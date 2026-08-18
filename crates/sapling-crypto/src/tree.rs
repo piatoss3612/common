@@ -58,7 +58,7 @@ fn merkle_hash_field(depth: usize, lhs: &[u8; 32], rhs: &[u8; 32]) -> jubjub::Ba
         tmp
     };
 
-    jubjub::ExtendedPoint::from(pedersen_hash(
+    pedersen_hash(
         Personalization::MerkleTree(depth),
         lhs.iter()
             .copied()
@@ -68,7 +68,7 @@ fn merkle_hash_field(depth: usize, lhs: &[u8; 32], rhs: &[u8; 32]) -> jubjub::Ba
                     .copied()
                     .take(bls12_381::Scalar::NUM_BITS as usize),
             ),
-    ))
+    )
     .to_affine()
     .get_u()
 }

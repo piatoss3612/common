@@ -1,20 +1,25 @@
 [package]
 name = "zakura-bento-macros"
-description = "Procedural macros over bento: expansion-time constant derivation and code generation"
-version = "0.1.0"
-authors = ["Sean Bowe <ewillbefull@gmail.com>"]
-edition = "2024"
-rust-version = "1.91"
-license = "MIT OR Apache-2.0"
-publish = false
+description = """
+Procedural macros over bento: expansion-time constant derivation and
+code generation
+"""
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [lib]
 proc-macro = true
+bench = false
 
 [dependencies]
 proc-macro2 = "1"
+proc-macro-crate = "3"
 quote = "1"
-bento-core = { package = "zakura-bento-core", path = "../bento-core" }
+bento-core.workspace = true
 
 [dependencies.syn]
 version = "2"
@@ -26,4 +31,4 @@ version = "2"
 # contrast to normal ones) so the unit tests can assert the exact re-export
 # paths under which consumers meet these macros; a facade rename or a dropped
 # re-export fails this crate's tests instead of surfacing downstream.
-bento = { package = "zakura-bento", path = "../bento" }
+bento.workspace = true

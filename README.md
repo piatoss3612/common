@@ -4,6 +4,9 @@ This is an experimental stack of Rust crates for Zakura Common: optimized Pasta 
 
 The crates are currently scaffolds; the descriptions below outline their intended roles. All target-compiled crates (`bento`, `bento-core`, and `udon`) use `no_std`. The procedural macro crate (`bento-macros`) runs on the build host and uses `std`.
 
+See [the crate development guide](crates/README.md) for dependency naming,
+workspace inheritance, macro path resolution, and publication conventions.
+
 ### `zakura-bento` ([crates.io](https://crates.io/crates/zakura-bento), [docs.rs](https://docs.rs/zakura-bento))
 
 The [`bento`](crates/bento/) crate provides the shared POD storage contract and the compile-time support needed to define `udon`.

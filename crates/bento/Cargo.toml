@@ -1,17 +1,16 @@
 [package]
 name = "zakura-bento"
-description = "Shared support utilities for Zcash cryptography crates: artifact embedding, const arithmetic, and procedural macros"
-version = "0.1.0"
-authors = ["Sean Bowe <ewillbefull@gmail.com>"]
-edition = "2024"
-rust-version = "1.91"
-license = "MIT OR Apache-2.0"
-publish = false
+description = """
+Shared support utilities for Zcash cryptography crates: artifact embedding,
+const arithmetic, and procedural macros
+"""
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
 
 [dependencies]
-# The facade must stay in exact lockstep with both halves: once these are
-# published dependencies, pin the macros crate with `=x.y.z` (the thiserror
-# discipline) so expansion behavior can never skew from the re-exporting
-# facade. Path dependencies pin implicitly for now.
-bento-core = { package = "zakura-bento-core", path = "../bento-core" }
-bento-macros = { package = "zakura-bento-macros", path = "../bento-macros" }
+bento-core.workspace = true
+bento-macros.workspace = true

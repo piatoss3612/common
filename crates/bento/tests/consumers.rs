@@ -2,8 +2,6 @@
 //!
 //! Tests inside the facade already see its direct core dependency, so
 //! separate consumer manifests exercise the dependencies available to callers.
-//! Keep these builds offline and seed their resolution from the workspace lock;
-//! the parent workspace build fetches the dependencies the consumers need.
 
 use std::{fs, path::Path};
 
@@ -124,7 +122,7 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         }
     }
 
-    // Normal builds must precede tests: dev dependencies are unavailable here.
+    // Build library targets before tests can activate their dev dependencies.
     let output = cargo(
         root,
         &[

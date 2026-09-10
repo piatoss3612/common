@@ -1,8 +1,7 @@
 [package]
 name = "zakura-bento-macros"
 description = """
-Procedural macros over bento: expansion-time constant derivation and
-code generation
+Procedural macro implementations for bento: addition chains and POD derivation
 """
 version.workspace = true
 authors.workspace = true

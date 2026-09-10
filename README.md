@@ -12,7 +12,7 @@ This is an experimental stack of Rust crates for Zakura Common.
 * See [the documentation guide](docs/DOCUMENTATION.md) when writing or reviewing
   documentation and code comments.
 
-### `zakura-bento`
+## `zakura-bento`
 
 The [`bento`](crates/bento/src/lib.rs) crate provides compile-time support for
 cryptographic arithmetic. Its `addition_chain!` macro scales a value by a fixed
@@ -34,7 +34,7 @@ The [`bento`](crates/bento/src/lib.rs) crate is a facade over
 [`bento-macros`](docs/MACROS.md) and
 [`bento-core`](crates/bento-core/src/lib.rs).
 
-### `zakura-udon`
+## `zakura-udon`
 
 [`udon`](crates/udon/src/lib.rs) is reserved for Pasta field and curve arithmetic.
 The planned implementation will adapt Zakura Common's fork of `pasta_curves`

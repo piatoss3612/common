@@ -5,6 +5,9 @@ records as bytes and consumers embed those files as typed static data. Byte
 views borrow existing values; embedding supplies aligned storage without
 allocation or runtime initialization.
 
+POD means plain old data. The [`Pod` contract][pod-contract] specifies which
+representations can be shared safely as both values and bytes.
+
 ## Defining a record
 
 Define stored types in the crate that owns the artifact format. Apply `repr(C)`
@@ -24,17 +27,20 @@ The [`Pod` contract][pod-contract] defines supported layouts and the obligations
 of handwritten unsafe implementations. Generic records and marker fields are
 supported; see the [derive documentation][pod-derive] for their requirements.
 
-`T: Pod` alone does not establish a usable layout. Validation happens through
-[`Pod::ASSERT_LAYOUT`][pod-contract]. Every storage consumer must evaluate
-`const { T::ASSERT_LAYOUT };` before relying on the contract, even for empty
-slices or zero-length arrays. A
-generic struct can have some instantiations suitable for storage and others
-that are only used as ordinary values. Byte conversions validate the layout;
-an explicit assertion can check a particular format without converting a value:
+`T: Pod` alone does not establish a usable layout. A generic struct can have
+some instantiations suitable for storage and others that are only used as
+ordinary values. The byte-view and embedding APIs force compile-time evaluation
+of [`Pod::ASSERT_LAYOUT`][pod-contract], even for empty slices or zero-length
+arrays. Callers of these APIs need no separate assertion. An explicit assertion
+can check a particular format without converting a value:
 
 ```rust
 const _: () = <Record as bento::Pod>::ASSERT_LAYOUT;
 ```
+
+When implementing a new unsafe storage consumer, force this validation with
+`const { T::ASSERT_LAYOUT };` before relying on the
+[`Pod` guarantees][pod-contract].
 
 ## Writing and embedding files
 

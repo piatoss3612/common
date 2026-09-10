@@ -12,9 +12,6 @@
 //! [`Pod::ASSERT_LAYOUT`] allows generic layouts to be checked when concrete
 //! types are used. Every conversion forces const evaluation, including empty
 //! views; the compiler can also evaluate concrete assertions earlier.
-//!
-//! - [`storage`] supplies aligned storage and shared byte views.
-//! - [`macros`] declares typed statics backed by included files.
 
 use core::marker::PhantomData;
 
@@ -36,10 +33,15 @@ pub use storage::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 /// generation.
 ///
 /// Implementations are provided for `u8`, `u16`, `u32`, `u64`, arrays, and
-/// [`PhantomData`]. Integer size and alignment must both equal their byte width;
-/// unsupported target layouts fail validation. Arrays validate their element
-/// type even when empty. [`PhantomData`] does not store or validate its marker
-/// type.
+/// [`PhantomData<T>`] with `T: ?Sized + Sync + 'static`. Integer size and alignment
+/// must both equal their byte width; unsupported target layouts fail validation.
+/// Arrays validate their element type even when empty. [`PhantomData`] does not
+/// store or validate its marker type's layout.
+///
+/// Generator and consumer must agree on type definitions and representation
+/// attributes. Byte conversion does not establish mathematical invariants such
+/// as canonical residues or curve membership; checking those belongs to the
+/// artifact's owner.
 ///
 /// # Safety
 ///
@@ -56,14 +58,11 @@ pub use storage::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 ///   the same type definition and representation attributes.
 /// - The stored representation is the little-endian in-memory layout.
 ///
-/// Generator and consumer must agree on type definitions and representation
-/// attributes. Byte conversion does not establish mathematical invariants such
-/// as canonical residues or curve membership. Every admitted bit pattern must
-/// nevertheless be memory-safe for all safe operations on the resulting type,
-/// including operations implemented internally with unsafe code. A trusted
-/// generator cannot establish this obligation for arbitrary-byte conversions.
-/// Types whose operations require stronger invariants need a validated
-/// construction boundary before those operations become available.
+/// Every admitted bit pattern must be memory-safe for all safe operations on the
+/// resulting type, including operations implemented internally with unsafe code.
+/// A trusted generator cannot establish this obligation for arbitrary-byte
+/// conversions. Types whose operations require stronger invariants need a
+/// validated construction boundary before those operations become available.
 ///
 /// Unsafe consumers must force compile-time evaluation with
 /// `const { T::ASSERT_LAYOUT };` before relying on these guarantees. A
@@ -71,8 +70,8 @@ pub use storage::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 /// validate nested types too; an empty assertion is appropriate only when
 /// every obligation has already been established independently.
 /// Implementations must retain the default `__LAYOUT` metadata, which measures
-/// `Self` for generated record checks.
-/// Violating these requirements can cause undefined behavior.
+/// `Self` for generated record checks. Violating these requirements can cause
+/// undefined behavior.
 ///
 /// [`ASSERT_LAYOUT`]: Self::ASSERT_LAYOUT
 pub unsafe trait Pod: Copy + Sync + Sized + 'static {
@@ -110,8 +109,16 @@ impl Layout {
         }
     }
 
-    /// Checks record layout after the derive has validated its representation
-    /// and recursively evaluated every field's `ASSERT_LAYOUT`.
+    /// Checks a record's byte order, total field size, and alignment.
+    ///
+    /// The derive must first validate the representation and recursively
+    /// evaluate every field's `ASSERT_LAYOUT`; metadata alone does not establish
+    /// field validity.
+    ///
+    /// # Panics
+    ///
+    /// Panics on a big-endian target, field-size overflow, padding, or alignment
+    /// above [`MAX_ALIGN`].
     pub const fn assert_record(&self, fields: &[Self]) {
         assert_little_endian();
         let mut size = 0usize;

@@ -32,12 +32,27 @@ pub use bento_core::{embed_array, embed_struct};
 /// [`Pod`](trait@Pod). Packed structs, enums, and unions are not supported.
 /// Explicit `repr(align(...))` is allowed within [`MAX_ALIGN`].
 ///
-/// Generic structs are supported. A [`core::marker::PhantomData`] field does not
-/// require its marker type to implement [`Pod`](trait@Pod).
+/// The struct must also implement [`Copy`] and [`Sync`] and satisfy `'static`.
+/// Generic structs are supported. A [`core::marker::PhantomData<T>`] field needs
+/// `T: Sync + 'static`, but does not require `T` to implement [`Pod`](trait@Pod)
+/// or [`Copy`]. Deriving [`Copy`] separately can impose additional bounds.
 ///
 /// Deriving [`Pod`](trait@Pod) leaves layout validation to [`Pod::ASSERT_LAYOUT`].
 /// A padded or over-aligned type can still be constructed and used normally;
 /// converting it to bytes fails during compilation.
+///
+/// The derive checks representation and layout. It cannot check invariants
+/// assumed by methods on the record: every bit pattern must be memory-safe for
+/// its safe operations, as required by the [trait's safety contract](trait@Pod).
+///
+/// # Support paths
+///
+/// Ordinary facade dependency aliases are discovered automatically. Use
+/// `#[pod(crate = path)]` on the struct for build-only dependencies, direct core
+/// dependencies, support reached through another crate's re-exports, or
+/// ambiguous dependency arrangements. The path must expose the
+/// [`Pod`](trait@Pod) trait. Discovery reads manifest names; it does not determine
+/// which dependencies Cargo enabled.
 ///
 /// # Examples
 ///
@@ -69,12 +84,6 @@ pub use bento_core::{embed_array, embed_struct};
 ///
 /// const _: () = <Padded as bento::Pod>::ASSERT_LAYOUT;
 /// ```
-///
-/// Ordinary facade dependency aliases are discovered automatically. Use
-/// `#[pod(crate = path)]` for build-only dependencies, direct core dependencies,
-/// support reached through another crate's re-exports, or ambiguous dependency
-/// arrangements. The path must expose the [`Pod`](trait@Pod) trait. Discovery
-/// reads manifest names; it does not determine which dependencies Cargo enabled.
 pub use bento_macros::Pod;
 
 /// Scales a value using a compile-time addition chain.
@@ -93,6 +102,20 @@ pub use bento_macros::Pod;
 /// Implement [`addchain::AdditionChain`] on the value's type or on an adapter, as
 /// shown below. The trait need not be imported to invoke the macro.
 ///
+/// Dependency aliases and re-exports of this macro retain the facade's support
+/// path, including in build scripts.
+///
+/// The operation schedule depends on the scalar literal, not the input value.
+/// Its exact sequence and operation count are implementation details; a shortest
+/// chain is not guaranteed. A fixed schedule does not establish constant-time
+/// behavior for input values: cloning, arithmetic, and dropping values also
+/// depend on the supplied type.
+///
+/// # Panics
+///
+/// Panics from the input expression or the supplied type's operations propagate
+/// to the caller.
+///
 /// # Examples
 ///
 /// ```
@@ -109,10 +132,6 @@ pub use bento_macros::Pod;
 /// assert_eq!(bento::addition_chain!(value.clone(), 0xb5), Value(1267));
 /// assert_eq!(value, Value(7));
 /// ```
-///
-/// Dependency aliases and re-exports of this macro retain the facade's support
-/// path, including in build scripts. A fixed schedule does not establish that
-/// the supplied operations are constant-time.
 ///
 /// The exponentiation interpretation described by [`addchain::AdditionChain`]
 /// can be used to raise a value to a fixed power:

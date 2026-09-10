@@ -1,8 +1,8 @@
 [package]
 name = "zakura-bento"
 description = """
-Shared support utilities for Zakura Common: artifact embedding,
-const arithmetic, and procedural macros
+Compile-time addition chains and checked POD storage and embedding
+for Zakura Common
 """
 version.workspace = true
 authors.workspace = true

@@ -1,8 +1,9 @@
 //! Parsing and expansion of fixed-scalar addition chains.
 //!
-//! [`Input`] parses a macro invocation, and [`evaluate`] validates its scalar
-//! and emits calls to [`bento_core::addchain::AdditionChain`]. The [`schedule`]
-//! module chooses the sequence of operations.
+//! [`Invocation`] parses the support path and arguments, and [`evaluate`]
+//! validates the scalar and emits calls to
+//! [`bento_core::addchain::AdditionChain`]. The [`schedule`] module chooses the
+//! sequence of operations.
 //!
 //! Scalar decoding and scheduling run on the host, so [`bento_core`] needs
 //! neither dependencies nor an allocator to supply the target support trait.

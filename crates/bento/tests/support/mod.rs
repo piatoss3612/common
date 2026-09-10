@@ -23,7 +23,9 @@ pub fn diagnostics(output: &Output) -> String {
     )
 }
 
-/// Owns a unique fixture workspace and its nested build output for one test run.
+/// Creates a unique fixture workspace that is removed when the handle is dropped.
+///
+/// Keep the handle alive until all nested Cargo processes have finished.
 pub fn workspace(prefix: &str) -> tempfile::TempDir {
     tempfile::Builder::new()
         .prefix(prefix)

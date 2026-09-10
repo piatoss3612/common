@@ -99,7 +99,7 @@ pub fn derive(input: DeriveInput, core: BentoCorePath) -> syn::Result<TokenStrea
         .iter()
         .map(|ty| quote_spanned!(ty.span()=> let () = <#ty as #core::Pod>::ASSERT_LAYOUT;));
 
-    // The representation fixes field order, and each field implements `Pod`.
+    // SAFETY: The representation fixes field order, and each field implements `Pod`.
     // Recursive validation establishes field validity and target layout. Equality
     // with the sum of field sizes excludes both interior and trailing padding.
     // Metadata and its inherent check belong to the actual trait, so callers

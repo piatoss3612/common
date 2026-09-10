@@ -1,8 +1,8 @@
 //! Generates artifact files, then compiles and runs a consumer that embeds them.
 //!
 //! The build script and consumer share the record definition, as they would in
-//! an artifact-owning crate. Separate Cargo builds let the generator run before
-//! the consumer expands its file inclusions.
+//! an artifact-owning crate. Cargo runs the generator as a build script before
+//! compiling the consumer's file inclusions.
 
 use std::{fs, path::Path};
 

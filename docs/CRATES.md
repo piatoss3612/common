@@ -40,10 +40,10 @@ Cargo's [package inheritance reference](https://doc.rust-lang.org/cargo/referenc
 
 | Directory | Cargo package | Dependency key | Rust dependency path |
 | --- | --- | --- | --- |
-| `bento/` | `zakura-bento` | `bento` | `bento::` |
-| `bento-core/` | `zakura-bento-core` | `bento-core` | `bento_core::` |
-| `bento-macros/` | `zakura-bento-macros` | `bento-macros` | `bento_macros::` |
-| `udon/` | `zakura-udon` | `udon` | `udon::` |
+| `crates/bento/` | `zakura-bento` | `bento` | `bento::` |
+| `crates/bento-core/` | `zakura-bento-core` | `bento-core` | `bento_core::` |
+| `crates/bento-macros/` | `zakura-bento-macros` | `bento-macros` | `bento_macros::` |
+| `crates/udon/` | `zakura-udon` | `udon` | `udon::` |
 
 The root manifest defines each alias, package identity, and path once:
 
@@ -99,8 +99,8 @@ and [library target names](https://doc.rust-lang.org/cargo/reference/cargo-targe
 | `udon` | Optimized field and curve arithmetic; `no_std` | `bento` |
 
 The current implementation consists of
-[`addition_chain!`](bento/src/lib.rs) and its
-[`AdditionChain`](bento-core/src/addchain.rs) support trait.
+[`addition_chain!`](../crates/bento/src/lib.rs) and its
+[`AdditionChain`](../crates/bento-core/src/addchain.rs) support trait.
 Storage and reference arithmetic in core, and field and curve arithmetic in
 `udon`, remain scaffolded. Consumers use the `bento` facade, which re-exports
 core items at its root and explicitly re-exports and documents each procedural
@@ -118,16 +118,16 @@ introduce a normal dependency from the macro implementation back to the facade.
 
 ## Procedural macros
 
-See the [macro authoring conventions](bento-macros/README.md#authoring-conventions)
-for error handling and testing requirements. The macro crate's
-[README](bento-macros/README.md) also links to the addition-chain implementation
+See the [macro authoring conventions](MACROS.md#authoring-conventions)
+for error handling and testing requirements. The
+[macro guide](MACROS.md) also links to the addition-chain implementation
 and tests.
 
 Generated paths must match the caller's dependencies. The
-[path resolver](bento-macros/src/path_resolution.rs) discovers the caller's
+[path resolver](../crates/bento-macros/src/path_resolution.rs) discovers the caller's
 aliases; a dependency on the facade is sufficient. Support interfaces are
 documented in their owning modules, such as
-[`addchain`](bento-core/src/addchain.rs).
+[`addchain`](../crates/bento-core/src/addchain.rs).
 
 ## Local development and publication
 

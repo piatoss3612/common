@@ -10,6 +10,10 @@ comments (`///`, `//!`), module documentation, and code comments (`//`). General
 writing rules also apply to READMEs and other prose guides. Formatting rules
 specific to Rustdoc are identified below.
 
+Keep repository Markdown documentation together in `docs/`, with the top-level
+[`README.md`](../README.md) as the entry point. Use descriptive filenames here
+instead of nested READMEs in crate or source directories.
+
 ## Audience and contract
 
 Write for the users of the API being documented. Public-facing crate and item

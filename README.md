@@ -7,7 +7,7 @@ This is an experimental stack of Rust crates for Zakura Common.
 * The current implementation provides an addition-chain macro and its support
   trait. Storage utilities and field and curve arithmetic remain scaffolded.
 * All target crates (`bento`, `bento-core`, and `udon`) currently use `no_std`.
-* See [the crate development guide](crates/README.md) for dependency naming,
+* See [the crate development guide](docs/CRATES.md) for dependency naming,
   workspace inheritance, macro path resolution, and publication conventions.
 * See [the documentation guide](docs/DOCUMENTATION.md) when writing or reviewing
   documentation and code comments.
@@ -33,7 +33,7 @@ The planned scope also includes:
   Artifact-specific generation will belong downstream with the data's owner.
 
 The [`bento`](crates/bento/src/lib.rs) crate is a facade over
-[`bento-macros`](crates/bento-macros/README.md) and
+[`bento-macros`](docs/MACROS.md) and
 [`bento-core`](crates/bento-core/src/lib.rs).
 
 ### `zakura-udon`

@@ -15,6 +15,14 @@ fn rejects_unsupported_items_and_representations() {
             quote!(#[repr(align(8))] struct Record(u64);),
             "Pod requires repr(C) or repr(transparent)",
         ),
+        (
+            quote!(#[repr(C)] struct Record { #[pod(skip)] value: u32 }),
+            "Pod attributes are supported only on the struct",
+        ),
+        (
+            quote!(#[repr(C)] struct Record(#[pod(crate = ignored)] u32);),
+            "Pod attributes are supported only on the struct",
+        ),
         (quote!(#[repr(C)] enum Record { A, B }), "Pod requires a struct"),
         (quote!(#[repr(C)] union Record { a: u32, b: u32 }), "Pod requires a struct"),
         (quote!(#[repr(C, packed)] struct Record(u32);), "Pod supports only repr(C)"),
@@ -90,18 +98,13 @@ fn expansion_preserves_generics_and_bounds_complete_field_types() {
             ::core::marker::PhantomData<M>: ::renamed::support::Pod
         {
             const ASSERT_LAYOUT: () = {
-                let () = <::core::primitive::u8 as ::renamed::support::Pod>::ASSERT_LAYOUT;
                 let () = <[T; N] as ::renamed::support::Pod>::ASSERT_LAYOUT;
                 let () = <::core::marker::PhantomData<M> as ::renamed::support::Pod>::ASSERT_LAYOUT;
-                ::core::assert!(
-                    ::core::mem::size_of::<Self>() == 0
-                        + ::core::mem::size_of::<[T; N]>()
-                        + ::core::mem::size_of::<::core::marker::PhantomData<M> >(),
-                    "Pod struct must have no padding"
-                );
-                ::core::assert!(
-                    ::core::mem::align_of::<Self>() <= ::renamed::support::MAX_ALIGN,
-                    "over-aligned Pod type"
+                <Self as ::renamed::support::Pod>::__LAYOUT.assert_record(
+                    &[
+                        <[T; N] as ::renamed::support::Pod>::__LAYOUT,
+                        <::core::marker::PhantomData<M> as ::renamed::support::Pod>::__LAYOUT
+                    ]
                 );
             };
         }

@@ -9,8 +9,9 @@
 //! # Design
 //!
 //! Layout checks depend on concrete generic arguments and the compilation target.
-//! [`Pod::ASSERT_LAYOUT`] defers them until a byte conversion instantiates the
-//! type. Every conversion forces const evaluation, including empty views.
+//! [`Pod::ASSERT_LAYOUT`] allows generic layouts to be checked when concrete
+//! types are used. Every conversion forces const evaluation, including empty
+//! views; the compiler can also evaluate concrete assertions earlier.
 //!
 //! - [`storage`] supplies aligned storage and shared byte views.
 //! - [`macros`] declares typed statics backed by included files.
@@ -56,25 +57,76 @@ pub use storage::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 /// - The stored representation is the little-endian in-memory layout.
 ///
 /// Generator and consumer must agree on type definitions and representation
-/// attributes. This trait does not check library invariants such as canonical
-/// residues or curve membership; those remain the responsibility of the types'
-/// libraries and artifact generators.
+/// attributes. Byte conversion does not establish mathematical invariants such
+/// as canonical residues or curve membership. Every admitted bit pattern must
+/// nevertheless be memory-safe for all safe operations on the resulting type,
+/// including operations implemented internally with unsafe code. A trusted
+/// generator cannot establish this obligation for arbitrary-byte conversions.
+/// Types whose operations require stronger invariants need a validated
+/// construction boundary before those operations become available.
 ///
 /// Unsafe consumers must force compile-time evaluation with
 /// `const { T::ASSERT_LAYOUT };` before relying on these guarantees. A
 /// `T: Pod` bound alone is insufficient. Handwritten implementations must
 /// validate nested types too; an empty assertion is appropriate only when
 /// every obligation has already been established independently.
+/// Implementations must retain the default `__LAYOUT` metadata, which measures
+/// `Self` for generated record checks.
 /// Violating these requirements can cause undefined behavior.
 ///
 /// [`ASSERT_LAYOUT`]: Self::ASSERT_LAYOUT
 pub unsafe trait Pod: Copy + Sync + Sized + 'static {
+    /// Layout metadata used by generated implementations.
+    ///
+    /// Implementations must retain the default, which measures `Self` in core.
+    /// Substituting another type's metadata violates the unsafe contract.
+    #[doc(hidden)]
+    const __LAYOUT: Layout = Layout::of::<Self>();
+
     /// Establishes the layout contract for this concrete type.
     ///
     /// Must fail during const evaluation if any requirement of [`Pod`] is not
     /// met. Unsafe consumers must evaluate this assertion even for empty arrays
     /// and slices.
     const ASSERT_LAYOUT: ();
+}
+
+/// Target layout metadata for generated record checks.
+///
+/// This describes layout; it does not certify that a type implements `Pod`.
+/// Measurements and assertions live here so a consumer cannot replace them by
+/// shadowing `core` or re-exporting `Pod` alongside counterfeit helpers.
+#[doc(hidden)]
+pub struct Layout {
+    size: usize,
+    align: usize,
+}
+
+impl Layout {
+    const fn of<T>() -> Self {
+        Self {
+            size: size_of::<T>(),
+            align: align_of::<T>(),
+        }
+    }
+
+    /// Checks record layout after the derive has validated its representation
+    /// and recursively evaluated every field's `ASSERT_LAYOUT`.
+    pub const fn assert_record(&self, fields: &[Self]) {
+        assert_little_endian();
+        let mut size = 0usize;
+        let mut index = 0;
+        while index < fields.len() {
+            // Even release const evaluation must reject overflow.
+            size = match size.checked_add(fields[index].size) {
+                Some(size) => size,
+                None => panic!("Pod field sizes overflow"),
+            };
+            index += 1;
+        }
+        assert!(self.size == size, "Pod struct must have no padding");
+        assert!(self.align <= MAX_ALIGN, "over-aligned Pod type");
+    }
 }
 
 /// Checks whether the target uses the required little-endian storage convention.

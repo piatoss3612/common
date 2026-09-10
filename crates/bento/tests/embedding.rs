@@ -13,7 +13,8 @@ use support::{cargo, diagnostics};
 fn generated_records_round_trip_through_file_embedding() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.join("../..").canonicalize().unwrap();
-    let directory = workspace.join("target/embedding-consumer");
+    let temporary = support::workspace("bento-embedding-");
+    let directory = temporary.path();
     let fixtures = manifest.join("tests/fixtures/pod/embedding");
     let facade = workspace.join("crates/bento");
     fs::create_dir_all(directory.join("src")).unwrap();
@@ -42,7 +43,7 @@ bento = {{ package = "zakura-bento", path = {facade:?} }}
         fs::copy(fixtures.join(path), directory.join(path)).unwrap();
     }
 
-    let output = cargo(&directory, &["run", "--release", "--quiet"]);
+    let output = cargo(directory, &["run", "--release", "--quiet"]);
     assert!(
         output.status.success(),
         "consumer failed:\n{}",

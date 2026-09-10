@@ -1,8 +1,12 @@
 struct Value;
 
 impl zakura_bento::addchain::AdditionChain for Value {
-    fn double(&self) -> Self { Self }
-    fn add(&self, _: &Self) -> Self { Self }
+    fn double(&self) -> Self {
+        Self
+    }
+    fn add(&self, _: &Self) -> Self {
+        Self
+    }
 }
 
 fn main() {

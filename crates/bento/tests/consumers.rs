@@ -1,7 +1,7 @@
 //! Cargo consumer tests for dependency path resolution and diagnostics.
 //!
 //! Tests inside the facade already see its direct core dependency, so
-//! separate consumer manifests are needed to prove the facade fallback works.
+//! separate consumer manifests exercise the dependencies available to callers.
 //! Keep these builds offline and seed their resolution from the workspace lock;
 //! the parent workspace build fetches the dependencies the consumers need.
 
@@ -14,17 +14,17 @@ use support::{cargo, diagnostics};
 fn downstream_paths_no_std_doctests_and_diagnostics() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.join("../..").canonicalize().unwrap();
-    let root = workspace.join("target/macro-consumers");
+    let temporary = support::workspace("bento-macros-");
+    let root = temporary.path();
     let fixtures = manifest.join("tests/fixtures");
     let facade = workspace.join("crates/bento");
     let core = workspace.join("crates/bento-core");
     let macros = workspace.join("crates/bento-macros");
-    fs::create_dir_all(&root).unwrap();
     fs::write(
         root.join("Cargo.toml"),
         format!(
             r#"[workspace]
-members = ["facade-default", "facade-renamed", "direct-core", "reexport", "missing-support"]
+members = ["facade-default", "facade-renamed", "direct-core", "reexport", "missing-support", "inactive-optional", "inactive-dev", "inactive-target", "build-only"]
 resolver = "3"
 
 [workspace.dependencies]
@@ -83,8 +83,62 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         fs::write(package.join("src/record.bin"), [1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
     }
 
+    for (name, extra) in [
+        (
+            "inactive-optional",
+            "[dependencies.support-core]\nworkspace = true\noptional = true",
+        ),
+        (
+            "inactive-dev",
+            "[dev-dependencies]\nsupport-core.workspace = true",
+        ),
+        (
+            "inactive-target",
+            "[target.'cfg(any())'.dependencies]\nsupport-core.workspace = true",
+        ),
+        ("build-only", ""),
+    ] {
+        let package = root.join(name);
+        fs::create_dir_all(package.join("src")).unwrap();
+        let table = if name == "build-only" {
+            "build-dependencies"
+        } else {
+            "dependencies"
+        };
+        fs::write(package.join("Cargo.toml"), format!(
+            "[package]\nname = {name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\n[{table}]\nsupport.workspace = true\n{extra}\n"
+        )).unwrap();
+        if name == "build-only" {
+            fs::write(package.join("src/lib.rs"), "#![no_std]\n").unwrap();
+            fs::copy(
+                fixtures.join("consumers/build_only.rs"),
+                package.join("build.rs"),
+            )
+            .unwrap();
+        } else {
+            fs::copy(
+                fixtures.join("consumers/facade_usage.rs"),
+                package.join("src/lib.rs"),
+            )
+            .unwrap();
+        }
+    }
+
+    // Normal builds must precede tests: dev dependencies are unavailable here.
     let output = cargo(
-        &root,
+        root,
+        &[
+            "build",
+            "--release",
+            "--workspace",
+            "--exclude",
+            "missing-support",
+        ],
+    );
+    assert!(output.status.success(), "{}", diagnostics(&output));
+
+    let output = cargo(
+        root,
         &[
             "test",
             "--workspace",
@@ -95,7 +149,7 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
     );
     assert!(output.status.success(), "{}", diagnostics(&output));
     let output = cargo(
-        &root,
+        root,
         &[
             "test",
             "--release",
@@ -107,7 +161,7 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
     );
     assert!(output.status.success(), "{}", diagnostics(&output));
 
-    let output = cargo(&root, &["check", "-p", "missing-support"]);
+    let output = cargo(root, &["check", "-p", "missing-support"]);
     let diagnostic = diagnostics(&output);
     assert!(
         !output.status.success(),
@@ -115,7 +169,7 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
     );
     assert!(
         diagnostic.contains(
-            "failed to find zakura-bento or zakura-bento-core; add zakura-bento to your Cargo.toml dependencies"
+            "cannot discover zakura-bento; use #[pod(crate = path)] to name the support path"
         ),
         "{diagnostic}"
     );
@@ -156,7 +210,7 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         .unwrap();
         manifest_text.push_str(&format!("\n[[bin]]\nname = {name:?}\n"));
         fs::write(&manifest_path, &manifest_text).unwrap();
-        let output = cargo(&root, &["check", "-p", "facade-default", "--bin", name]);
+        let output = cargo(root, &["check", "-p", "facade-default", "--bin", name]);
         let diagnostic = diagnostics(&output);
         assert!(!output.status.success(), "{name} unexpectedly compiled");
         assert!(diagnostic.contains(expected), "{name}: {diagnostic}");

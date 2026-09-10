@@ -50,7 +50,7 @@ Run the full test suite (every workspace crate, all features) with optimizations
 enabled:
 
 ```console
-cargo test --release --workspace --all-features
+cargo test --release --locked --workspace --all-features
 ```
 
 The pinned toolchain ([`rust-toolchain.toml`](rust-toolchain.toml), the crates'
@@ -58,7 +58,11 @@ MSRV) is also used to check formatting, lints, and documentation across the
 workspace:
 
 ```console
-cargo fmt --check
+python3 ci/check-format
 cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo doc --locked --workspace --all-features --no-deps
+RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-deps
 ```
+
+The [CI workflow](.github/workflows/ci.yml) defines these gates plus focused
+Miri and cross-target checks. The format script also checks standalone Rust
+fixtures that Cargo does not discover.

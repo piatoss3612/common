@@ -24,7 +24,10 @@ The [`Pod` contract][pod-contract] defines supported layouts and the obligations
 of handwritten unsafe implementations. Generic records and marker fields are
 supported; see the [derive documentation][pod-derive] for their requirements.
 
-Layout validation happens through [`Pod::ASSERT_LAYOUT`][pod-contract]. A
+`T: Pod` alone does not establish a usable layout. Validation happens through
+[`Pod::ASSERT_LAYOUT`][pod-contract]. Every storage consumer must evaluate
+`const { T::ASSERT_LAYOUT };` before relying on the contract, even for empty
+slices or zero-length arrays. A
 generic struct can have some instantiations suitable for storage and others
 that are only used as ordinary values. Byte conversions validate the layout;
 an explicit assertion can check a particular format without converting a value:
@@ -77,36 +80,29 @@ attributes, and any semantic invariants. Layout validation cannot detect a file
 generated for a different type of the same size, check canonical field residues,
 or establish curve membership. Those checks belong to the artifact's owner.
 
-POD storage uses little-endian bytes and validates primitive size and alignment
-on the target. Unsupported endianness or layouts fail when a storage operation
-is instantiated; they do not prevent using unrelated crate functionality.
+Every bit pattern admitted by the safe byte-conversion APIs must nevertheless
+be memory-safe for every safe operation on the resulting type. A generator
+cannot establish that obligation for arbitrary bytes supplied by another safe
+caller. If arithmetic needs stronger invariants, keep the stored representation
+separate from the arithmetic type and establish those invariants through checked
+conversion or a narrowly scoped trusted construction path. The complete unsafe
+implementation obligations belong to the [`Pod` contract][pod-contract].
 
-Dependency aliases follow the [workspace conventions](CRATES.md#procedural-macros)
-and are resolved automatically. A crate that reaches support through another
-facade can use `#[pod(crate = path)]`; see the [derive documentation][pod-derive]
-for the required re-exports.
+POD storage uses little-endian bytes and validates primitive size and alignment
+on the target. Unsupported endianness or layouts fail when their layout
+assertions are evaluated; unrelated crate functionality remains available.
+
+Ordinary facade dependency aliases are discovered automatically. Use
+`#[pod(crate = path)]` for build-only dependencies, direct-core consumers,
+indirect re-exports, or ambiguous arrangements; see the
+[macro path conventions](MACROS.md#support-paths).
 
 ## Validation
 
-Run the [workspace checks](../README.md#testing), including the release test
-suite. `cargo check` alone can miss layout failures deferred until code
-generation. The suite covers:
-
-- [Parsing and expansion](../crates/bento-macros/src/derive/pod/tests.rs).
-- [Core storage unit tests](../crates/bento-core/src/pod/storage/tests.rs) for
-  byte views, primitive boundaries, and runtime length checks.
-- [Derived records and embedded data](../crates/bento/tests/pod.rs), including
-  alignment boundaries, generic records, and zero-sized types.
-- [Generated artifact round trips](../crates/bento/tests/embedding.rs), using a
-  build script to write files before compiling and running their consumer.
-- [Compiler failures](../crates/bento/tests/pod_compile.rs) for padding,
-  unsupported fields and representations, excessive alignment, and file length.
-- [Separate Cargo consumers](../crates/bento/tests/consumers.rs) for
-  `no_std`, dependency aliases, direct core dependencies, and facade re-exports.
-
-The [testing guide](TESTING.md) defines the roles of these tests and the
-conventions for compiler builds and fixtures. The embedding example also runs
-as part of the workspace test suite.
+Follow the [testing guide](TESTING.md) for compiler, Miri, and portability
+checks. Use full builds to establish deferred layout failures, and generate
+files through the storage API when testing the artifact workflow. The
+[embedding round trip](../crates/bento/tests/embedding.rs) is one such consumer.
 
 [pod-derive]: ../crates/bento/src/lib.rs
 [pod-contract]: ../crates/bento-core/src/pod/mod.rs

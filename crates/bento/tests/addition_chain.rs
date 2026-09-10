@@ -4,6 +4,74 @@ use zakura_bento as bento;
 
 use std::{cell::Cell, rc::Rc};
 
+#[test]
+#[allow(non_upper_case_globals)]
+fn caller_constants_cannot_become_generated_patterns() {
+    mod names {
+        pub const __bento_odd_0: u128 = 1;
+        pub const __bento_odd_1: u128 = 2;
+        pub const __bento_odd_2: u128 = 3;
+        pub const __bento_doubled: u128 = 4;
+        pub const __bento_accumulator: u128 = 5;
+        pub const __bento_clone: u128 = 6;
+        pub const __bento_chain: u128 = 7;
+    }
+    use names::*;
+    assert_eq!(bento::addition_chain!(Value(__bento_odd_0), 1), Value(1));
+    assert_eq!(
+        bento::addition_chain!(
+            Value(
+                __bento_odd_0
+                    + __bento_odd_1
+                    + __bento_odd_2
+                    + __bento_doubled
+                    + __bento_accumulator
+                    + __bento_clone
+                    + __bento_chain
+            ),
+            181
+        ),
+        Value(28 * 181)
+    );
+}
+
+#[test]
+fn input_control_flow_stays_in_the_caller() {
+    fn fallible(input: Result<Value, ()>) -> Result<Value, ()> {
+        Ok(bento::addition_chain!(input?, 3))
+    }
+    fn early_return(stop: bool) -> Value {
+        bento::addition_chain!(
+            {
+                if stop {
+                    return Value(11);
+                }
+                Value(7)
+            },
+            3
+        )
+    }
+    assert_eq!(fallible(Ok(Value(7))), Ok(Value(21)));
+    assert_eq!(fallible(Err(())), Err(()));
+    assert_eq!(early_return(true), Value(11));
+    assert_eq!(early_return(false), Value(21));
+    let mut stop = false;
+    let result = loop {
+        let value = bento::addition_chain!(
+            {
+                if stop {
+                    break Value(11);
+                }
+                Value(7)
+            },
+            3
+        );
+        assert_eq!(value, Value(21));
+        stop = true;
+    };
+    assert_eq!(result, Value(11));
+}
+
 #[derive(Debug, PartialEq)]
 struct Value(u128);
 
@@ -259,6 +327,8 @@ fn superseded_accumulators_drop_between_steps() {
 }
 
 #[test]
+// The immediate closure call exercises commas inside the macro's expression.
+#[allow(clippy::redundant_closure_call)]
 fn caller_bindings_and_expression_syntax_survive_expansion() {
     macro_rules! scale {
         ($value:expr, $scalar:literal) => {

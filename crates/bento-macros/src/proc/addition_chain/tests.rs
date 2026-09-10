@@ -62,26 +62,57 @@ fn expansion_unrolls_a_windowed_chain_with_qualified_calls() {
     // This snapshot intentionally fixes the tie-breaking and code-generation policy.
     // 181 uses ten operations, including the odd table, versus eleven for binary.
     let expansion = evaluate(parse_quote!(f(y), 0xb5), BentoCorePath::default()).unwrap();
-    let expected = quote! {{
-        let __bento_odd_0 = (f(y));
-        let __bento_doubled = ::bento_core::addchain::AdditionChain::double(&__bento_odd_0);
-        let __bento_odd_1 = ::bento_core::addchain::AdditionChain::add(&__bento_odd_0, &__bento_doubled);
-        let __bento_odd_2 = ::bento_core::addchain::AdditionChain::add(&__bento_odd_1, &__bento_doubled);
-        let mut __bento_accumulator = {
-            fn __bento_clone<T: ::bento_core::addchain::AdditionChain>(value: &T) -> T {
-                ::core::clone::Clone::clone(value)
+    let expected = quote! {
+        ({
+            #[allow(dead_code)] fn __bento_odd_0() {}
+            #[allow(dead_code)] fn __bento_odd_1() {}
+            #[allow(dead_code)] fn __bento_odd_2() {}
+            #[allow(dead_code)] fn __bento_doubled() {}
+            #[allow(dead_code)] fn __bento_accumulator() {}
+            fn __bento_chain<__BentoValue: ::bento_core::addchain::AdditionChain>(
+                __bento_odd_0: __BentoValue
+            ) -> __BentoValue {
+                let __bento_doubled = ::bento_core::addchain::AdditionChain::double(&__bento_odd_0);
+                let __bento_odd_1 = ::bento_core::addchain::AdditionChain::add(&__bento_odd_0, &__bento_doubled);
+                let __bento_odd_2 = ::bento_core::addchain::AdditionChain::add(&__bento_odd_1, &__bento_doubled);
+                let mut __bento_accumulator = __BentoValue::clone(&__bento_odd_2);
+                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
+                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
+                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
+                __bento_accumulator = ::bento_core::addchain::AdditionChain::add(&__bento_accumulator, &__bento_odd_2);
+                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
+                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
+                __bento_accumulator = ::bento_core::addchain::AdditionChain::add(&__bento_accumulator, &__bento_odd_0);
+                __bento_accumulator
             }
-            __bento_clone(&__bento_odd_2)
-        };
-        __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-        __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-        __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-        __bento_accumulator = ::bento_core::addchain::AdditionChain::add(&__bento_accumulator, &__bento_odd_2);
-        __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-        __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-        __bento_accumulator = ::bento_core::addchain::AdditionChain::add(&__bento_accumulator, &__bento_odd_0);
-        __bento_accumulator
-    }};
+            __bento_chain
+        })(f(y))
+    };
     assert_eq!(expansion.to_string(), expected.to_string());
     syn::parse2::<Expr>(expansion).unwrap();
+}
+
+#[test]
+fn internal_invocations_require_an_explicit_support_path() {
+    let invocation: Invocation = syn::parse2(quote!(crate = crate::support; value, 3)).unwrap();
+    let core = invocation.core;
+    assert_eq!(
+        quote!(#core).to_string(),
+        quote!(crate::support).to_string()
+    );
+    assert!(syn::parse2::<Invocation>(quote!(value, 3)).is_err());
+}
+
+#[test]
+fn wide_decimal_decoding_matches_an_independent_integer() {
+    use num_bigint::BigUint;
+    for bits in [1usize, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 1024] {
+        let power = BigUint::from(1u8) << bits;
+        for number in [&power - 1u8, power.clone(), &power + 1u8] {
+            assert_eq!(
+                limbs_from_decimal(&number.to_str_radix(10)),
+                number.to_u64_digits()
+            );
+        }
+    }
 }

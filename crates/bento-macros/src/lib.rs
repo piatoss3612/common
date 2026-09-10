@@ -27,13 +27,10 @@ pub fn pod(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     })
 }
 
-// Documentation lives on the facade's re-export.
+// Documentation lives on the facade's wrapper.
 #[expect(missing_docs)]
 #[proc_macro]
 pub fn addition_chain(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input = syn::parse_macro_input!(input as proc::addition_chain::Input);
-    helpers::macro_body(|| {
-        let core = path_resolution::BentoCorePath::resolve()?;
-        proc::addition_chain::evaluate(input, core)
-    })
+    let input = syn::parse_macro_input!(input as proc::addition_chain::Invocation);
+    helpers::macro_body(|| proc::addition_chain::evaluate(input.input, input.core))
 }

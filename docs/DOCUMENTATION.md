@@ -1,190 +1,54 @@
 # Documentation
 
-Documentation explains an API's purpose and use. Readers need context that a
-signature alone cannot provide. Supply that context by introducing the problem,
-its solution, and the API's role in that solution, with links to the definitions
-it relies on.
+Explain what readers need to use an API or maintain its implementation: purpose,
+semantics, constraints, and the reasons behind non-obvious choices. Scale the
+explanation to the subject. A simple operation may need one sentence; a complex
+abstraction may need background, examples, and a discussion of tradeoffs.
 
-Use this guide when writing or reviewing documentation. It covers Rust doc
-comments (`///`, `//!`), module documentation, and code comments (`//`). General
-writing rules also apply to READMEs and other prose guides. Formatting rules
-specific to Rustdoc are identified below.
+The [README](../README.md) is the repository entry point. Keep shared guides in
+`docs/`, API contracts with their definitions, and implementation reasoning
+beside the code it explains. Link to the authoritative explanation instead of
+maintaining parallel accounts or inventories of current files.
 
-Keep repository Markdown documentation together in `docs/`, with the top-level
-[`README.md`](../README.md) as the entry point. Use descriptive filenames here
-instead of nested READMEs in crate or source directories.
+## Audience and contracts
 
-## Audience and contract
+An item exposed through a public facade has a public contract, wherever it is
+implemented. Document intended behavior, accepted inputs, errors, panics, and
+invariants that are not apparent from the signature. Review re-exported docs as
+readers see them. Internal documentation can explain algorithms, representations,
+and maintenance constraints without making them public guarantees.
 
-Write for the users of the API being documented. Public-facing crate and item
-documentation describes the supported abstraction, how to use it, and the
-behavior callers can rely on. Treat statements in public documentation as part
-of the API contract. Omit internal implementation details from public
-documentation.
+Use `///` and `//!` for the abstraction and its contract; use `//` for local
+reasoning. Comments should explain why code is necessary or correct rather than
+narrate its syntax. Avoid promising incidental implementation behavior.
 
-Internal APIs can document implementation details for their users. Crates such
-as `bento-core` are internal even though their items use `pub`. Internal module
-and item documentation can explain algorithms, representations, invariants, and
-the decisions their maintainers need to understand. Keep local implementation
-reasoning beside the relevant code.
+Unsafe items need a `# Safety` section stating the caller's or implementer's
+obligations precisely. Explain how unsafe operations discharge those obligations
+where they occur. Distinguish memory-safety requirements from mathematical
+validity, performance properties, and application policy. For cryptographic
+code, make the scope and assumptions of side-channel claims explicit.
 
-Public module documentation should name only public API items and link to
-them. If an item cannot be linked as part of that API, omit it. Internal module
-documentation may discuss and link the internal API it serves.
+## Presentation
 
-Check where documentation reaches readers. Documentation on an internal item
-may also appear through a public facade's re-export. Review that presentation
-against the public API's intended contract. Linking from public documentation
-to an internal implementation is not a substitute for documenting the public
-abstraction.
+Use direct sentences, concrete terminology, and examples that explain meaningful
+relationships. Avoid filler and restating straightforward signatures. Introduce
+unfamiliar concepts before relying on them; use headings when they help readers
+navigate, without imposing a template on every module.
 
-For example, the public `addition_chain!` documentation can explain scaling and
-its support interface. Planner window widths, tie-breaking, and temporary
-bindings belong with the internal planner and expansion code.
+Start Rust doc blocks with a brief summary and separate further details with a
+blank line. Wrap prose at roughly 80 characters, use backticks for code names,
+and use conventional Markdown heading levels. Prefer executable examples with
+assertions; hide setup only when it distracts from the documented use.
 
-Use `///` and `//!` for an API's purpose, motivation, usage, and invariants.
-Use `//` for algorithm steps, optimization rationale, and non-obvious behavior
-within an implementation. Internal API documentation can explain the design
-needed to use that API; comments beside its implementation explain local
-mechanics. Omit obvious optimizations from both.
+Use Rustdoc intra-doc links for API items and relative links in repository
+guides. Link to named items, files, or section anchors, not line numbers. Define
+mathematical notation locally and ensure it renders in the supported renderer;
+keep plain code comments readable without mathematical rendering.
 
-## Introductions
+## Review
 
-Introduce each subject in this order:
-
-1. Briefly state what it does.
-2. Explain the problem it addresses.
-3. Explain the solution to that problem.
-4. Describe how this API realizes the solution more specifically.
-
-Scale the explanation to the subject. A simple operation may need only one or
-two sentences to cover this sequence; a complicated API may need paragraphs and
-an example. Do not manufacture a problem or add filler to satisfy the sequence.
-The final step in public documentation describes the API's operations and
-behavior. Implementation mechanics belong in documentation for internal APIs
-and in code comments.
-
-For substantial module documentation, separate conceptual grounding into a
-"Background" section and architectural choices and trade-offs into a "Design"
-section. Keep both within the module's audience boundary. Explain why a design
-choice addresses the problem, including the drawback of a naive approach when
-that motivates the choice. Avoid recounting alternatives that add no useful
-context.
-
-When a module organizes several submodules, enumerate those available to its
-audience with linked names and one-line summaries. Make dependencies on other
-APIs explicit through links. Connect mathematical constructs to the concrete
-API items or, for internal documentation, code paths that implement them.
-
-## Signatures and semantics
-
-Avoid explaining a straightforward signature. Argument and return types, trait
-bounds, and guarantees already evident from the type system usually need no
-prose restatement. Document the purpose of the operation and the semantics that
-the signature leaves unstated.
-
-For example, an addition-chain trait needs to explain associativity and the
-relationship between doubling and addition. Repeating that its supertrait is
-`Clone` contributes little when the declaration already says so.
-
-Use judgment for complicated interfaces. Explain relationships between types
-or show an example when that helps readers understand how to use the API.
-Macro input syntax may also need explanation because it has no ordinary
-function signature to communicate its accepted forms.
-
-Document intended behavior. Incidental capabilities of the current
-implementation do not belong in the contract. Avoid tables that merely
-reformat declarations already visible in the code.
-
-State preconditions directly. For example, "Must be smaller than `T`" is
-sufficient; do not append generic warnings that violations may cause panics
-or incorrect behavior. Document defined error and panic behavior when it is
-part of the API. For `unsafe` items, include a `# Safety` section that states
-the caller's obligations and explicitly warns about undefined behavior from
-violating the safety requirements.
-
-## Cross-references
-
-Document a concept where it is defined and link to that explanation from its
-uses. Each concept has one authoritative explanation. In Rustdoc, use intra-doc
-links such as ``[`AdditionChain`]`` or ``[`AdditionChain::double`]`` when those
-items are in scope. Use explicit link targets when the displayed name and the
-resolvable path differ. In Markdown guides, use relative links to repository
-documentation and source files.
-
-Keep enough local context to explain why the reference matters. For example,
-macro documentation can identify and link its support trait without repeating
-the trait's method signatures and laws. Verify that links resolve from the
-place where readers encounter the documentation, including public re-exports.
-
-Link consistently within a doc block. Once an item is linked, link each prose
-reference to it in that block. Put reference definitions such as
-``[`AdditionChain`]: crate::addchain::AdditionChain`` at the end of the block.
-
-Never refer to line numbers in documentation or code comments. This includes
-line ranges, line-number URL fragments, and file references with line-number
-suffixes. They become stale as code changes. Link to named items, modules,
-files, or section anchors instead.
-
-## Voice
-
-The technical voice is **intelligent but with nothing to prove**.
-
-Use direct sentences, concrete descriptions, and technical terms that serve
-the explanation. Explain difficult ideas patiently without displaying
-expertise for its own sake. Remove rhetorical flourishes, filler, promotional
-language, and commentary about how clever or elegant the implementation is.
-Each sentence should help the reader understand the problem, use the API, or
-maintain the internal code being documented.
-
-Write doc comments as complete sentences with proper punctuation. Describe
-functions in the third-person singular: "Returns the sum." Start type
-descriptions with an article: "A wrapper that..." Prefer relative clauses,
-such as "A type that computes...", over "A type for computing...".
-
-## Rustdoc and comment formatting
-
-- Start each `///` block with a brief one-line summary. Add a blank doc-comment
-  line before details when details are needed.
-- Wrap doc prose at approximately 80 characters, excluding the `///` or `//!`
-  prefix. Code blocks and display math may exceed that width.
-- Use `#` for top-level module headings and `###` for subsections. Skip `##`,
-  which is too visually similar to `#`.
-- Always backtick code identifiers in prose, including headings. For example,
-  write ``### The `ONE` Wire``.
-- Separate adjacent documented struct fields with a blank source line between
-  one field's declaration and the next field's doc block.
-- Leave a blank line before a `//` comment unless it starts a block.
-
-## Mathematics
-
-Escape underscores in LaTeX subscripts to prevent Markdown interpretation:
-write `$\mathbf{u}\_{i,j}$`. Put display math delimited by `$$` on separate
-lines, with its delimiters and content separate from prose.
-
-Avoid Unicode math symbols in `//` comments. When an explanation needs rendered
-math, prefer smaller functions with doc comments that can carry that
-explanation. Use KaTeX notation where the documentation renderer supports it.
-
-For polynomial evaluation APIs, check fixed and free variables against the
-signature. Uppercase variables such as `X` and `Y` denote polynomial variables;
-lowercase variables such as `x` and `y` denote fixed evaluation points. Method
-names list the fixed variables: `y()` fixes `y` and returns a polynomial in
-`X`, while `xy()` fixes both. "Restricted to X" in documentation for `y()`
-names the free variable of the result and is correct under this convention.
-Do not flag it as a mismatch merely because the method is named `y()`.
-
-## Reviewing changes
-
-Read changed documentation alongside the API or code it describes and the
-definitions it references. Check that:
-
-- The content serves its audience wherever it is exposed.
-- The introduction establishes purpose, problem, solution, and the API's role
-  with detail appropriate to its complexity.
-- Each explanation adds meaning beyond a straightforward signature.
-- Public documentation contains only the intended public contract.
-- Shared concepts use working cross-references instead of duplicated accounts.
-- No reference depends on a line number.
-- The prose is accurate, direct, and free of filler.
-- Sentence forms, links, headings, spacing, and math follow the rules above.
+Read documentation alongside the implementation and referenced definitions.
+Check that the claims are accurate, useful to the intended audience, and no
+stronger than the code and validation support. Remove obsolete material and
+unnecessary duplication. Run the documentation and example checks in
+[CI](../.github/workflows/ci.yml); warnings must fail the documentation build.

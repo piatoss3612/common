@@ -23,7 +23,7 @@ impl support_core::addchain::AdditionChain for Value {
 }
 
 pub fn scale(value: Value) -> Value {
-    macros::addition_chain!(value, 181)
+    macros::addition_chain!(crate = support_core; value, 181)
 }
 
 #[test]

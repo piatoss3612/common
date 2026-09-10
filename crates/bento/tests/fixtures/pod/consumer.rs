@@ -2,6 +2,7 @@ use super::bento;
 
 #[repr(C)]
 #[derive(Clone, Copy, bento::Pod)]
+#[pod(crate = bento)]
 pub struct Record {
     pub low: u16,
     pub high: u16,

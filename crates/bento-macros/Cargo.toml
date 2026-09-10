@@ -25,3 +25,6 @@ bento-core.workspace = true
 version = "2"
 features = ["full"]
 # Add `extra-traits` for debugging.
+
+[dev-dependencies]
+num-bigint = "0.4"

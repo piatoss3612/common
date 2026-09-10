@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Check Cargo targets and standalone Rust fixtures with the pinned toolchain."""
+
+import difflib
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+root = Path(__file__).resolve().parent.parent
+subprocess.run(["cargo", "fmt", "--check"], cwd=root, check=True)
+metadata = json.loads(subprocess.check_output(
+    ["cargo", "metadata", "--locked", "--offline", "--no-deps", "--format-version", "1"],
+    cwd=root,
+))
+for package in metadata["packages"]:
+    fixtures = Path(package["manifest_path"]).parent / "tests" / "fixtures"
+    for source in sorted(fixtures.rglob("*.rs")):
+        # stdin avoids resolving modules that the consumer harness assembles.
+        original = source.read_text()
+        result = subprocess.run(
+            ["rustfmt", "--edition", package["edition"]],
+            input=original,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=root,
+        )
+        if result.returncode:
+            print(f"Formatting failed: {source.relative_to(root)}", file=sys.stderr)
+            sys.stderr.write(result.stderr)
+            sys.exit(result.returncode)
+        # --check does not report stdin differences on the pinned rustfmt.
+        if result.stdout != original:
+            name = str(source.relative_to(root))
+            sys.stderr.writelines(difflib.unified_diff(
+                original.splitlines(keepends=True),
+                result.stdout.splitlines(keepends=True),
+                fromfile=name,
+                tofile=f"{name} (formatted)",
+            ))
+            sys.exit(1)

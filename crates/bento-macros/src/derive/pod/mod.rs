@@ -46,6 +46,16 @@ pub fn derive(input: DeriveInput, core: BentoCorePath) -> syn::Result<TokenStrea
     let Data::Struct(data) = &input.data else {
         return Err(syn::Error::new_spanned(&input, "Pod requires a struct"));
     };
+    for field in &data.fields {
+        for attribute in &field.attrs {
+            if attribute.path().is_ident("pod") {
+                return Err(syn::Error::new_spanned(
+                    attribute,
+                    "Pod attributes are supported only on the struct",
+                ));
+            }
+        }
+    }
     let mut representation = false;
     for attribute in &input.attrs {
         if attribute.path().is_ident("repr") {
@@ -92,19 +102,16 @@ pub fn derive(input: DeriveInput, core: BentoCorePath) -> syn::Result<TokenStrea
     // The representation fixes field order, and each field implements `Pod`.
     // Recursive validation establishes field validity and target layout. Equality
     // with the sum of field sizes excludes both interior and trailing padding.
+    // Metadata and its inherent check belong to the actual trait, so callers
+    // cannot replace safety-critical helpers through the chosen support path.
     Ok(quote! {
         #[automatically_derived]
         unsafe impl #impl_generics #core::Pod for #name #ty_generics #where_clause {
             const ASSERT_LAYOUT: () = {
-                // Use a primitive assertion for the storage convention even
-                // on unit structs, whose field list is empty.
-                let () = <::core::primitive::u8 as #core::Pod>::ASSERT_LAYOUT;
                 #(#field_assertions)*
-                ::core::assert!(
-                    ::core::mem::size_of::<Self>() == 0 #(+ ::core::mem::size_of::<#fields>())*,
-                    "Pod struct must have no padding"
+                <Self as #core::Pod>::__LAYOUT.assert_record(
+                    &[#(<#fields as #core::Pod>::__LAYOUT),*]
                 );
-                ::core::assert!(::core::mem::align_of::<Self>() <= #core::MAX_ALIGN, "over-aligned Pod type");
             };
         }
     })

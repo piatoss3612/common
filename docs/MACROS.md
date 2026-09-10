@@ -1,82 +1,52 @@
-# `bento-macros`
+# Procedural macros
 
-This crate implements procedural macros exposed through the
-[`bento`](../crates/bento/src/lib.rs) facade. Consumers should use the macros through
-[`bento`](../crates/bento/src/lib.rs).
-
-See the [crate development guide](CRATES.md) for workspace structure and
-dependency conventions. Implementation details are documented alongside the
-code; build them with `cargo doc --document-private-items`.
-
-## Background
-
-Macros run on the build host, while their output must compile for the caller's
-target. Shared support interfaces and reference arithmetic belong in
-[`bento-core`](../crates/bento-core/src/lib.rs); parsing and token generation belong
-in `bento-macros`.
-
-## Design
-
-Entry points in the [crate root](../crates/bento-macros/src/lib.rs) parse input,
-resolve dependency paths, and invoke
-[`macro_body`](../crates/bento-macros/src/helpers.rs). Expansion uses
-`proc_macro2::TokenStream` and `syn::Result` so it can be tested outside the
-compiler's procedural macro context.
-
-The implementation is organized into:
-
-- [`derive`](../crates/bento-macros/src/derive/mod.rs): derive macro conventions
-  and the checked `Pod` implementation.
-- [`proc`](../crates/bento-macros/src/proc/mod.rs): function-like macro parsing and
-  expansion.
-- [`helpers`](../crates/bento-macros/src/helpers.rs): shared error reporting for
-  entry points.
-- [`path_resolution`](../crates/bento-macros/src/path_resolution.rs): caller
-  dependency lookup for generated library paths.
+[`bento-macros`](../crates/bento-macros/src/lib.rs) implements macros exposed
+through the [`bento`](../crates/bento/src/lib.rs) facade. Parsing and expansion
+run on the build host; emitted code compiles for the caller's target. See the
+[crate guide](CRATES.md) for dependency boundaries.
 
 ## Authoring conventions
 
-Follow the module conventions in [`derive`](../crates/bento-macros/src/derive/mod.rs)
-or [`proc`](../crates/bento-macros/src/proc/mod.rs) when adding a macro. Report
-invalid input with `syn::Error`; reserve panics for internal invariants. In
-generated code, interpolate the supplied
-[`BentoCorePath`](../crates/bento-macros/src/path_resolution.rs) for library items
-and use absolute `::core` paths for standard types to support `no_std` callers.
+Keep compiler entry points thin. Parse and expand with `syn::Result` and
+`proc_macro2::TokenStream` so most behavior can be tested outside the procedural
+macro context. Report invalid input with `syn::Error` at the relevant span;
+reserve panics for internal invariants. Reject unsupported helper attributes,
+including misplaced ones, instead of silently ignoring them.
 
-Document and explicitly re-export each macro from
-[`bento`](../crates/bento/src/lib.rs). Test parsing and expansion in the
-implementation module, and test generated behavior through the
-[`bento` integration tests](../crates/bento/tests/).
-Expansions that reference library items also need Cargo consumer tests in the
-facade's suite to exercise dependency resolution. Those tests create separate
-consumer manifests. Follow the [testing guide](TESTING.md) for
-readable token expectations, compiler fixtures, and example execution.
+Document and deliberately export public macros from the facade. Generated
+code must support the target's `no_std` context. Use qualified paths, but do not
+assume that `::core` or caller-visible helper names authenticate safety checks.
+For generated unsafe implementations, anchor the proof in the actual support
+trait and code whose meaning the consumer cannot substitute. Layout and other
+target properties must be checked in target-compiled code.
 
-## Addition chains
+Generated names must survive caller locals, constants, imports, and repeated
+invocations. Preserve the documented evaluation count and the caller's control
+flow when wrapping expressions. Exercise these properties in real consumers;
+see the [testing guide](TESTING.md).
 
-`addition_chain!` provides a working example:
+## Support paths
 
-- [Public documentation and examples](../crates/bento/src/lib.rs).
-- [Parsing and expansion](../crates/bento-macros/src/proc/addition_chain/mod.rs) and
-  [chain planning](../crates/bento-macros/src/proc/addition_chain/schedule.rs).
-- [Expansion tests](../crates/bento-macros/src/proc/addition_chain/tests.rs),
-  [behavioral tests](../crates/bento/tests/addition_chain.rs), and
-  [Cargo consumer tests](../crates/bento/tests/consumers.rs).
+Prefer a facade wrapper that forwards `$crate` to the implementation. The
+public `addition_chain!(value, scalar)` macro uses this approach, so aliases,
+build dependencies, and indirect re-exports retain the correct support path.
+Direct users of the implementation crate must supply its internal protocol:
+`addition_chain!(crate = support_path; value, scalar)`.
 
-## POD storage
+Derives cannot receive `$crate` from a declarative wrapper. The `Pod` derive
+looks up the facade dependency's Cargo name for ordinary callers. Use
+`#[pod(crate = path)]` on the struct for direct-core consumers, build-only
+dependencies, indirect re-exports, or ambiguous dependency arrangements. That
+path must expose the intended `Pod` trait. Manifest discovery identifies names;
+it does not determine whether an optional, target, or development dependency is
+active. Explicit paths must name support available in that compilation context.
 
-The [`Pod` derive](../crates/bento-macros/src/derive/pod/mod.rs) validates a
-struct's representation and generates field bounds and recursive layout
-assertions. It resolves dependencies through
-[`BentoCorePath`](../crates/bento-macros/src/path_resolution.rs), with an optional
-`#[pod(crate = path)]` override for support reached through another facade.
-Assertions remain associated with the concrete type so generic records can be
-validated when used for storage.
+## Storage derivation
 
-The declarative [embedding macros](../crates/bento-core/src/pod/macros.rs) live
-in core and use `$crate` paths. Their initializers borrow aligned bytes for
-static typed views.
-
-See the [POD guide](POD.md) for usage, format ownership, and validation coverage.
-In particular, compiler tests must perform full builds: metadata-only checks
-can miss deferred layout assertion failures.
+The `Pod` derive validates representation and field bounds, then emits recursive
+layout assertions. Measurements and record checks belong to core-owned metadata
+obtained through the actual `Pod` trait, so replacing a caller's `core` path or
+re-exporting the trait with counterfeit helpers cannot bypass validation.
+Metadata is not a validation witness: storage consumers must still evaluate
+`Pod::ASSERT_LAYOUT`, including for empty values. See the [POD guide](POD.md)
+and the [trait contract](../crates/bento-core/src/pod/mod.rs).

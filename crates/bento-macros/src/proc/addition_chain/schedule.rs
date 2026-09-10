@@ -159,6 +159,45 @@ mod tests {
     }
 
     #[test]
+    fn every_window_replays_wide_scalars_independently() {
+        use num_bigint::BigUint;
+
+        let mut scalars = Vec::new();
+        for bits in [1usize, 63, 64, 65, 127, 128, 129, 255, 256, 257, 511, 1024] {
+            let power = BigUint::from(1u8) << bits;
+            scalars.extend([&power - 1u8, power.clone(), &power + 1u8]);
+        }
+        // Fixed recurrence gives reproducible mixed patterns without a RNG dependency.
+        let mut state = 0x9e37_79b9_7f4a_7c15u64;
+        for length in [3, 4, 8, 16] {
+            let mut bytes = Vec::new();
+            for _ in 0..length {
+                state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                bytes.extend_from_slice(&state.to_le_bytes());
+            }
+            scalars.push(BigUint::from_bytes_le(&bytes));
+        }
+        for scalar in scalars {
+            let limbs = scalar.to_u64_digits();
+            for width in 1..=6 {
+                let schedule = plan_with_width(&limbs, scalar.bits() as usize, width);
+                let mut value = BigUint::from(2 * schedule.first + 1);
+                assert!(schedule.first <= schedule.max_odd_index);
+                for step in schedule.steps {
+                    match step {
+                        Step::Double => value <<= 1usize,
+                        Step::AddOdd(index) => {
+                            assert!(index <= schedule.max_odd_index);
+                            value += BigUint::from(2 * index + 1);
+                        }
+                    }
+                }
+                assert_eq!(value, scalar, "window width {width}");
+            }
+        }
+    }
+
+    #[test]
     fn zero_has_no_chain() {
         assert!(plan(&[]).is_none());
         assert!(plan(&[0, 0]).is_none());

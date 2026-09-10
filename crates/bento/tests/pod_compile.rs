@@ -14,6 +14,7 @@ mod support;
 use support::{cargo, diagnostics};
 
 struct Consumer {
+    _temporary: tempfile::TempDir,
     directory: PathBuf,
 }
 
@@ -23,7 +24,8 @@ impl Consumer {
             .join("../..")
             .canonicalize()
             .unwrap();
-        let directory = workspace.join("target/pod-consumers");
+        let temporary = support::workspace("bento-pod-");
+        let directory = temporary.path().to_path_buf();
         fs::create_dir_all(directory.join("src/bin")).unwrap();
         let facade = workspace.join("crates/bento");
         fs::write(
@@ -40,7 +42,10 @@ impl Consumer {
         fs::copy(workspace.join("Cargo.lock"), directory.join("Cargo.lock")).unwrap();
         fs::write(directory.join("record.pod"), [1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
         fs::write(directory.join("empty.pod"), []).unwrap();
-        Self { directory }
+        Self {
+            _temporary: temporary,
+            directory,
+        }
     }
 
     fn build(&self, name: &str, source: TokenStream, error: Option<&str>) {
@@ -77,7 +82,46 @@ fn pod_contract_is_enforced_during_codegen() {
     padded_layouts_are_checked_at_storage_operations(&consumer);
     invalid_definitions_are_reported_by_derive(&consumer);
     excessive_alignment_is_rejected(&consumer);
+    caller_names_cannot_replace_layout_checks(&consumer);
     static_views_require_exact_byte_lengths(&consumer);
+}
+
+#[rustfmt::skip]
+fn caller_names_cannot_replace_layout_checks(consumer: &Consumer) {
+    let counterfeit = quote! {
+        extern crate core as real_core;
+        extern crate self as core;
+        pub use real_core::{assert, marker, primitive};
+        pub mod mem {
+            pub const fn size_of<T>() -> usize { 0 }
+            pub const fn align_of<T>() -> usize { 1 }
+        }
+        mod support {
+            pub use bento::Pod;
+            pub const MAX_ALIGN: usize = 1024;
+            pub const fn assert_little_endian() {}
+        }
+    };
+    for (name, record, expected) in [
+        ("counterfeit_core_valid", quote! {
+            #[repr(C)] struct Record(u32, u32);
+        }, None),
+        ("counterfeit_core_padding", quote! {
+            #[repr(C)] struct Record(u8, u32);
+        }, Some("Pod struct must have no padding")),
+        ("counterfeit_support_alignment", quote! {
+            #[repr(C, align(128))] struct Record([u8; 128]);
+        }, Some("over-aligned Pod type")),
+    ] {
+        consumer.build(name, quote! {
+            #counterfeit
+            #[derive(Clone, Copy, bento::Pod)]
+            #[pod(crate = support)]
+            #record
+            const _: () = <Record as bento::Pod>::ASSERT_LAYOUT;
+            fn main() {}
+        }, expected);
+    }
 }
 
 #[rustfmt::skip]

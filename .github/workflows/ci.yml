@@ -17,10 +17,12 @@ jobs:
       - name: Install pinned toolchain
         run: rustup toolchain install
       - name: Check formatting
-        run: cargo fmt --check
+        run: python3 ci/check-format
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
       - name: Check documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
         run: cargo doc --locked --workspace --all-features --no-deps
 
   test:
@@ -32,3 +34,27 @@ jobs:
         run: rustup toolchain install
       - name: Run test suite (all workspace crates, all features)
         run: cargo test --release --locked --workspace --all-features
+
+  miri:
+    name: Unsafe storage checks
+    runs-on: ubuntu-latest
+    env:
+      MIRI_TOOLCHAIN: nightly-2026-09-06
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install Miri toolchain
+        run: rustup toolchain install "$MIRI_TOOLCHAIN" --profile minimal --component miri,rust-src
+      - name: Check core storage
+        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib
+      - name: Check public storage API
+        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod
+
+  portability:
+    name: Target layout contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned toolchain and target libraries
+        run: rustup toolchain install --target thumbv7em-none-eabi,s390x-unknown-linux-gnu
+      - name: Build portable libraries and check unsupported layouts
+        run: cargo test --release --locked -p zakura-bento --test portability -- --ignored

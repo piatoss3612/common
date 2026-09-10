@@ -14,7 +14,12 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
-pub use bento_core::*;
+extern crate self as zakura_bento;
+
+pub use bento_core::{AlignedBytes, MAX_ALIGN, Pod, addchain, bytes_of, bytes_of_slice};
+
+#[doc(hidden)]
+pub use bento_macros::addition_chain as __addition_chain;
 
 #[doc(inline)]
 pub use bento_core::{embed_array, embed_struct};
@@ -65,10 +70,11 @@ pub use bento_core::{embed_array, embed_struct};
 /// const _: () = <Padded as bento::Pod>::ASSERT_LAYOUT;
 /// ```
 ///
-/// Dependency aliases are discovered automatically. If the support items are
-/// reached through another crate's re-exports, `#[pod(crate = path)]` supplies
-/// their path explicitly. That path must expose [`Pod`](trait@Pod) and
-/// [`MAX_ALIGN`].
+/// Ordinary facade dependency aliases are discovered automatically. Use
+/// `#[pod(crate = path)]` for build-only dependencies, direct core dependencies,
+/// support reached through another crate's re-exports, or ambiguous dependency
+/// arrangements. The path must expose the [`Pod`](trait@Pod) trait. Discovery
+/// reads manifest names; it does not determine which dependencies Cargo enabled.
 pub use bento_macros::Pod;
 
 /// Scales a value using a compile-time addition chain.
@@ -104,6 +110,10 @@ pub use bento_macros::Pod;
 /// assert_eq!(value, Value(7));
 /// ```
 ///
+/// Dependency aliases and re-exports of this macro retain the facade's support
+/// path, including in build scripts. A fixed schedule does not establish that
+/// the supplied operations are constant-time.
+///
 /// The exponentiation interpretation described by [`addchain::AdditionChain`]
 /// can be used to raise a value to a fixed power:
 ///
@@ -119,4 +129,9 @@ pub use bento_macros::Pod;
 ///
 /// assert_eq!(bento::addition_chain!(Power(3), 9), Power(19_683));
 /// ```
-pub use bento_macros::addition_chain;
+#[macro_export]
+macro_rules! addition_chain {
+    ($($input:tt)*) => {
+        $crate::__addition_chain!(crate = $crate; $($input)*)
+    };
+}

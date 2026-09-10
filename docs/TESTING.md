@@ -1,93 +1,62 @@
 # Testing
 
-Tests should make clear which behavior they establish and why that behavior is
-checked at that layer. Run the [workspace checks](../README.md#testing) before
-finishing a change.
+Choose the narrowest test layer that establishes the property under review.
+Keep tests with the crate that owns the behavior; integration across crate
+boundaries belongs with the public API or consumer that assembles them. Future
+arithmetic tests need not live in the support facade.
 
-## Test roles and placement
+The [CI workflow](../.github/workflows/ci.yml) defines the required checks and
+pins the additional toolchain and targets. The [README](../README.md#testing)
+lists the local baseline. Tests run with optimizations so validation must not
+depend on debug assertions.
 
-All integration tests for the `bento` stack live in the
-[`bento` facade's `tests/` directory](../crates/bento/tests/), including compiler
-diagnostics, dependency resolution, and artifact generation. These tests verify
-the assembled library and its consumer behavior. Keep implementation unit tests
-in `bento-core` and `bento-macros` beside the code they exercise.
+## Test roles
 
-- **Unit tests** live beside the implementation under `#[cfg(test)]`. Test
-  parsing, algorithms, validation, and expansion without invoking a downstream
-  compiler. Storage operations that need only core types belong in
-  [`bento-core`](../crates/bento-core/src/pod/storage/tests.rs); macro parsing and
-  token generation belong in
-  [`bento-macros`](../crates/bento-macros/src/derive/pod/tests.rs).
-- **Public API integration tests** exercise derived types, re-exports,
-  and storage together through the facade. Keep detailed edge cases here when
-  they need several components to work together.
-- **Compiler integration tests** build separate Cargo consumers when the result
-  depends on dependency lookup, type checking, or constant evaluation. The
-  [Cargo consumer tests](../crates/bento/tests/consumers.rs) cover dependency
-  arrangements and diagnostics. The
-  [POD compiler tests](../crates/bento/tests/pod_compile.rs) cover rejected
-  representations and storage operations.
-- **Examples** live in the public crate's `examples/` directory. Each should
-  demonstrate a complete, representative use and assert its result, serving as
-  both usage documentation and an integration check. Set `test = true` and
-  `harness = false` in its `[[example]]` manifest entry so the ordinary workspace
-  test command executes `main`. Keep diagnostic fixtures and exhaustive edge
-  cases in tests, where their intent is clearer.
-- **Doctests** verify the usage shown in public API documentation. Keep them
-  focused on the documented contract and follow the
-  [documentation guide](DOCUMENTATION.md).
+- Unit tests check algorithms, parsers, and local contracts beside their code.
+  Use independent references for arithmetic and representation checks, including
+  boundary values and inputs wider than native integers. Replaying output with
+  the same algorithm is not an independent correctness check.
+- Public API tests check observable behavior and interactions between components.
+  Token snapshots establish expansion structure, not successful compilation or
+  runtime semantics.
+- Compiler tests establish type, diagnostic, constant-evaluation, and dependency
+  contracts in separate consumers. Use full builds for assertions deferred to
+  code generation; `cargo check` can miss them. Check the relevant diagnostic and
+  source location without pinning the compiler's entire rendered output.
+- Examples demonstrate complete uses and assert their results. Configure runnable
+  examples with `test = true` and `harness = false` so the suite executes them.
+  Doctests verify focused public API examples.
 
-Prefer the narrowest layer that establishes a property. Expansion comparisons
-show what code a macro emits; they do not establish that the code type-checks or
-behaves correctly. Add integration coverage for those properties without
-repeating every parser case in a consumer build.
+Safety and portability need targeted evidence as well as native tests. CI runs
+Miri over storage unit tests and the public storage integration tests; nested
+Cargo tests stay in the native suite. The portability test builds `no_std`
+libraries for a 32-bit little-endian target and separately checks that big-endian
+storage fails while unrelated functionality compiles. It is ignored in ordinary
+runs because target libraries must be installed, and explicitly executed in CI.
+These checks do not establish correctness on every target or constant-time
+behavior; extend validation when new code introduces new assumptions.
 
-## Rust inputs and expansion expectations
+## Fixtures and nested builds
 
-Write Rust inputs and expected expansions with `quote!` or `syn::parse_quote!`,
-so the code remains readable as Rust. For a complete expansion expectation,
-compare token streams through `to_string()` and parse the result as the expected
-syntax category. See the [derive snapshot](../crates/bento-macros/src/derive/pod/tests.rs)
-and [addition-chain snapshot](../crates/bento-macros/src/proc/addition_chain/tests.rs).
+Keep complete Rust consumer programs in `.rs` files under `tests/fixtures/`,
+grouped by the behavior they exercise. Preserve relative module and data paths.
+Small parameterized inputs and expected expansions can use `quote!` or
+`syn::parse_quote!`. Use source strings only when text itself is under test or
+when writing the generated source at the compiler boundary.
 
-These comparisons discard ordinary source whitespace, but token punctuation
-still matters. For example, an interpolated type can leave separate closing
-`> >` tokens where handwritten `>>` has joint punctuation. Match the emitted
-tokens in the expectation; avoid broad string replacements that could conceal
-a change in the expansion.
+Compare token expectations without normalizing away meaningful punctuation,
+and parse complete expansions as the expected syntax category. A local
+`#[rustfmt::skip]` is appropriate when formatting quoted Rust obscures a case;
+keep the harness itself formatted. The [format check](../ci/check-format)
+includes standalone fixtures that `cargo fmt` does not discover.
 
-Use `#[rustfmt::skip]` on individual tests or case-building functions when
-formatting quoted Rust obscures the inputs or expectations. Maintain that
-layout by hand and keep the surrounding implementation and harness formatted
-normally. This also preserves deliberately separate punctuation tokens.
+Give every nested Cargo test run a unique temporary workspace and target
+directory, owned until its processes finish. This prevents concurrent runs from
+rewriting each other's manifests, sources, or artifacts and avoids the parent
+Cargo lock. Seed resolution from the workspace lockfile and run offline, allowing
+Cargo to adapt the seed to the fixture's dependency graph. The parent build must
+first fetch any dependencies those consumers require.
 
-Use ordinary `.rs` fixtures for complete consumer programs and cases involving
-source-relative paths. Small parameterized compiler cases can use `quote!` and
-be serialized when the harness writes their source files. Keep Rust source out
-of string literals unless the literal text itself is under test, as with a
-lexer or malformed tokens that `quote!` cannot express. Diagnostic messages,
-numeric parser inputs, and generated manifests remain strings.
-
-Format standalone `.rs` fixtures directly with the pinned `rustfmt` and the
-workspace edition. `cargo fmt` visits discovered targets and modules; it does
-not find every fixture file.
-
-## Consumer builds and artifacts
-
-Group fixtures by feature under `tests/fixtures/`; use a shared directory for
-consumers that exercise multiple features. Preserve module and relative file
-paths when copying fixtures into generated packages. Name compiler inputs as
-test fixtures and build them as library or binary targets, reserving examples
-for runnable demonstrations.
-
-Nested Cargo invocations need a separate target directory to avoid the parent
-build's lock. Seed their dependency resolution from the workspace lockfile and
-run offline. Assert the expected diagnostic and its source location without
-pinning the compiler's entire rendered message.
-
-Use full release builds for assertions deferred until code generation;
-`cargo check` can miss those failures. Fixed byte fixtures test embedding and
-length validation. A generator-to-consumer test must also write the artifact
-through the storage API before compiling and running the consumer. The
-[embedding integration test](../crates/bento/tests/embedding.rs) does this with a
-build script and a shared record definition.
+Fixed bytes test format interpretation and length checks. A generator-to-consumer
+round trip must actually generate the artifact through the writing API before
+building its consumer; copying a golden file does not exercise generation.

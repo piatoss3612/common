@@ -18,6 +18,25 @@ use crate::path_resolution::BentoCorePath;
 
 mod schedule;
 
+/// The internal protocol used by the facade wrapper and direct core consumers.
+pub(crate) struct Invocation {
+    pub(crate) core: BentoCorePath,
+    pub(crate) input: Input,
+}
+
+impl Parse for Invocation {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        input.parse::<Token![crate]>()?;
+        input.parse::<Token![=]>()?;
+        let core = input.parse::<syn::Path>()?.into();
+        input.parse::<Token![;]>()?;
+        Ok(Self {
+            core,
+            input: input.parse()?,
+        })
+    }
+}
+
 /// A parsed invocation whose scalar still needs semantic validation.
 ///
 /// [`evaluate`] checks that the scalar is nonzero and unsuffixed before
@@ -62,13 +81,15 @@ pub(crate) fn evaluate(input: Input, core: BentoCorePath) -> Result<TokenStream>
         ));
     };
 
-    // Mixed-site spans keep generated bindings separate from caller bindings.
-    // Qualified trait calls avoid trait imports and inherent method lookup.
+    // Mixed-site spans isolate caller locals, but constants still participate
+    // in pattern resolution. Functions in the helper's enclosing scope shield
+    // every generated binding name. The caller expression stays outside that
+    // scope as the argument to the generated function.
     let odd = |index| format_ident!("__bento_odd_{index}", span = Span::mixed_site());
     let base = odd(0);
     let doubled = format_ident!("__bento_doubled", span = Span::mixed_site());
     let accumulator = format_ident!("__bento_accumulator", span = Span::mixed_site());
-    let clone = format_ident!("__bento_clone", span = Span::mixed_site());
+    let chain = format_ident!("__bento_chain", span = Span::mixed_site());
     let support = quote!(#core::addchain::AdditionChain);
     let table = if schedule.max_odd_index == 0 {
         quote!()
@@ -97,21 +118,21 @@ pub(crate) fn evaluate(input: Input, core: BentoCorePath) -> Result<TokenStream>
             quote!(#accumulator = #support::add(&#accumulator, &#entry);)
         }
     });
-    Ok(quote! {{
-        let #base = (#value);
-        #table
-        let #mutability #accumulator = {
-            // Enforce the trait even for scalar one. Unlike local bindings,
-            // item names are not hygienic at mixed site; keep this helper out
-            // of the caller expression's scope.
-            fn #clone<T: #support>(value: &T) -> T {
-                ::core::clone::Clone::clone(value)
+    let shields = (0..=schedule.max_odd_index)
+        .map(odd)
+        .chain([doubled.clone(), accumulator.clone()]);
+    Ok(quote! {
+        ({
+            #(#[allow(dead_code)] fn #shields() {})*
+            fn #chain<__BentoValue: #support>(#base: __BentoValue) -> __BentoValue {
+                #table
+                let #mutability #accumulator = __BentoValue::clone(&#first);
+                #(#steps)*
+                #accumulator
             }
-            #clone(&#first)
-        };
-        #(#steps)*
-        #accumulator
-    }})
+            #chain
+        })(#value)
+    })
 }
 
 /// Decodes decimal digits into little-endian limbs without a fixed integer size.

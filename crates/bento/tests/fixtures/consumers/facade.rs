@@ -13,6 +13,12 @@ pub mod pod;
 // Consumers can expose the support API through their own facade.
 pub use bento::*;
 
+// Exercise automatic derive discovery independently of the shared core fixture.
+#[repr(transparent)]
+#[derive(Clone, Copy, bento::Pod)]
+pub struct Automatic(pub u32);
+const _: () = <Automatic as bento::Pod>::ASSERT_LAYOUT;
+
 #[derive(Clone)]
 pub struct Value(pub u64);
 

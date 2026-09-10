@@ -14,7 +14,7 @@ reorganization when it makes the result more consistent and easier to navigate.
 Keep it tied to the change and update affected paths, links, and test harnesses.
 
 For example, adding a `pod/` directory to the
-[macro fixtures](../crates/bento-macros/tests/fixtures/) calls for grouping the
+[integration fixtures](../crates/bento/tests/fixtures/) calls for grouping the
 existing addition-chain fixtures under `addition_chain/` too. Fixtures shared by
 both features belong in a common directory such as `consumers/`.
 
@@ -127,9 +127,10 @@ both ordinary library code and macros can use it. Macros execute on the build
 host; generated Rust code is compiled in the caller's crate for the target.
 These are separate dependency contexts.
 
-`bento-macros` also has a development dependency on `bento` for tests using the
-public facade. Cargo permits this development dependency cycle; it does not
-introduce a normal dependency from the macro implementation back to the facade.
+All integration tests for the `bento` stack live with the `bento` facade,
+including compiler and Cargo consumer tests. Implementation unit tests stay in
+their owning crates. See the [testing guide](TESTING.md) for test roles, fixture
+placement, and executable examples.
 
 ## Procedural macros
 

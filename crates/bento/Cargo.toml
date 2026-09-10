@@ -14,3 +14,18 @@ publish.workspace = true
 [dependencies]
 bento-core.workspace = true
 bento-macros.workspace = true
+
+[dev-dependencies]
+proc-macro2 = "1"
+quote = "1"
+
+# Run the examples' assertions as part of the workspace test suite.
+[[example]]
+name = "addition_chain"
+test = true
+harness = false
+
+[[example]]
+name = "embed"
+test = true
+harness = false

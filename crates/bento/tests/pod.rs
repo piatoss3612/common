@@ -1,6 +1,8 @@
 //! Layout and byte-view round trips through the public crate paths.
 #![forbid(unsafe_code)]
 
+use zakura_bento as bento;
+
 use bento::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 
 /// A test record that mixes integer widths without padding.
@@ -52,20 +54,6 @@ fn storage_is_aligned_to_the_advertised_limit() {
     static ONE: AlignedBytes<64> = AlignedBytes([1; 64]);
     let line: &'static CacheLine = ONE.as_value();
     assert_eq!(bytes_of(line), &ONE.0);
-}
-
-#[test]
-fn casts_round_trip_through_stored_bytes() {
-    static BYTES: AlignedBytes<64> = AlignedBytes([7; 64]);
-    let values: &'static [u16; 32] = BYTES.as_array();
-    assert!(values.iter().all(|&value| value == 0x0707));
-    assert_eq!(bytes_of_slice(&values[..]), &BYTES.0);
-    assert_eq!(bytes_of_slice(values).as_ptr(), BYTES.0.as_ptr());
-
-    let single: &'static [u64; 8] = BYTES.as_value();
-    assert_eq!(bytes_of(single), &BYTES.0);
-    assert_eq!(core::ptr::from_ref(single).cast::<u8>(), BYTES.0.as_ptr());
-    assert_eq!(single[0], 0x0707_0707_0707_0707);
 }
 
 #[test]
@@ -131,36 +119,24 @@ fn generic_records_and_phantom_markers() {
 }
 
 #[test]
-fn primitives_preserve_little_endian_bytes_at_boundaries() {
-    macro_rules! check {
-        ($($ty:ty),*) => {$(
-            for value in [0, 1, <$ty>::MAX / 2, <$ty>::MAX] {
-                assert_eq!(bytes_of(&value), value.to_le_bytes());
-            }
-        )*};
-    }
-    check!(u8, u16, u32, u64);
-}
-
-#[test]
 fn file_embedding_preserves_records_arrays_and_empty_layouts() {
     bento::embed_struct! {
-        static RECORD: Record = "../../bento/examples/data/record.bin";
+        static RECORD: Record = "../examples/data/record.bin";
     }
     bento::embed_array! {
-        static WORDS: [u32; 2] = "../../bento/examples/data/record.bin";
+        static WORDS: [u32; 2] = "../examples/data/record.bin";
     }
     bento::embed_array! {
-        static EMPTY: [u64; 0] = "../../bento/examples/data/empty.bin";
+        static EMPTY: [u64; 0] = "fixtures/pod/empty.bin";
     }
     #[repr(C, align(64))]
     #[derive(Clone, Copy, bento::Pod)]
     struct Empty;
     bento::embed_struct! {
-        static ZERO: Empty = "../../bento/examples/data/empty.bin";
+        static ZERO: Empty = "fixtures/pod/empty.bin";
     }
     bento::embed_array! {
-        static ZEROS: [Empty; 3] = "../../bento/examples/data/empty.bin";
+        static ZEROS: [Empty; 3] = "fixtures/pod/empty.bin";
     }
     assert_eq!(RECORD.low, 0x0201);
     assert_eq!(RECORD.high, 0x0403);
@@ -172,12 +148,4 @@ fn file_embedding_preserves_records_arrays_and_empty_layouts() {
     assert_eq!(core::ptr::from_ref(ZERO).addr() % MAX_ALIGN, 0);
     assert_eq!(ZEROS.len(), 3);
     assert!(bytes_of_slice(ZEROS).is_empty());
-}
-
-#[test]
-fn runtime_views_reject_incorrect_buffer_lengths() {
-    static BYTES: AlignedBytes<8> = AlignedBytes([0; 8]);
-    assert!(std::panic::catch_unwind(|| BYTES.as_value::<u32>()).is_err());
-    assert!(std::panic::catch_unwind(|| BYTES.as_array::<u32, 3>()).is_err());
-    assert!(std::panic::catch_unwind(|| BYTES.as_array::<u32, 0>()).is_err());
 }

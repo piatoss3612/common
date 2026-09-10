@@ -1,6 +1,6 @@
 //! Cargo consumer tests for dependency path resolution and diagnostics.
 //!
-//! Tests inside the macro crate already see its direct core dependency, so
+//! Tests inside the facade already see its direct core dependency, so
 //! separate consumer manifests are needed to prove the facade fallback works.
 //! Keep these builds offline and seed their resolution from the workspace lock;
 //! the parent workspace build fetches the dependencies the consumers need.
@@ -74,7 +74,7 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         fs::write(
             package.join("Cargo.toml"),
             format!(
-                "[package]\nname = {name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\nautoexamples = false\n\n[dependencies]\n{dependencies}\n\n[features]\n{features}\n"
+                "[package]\nname = {name:?}\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\nautobins = false\nautoexamples = false\n\n[dependencies]\n{dependencies}\n\n[features]\n{features}\n"
             ),
         )
         .unwrap();
@@ -124,10 +124,10 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         "{diagnostic}"
     );
 
-    // Only register failing examples after the successful consumer build.
+    // Only register failing binaries after the successful consumer build.
     // Check stable messages and source locations, not whole rustc renderings.
     let package = root.join("facade-default");
-    fs::create_dir_all(package.join("examples")).unwrap();
+    fs::create_dir_all(package.join("src/bin")).unwrap();
     let manifest_path = package.join("Cargo.toml");
     let mut manifest_text = fs::read_to_string(&manifest_path).unwrap();
     for (name, expected) in [
@@ -151,17 +151,17 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
     ] {
         fs::copy(
             fixtures.join(format!("addition_chain/{name}.rs")),
-            package.join(format!("examples/{name}.rs")),
+            package.join(format!("src/bin/{name}.rs")),
         )
         .unwrap();
-        manifest_text.push_str(&format!("\n[[example]]\nname = {name:?}\n"));
+        manifest_text.push_str(&format!("\n[[bin]]\nname = {name:?}\n"));
         fs::write(&manifest_path, &manifest_text).unwrap();
-        let output = cargo(&root, &["check", "-p", "facade-default", "--example", name]);
+        let output = cargo(&root, &["check", "-p", "facade-default", "--bin", name]);
         let diagnostic = diagnostics(&output);
         assert!(!output.status.success(), "{name} unexpectedly compiled");
         assert!(diagnostic.contains(expected), "{name}: {diagnostic}");
         assert!(
-            diagnostic.contains(&format!("examples/{name}.rs:")),
+            diagnostic.contains(&format!("src/bin/{name}.rs:")),
             "{diagnostic}"
         );
     }

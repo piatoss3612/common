@@ -1,18 +1,13 @@
 use super::*;
 use syn::parse_quote;
 
+#[rustfmt::skip]
 #[test]
 fn expression_parser_handles_commas_and_all_integer_radices() {
     for tokens in [
         quote!(f::<A, B>(a, b), 181),
         quote!((|a, b| a + b)(1, 2), 0xb5,),
-        quote!(
-            {
-                let x = 1;
-                x
-            },
-            0o265
-        ),
+        quote!({ let x = 1; x }, 0o265),
         quote!(x, 0b1011_0101),
     ] {
         let input: Input = syn::parse2(tokens).unwrap();
@@ -61,6 +56,7 @@ fn decoding_is_not_limited_to_target_integer_sizes() {
     }
 }
 
+#[rustfmt::skip]
 #[test]
 fn expansion_unrolls_a_windowed_chain_with_qualified_calls() {
     // This snapshot intentionally fixes the tie-breaking and code-generation policy.

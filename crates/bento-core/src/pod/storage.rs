@@ -95,3 +95,6 @@ pub fn bytes_of_slice<T: Pod>(values: &[T]) -> &[u8] {
     // whose bytes cannot be mutated through a shared reference.
     unsafe { core::slice::from_raw_parts(values.as_ptr().cast::<u8>(), size_of_val(values)) }
 }
+
+#[cfg(test)]
+mod tests;

@@ -3,71 +3,25 @@ use syn::parse_quote;
 
 use super::*;
 
+#[rustfmt::skip]
 #[test]
 fn rejects_unsupported_items_and_representations() {
     for (input, expected) in [
         (
-            quote!(
-                struct Record(u32);
-            ),
+            quote!(struct Record(u32);),
             "Pod requires repr(C) or repr(transparent)",
         ),
         (
-            quote!(
-                #[repr(align(8))]
-                struct Record(u64);
-            ),
+            quote!(#[repr(align(8))] struct Record(u64);),
             "Pod requires repr(C) or repr(transparent)",
         ),
-        (
-            quote!(
-                #[repr(C)]
-                enum Record {
-                    A,
-                    B,
-                }
-            ),
-            "Pod requires a struct",
-        ),
-        (
-            quote!(#[repr(C)] union Record { a: u32, b: u32 }),
-            "Pod requires a struct",
-        ),
-        (
-            quote!(
-                #[repr(C, packed)]
-                struct Record(u32);
-            ),
-            "Pod supports only repr(C)",
-        ),
-        (
-            quote!(
-                #[repr(C, packed(2))]
-                struct Record(u32);
-            ),
-            "Pod supports only repr(C)",
-        ),
-        (
-            quote!(
-                #[repr(u32)]
-                struct Record(u32);
-            ),
-            "Pod supports only repr(C)",
-        ),
-        (
-            quote!(
-                #[repr(C, align(8, 16))]
-                struct Record(u64);
-            ),
-            "expected one alignment",
-        ),
-        (
-            quote!(
-                #[repr(C, align())]
-                struct Record(u64);
-            ),
-            "expected integer literal",
-        ),
+        (quote!(#[repr(C)] enum Record { A, B }), "Pod requires a struct"),
+        (quote!(#[repr(C)] union Record { a: u32, b: u32 }), "Pod requires a struct"),
+        (quote!(#[repr(C, packed)] struct Record(u32);), "Pod supports only repr(C)"),
+        (quote!(#[repr(C, packed(2))] struct Record(u32);), "Pod supports only repr(C)"),
+        (quote!(#[repr(u32)] struct Record(u32);), "Pod supports only repr(C)"),
+        (quote!(#[repr(C, align(8, 16))] struct Record(u64);), "expected one alignment"),
+        (quote!(#[repr(C, align())] struct Record(u64);), "expected integer literal"),
     ] {
         let input = syn::parse2(input).unwrap();
         let error = derive(input, BentoCorePath::default()).unwrap_err();
@@ -75,6 +29,7 @@ fn rejects_unsupported_items_and_representations() {
     }
 }
 
+#[rustfmt::skip]
 #[test]
 fn parses_explicit_paths_and_rejects_invalid_options() {
     let input = parse_quote! {
@@ -105,6 +60,7 @@ fn parses_explicit_paths_and_rejects_invalid_options() {
     }
 }
 
+#[rustfmt::skip]
 #[test]
 fn expansion_preserves_generics_and_bounds_complete_field_types() {
     let core: Path = parse_quote!(::renamed::support);
@@ -112,7 +68,9 @@ fn expansion_preserves_generics_and_bounds_complete_field_types() {
         parse_quote! {
             #[repr(C)]
             struct Block<T: Copy, M: ?Sized, const N: usize = 4>
-            where T: Sync {
+            where
+                T: Sync,
+            {
                 values: [T; N],
                 marker: ::core::marker::PhantomData<M>,
             }
@@ -120,61 +78,47 @@ fn expansion_preserves_generics_and_bounds_complete_field_types() {
         core.into(),
     )
     .unwrap();
-    let item: syn::ItemImpl = syn::parse2(output).unwrap();
-    assert!(item.unsafety.is_some());
-    assert!(
-        item.attrs
-            .iter()
-            .any(|attr| attr.path().is_ident("automatically_derived"))
-    );
-    assert_eq!(item.generics.params.len(), 3);
-    let predicates: Vec<_> = item
-        .generics
-        .where_clause
-        .unwrap()
-        .predicates
-        .iter()
-        .map(|predicate| predicate.to_token_stream().to_string())
-        .collect();
-    let expected = [
-        quote!(T: Sync),
-        quote!(Self: ::core::marker::Copy + ::core::marker::Sync + 'static),
-        quote!([T; N]: ::renamed::support::Pod),
-        quote!(::core::marker::PhantomData<M>: ::renamed::support::Pod),
-    ]
-    .map(|tokens| tokens.to_string());
-    assert_eq!(predicates, expected);
-    assert!(
-        matches!(&item.generics.params[2], syn::GenericParam::Const(param) if param.default.is_none())
-    );
+
+    // Interpolated field types leave adjacent closing `>` tokens separate.
+    let expected = quote! {
+        #[automatically_derived]
+        unsafe impl<T: Copy, M: ?Sized, const N: usize> ::renamed::support::Pod for Block<T, M, N>
+        where
+            T: Sync,
+            Self: ::core::marker::Copy + ::core::marker::Sync + 'static,
+            [T; N]: ::renamed::support::Pod,
+            ::core::marker::PhantomData<M>: ::renamed::support::Pod
+        {
+            const ASSERT_LAYOUT: () = {
+                let () = <::core::primitive::u8 as ::renamed::support::Pod>::ASSERT_LAYOUT;
+                let () = <[T; N] as ::renamed::support::Pod>::ASSERT_LAYOUT;
+                let () = <::core::marker::PhantomData<M> as ::renamed::support::Pod>::ASSERT_LAYOUT;
+                ::core::assert!(
+                    ::core::mem::size_of::<Self>() == 0
+                        + ::core::mem::size_of::<[T; N]>()
+                        + ::core::mem::size_of::<::core::marker::PhantomData<M> >(),
+                    "Pod struct must have no padding"
+                );
+                ::core::assert!(
+                    ::core::mem::align_of::<Self>() <= ::renamed::support::MAX_ALIGN,
+                    "over-aligned Pod type"
+                );
+            };
+        }
+    };
+    assert_eq!(output.to_string(), expected.to_string());
+    syn::parse2::<syn::ItemImpl>(output).unwrap();
 }
 
+#[rustfmt::skip]
 #[test]
 fn accepts_named_tuple_unit_and_transparent_structs() {
     for input in [
-        quote!(
-            #[repr(C)]
-            struct Named {
-                value: u64,
-            }
-        ),
-        quote!(
-            #[repr(C)]
-            #[repr(align(64))]
-            struct Tuple([u64; 8]);
-        ),
-        quote!(
-            #[repr(C)]
-            struct Unit;
-        ),
-        quote!(
-            #[repr(C)]
-            struct Empty {}
-        ),
-        quote!(
-            #[repr(transparent)]
-            struct Wrapper(u32);
-        ),
+        quote!(#[repr(C)] struct Named { value: u64 }),
+        quote!(#[repr(C)] #[repr(align(64))] struct Tuple([u64; 8]);),
+        quote!(#[repr(C)] struct Unit;),
+        quote!(#[repr(C)] struct Empty {}),
+        quote!(#[repr(transparent)] struct Wrapper(u32);),
     ] {
         let output = derive(syn::parse2(input).unwrap(), BentoCorePath::default()).unwrap();
         syn::parse2::<syn::ItemImpl>(output).unwrap();

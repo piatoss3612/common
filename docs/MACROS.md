@@ -45,10 +45,12 @@ and use absolute `::core` paths for standard types to support `no_std` callers.
 
 Document and explicitly re-export each macro from
 [`bento`](../crates/bento/src/lib.rs). Test parsing and expansion in the
-implementation module, and use the facade dev-dependency for tests of generated
-behavior.
-Expansions that reference library items also need separate Cargo consumer tests
-to exercise dependency resolution.
+implementation module, and test generated behavior through the
+[`bento` integration tests](../crates/bento/tests/).
+Expansions that reference library items also need Cargo consumer tests in the
+facade's suite to exercise dependency resolution. Those tests create separate
+consumer manifests. Follow the [testing guide](TESTING.md) for
+readable token expectations, compiler fixtures, and example execution.
 
 ## Addition chains
 
@@ -58,8 +60,8 @@ to exercise dependency resolution.
 - [Parsing and expansion](../crates/bento-macros/src/proc/addition_chain/mod.rs) and
   [chain planning](../crates/bento-macros/src/proc/addition_chain/schedule.rs).
 - [Expansion tests](../crates/bento-macros/src/proc/addition_chain/tests.rs),
-  [behavioral tests](../crates/bento-macros/tests/addition_chain.rs), and
-  [Cargo consumer tests](../crates/bento-macros/tests/consumers.rs).
+  [behavioral tests](../crates/bento/tests/addition_chain.rs), and
+  [Cargo consumer tests](../crates/bento/tests/consumers.rs).
 
 ## POD storage
 

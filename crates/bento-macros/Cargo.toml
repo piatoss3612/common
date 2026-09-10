@@ -25,8 +25,3 @@ bento-core.workspace = true
 version = "2"
 features = ["full"]
 # Add `extra-traits` for debugging.
-
-[dev-dependencies]
-# Tests use the facade to verify the macro re-exports seen by consumers.
-# Cargo permits this development dependency cycle; see `../../docs/CRATES.md`.
-bento.workspace = true

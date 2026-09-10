@@ -43,6 +43,9 @@ does not yet expose arithmetic APIs.
 
 ## Testing
 
+See the [testing guide](docs/TESTING.md) for test roles, fixture organization,
+and executable examples.
+
 Run the full test suite (every workspace crate, all features) with optimizations
 enabled:
 

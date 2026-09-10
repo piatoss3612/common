@@ -1,5 +1,7 @@
 //! Behavioral checks through the public facade, separate from token snapshots.
 
+use zakura_bento as bento;
+
 use std::{cell::Cell, rc::Rc};
 
 #[derive(Debug, PartialEq)]

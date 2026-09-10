@@ -93,16 +93,20 @@ suite. `cargo check` alone can miss layout failures deferred until code
 generation. The suite covers:
 
 - [Parsing and expansion](../crates/bento-macros/src/derive/pod/tests.rs).
-- [Byte views and embedded data](../crates/bento-macros/tests/pod.rs), including
+- [Core storage unit tests](../crates/bento-core/src/pod/storage/tests.rs) for
+  byte views, primitive boundaries, and runtime length checks.
+- [Derived records and embedded data](../crates/bento/tests/pod.rs), including
   alignment boundaries, generic records, and zero-sized types.
-- [Compiler failures](../crates/bento-macros/tests/pod_compile.rs) for padding,
+- [Generated artifact round trips](../crates/bento/tests/embedding.rs), using a
+  build script to write files before compiling and running their consumer.
+- [Compiler failures](../crates/bento/tests/pod_compile.rs) for padding,
   unsupported fields and representations, excessive alignment, and file length.
-- [Separate Cargo consumers](../crates/bento-macros/tests/consumers.rs) for
+- [Separate Cargo consumers](../crates/bento/tests/consumers.rs) for
   `no_std`, dependency aliases, direct core dependencies, and facade re-exports.
 
-Compiler tests build offline with dependency versions seeded from the workspace
-lockfile. They check diagnostic messages and source locations without pinning
-the compiler's full diagnostic rendering.
+The [testing guide](TESTING.md) defines the roles of these tests and the
+conventions for compiler builds and fixtures. The embedding example also runs
+as part of the workspace test suite.
 
 [pod-derive]: ../crates/bento/src/lib.rs
 [pod-contract]: ../crates/bento-core/src/pod/mod.rs

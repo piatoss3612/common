@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Check documentation
+        run: cargo doc --locked --workspace --all-features --no-deps
+
+  test:
+    name: Public test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - name: Run test suite (all workspace crates, all features)
+        run: cargo test --release --locked --workspace --all-features

@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "crates/bento",
+    "crates/bento-core",
+    "crates/bento-macros",
+    "crates/udon",
+]
+resolver = "3"

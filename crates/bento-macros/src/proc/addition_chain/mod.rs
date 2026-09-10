@@ -1,8 +1,11 @@
-//! Parse a fixed scalar and emit calls to the addition-chain support trait.
+//! Parsing and expansion of fixed-scalar addition chains.
 //!
-//! Scalar decoding and scheduling are host-only implementation details.
-//! Keeping them here leaves `bento-core` with just the target support trait,
-//! requiring neither dependencies nor an allocator for addition chains.
+//! [`Input`] parses a macro invocation, and [`evaluate`] validates its scalar
+//! and emits calls to [`bento_core::addchain::AdditionChain`]. The [`schedule`]
+//! module chooses the sequence of operations.
+//!
+//! Scalar decoding and scheduling run on the host, so [`bento_core`] needs
+//! neither dependencies nor an allocator to supply the target support trait.
 
 use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
@@ -15,11 +18,10 @@ use crate::path_resolution::BentoCorePath;
 
 mod schedule;
 
-/// A value expression and a nonzero, unsuffixed scalar literal.
+/// A parsed invocation whose scalar still needs semantic validation.
 ///
-/// Use syn's full expression parser so commas inside closures and generic
-/// arguments do not need extra parentheses to distinguish them from the
-/// macro's argument separator.
+/// [`evaluate`] checks that the scalar is nonzero and unsuffixed before
+/// generating code.
 pub(crate) struct Input {
     value: Expr,
     scalar: LitInt,
@@ -27,6 +29,8 @@ pub(crate) struct Input {
 
 impl Parse for Input {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
+        // The full expression parser distinguishes commas inside closures and
+        // generic arguments from the macro's argument separator.
         let value = input.parse()?;
         input.parse::<Token![,]>()?;
         if input.peek(Token![-]) {
@@ -41,7 +45,7 @@ impl Parse for Input {
     }
 }
 
-/// Validate the scalar, plan on the host, and emit a single target expression.
+/// Validates the scalar and expands the invocation into a scaling expression.
 pub(crate) fn evaluate(input: Input, core: BentoCorePath) -> Result<TokenStream> {
     let Input { value, scalar } = input;
     if !scalar.suffix().is_empty() {
@@ -59,7 +63,7 @@ pub(crate) fn evaluate(input: Input, core: BentoCorePath) -> Result<TokenStream>
     };
 
     // Mixed-site spans keep generated bindings separate from caller bindings.
-    // UFCS also avoids requiring trait imports or selecting inherent methods.
+    // Qualified trait calls avoid trait imports and inherent method lookup.
     let odd = |index| format_ident!("__bento_odd_{index}", span = Span::mixed_site());
     let base = odd(0);
     let doubled = format_ident!("__bento_doubled", span = Span::mixed_site());
@@ -80,6 +84,7 @@ pub(crate) fn evaluate(input: Input, core: BentoCorePath) -> Result<TokenStream>
         }
     };
     let first = odd(schedule.first);
+
     // Reassignment drops superseded accumulators after each operation. Chains
     // completed by table preparation alone need no mutable binding.
     let mutability = (!schedule.steps.is_empty()).then(|| quote!(mut));
@@ -109,8 +114,10 @@ pub(crate) fn evaluate(input: Input, core: BentoCorePath) -> Result<TokenStream>
     }})
 }
 
-/// Decode syn's normalized decimal digits without imposing a target word size.
-/// Zero is the empty vector; all other values have a nonzero final limb.
+/// Decodes decimal digits into little-endian limbs without a fixed integer size.
+///
+/// Accepts the normalized digits from [`LitInt::base10_digits`]. Zero is the
+/// empty vector; all other values have a nonzero final limb.
 fn limbs_from_decimal(digits: &str) -> Vec<u64> {
     let mut limbs = Vec::new();
     for digit in digits.bytes() {

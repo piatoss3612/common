@@ -1,21 +1,49 @@
-//! Host-only sliding-window planning, independent of Rust syntax and types.
+//! Sliding-window planning for addition chains on the build host.
 //!
-//! An odd-table entry represents `(2 * index + 1)` copies of the input value.
+//! [`plan`] chooses a [`Schedule`] independently of Rust syntax and target
+//! types. Expansion consumes that schedule to generate calls to
+//! [`bento_core::addchain::AdditionChain`].
+//!
+//! # Background
+//!
+//! A binary chain starts from the input and processes each bit after the leading
+//! bit with a doubling and, if the bit is set, an addition of the input. Sliding
+//! windows group nearby set bits so one addition can incorporate several bits at
+//! once. This requires precomputing odd multiples of the input.
+//!
+//! # Design
+//!
+//! Each table entry represents `(2 * index + 1)` copies of the input value.
+//! A [`Schedule`] starts from one entry and applies a sequence of [`Step`]
+//! operations. Only entries through the highest referenced index are prepared.
+//! [`plan`] compares candidate schedules using [`Schedule::cost`], which includes
+//! preparation so its cost can be weighed against the saved additions.
 
+/// An operation that updates the accumulator using the prepared odd multiples.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Step {
+    /// Doubles the accumulator.
     Double,
+
+    /// Adds the odd multiple at the given table index to the accumulator.
     AddOdd(usize),
 }
 
+/// A sequence of operations and the odd multiples needed to scale an input.
 pub(super) struct Schedule {
+    /// The table index used to initialize the accumulator.
     pub(super) first: usize,
+
+    /// The operations applied after initialization, in execution order.
     pub(super) steps: Vec<Step>,
+
+    /// The highest required table index, or zero when only the input is needed.
     pub(super) max_odd_index: usize,
 }
 
 impl Schedule {
-    /// Count additions and doublings equally, including table preparation.
+    /// Counts additions and doublings equally, including table preparation.
+    ///
     /// Cloning, storage, and the implementation's relative costs are excluded.
     fn cost(&self) -> usize {
         let table = if self.max_odd_index == 0 {
@@ -27,11 +55,16 @@ impl Schedule {
     }
 }
 
-/// Compare widths six through one; the first minimum wins, so ties prefer
-/// wider windows. This is a heuristic, not a shortest-chain algorithm.
+/// Selects a sliding-window schedule for a positive scalar.
+///
+/// The scalar's limbs are little-endian; leading zero limbs are allowed.
+/// Returns `None` for zero. The heuristic does not guarantee a shortest chain.
 pub(super) fn plan(limbs: &[u64]) -> Option<Schedule> {
     let top_index = limbs.iter().rposition(|limb| *limb != 0)?;
     let bits = top_index * 64 + (64 - limbs[top_index].leading_zeros() as usize);
+
+    // Compare widths six through one. The first minimum wins, so ties prefer
+    // wider windows.
     (1..=6)
         .rev()
         .map(|width| plan_with_width(limbs, bits, width))

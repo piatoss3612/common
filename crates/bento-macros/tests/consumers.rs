@@ -1,4 +1,4 @@
-//! Real Cargo manifests exercise resolution beyond the macro crate's own deps.
+//! Cargo consumer tests for dependency path resolution and diagnostics.
 //!
 //! Tests inside the macro crate already see its direct core dependency, so
 //! separate consumer manifests are needed to prove the facade fallback works.
@@ -8,11 +8,11 @@
 use std::{fs, path::Path, process::Command};
 
 fn cargo(root: &Path, args: &[&str]) -> std::process::Output {
+    // A separate target directory avoids locking the parent Cargo build.
     Command::new(env!("CARGO"))
         .current_dir(root)
         .args(args)
         .arg("--offline")
-        // A separate target directory avoids locking the parent Cargo build.
         .env("CARGO_TARGET_DIR", root.join("target"))
         .env("CARGO_TERM_COLOR", "never")
         .output()

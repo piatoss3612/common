@@ -1,4 +1,6 @@
-//! POD storage, const arithmetic, and macro support traits behind the `bento` facade.
+//! Shared support traits behind the `bento` facade.
+//!
+//! The [`addchain`] module defines the target operations used by addition chains.
 
 #![no_std]
 #![deny(unsafe_code)]

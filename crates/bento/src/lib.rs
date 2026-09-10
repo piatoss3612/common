@@ -1,4 +1,7 @@
-//! Shared POD storage utilities and compile-time support for field implementations.
+//! Compile-time support for cryptographic arithmetic.
+//!
+//! Use [`addition_chain!`] to scale a value by a fixed positive integer. The
+//! [`addchain`] module defines the operations that a value supplies for scaling.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -7,40 +10,27 @@
 
 pub use bento_core::*;
 
-/// Scale a value using a compile-time addition chain.
+/// Scales a value using a compile-time addition chain.
+///
+/// A fixed scalar allows the sequence of operations to be chosen at compile time.
+/// This macro scales values through the [`addchain::AdditionChain`] support
+/// interface, which defines the required operations and their laws.
 ///
 /// `addition_chain!(value_expression, scalar)` evaluates the expression once,
 /// taking ownership of its result, and returns the same type scaled by `scalar`.
 /// The scalar must be a nonzero, unsuffixed integer literal: decimal, hexadecimal,
 /// octal, and binary are accepted, with underscores and an optional trailing
-/// comma. Literals wider than 128 bits are supported; the scalar never becomes
-/// a target integer. Constants, expressions, negative values, and zero are not
-/// accepted. Zero would require an identity operation.
+/// comma. Literals wider than 128 bits are supported. Constants, expressions,
+/// negative values, and zero are not accepted.
 ///
-/// The value's type must implement [`addchain::AdditionChain`], whose supertrait is
-/// `Clone`, with `double(&self) -> Self` and
-/// `add(&self, rhs: &Self) -> Self`. Addition must be associative, doubling must
-/// equal adding a value to itself, and cloning must preserve the value.
-/// Implement this support trait on an internal type or adapter using the fully
-/// qualified path, `impl bento::addchain::AdditionChain for Value`. Avoid importing the
-/// trait so its method names do not affect method lookup elsewhere in the
-/// module. `Copy` is not required. The generated code also uses qualified trait
-/// calls, so inherent methods named `double` or `add` do not affect it.
+/// Implement [`addchain::AdditionChain`] on the value's type or on an adapter, as
+/// shown below. The trait need not be imported to invoke the macro.
 ///
-/// The host planner compares left-to-right sliding windows of widths one through
-/// six, counting additions and doublings equally, including preparation of odd
-/// multiples. Ties prefer wider windows. This heuristic does not guarantee a
-/// shortest chain and does not account for cloning or storage costs. The output
-/// prepares the needed odd multiples, clones the initial accumulator once, and
-/// performs a fixed sequence of trait calls. Scalar one clones the input without
-/// adding or doubling. Each replacement drops the previous accumulator before
-/// the next operation. The input and precomputed values drop when the generated
-/// block finishes. There are no generated runtime loops or branches; timing and
-/// allocation behavior still depend on the type's operations and destructors.
+/// # Examples
 ///
 /// ```
 /// # use zakura_bento as bento;
-/// #[derive(Clone, Debug, PartialEq)] // Deliberately not Copy.
+/// #[derive(Clone, Debug, PartialEq)]
 /// struct Value(u64);
 ///
 /// impl bento::addchain::AdditionChain for Value {
@@ -53,8 +43,8 @@ pub use bento_core::*;
 /// assert_eq!(value, Value(7));
 /// ```
 ///
-/// Exponentiation uses the same chain by interpreting doubling as squaring
-/// and addition as multiplication:
+/// The exponentiation interpretation described by [`addchain::AdditionChain`]
+/// can be used to raise a value to a fixed power:
 ///
 /// ```
 /// # use zakura_bento as bento;

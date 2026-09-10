@@ -1,4 +1,4 @@
-//! Two interpretations of the same fixed-scalar chain; no Copy requirement.
+//! Vector scaling and modular exponentiation with [`bento::addition_chain!`].
 
 use zakura_bento as bento;
 
@@ -28,7 +28,7 @@ impl bento::addchain::AdditionChain for Power {
     }
 }
 
-// The macro works inside a function generic over the internal support trait.
+/// Scales a value by 181 through the [`bento::addchain::AdditionChain`] interface.
 fn scale_181<T: bento::addchain::AdditionChain>(value: T) -> T {
     bento::addition_chain!(value, 0xb5)
 }

@@ -1,21 +1,20 @@
-//! Resolve the caller's path to items defined in `bento-core`.
+//! Dependency path resolution for generated code.
 //!
-//! Prefer a direct dependency on `zakura-bento-core`, then fall back to the
-//! `zakura-bento` facade's root re-exports. Look up package names rather than
-//! assuming dependency names: both crates can be renamed in `Cargo.toml`.
-//! Self references use `crate`.
+//! Callers can rename dependencies in `Cargo.toml`, so generated paths cannot
+//! assume a fixed crate name. [`BentoCorePath::resolve`] looks up package names
+//! and returns the path under which the caller can reach [`bento_core`] items.
 //!
 //! In a doctest, `crate` refers to the generated test crate. The facade's
 //! doctests resolve through its direct core dependency, which takes precedence
-//! over its self lookup. Verify changes with those doctests and the separate
-//! Cargo consumers in `tests/consumers.rs`, as well as the unit tests here.
+//! over its self lookup. Verify changes with those doctests, the Cargo consumer
+//! tests, and the unit tests here.
 
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream};
 use quote::ToTokens;
 use syn::{Error, Ident, Path, Result, parse_quote};
 
-/// The path through which generated code can reach `bento-core` items.
+/// A path through which generated code can reach [`bento_core`] items.
 #[derive(Clone)]
 pub struct BentoCorePath(Path);
 
@@ -26,13 +25,20 @@ impl ToTokens for BentoCorePath {
 }
 
 impl Default for BentoCorePath {
-    /// A deterministic path for expansion tests; entry points use `resolve`.
+    /// Returns a deterministic path for expansion tests.
+    ///
+    /// Macro entry points use [`Self::resolve`] to match the caller's manifest.
     fn default() -> Self {
         Self(parse_quote!(::bento_core))
     }
 }
 
 impl BentoCorePath {
+    /// Resolves the caller's path to the support crate.
+    ///
+    /// Prefers a direct dependency on `zakura-bento-core`, then falls back to
+    /// the `zakura-bento` facade's root re-exports. Self references use `crate`.
+    /// Returns an error if neither package is a dependency of the caller.
     pub fn resolve() -> Result<Self> {
         bento_core_path(
             crate_name("zakura-bento-core").ok(),
@@ -120,7 +126,7 @@ mod tests {
 
     #[test]
     fn test_resolve_manifest_dependency() {
-        // The inherited workspace dependency renames zakura-bento-core to bento-core.
+        // The workspace dependency renames `zakura-bento-core` to `bento-core`.
         let resolved = BentoCorePath::resolve().unwrap();
         let expected = BentoCorePath::default();
         assert_eq!(quote!(#resolved).to_string(), quote!(#expected).to_string());

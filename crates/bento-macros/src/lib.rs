@@ -1,23 +1,11 @@
-//! Procedural macros over `bento-core`.
+//! Procedural macro implementations for the `bento` facade.
 //!
 //! Macros are exposed and documented through the `bento` facade. This crate
 //! contains their implementation and is not intended as a direct dependency.
 //!
-//! Entry points here only parse input, resolve dependency paths, and invoke
-//! `helpers::macro_body`. Expansion lives in `derive` or `proc` and uses
-//! `proc_macro2::TokenStream` and `syn::Result` so it can be tested without the
-//! compiler's procedural macro context. Shared arithmetic belongs in
-//! `bento-core`; parsing and token generation belong here.
-//!
-//! Report invalid input with `syn::Error`; reserve panics for internal
-//! invariants. In generated code, interpolate the supplied `BentoCorePath` for
-//! library items and use absolute `::core` paths for standard types to support
-//! `no_std` callers.
-//!
-//! Document and explicitly re-export each macro from `bento`. Test parsing and
-//! expansion in the implementation module, and use the facade dev-dependency
-//! for tests of generated behavior. Expansions that reference library items
-//! also need separate Cargo consumer tests to exercise dependency resolution.
+//! Macros run on the build host, while their output must compile for the
+//! caller's target. Shared support interfaces and reference arithmetic belong
+//! in [`bento_core`]; parsing and token generation belong here.
 
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]

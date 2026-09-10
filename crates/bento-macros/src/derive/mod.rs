@@ -1,6 +1,7 @@
-//! Derive macro implementations, one module per derive.
+//! Conventions for derive macro implementations.
 //!
-//! Each module exposes `derive(input: syn::DeriveInput, ...)`, taking resolved
-//! paths explicitly and returning `syn::Result<proc_macro2::TokenStream>`.
+//! Add one module per derive, with a `derive` function that accepts
+//! [`syn::DeriveInput`] and resolved dependency paths and returns expansion
+//! tokens through [`syn::Result`].
 //! Keep input validation, expansion, and unit tests together in that module.
 //! Mark generated implementations with `#[automatically_derived]`.

@@ -1,21 +1,26 @@
 //! Support for scaling values with addition chains.
+//!
+//! [`AdditionChain`] supplies the operations needed to combine multiples of a
+//! value. Implement it to support scaling for a type or an adapter.
 
-/// Operations used by `bento::addition_chain!` to scale a value.
+/// A support interface for scaling a value with an addition chain.
 ///
-/// Implement this on an internal type or wrapper in the consuming crate using
-/// the fully qualified path, such as `impl bento::addchain::AdditionChain for Value`.
-/// Avoid importing the trait so its method names do not affect method lookup
-/// elsewhere in the module. This trait provides support for the macro.
+/// An addition chain builds a positive multiple of one input by combining
+/// previously computed multiples. This interface supplies the operations needed
+/// to follow such a chain without requiring an identity or inverse operation.
 ///
-/// `add` must be associative, `self.double()` must be equivalent to
-/// `self.add(self)`, and cloning must preserve the value. No identity or inverse
-/// operation is required. Addition need not be commutative: all values in a
-/// chain are multiples of one input, so they commute given associativity.
-/// For exponentiation, implement `double` as squaring and `add` as multiplication.
+/// [`add`](Self::add) must be associative, [`double`](Self::double) must equal
+/// adding a value to itself, and cloning must preserve the value. Addition need
+/// not be commutative: all values in a chain are multiples of one input, so they
+/// commute given associativity. For exponentiation, implement
+/// [`double`](Self::double) as squaring and [`add`](Self::add) as multiplication.
+///
+/// Use the fully qualified trait path in implementations to avoid introducing
+/// its method names into method lookup elsewhere in the module.
 pub trait AdditionChain: Clone {
-    /// Return the sum of this value with itself.
+    /// Returns the sum of this value with itself.
     fn double(&self) -> Self;
 
-    /// Return the sum of this value and `rhs`, preserving both inputs.
+    /// Returns the sum of this value and `rhs`, preserving both inputs.
     fn add(&self, rhs: &Self) -> Self;
 }

@@ -68,8 +68,8 @@ Workspace dependency paths are relative to the workspace root. Inheritance also
 works in `[dev-dependencies]` and `[build-dependencies]`.
 
 The table does not add dependencies to every member or make dependencies
-transitively available. In particular, `bento-core` inherits no dependencies. Add new
-internal aliases to the root table, then inherit them only where needed.
+transitively available. In particular, `bento-core` inherits no dependencies.
+Add new internal aliases to the root table, then inherit them only where needed.
 Third-party dependencies currently remain in the members that use them.
 
 Package declarations, `Cargo.lock`, registry URLs, and macro package lookups
@@ -98,7 +98,9 @@ and [library target names](https://doc.rust-lang.org/cargo/reference/cargo-targe
 | `bento` | Public facade; `no_std` | `bento-core`, `bento-macros` |
 | `udon` | Optimized field and curve arithmetic; `no_std` | `bento` |
 
-The current implementation consists of `addition_chain!` and its support trait.
+The current implementation consists of
+[`addition_chain!`](bento/src/lib.rs) and its
+[`AdditionChain`](bento-core/src/addchain.rs) support trait.
 Storage and reference arithmetic in core, and field and curve arithmetic in
 `udon`, remain scaffolded. Consumers use the `bento` facade, which re-exports
 core items at its root and explicitly re-exports and documents each procedural
@@ -116,9 +118,10 @@ introduce a normal dependency from the macro implementation back to the facade.
 
 ## Procedural macros
 
-See the [macro crate documentation](bento-macros/src/lib.rs) for authoring and
-error-handling conventions, and its [README](bento-macros/README.md) for links
-to the addition-chain implementation and tests.
+See the [macro authoring conventions](bento-macros/README.md#authoring-conventions)
+for error handling and testing requirements. The macro crate's
+[README](bento-macros/README.md) also links to the addition-chain implementation
+and tests.
 
 Generated paths must match the caller's dependencies. The
 [path resolver](bento-macros/src/path_resolution.rs) discovers the caller's

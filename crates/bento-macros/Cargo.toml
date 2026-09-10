@@ -24,11 +24,9 @@ bento-core.workspace = true
 [dependencies.syn]
 version = "2"
 features = ["full"]
-# Add "extra-traits" for debugging.
+# Add `extra-traits` for debugging.
 
 [dev-dependencies]
-# A dev-dependency cycle back onto the facade (legal for dev-dependencies, in
-# contrast to normal ones) so the unit tests can assert the exact re-export
-# paths under which consumers meet these macros; a facade rename or a dropped
-# re-export fails this crate's tests instead of surfacing downstream.
+# Tests use the facade to verify the macro re-exports seen by consumers.
+# Cargo permits this development dependency cycle; see `../README.md`.
 bento.workspace = true

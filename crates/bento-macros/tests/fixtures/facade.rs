@@ -20,6 +20,8 @@ impl bento::addchain::AdditionChain for Value {
     }
 }
 
+/// Scales a value by 181 through the facade's macro re-export.
+///
 /// ```
 /// # #[cfg(feature = "renamed")]
 /// # use facade_renamed::{scale, Value};

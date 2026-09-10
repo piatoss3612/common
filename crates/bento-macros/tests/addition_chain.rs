@@ -143,7 +143,7 @@ fn evaluates_once_clones_once_and_dispatches_only_to_the_trait() {
         }
     }
 
-    // Inherent names deliberately conflict with the trait and Clone.
+    // Inherent names deliberately conflict with the trait and `Clone`.
     #[allow(dead_code)]
     impl Tracked {
         fn double(&self) -> Self {
@@ -231,6 +231,7 @@ fn superseded_accumulators_drop_between_steps() {
         let counts = Rc::new(Counts::default());
         let result = scale(Tracked::new(1, &counts));
         assert_eq!(result.value, expected);
+
         // These sparse scalars need no odd table: only the input, accumulator,
         // and its replacement should coexist, regardless of chain length.
         assert!(counts.peak.get() <= 3, "{} live values", counts.peak.get());

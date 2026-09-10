@@ -91,88 +91,40 @@ and [library target names](https://doc.rust-lang.org/cargo/reference/cargo-targe
 
 ## Crate layers
 
-| Crate | Role | Normal workspace dependencies |
+| Crate | Intended role | Normal workspace dependencies |
 | --- | --- | --- |
 | `bento-core` | Shared traits, storage support, and reference arithmetic; `no_std` | None |
 | `bento-macros` | Parsing, validation, and code generation on the build host; uses `std` | `bento-core` |
 | `bento` | Public facade; `no_std` | `bento-core`, `bento-macros` |
 | `udon` | Optimized field and curve arithmetic; `no_std` | `bento` |
 
-These roles describe the intended implementation; the crates are currently
-scaffolds. Consumers use the `bento` facade. It re-exports core items at its root,
-and each procedural macro will be explicitly re-exported and documented there.
-No procedural macros are exported yet. `udon` reaches shared support through
-`bento` without declaring a direct dependency on `bento-core`.
+The current implementation consists of `addition_chain!` and its support trait.
+Storage and reference arithmetic in core, and field and curve arithmetic in
+`udon`, remain scaffolded. Consumers use the `bento` facade, which re-exports
+core items at its root and explicitly re-exports and documents each procedural
+macro. `udon` declares its support dependency through `bento`.
 
 `bento-core` is the bottom layer and cannot invoke the macros through the
 facade under this dependency structure. Shared arithmetic belongs there so
-both ordinary library code and macros can use it. Macro execution happens on
-the build host: macro implementation code calls that arithmetic through its own
-`bento_core` dependency. The generated Rust code is then compiled in the
-caller's crate for the target. These are separate dependency contexts.
+both ordinary library code and macros can use it. Macros execute on the build
+host; generated Rust code is compiled in the caller's crate for the target.
+These are separate dependency contexts.
 
 `bento-macros` also has a development dependency on `bento` for tests using the
 public facade. Cargo permits this development dependency cycle; it does not
 introduce a normal dependency from the macro implementation back to the facade.
 
-## Procedural macro structure and paths
+## Procedural macros
 
-Compiler entry points in `bento-macros/src/lib.rs` parse input, resolve the
-dependency paths needed by the expansion, and delegate through
-`helpers::macro_body`. Expansion functions in `derive/` and `proc/` use
-`proc_macro2::TokenStream` and `syn::Result`, keeping them testable outside the
-compiler's procedural macro context. Parsing and token generation belong in
-the macro crate; reusable arithmetic belongs in core. The
-[`bento-macros` guide](bento-macros/README.md) describes adding an entry point,
-reporting errors, testing expansions, and exposing the macro through `bento`.
+See the [macro crate documentation](bento-macros/src/lib.rs) for authoring and
+error-handling conventions, and its [README](bento-macros/README.md) for links
+to the addition-chain implementation and tests.
 
 Generated paths must match the caller's dependencies. The
-[`BentoCorePath` resolver](bento-macros/src/path_resolution.rs) uses
-[`proc-macro-crate`](https://docs.rs/proc-macro-crate/3.5.0/proc_macro_crate/)
-to look up stable package identities in the caller's manifest, including
-inherited workspace dependencies:
-
-1. Look for a direct dependency on package `zakura-bento-core`.
-2. Otherwise, look for package `zakura-bento` and use its root re-exports.
-3. Emit the discovered dependency name as an absolute Rust path. A lookup that
-   identifies the current package (`FoundCrate::Itself`) maps to `crate`.
-4. Report a compiler error if neither package is available.
-
-| Caller's dependencies | Path to core items in the expansion |
-| --- | --- |
-| Facade aliased to `bento` | `::bento` |
-| Facade aliased to `support` | `::support` |
-| Facade without a rename | `::zakura_bento` |
-| Core aliased to `bento-core` | `::bento_core` |
-| Core aliased to `support-core`, plus a facade dependency | `::support_core` |
-
-The direct core dependency takes precedence when both packages are present.
-It is an implementation option, not a requirement for consumers: a dependency
-on the facade is sufficient. The macro crate's own core dependency is not
-automatically visible in the caller. Resolving by package identity and then
-using the caller's alias avoids hardcoding either `::bento` or
-`::zakura_bento` into generated code.
-
-Expansion functions interpolate the supplied path with `quote!` and use
-absolute `::core` paths for standard types, preserving support for `no_std`
-callers. `BentoCorePath::default()` is a deterministic `::bento_core` path for
-unit tests; real entry points use `resolve()`.
-
-### Self aliases
-
-`extern crate self as zakura_bento_core;` would give the current crate an
-additional name within its own code, allowing `::zakura_bento_core::Item` to
-refer to its own `Item`. It does not add a dependency or change the name seen
-by downstream crates. We do not need that alias: core does not invoke the
-macros, and it has no effect on either the macro implementation's dependency
-name or the paths available to a downstream expansion.
-
-A self alias can help a macro expansion that references a fixed external crate
-name when invoked inside that same library, if its dependency structure allows
-such invocation. Our resolver instead handles `FoundCrate::Itself` with
-`crate`. This case is not a blanket solution for doctests: there, `crate`
-refers to the generated test crate. When adding actual macros, test their
-intended invocation sites, including doctests and renamed dependencies.
+[path resolver](bento-macros/src/path_resolution.rs) discovers the caller's
+aliases; a dependency on the facade is sufficient. Support interfaces are
+documented in their owning modules, such as
+[`addchain`](bento-core/src/addchain.rs).
 
 ## Local development and publication
 

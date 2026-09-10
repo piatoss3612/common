@@ -1,11 +1,11 @@
 # (no name yet)
 
-This is an experimental stack of Rust crates for Zakura Common: optimized Pasta field and curve arithmetic (`udon`) and the minimal support layer it sits on (`bento`). The repository is one virtual Cargo workspace; every crate lives under `crates/`.
+This is an experimental stack of Rust crates for Zakura Common.
 
-The crates are currently scaffolds; the descriptions below outline their intended roles. All target-compiled crates (`bento`, `bento-core`, and `udon`) use `no_std`. The procedural macro crate (`bento-macros`) runs on the build host and uses `std`.
-
-See [the crate development guide](crates/README.md) for dependency naming,
-workspace inheritance, macro path resolution, and publication conventions.
+* This repository is one virtual Cargo workspace; every crate lives under `crates/`.
+* This is mostly scaffolded.
+* All _target-compiled_ crates (`bento`, `bento-core`, and `udon`) use `no_std` currently.
+* See [the crate development guide](crates/README.md) for dependency naming, workspace inheritance, macro path resolution, and publication conventions.
 
 ### `zakura-bento` ([crates.io](https://crates.io/crates/zakura-bento), [docs.rs](https://docs.rs/zakura-bento))
 
@@ -23,15 +23,13 @@ The `bento` crate itself is a facade over the `bento-macros` and `bento-core` cr
 
 ## Testing
 
-Run the full test suite (every workspace crate, all features) with
-optimizations enabled:
+Run the full test suite (every workspace crate, all features) with optimizations enabled:
 
 ```console
 cargo test --release --workspace --all-features
 ```
 
-The pinned toolchain (`rust-toolchain.toml`, the crates' MSRV) is also used
-to check formatting, lints, and documentation across the workspace:
+The pinned toolchain (`rust-toolchain.toml`, the crates' MSRV) is also used to check formatting, lints, and documentation across the workspace:
 
 ```console
 cargo fmt --check

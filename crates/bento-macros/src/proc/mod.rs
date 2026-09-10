@@ -4,3 +4,5 @@
 //! node does not suffice. Expose `evaluate(input: Input, ...)`, taking any
 //! resolved paths explicitly and returning `syn::Result<proc_macro2::TokenStream>`.
 //! Keep parsing, expansion, and unit tests together in that module.
+
+pub(crate) mod addition_chain;

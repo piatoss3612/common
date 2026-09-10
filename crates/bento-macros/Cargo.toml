@@ -23,8 +23,8 @@ bento-core.workspace = true
 
 [dependencies.syn]
 version = "2"
-# Helpful for debugging:
-# features = ["full", "extra-traits"]
+features = ["full"]
+# Add "extra-traits" for debugging.
 
 [dev-dependencies]
 # A dev-dependency cycle back onto the facade (legal for dev-dependencies, in

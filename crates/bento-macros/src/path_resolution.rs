@@ -4,6 +4,11 @@
 //! `zakura-bento` facade's root re-exports. Look up package names rather than
 //! assuming dependency names: both crates can be renamed in `Cargo.toml`.
 //! Self references use `crate`.
+//!
+//! In a doctest, `crate` refers to the generated test crate. The facade's
+//! doctests resolve through its direct core dependency, which takes precedence
+//! over its self lookup. Verify changes with those doctests and the separate
+//! Cargo consumers in `tests/consumers.rs`, as well as the unit tests here.
 
 use proc_macro_crate::{FoundCrate, crate_name};
 use proc_macro2::{Span, TokenStream};
@@ -28,10 +33,6 @@ impl Default for BentoCorePath {
 }
 
 impl BentoCorePath {
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "path plumbing for the first procedural macro")
-    )]
     pub fn resolve() -> Result<Self> {
         bento_core_path(
             crate_name("zakura-bento-core").ok(),

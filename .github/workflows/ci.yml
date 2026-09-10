@@ -54,7 +54,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - name: Install pinned toolchain and target libraries
-        run: rustup toolchain install --target thumbv7em-none-eabi,s390x-unknown-linux-gnu
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - name: Install target libraries
+        run: rustup target add thumbv7em-none-eabi s390x-unknown-linux-gnu
       - name: Build portable libraries and check unsupported layouts
         run: cargo test --release --locked -p zakura-bento --test portability -- --ignored

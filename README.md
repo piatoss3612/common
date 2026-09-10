@@ -6,6 +6,7 @@ This is an experimental stack of Rust crates for Zakura Common.
 * This is mostly scaffolded.
 * All _target-compiled_ crates (`bento`, `bento-core`, and `udon`) use `no_std` currently.
 * See [the crate development guide](crates/README.md) for dependency naming, workspace inheritance, macro path resolution, and publication conventions.
+* See [the documentation guide](docs/DOCUMENTATION.md) when writing or reviewing documentation and code comments.
 
 ### `zakura-bento` ([crates.io](https://crates.io/crates/zakura-bento), [docs.rs](https://docs.rs/zakura-bento))
 

@@ -1,5 +1,13 @@
 #![no_std]
 #![deny(warnings)]
+#![forbid(unsafe_code)]
+
+mod bento {
+    pub use macros::Pod;
+    pub use support_core::*;
+}
+
+pub mod pod;
 
 #[derive(Clone)]
 pub struct Value(pub u64);

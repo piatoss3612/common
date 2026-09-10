@@ -5,33 +5,16 @@
 //! Keep these builds offline and seed their resolution from the workspace lock;
 //! the parent workspace build fetches the dependencies the consumers need.
 
-use std::{fs, path::Path, process::Command};
+use std::{fs, path::Path};
 
-fn cargo(root: &Path, args: &[&str]) -> std::process::Output {
-    // A separate target directory avoids locking the parent Cargo build.
-    Command::new(env!("CARGO"))
-        .current_dir(root)
-        .args(args)
-        .arg("--offline")
-        .env("CARGO_TARGET_DIR", root.join("target"))
-        .env("CARGO_TERM_COLOR", "never")
-        .output()
-        .expect("run Cargo for consumer fixture")
-}
-
-fn diagnostics(output: &std::process::Output) -> String {
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
+mod support;
+use support::{cargo, diagnostics};
 
 #[test]
 fn downstream_paths_no_std_doctests_and_diagnostics() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.join("../..").canonicalize().unwrap();
-    let root = workspace.join("target/addition-chain-consumers");
+    let root = workspace.join("target/macro-consumers");
     let fixtures = manifest.join("tests/fixtures");
     let facade = workspace.join("crates/bento");
     let core = workspace.join("crates/bento-core");
@@ -41,7 +24,7 @@ fn downstream_paths_no_std_doctests_and_diagnostics() {
         root.join("Cargo.toml"),
         format!(
             r#"[workspace]
-members = ["facade-default", "facade-renamed", "direct-core", "missing-support"]
+members = ["facade-default", "facade-renamed", "direct-core", "reexport", "missing-support"]
 resolver = "3"
 
 [workspace.dependencies]
@@ -57,25 +40,31 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
     for (name, source, dependencies, features) in [
         (
             "facade-default",
-            "facade.rs",
+            "consumers/facade.rs",
             format!("zakura-bento = {{ path = {facade:?} }}"),
             "renamed = []",
         ),
         (
             "facade-renamed",
-            "facade.rs",
+            "consumers/facade.rs",
             "support.workspace = true".into(),
             "default = [\"renamed\"]\nrenamed = []",
         ),
         (
             "direct-core",
-            "direct_core.rs",
+            "consumers/direct_core.rs",
             "support-core.workspace = true\nmacros.workspace = true\nsupport = { workspace = true, optional = true }".into(),
             "with-facade = [\"dep:support\"]",
         ),
         (
+            "reexport",
+            "pod/reexport.rs",
+            "bridge = { package = \"facade-default\", path = \"../facade-default\" }".into(),
+            "",
+        ),
+        (
             "missing-support",
-            "missing_support.rs",
+            "consumers/missing_support.rs",
             "macros.workspace = true".into(),
             "",
         ),
@@ -90,6 +79,8 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         )
         .unwrap();
         fs::copy(fixtures.join(source), package.join("src/lib.rs")).unwrap();
+        fs::copy(fixtures.join("pod/consumer.rs"), package.join("src/pod.rs")).unwrap();
+        fs::write(package.join("src/record.bin"), [1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
     }
 
     let output = cargo(
@@ -105,7 +96,14 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
     assert!(output.status.success(), "{}", diagnostics(&output));
     let output = cargo(
         &root,
-        &["check", "-p", "direct-core", "--features", "with-facade"],
+        &[
+            "test",
+            "--release",
+            "-p",
+            "direct-core",
+            "--features",
+            "with-facade",
+        ],
     );
     assert!(output.status.success(), "{}", diagnostics(&output));
 
@@ -152,7 +150,7 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         ("moved_value", "use of moved value: `value`"),
     ] {
         fs::copy(
-            fixtures.join(format!("{name}.rs")),
+            fixtures.join(format!("addition_chain/{name}.rs")),
             package.join(format!("examples/{name}.rs")),
         )
         .unwrap();

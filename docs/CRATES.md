@@ -5,6 +5,19 @@ names for Cargo and the registry. Shared package metadata and internal dependenc
 declarations live in the root [`Cargo.toml`](../Cargo.toml); each member explicitly
 inherits what it uses.
 
+## Related reorganization
+
+When a change introduces a new structure or convention, review the surrounding
+code, tests, and documentation for related reorganization. Consider whether
+existing material should follow the same structure, and include that
+reorganization when it makes the result more consistent and easier to navigate.
+Keep it tied to the change and update affected paths, links, and test harnesses.
+
+For example, adding a `pod/` directory to the
+[macro fixtures](../crates/bento-macros/tests/fixtures/) calls for grouping the
+existing addition-chain fixtures under `addition_chain/` too. Fixtures shared by
+both features belong in a common directory such as `consumers/`.
+
 ## Shared package metadata
 
 The root `[workspace.package]` table defines `version`, `authors`, `edition`,
@@ -98,13 +111,15 @@ and [library target names](https://doc.rust-lang.org/cargo/reference/cargo-targe
 | `bento` | Public facade; `no_std` | `bento-core`, `bento-macros` |
 | `udon` | Optimized field and curve arithmetic; `no_std` | `bento` |
 
-The current implementation consists of
-[`addition_chain!`](../crates/bento/src/lib.rs) and its
-[`AdditionChain`](../crates/bento-core/src/addchain.rs) support trait.
-Storage and reference arithmetic in core, and field and curve arithmetic in
-`udon`, remain scaffolded. Consumers use the `bento` facade, which re-exports
-core items at its root and explicitly re-exports and documents each procedural
-macro. `udon` declares its support dependency through `bento`.
+The current implementation provides
+[`addition_chain!`](../crates/bento/src/lib.rs), its
+[`AdditionChain`](../crates/bento-core/src/addchain.rs) support trait, and
+[POD storage and embedding](POD.md). Reference arithmetic in core, and field and
+curve arithmetic in `udon`, remain scaffolded. Consumers use the `bento` facade,
+which re-exports core items at its root and explicitly re-exports each macro.
+Procedural macros are documented on the facade; declarative embedding macros
+carry their documentation through the re-export. `udon` declares its support
+dependency through `bento`.
 
 `bento-core` is the bottom layer and cannot invoke the macros through the
 facade under this dependency structure. Shared arithmetic belongs there so

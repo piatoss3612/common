@@ -2,6 +2,12 @@
 //!
 //! Use [`addition_chain!`] to scale a value by a fixed positive integer. The
 //! [`addchain`] module defines the operations that a value supplies for scaling.
+//!
+//! Store records with the [`Pod`](trait@Pod) trait and its
+//! [derive macro](macro@Pod). [`bytes_of`] and [`bytes_of_slice`] expose their
+//! stored representation; [`embed_struct!`] and [`embed_array!`] include files as
+//! typed static data. [`AlignedBytes`] provides aligned storage when the bytes
+//! are already available.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -9,6 +15,61 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 pub use bento_core::*;
+
+#[doc(inline)]
+pub use bento_core::{embed_array, embed_struct};
+
+/// Derives the [`Pod`](trait@Pod) storage contract for a struct.
+///
+/// Use this derive for records that generators write as bytes and consumers
+/// embed as static data. It implements the [`Pod`](trait@Pod) contract for
+/// `repr(C)` and `repr(transparent)` structs whose fields implement
+/// [`Pod`](trait@Pod). Packed structs, enums, and unions are not supported.
+/// Explicit `repr(align(...))` is allowed within [`MAX_ALIGN`].
+///
+/// Generic structs are supported. A [`core::marker::PhantomData`] field does not
+/// require its marker type to implement [`Pod`](trait@Pod).
+///
+/// Deriving [`Pod`](trait@Pod) leaves layout validation to [`Pod::ASSERT_LAYOUT`].
+/// A padded or over-aligned type can still be constructed and used normally;
+/// converting it to bytes fails during compilation.
+///
+/// # Examples
+///
+/// ```
+/// # use zakura_bento as bento;
+/// #[repr(C)]
+/// #[derive(Clone, Copy, bento::Pod)]
+/// struct Record {
+///     low: u16,
+///     high: u16,
+///     value: u32,
+/// }
+///
+/// let record = Record { low: 0x0201, high: 0x0403, value: 0x0807_0605 };
+/// assert_eq!(bento::bytes_of(&record), &[1, 2, 3, 4, 5, 6, 7, 8]);
+///
+/// static BYTES: bento::AlignedBytes<8> = bento::AlignedBytes([1, 2, 3, 4, 5, 6, 7, 8]);
+/// static STORED: &Record = BYTES.as_value();
+/// assert_eq!(STORED.value, record.value);
+/// ```
+///
+/// Concrete layouts can also be checked explicitly, without converting bytes:
+///
+/// ```compile_fail
+/// # use zakura_bento as bento;
+/// #[repr(C)]
+/// #[derive(Clone, Copy, bento::Pod)]
+/// struct Padded(u8, u32);
+///
+/// const _: () = <Padded as bento::Pod>::ASSERT_LAYOUT;
+/// ```
+///
+/// Dependency aliases are discovered automatically. If the support items are
+/// reached through another crate's re-exports, `#[pod(crate = path)]` supplies
+/// their path explicitly. That path must expose [`Pod`](trait@Pod) and
+/// [`MAX_ALIGN`].
+pub use bento_macros::Pod;
 
 /// Scales a value using a compile-time addition chain.
 ///

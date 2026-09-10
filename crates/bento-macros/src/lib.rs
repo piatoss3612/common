@@ -18,6 +18,17 @@ mod proc;
 
 // Documentation lives on the facade's re-export.
 #[expect(missing_docs)]
+#[proc_macro_derive(Pod, attributes(pod))]
+pub fn pod(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = syn::parse_macro_input!(input as syn::DeriveInput);
+    helpers::macro_body(|| {
+        let core = derive::pod::core_path(&input)?;
+        derive::pod::derive(input, core)
+    })
+}
+
+// Documentation lives on the facade's re-export.
+#[expect(missing_docs)]
 #[proc_macro]
 pub fn addition_chain(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input = syn::parse_macro_input!(input as proc::addition_chain::Input);

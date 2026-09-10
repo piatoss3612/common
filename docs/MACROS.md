@@ -25,8 +25,8 @@ compiler's procedural macro context.
 
 The implementation is organized into:
 
-- [`derive`](../crates/bento-macros/src/derive/mod.rs): conventions and space for
-  derive macro implementations.
+- [`derive`](../crates/bento-macros/src/derive/mod.rs): derive macro conventions
+  and the checked `Pod` implementation.
 - [`proc`](../crates/bento-macros/src/proc/mod.rs): function-like macro parsing and
   expansion.
 - [`helpers`](../crates/bento-macros/src/helpers.rs): shared error reporting for
@@ -60,3 +60,21 @@ to exercise dependency resolution.
 - [Expansion tests](../crates/bento-macros/src/proc/addition_chain/tests.rs),
   [behavioral tests](../crates/bento-macros/tests/addition_chain.rs), and
   [Cargo consumer tests](../crates/bento-macros/tests/consumers.rs).
+
+## POD storage
+
+The [`Pod` derive](../crates/bento-macros/src/derive/pod/mod.rs) validates a
+struct's representation and generates field bounds and recursive layout
+assertions. It resolves dependencies through
+[`BentoCorePath`](../crates/bento-macros/src/path_resolution.rs), with an optional
+`#[pod(crate = path)]` override for support reached through another facade.
+Assertions remain associated with the concrete type so generic records can be
+validated when used for storage.
+
+The declarative [embedding macros](../crates/bento-core/src/pod/macros.rs) live
+in core and use `$crate` paths. Their initializers borrow aligned bytes for
+static typed views.
+
+See the [POD guide](POD.md) for usage, format ownership, and validation coverage.
+In particular, compiler tests must perform full builds: metadata-only checks
+can miss deferred layout assertion failures.

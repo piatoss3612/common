@@ -1,11 +1,17 @@
 #![no_std]
 #![deny(warnings)]
+#![forbid(unsafe_code)]
 
 // The harness compiles this with both an inherited alias and the registry name.
 #[cfg(feature = "renamed")]
 use support as bento;
 #[cfg(not(feature = "renamed"))]
 use zakura_bento as bento;
+
+pub mod pod;
+
+// Consumers can expose the support API through their own facade.
+pub use bento::*;
 
 #[derive(Clone)]
 pub struct Value(pub u64);

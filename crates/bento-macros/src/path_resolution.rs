@@ -18,6 +18,12 @@ use syn::{Error, Ident, Path, Result, parse_quote};
 #[derive(Clone)]
 pub struct BentoCorePath(Path);
 
+impl From<Path> for BentoCorePath {
+    fn from(path: Path) -> Self {
+        Self(path)
+    }
+}
+
 impl ToTokens for BentoCorePath {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         self.0.to_tokens(tokens)

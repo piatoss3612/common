@@ -5,3 +5,7 @@
 //! tokens through [`syn::Result`].
 //! Keep input validation, expansion, and unit tests together in that module.
 //! Mark generated implementations with `#[automatically_derived]`.
+//!
+//! The [`pod`] module implements the checked record storage derive.
+
+pub mod pod;

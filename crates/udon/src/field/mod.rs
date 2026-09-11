@@ -110,7 +110,7 @@ impl<M: PrimeModulus> PastaField<M> {
 
     #[inline]
     const fn from_montgomery(limbs: [u64; 4]) -> Self {
-        debug_assert!(!bento::const_arithmetic::u256::ge(&limbs, &M::MODULUS));
+        debug_assert!(word::compare_limbs(&limbs, &M::MODULUS).is_lt());
         Self {
             limbs,
             marker: PhantomData,

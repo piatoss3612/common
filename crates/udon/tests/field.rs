@@ -15,6 +15,26 @@ fn hex_macros_match_checked_integer_constructors() {
     assert_eq!(FP.to_bytes(), FQ.to_bytes());
 }
 
+mod literals {
+    pub use zakura_udon::{fp_hex as fp, fq_hex as fq};
+}
+
+#[test]
+fn reexported_hex_macros_cover_canonical_boundaries() {
+    const FP: [Fp; 3] = [
+        literals::fp!("0x0000000000000000000000000000000000000000000000000000000000000000"),
+        literals::fp!("0x0000000000000000000000000000000000000000000000000000000000000001"),
+        literals::fp!("0x40000000000000000000000000000000224698fc094cf91b992d30ed00000000",),
+    ];
+    const FQ: [Fq; 3] = [
+        literals::fq!("0x0000000000000000000000000000000000000000000000000000000000000000"),
+        literals::fq!("0x0000000000000000000000000000000000000000000000000000000000000001"),
+        literals::fq!("0x40000000000000000000000000000000224698FC0994A8DD8C46EB2100000000",),
+    ];
+    assert_eq!(FP, [Fp::ZERO, Fp::ONE, Fp::ONE.neg()]);
+    assert_eq!(FQ, [Fq::ZERO, Fq::ONE, Fq::ONE.neg()]);
+}
+
 fn check_encoding_boundaries<M: PrimeModulus>() {
     let modulus = CanonicalUint::from_limbs(M::MODULUS);
     assert!(PastaField::<M>::from_canonical_uint(modulus).is_none());
@@ -27,14 +47,6 @@ fn check_encoding_boundaries<M: PrimeModulus>() {
         std::panic::catch_unwind(|| { PastaField::<M>::from_montgomery_limbs(M::MODULUS) })
             .is_err()
     );
-
-    for limbs in [M::MODULUS, [u64::MAX; 4]] {
-        let hex = format!(
-            "0x{:016x}{:016x}{:016x}{:016x}",
-            limbs[3], limbs[2], limbs[1], limbs[0]
-        );
-        assert!(std::panic::catch_unwind(|| PastaField::<M>::from_hex(&hex)).is_err());
-    }
 
     for integer in [0, 1, 2, 3, u64::MAX] {
         let value = PastaField::<M>::from_u64(integer);

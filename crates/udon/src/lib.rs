@@ -23,5 +23,13 @@
 
 pub mod field;
 
+// Keep macro support anchored to Udon through dependency aliases and re-exports.
+// These expose only Bento's const-enforcing macros, never arithmetic functions.
+#[doc(hidden)]
+pub use bento::const_arithmetic::{
+    m255::from_u256 as __m255_from_u256,
+    u256::{from_hex as __u256_from_hex, ge as __u256_ge},
+};
+
 #[cfg(test)]
 extern crate std;

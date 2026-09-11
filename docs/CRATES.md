@@ -34,6 +34,12 @@ support code. Core must not depend on the facade or invoke its procedural
 macros. Expose facade items deliberately; adding a public implementation helper
 must not automatically extend the facade's API.
 
+The facade lists each exported item explicitly, including items within public
+modules. Reference arithmetic is exposed through macros that place the entire
+implementation call inside `const { ... }`. Do not export arithmetic functions
+or contexts through the facade: Udon must use this support only at compile time.
+POD storage APIs retain their existing const methods.
+
 Procedural macros and build scripts execute on the host. Generated code and
 embedded representations must satisfy the target's layout and platform
 requirements. Keep host parsing and generation dependencies out of target

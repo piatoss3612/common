@@ -1,17 +1,20 @@
-# Procedural macros
+# Macros
 
 [`bento-macros`](../crates/bento-macros/src/lib.rs) implements macros exposed
 through the [`bento`](../crates/bento/src/lib.rs) facade. Parsing and expansion
 run on the build host; emitted code compiles for the caller's target. See the
 [crate guide](CRATES.md) for dependency boundaries.
 
+The facade also exports declarative wrappers for compile-time reference
+arithmetic. These are defined in `bento-core` and evaluated by the Rust compiler.
+
 ## Authoring conventions
 
-Keep compiler entry points thin. Parse and expand with `syn::Result` and
-`proc_macro2::TokenStream` so most behavior can be tested outside the procedural
-macro context. Report invalid input with `syn::Error` at the relevant span;
-reserve panics for internal invariants. Reject unsupported helper attributes,
-including misplaced ones, instead of silently ignoring them.
+For procedural macros, keep compiler entry points thin. Parse and expand with
+`syn::Result` and `proc_macro2::TokenStream` so most behavior can be tested outside
+the procedural macro context. Report invalid input with `syn::Error` at the
+relevant span; reserve panics for internal invariants. Reject unsupported helper
+attributes, including misplaced ones, instead of silently ignoring them.
 
 Document and deliberately export public macros from the facade. Generated
 code must support the target's `no_std` context. Use qualified paths, but do not
@@ -50,3 +53,22 @@ re-exporting the trait with counterfeit helpers cannot bypass validation.
 Metadata is not a validation witness: storage consumers must still evaluate
 `Pod::ASSERT_LAYOUT`, including for empty values. See the [POD guide](POD.md)
 and the [trait contract](../crates/bento-core/src/pod/mod.rs).
+
+## Reference arithmetic
+
+The [`const_arithmetic`](../crates/bento/src/const_arithmetic/mod.rs) facade
+exports arithmetic macros and integer storage aliases explicitly. Calls such
+as `m255::mul!(&MODULUS, &A, &B)` expand to the corresponding core function
+inside `const { ... }`. The compiler rejects runtime arguments and runs the
+operation's input checks even when the macro appears in a runtime expression.
+
+The [API documentation](../crates/bento/src/const_arithmetic/mod.rs) explains
+which constant expressions can be passed through the wrappers and how to
+compose derivations. The [Montgomery module](../crates/bento/src/const_arithmetic/m255.rs)
+also demonstrates inferred and explicit table lengths.
+
+The wrappers are defined in core so `$crate` identifies the implementation
+through dependency aliases, build dependencies, and indirect macro re-exports.
+Each wrapper accepts only its operation's arguments; it provides no way to
+select another core item or return an arithmetic context. Runtime arithmetic
+belongs in Udon or another consumer.

@@ -31,6 +31,9 @@ cargo test --locked -p zakura-udon --lib
   contracts in separate consumers. Use full builds for assertions deferred to
   code generation; `cargo check` can miss them. Check the relevant diagnostic and
   source location without pinning the compiler's entire rendered output.
+  Reference-arithmetic consumers verify that every facade macro rejects runtime
+  arguments, that direct functions and contexts are unavailable, and that
+  constant inputs work through dependency aliases and re-exports.
 - Examples demonstrate complete uses and assert their results. Configure runnable
   examples with `test = true` and `harness = false` so the suite executes them.
   Doctests verify focused public API examples.

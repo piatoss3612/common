@@ -17,6 +17,10 @@ impl support::addchain::AdditionChain for Value {
 }
 
 fn main() {
+    assert_eq!(
+        support::const_arithmetic::m255::one!(&[97, 0, 0, 0]),
+        [61, 0, 0, 0]
+    );
     let value = support::addition_chain!(Value(7), 181);
     assert_eq!(support::bytes_of(&value), 1267_u32.to_le_bytes());
 }

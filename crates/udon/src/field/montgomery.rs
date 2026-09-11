@@ -99,9 +99,9 @@ pub(super) fn montgomery_reduce_unreduced<M: PrimeModulus>(limbs: [u64; 8]) -> [
 /// optional multiplication by a reduced residue. No field value crosses the
 /// canonical representation boundary until the final reduction.
 ///
-/// Requires a reduced input and at most 256 squares. The parameter bundle
-/// checks the exact REDC recurrence for every permitted run length, including
-/// the final product bound. Larger runs are split by the caller.
+/// Requires a reduced input and at most 256 squares. Compile-time parameter
+/// checks verify the exact REDC recurrence for every permitted run length,
+/// including the final product bound. Larger runs are split by the caller.
 #[inline]
 pub(super) fn square_run<M: PrimeModulus>(
     value: &[u64; 4],

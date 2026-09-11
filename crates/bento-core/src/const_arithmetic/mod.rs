@@ -53,6 +53,7 @@ pub type U512 = [u64; 8];
 pub mod m255;
 pub mod u256;
 
+mod macros;
 mod word;
 
 #[cfg(test)]

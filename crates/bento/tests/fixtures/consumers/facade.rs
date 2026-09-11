@@ -8,9 +8,11 @@ use support as bento;
 #[cfg(not(feature = "renamed"))]
 use zakura_bento as bento;
 
+pub mod arithmetic;
 pub mod pod;
 
 // Consumers can expose the support API through their own facade.
+pub use bento::const_arithmetic::u256::shr as shift;
 pub use bento::*;
 
 // Exercise automatic derive discovery independently of the shared core fixture.
@@ -47,6 +49,7 @@ pub fn scale(value: Value) -> Value {
 
 #[test]
 fn facade_only_consumer() {
+    arithmetic::check();
     assert_eq!(scale(Value(7)).0, 1267);
     assert_eq!(bento::addition_chain!(Value(7), 1).0, 7);
     assert_eq!(bento::addition_chain!(Value(7), 3).0, 21);

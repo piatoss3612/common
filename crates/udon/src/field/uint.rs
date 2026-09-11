@@ -1,8 +1,7 @@
 //! Modulus-independent unsigned integers and bit windows.
 
-use bento::const_arithmetic::u256;
-
-use super::{ENCODED_SIZE, word::compare_limbs};
+use super::ENCODED_SIZE;
+use super::word::{add_limbs, compare_limbs};
 
 /// An unsigned 256-bit integer used for field bit decomposition.
 ///
@@ -100,9 +99,18 @@ impl CanonicalUint {
         if shift >= ENCODED_SIZE * 8 {
             return Self { limbs: [0; 4] };
         }
-        Self {
-            limbs: u256::shr(&self.limbs, shift as u32),
+        let limb_shift = shift / 64;
+        let bit_shift = shift % 64;
+        let mut limbs = [0; 4];
+        let mut index = 0;
+        while index + limb_shift < 4 {
+            limbs[index] = self.limbs[index + limb_shift] >> bit_shift;
+            if bit_shift != 0 && index + limb_shift + 1 < 4 {
+                limbs[index] |= self.limbs[index + limb_shift + 1] << (64 - bit_shift);
+            }
+            index += 1;
         }
+        Self { limbs }
     }
 
     /// Extracts an arbitrary-width bit range as another fixed-width integer.
@@ -130,8 +138,7 @@ impl CanonicalUint {
     /// Adds a small unsigned integer, returning `None` on 256-bit overflow.
     #[inline]
     pub fn checked_add_u128(self, rhs: u128) -> Option<Self> {
-        let (limbs, carry) =
-            u256::add_with_carry(&self.limbs, &[rhs as u64, (rhs >> 64) as u64, 0, 0]);
+        let (limbs, carry) = add_limbs(&self.limbs, &[rhs as u64, (rhs >> 64) as u64, 0, 0]);
         (carry == 0).then_some(Self { limbs })
     }
 

@@ -77,6 +77,11 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         )
         .unwrap();
         fs::copy(fixtures.join(source), package.join("src/lib.rs")).unwrap();
+        fs::copy(
+            fixtures.join("const_arithmetic/consumer.rs"),
+            package.join("src/arithmetic.rs"),
+        )
+        .unwrap();
         fs::copy(fixtures.join("pod/consumer.rs"), package.join("src/pod.rs")).unwrap();
         fs::write(package.join("src/record.bin"), [1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
     }
@@ -216,6 +221,30 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
             "const_arithmetic/ratio_overflow",
             "quotient exceeds five limbs",
         ),
+        (
+            "const_arithmetic/runtime_arguments",
+            "attempt to use a non-constant value in a constant",
+        ),
+        (
+            "const_arithmetic/const_fn_arguments",
+            "attempt to use a non-constant value in a constant",
+        ),
+        (
+            "const_arithmetic/const_local",
+            "attempt to use a non-constant value in a constant",
+        ),
+        (
+            "const_arithmetic/direct_functions",
+            "expected value, found macro",
+        ),
+        (
+            "const_arithmetic/direct_context",
+            "could not find `MontgomeryContext` in `m255`",
+        ),
+        (
+            "const_arithmetic/invalid_runtime_expression",
+            "modulus must be odd",
+        ),
     ] {
         let name = Path::new(fixture).file_name().unwrap().to_str().unwrap();
         fs::copy(
@@ -236,5 +265,17 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
             diagnostic.contains(&format!("src/bin/{name}.rs:")),
             "{diagnostic}"
         );
+        let source = fs::read_to_string(fixtures.join(format!("{fixture}.rs"))).unwrap();
+        for (line, _) in source
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.ends_with("// rejected"))
+        {
+            assert!(
+                diagnostic.contains(&format!("src/bin/{name}.rs:{}:", line + 1)),
+                "missing diagnostic for line {}: {diagnostic}",
+                line + 1,
+            );
+        }
     }
 }

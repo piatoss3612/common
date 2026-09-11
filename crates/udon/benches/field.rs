@@ -156,7 +156,6 @@ fn encoding<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     let modulus = CanonicalUint::from_limbs(M::MODULUS);
     let unreduced = CanonicalUint::from_limbs([u64::MAX; 4]);
     let wide = [0xa7; 64];
-    let hex = format!("{value:?}");
     let mut group = criterion.benchmark_group(format!("{field}/encoding"));
     bench(&mut group, "from_u64", &u64::MAX, |value| {
         PastaField::<M>::from_u64(*value)
@@ -195,11 +194,8 @@ fn encoding<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
         &value.montgomery_limbs(),
         |limbs| PastaField::<M>::from_montgomery_limbs(*limbs),
     );
-    bench(&mut group, "from_hex", hex.as_str(), |hex| {
-        PastaField::<M>::from_hex(hex)
-    });
     bench(&mut group, "is_odd", &value, |value| value.is_odd());
-    let mut formatted = String::with_capacity(hex.len());
+    let mut formatted = String::with_capacity(66);
     group.bench_function("debug", |b| {
         b.iter(|| {
             formatted.clear();

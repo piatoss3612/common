@@ -1,56 +1,86 @@
-//! Limb arithmetic shared by the runtime field kernels.
-
-use bento::const_arithmetic::u256;
+//! Limb arithmetic for runtime field kernels and their compile-time bound checks.
 
 /// Adds two limbs and a carry, returning the low limb and high carry.
 #[inline(always)]
-pub(super) fn adc(lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
-    let value = u128::from(lhs) + u128::from(rhs) + u128::from(carry);
+pub(super) const fn adc(lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
+    let value = lhs as u128 + rhs as u128 + carry as u128;
     (value as u64, (value >> 64) as u64)
 }
 
 /// Subtracts a limb and a borrow bit, returning the low limb and borrow bit.
 #[inline(always)]
-pub(super) fn sbb(lhs: u64, rhs: u64, borrow: u64) -> (u64, u64) {
+pub(super) const fn sbb(lhs: u64, rhs: u64, borrow: u64) -> (u64, u64) {
     let (value, first_borrow) = lhs.overflowing_sub(rhs);
     let (value, second_borrow) = value.overflowing_sub(borrow);
-    (value, u64::from(first_borrow | second_borrow))
+    (value, (first_borrow | second_borrow) as u64)
 }
 
 /// Accumulates one limb product plus an accumulator limb and a carry limb.
 #[inline(always)]
-pub(super) fn mac(accumulator: u64, lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
-    let value = u128::from(lhs) * u128::from(rhs) + u128::from(accumulator) + u128::from(carry);
+pub(super) const fn mac(accumulator: u64, lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
+    let value = lhs as u128 * rhs as u128 + accumulator as u128 + carry as u128;
     (value as u64, (value >> 64) as u64)
 }
 
 /// Compares two unsigned 256-bit integers.
 #[inline]
-pub(super) fn compare_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> core::cmp::Ordering {
-    for index in (0..4).rev() {
-        match lhs[index].cmp(&rhs[index]) {
-            core::cmp::Ordering::Equal => {}
-            ordering => return ordering,
+pub(super) const fn compare_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> core::cmp::Ordering {
+    let mut index = 4;
+    while index > 0 {
+        index -= 1;
+        if lhs[index] < rhs[index] {
+            return core::cmp::Ordering::Less;
+        }
+        if lhs[index] > rhs[index] {
+            return core::cmp::Ordering::Greater;
         }
     }
     core::cmp::Ordering::Equal
 }
 
-/// Subtracts two unsigned 256-bit integers, returning the borrow bit.
+/// Adds two unsigned 256-bit integers, returning the wrapped sum and carry bit.
 #[inline]
-pub(super) fn subtract_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> ([u64; 4], u64) {
+pub(super) const fn add_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> ([u64; 4], u64) {
+    let mut result = [0; 4];
+    let mut carry = 0;
+    let mut index = 0;
+    while index < 4 {
+        (result[index], carry) = adc(lhs[index], rhs[index], carry);
+        index += 1;
+    }
+    (result, carry)
+}
+
+/// Subtracts two unsigned 256-bit integers, returning the wrapped difference
+/// and borrow bit.
+#[inline]
+pub(super) const fn subtract_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> ([u64; 4], u64) {
     let mut result = [0; 4];
     let mut borrow = 0;
-    for index in 0..4 {
+    let mut index = 0;
+    while index < 4 {
         (result[index], borrow) = sbb(lhs[index], rhs[index], borrow);
+        index += 1;
     }
     (result, borrow)
 }
 
 /// Returns the exact eight-limb product, without modular reduction.
 #[inline]
-pub(super) fn multiply_wide(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 8] {
-    u256::mul_wide(lhs, rhs)
+pub(super) const fn multiply_wide(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 8] {
+    let mut product = [0; 8];
+    let mut i = 0;
+    while i < 4 {
+        let mut carry = 0;
+        let mut j = 0;
+        while j < 4 {
+            (product[i + j], carry) = mac(product[i + j], lhs[i], rhs[j], carry);
+            j += 1;
+        }
+        product[i + 4] = carry;
+        i += 1;
+    }
+    product
 }
 
 /// Returns the exact eight-limb square of a 256-bit integer.

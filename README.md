@@ -21,10 +21,12 @@ positive integer using operations supplied by the value's type. Its
 [POD storage APIs](docs/POD.md) let generators write records as bytes and
 consumers embed those files as typed static data.
 
-The [`const_arithmetic`](crates/bento-core/src/const_arithmetic/mod.rs) module
-derives field and curve parameters with `const fn` integer and Montgomery
-arithmetic. It operates on public parameters and provides no constant-time
-guarantee. The [field constants example](crates/bento/examples/field_constants.rs)
+The [`const_arithmetic`](crates/bento/src/const_arithmetic/mod.rs) module
+derives field and curve parameters with integer and Montgomery arithmetic
+macros. Each macro evaluates its arguments and result inside `const { ... }`,
+so runtime arguments are rejected. The reference arithmetic operates on public
+parameters and provides no constant-time guarantee.
+The [field constants example](crates/bento/examples/field_constants.rs)
 derives a root of unity and its inverse from a modulus and generator:
 
 ```console

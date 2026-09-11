@@ -5,17 +5,28 @@
 
 use core::marker::PhantomData;
 
-use bento::const_arithmetic::{m255, u256};
-
 use super::montgomery::{montgomery_multiply, montgomery_reduce};
 use super::word::{adc, compare_limbs, multiply_wide};
 use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus};
 
 /// Constructs an [`Fp`](crate::field::Fp) constant from hexadecimal text.
 ///
-/// Requires a canonical `0x`-prefixed, 64-digit integer, as accepted by
-/// [`PastaField::from_hex`]. Malformed or noncanonical literals fail to build
-/// even when the macro is used in a runtime expression.
+/// Requires a string literal containing a canonical `0x`-prefixed, 64-digit
+/// integer strictly below the field modulus. The most significant digit comes
+/// first. Digits may use either case; the prefix must be lowercase `0x`.
+/// Parsing and conversion run at compile time; malformed or noncanonical
+/// literals fail to build even in a runtime expression.
+///
+/// For runtime input, use [`Fp::from_bytes`](crate::field::Fp::from_bytes) or
+/// [`Fp::from_canonical_uint`](crate::field::Fp::from_canonical_uint).
+///
+/// ```
+/// use zakura_udon::{field::Fp, fp_hex};
+///
+/// const VALUE: Fp =
+///     fp_hex!("0x000000000000000000000000000000000000000000000000000000000000002a");
+/// assert_eq!(VALUE, Fp::from_u64(42));
+/// ```
 ///
 /// ```compile_fail
 /// // The modulus itself is not a canonical field element.
@@ -28,17 +39,41 @@ use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus};
 /// // Hex strings must contain exactly 64 digits after the prefix.
 /// let _ = zakura_udon::fp_hex!("0x01");
 /// ```
+///
+/// ```compile_fail
+/// // Only literals are accepted, including when a variable holds a literal.
+/// let text = "0x0000000000000000000000000000000000000000000000000000000000000001";
+/// let _ = zakura_udon::fp_hex!(text);
+/// ```
+///
+/// ```compile_fail
+/// let _ = zakura_udon::fp_hex!(
+///     "0x000000000000000000000000000000000000000000000000000000000000000g"
+/// );
+/// ```
 #[macro_export]
 macro_rules! fp_hex {
     ($value:literal $(,)?) => {
-        const { $crate::field::Fp::from_hex($value) }
+        const {
+            const MODULUS: [::core::primitive::u64; 4] =
+                <$crate::field::PallasBase as $crate::field::PrimeModulus>::MODULUS;
+            const CANONICAL: [::core::primitive::u64; 4] = $crate::__u256_from_hex!($value);
+            ::core::assert!(
+                !$crate::__u256_ge!(&CANONICAL, &MODULUS),
+                "field constants must be canonical residues"
+            );
+            $crate::field::Fp::from_montgomery_limbs($crate::__m255_from_u256!(
+                &MODULUS, &CANONICAL
+            ))
+        }
     };
 }
 
 /// Constructs an [`Fq`](crate::field::Fq) constant from hexadecimal text.
 ///
-/// Requires a canonical `0x`-prefixed, 64-digit integer and compile-time
-/// evaluation, exactly as [`fp_hex!`](crate::fp_hex) does for `Fp`.
+/// Uses the literal format and compile-time evaluation rules of
+/// [`fp_hex!`](crate::fp_hex), with the canonical bound of
+/// [`Fq`](crate::field::Fq).
 ///
 /// ```compile_fail
 /// let _ = zakura_udon::fq_hex!(
@@ -48,7 +83,18 @@ macro_rules! fp_hex {
 #[macro_export]
 macro_rules! fq_hex {
     ($value:literal $(,)?) => {
-        const { $crate::field::Fq::from_hex($value) }
+        const {
+            const MODULUS: [::core::primitive::u64; 4] =
+                <$crate::field::PallasScalar as $crate::field::PrimeModulus>::MODULUS;
+            const CANONICAL: [::core::primitive::u64; 4] = $crate::__u256_from_hex!($value);
+            ::core::assert!(
+                !$crate::__u256_ge!(&CANONICAL, &MODULUS),
+                "field constants must be canonical residues"
+            );
+            $crate::field::Fq::from_montgomery_limbs($crate::__m255_from_u256!(
+                &MODULUS, &CANONICAL
+            ))
+        }
     };
 }
 
@@ -161,7 +207,7 @@ impl<M: PrimeModulus> PastaField<M> {
     /// expression this produces a compile error.
     pub const fn from_montgomery_limbs(limbs: [u64; 4]) -> Self {
         assert!(
-            !u256::ge(&limbs, &M::MODULUS),
+            compare_limbs(&limbs, &M::MODULUS).is_lt(),
             "Montgomery limbs must be a canonical residue"
         );
         Self {
@@ -170,34 +216,15 @@ impl<M: PrimeModulus> PastaField<M> {
         }
     }
 
-    /// Converts a canonical `0x`-prefixed, 64-digit hexadecimal integer.
-    ///
-    /// The most significant digit comes first. Both letter cases are
-    /// accepted, matching [`u256::from_hex`]. Use [`fp_hex!`](crate::fp_hex)
-    /// or [`fq_hex!`](crate::fq_hex) to require compile-time evaluation.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the prefix, digit count, or digits are invalid, or the
-    /// integer is at least the modulus. In a const expression this produces
-    /// a compile error.
-    pub const fn from_hex(value: &str) -> Self {
-        let canonical = u256::from_hex(value);
-        assert!(
-            !u256::ge(&canonical, &M::MODULUS),
-            "field constants must be canonical residues"
-        );
-        Self::from_montgomery_limbs(m255::mul(&M::MODULUS, &canonical, &M::R2))
-    }
-
     /// Returns the parity of the canonical integer representative.
     pub fn is_odd(&self) -> bool {
         self.to_canonical_uint().bit(0) == Some(true)
     }
 }
 
-// Raw operands may exceed p. The parameter bundle checks the constant bounds
-// for both callers, establishing a*b+c*d < pR without field constructors.
+// Raw operands may exceed p. Compile-time checks in
+// parameters::assert_kernel_bounds establish a*b+c*d < pR for both callers,
+// where p is the modulus and R = 2^256.
 #[inline]
 fn raw_product_sum<M: PrimeModulus>(
     a: &[u64; 4],

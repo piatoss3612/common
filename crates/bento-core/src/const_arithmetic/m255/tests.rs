@@ -162,6 +162,58 @@ fn full_width_tables_are_const_evaluable_and_match_independent_integers() {
 }
 
 #[test]
+fn root_tables_match_independent_integers() {
+    fn check<const N: usize>(modulus: U256, generator: u64) {
+        let (roots, inverses) = two_adic_root_tables::<N>(&modulus, generator, (N - 1) as u32);
+        let p = integer(&modulus);
+        let radix = (BigUint::from(1u8) << 256) % &p;
+        let generator = BigUint::from(generator);
+        for k in 0..N {
+            let root = generator.modpow(&((&p - 1u8) >> k), &p);
+            assert_eq!(roots[k], limbs(&((&root * &radix) % &p)));
+            assert_eq!(
+                inverses[k],
+                limbs(&((root.modinv(&p).unwrap() * &radix) % &p))
+            );
+            assert_eq!(
+                root.modpow(&(BigUint::from(1u8) << k), &p),
+                BigUint::from(1u8)
+            );
+            if k > 0 {
+                assert_ne!(
+                    root.modpow(&(BigUint::from(1u8) << (k - 1)), &p),
+                    BigUint::from(1u8)
+                );
+            }
+        }
+    }
+
+    check::<2>([7, 0, 0, 0], 3);
+    check::<3>([13, 0, 0, 0], 2);
+    check::<6>([97, 0, 0, 0], 5);
+    check::<33>(
+        u256::from_hex("0x73eda753299d7d483339d80809a1d80553bda402fffe5bfeffffffff00000001"),
+        7,
+    );
+}
+
+#[test]
+fn root_tables_validate_modulus_two_adicity_and_length() {
+    for modulus in [[0; 4], [1, 0, 0, 0], [2, 0, 0, 0], [u64::MAX; 4]] {
+        assert!(std::panic::catch_unwind(|| two_adic_root_tables::<6>(&modulus, 5, 5)).is_err());
+    }
+    for two_adicity in [0, 1, 4, 6, 256, u32::MAX] {
+        assert!(
+            std::panic::catch_unwind(|| two_adic_root_tables::<6>(&[97, 0, 0, 0], 5, two_adicity))
+                .is_err()
+        );
+    }
+    assert!(std::panic::catch_unwind(|| two_adic_root_tables::<0>(&[97, 0, 0, 0], 5, 5)).is_err());
+    assert!(std::panic::catch_unwind(|| two_adic_root_tables::<5>(&[97, 0, 0, 0], 5, 5)).is_err());
+    assert!(std::panic::catch_unwind(|| two_adic_root_tables::<7>(&[97, 0, 0, 0], 5, 5)).is_err());
+}
+
+#[test]
 fn safegcd_tables_use_the_requested_batch_limit() {
     const MODULUS: U256 = [97, 0, 0, 0];
     const EMPTY: [U256; 0] = safegcd_corrections_62_64(&MODULUS);

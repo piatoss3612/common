@@ -3,6 +3,7 @@
 use bento::const_arithmetic::{m255, u256};
 
 use super::PastaField;
+use super::word::{add_limbs, compare_limbs, multiply_wide, subtract_limbs};
 use crate::field::safegcd::{SAFEGCD_BATCHES, to_signed62};
 
 // Derive the remaining field constants from these inputs and each modulus.
@@ -96,9 +97,9 @@ macro_rules! pasta_field_parameters {
      zeta: canonical_root $(,)?) => {
         pasta_field_parameters! {
             @impl $marker, $modulus,
-            const ZETA: [u64; 4] = Self::PARAMETERS.cube_root;
+            const ZETA: [u64; 4] = m255::cube_root_of_unity!(&Self::MODULUS, GENERATOR);
             const ZETA_INVERSE: [u64; 4] =
-                m255::mul(&Self::MODULUS, &Self::ZETA, &Self::ZETA);
+                m255::mul!(&Self::MODULUS, &Self::ZETA, &Self::ZETA);
         }
     };
     ($marker:ty, modulus: $modulus:literal,
@@ -106,40 +107,43 @@ macro_rules! pasta_field_parameters {
         pasta_field_parameters! {
             @impl $marker, $modulus,
             const ZETA: [u64; 4] =
-                m255::mul(&Self::MODULUS, &Self::ZETA_INVERSE, &Self::ZETA_INVERSE);
-            const ZETA_INVERSE: [u64; 4] = Self::PARAMETERS.cube_root;
+                m255::mul!(&Self::MODULUS, &Self::ZETA_INVERSE, &Self::ZETA_INVERSE);
+            const ZETA_INVERSE: [u64; 4] = m255::cube_root_of_unity!(&Self::MODULUS, GENERATOR);
         }
     };
     (@impl $marker:ty, $modulus:literal, $($zeta:item)*) => {
         impl PrimeModulus for $marker {
-            const MODULUS: [u64; 4] = u256::from_hex($modulus);
+            const MODULUS: [u64; 4] = u256::from_hex!($modulus);
         }
 
         impl $marker {
-            const PARAMETERS: FieldParameters = FieldParameters::new(Self::MODULUS);
+            const ROOT_TABLES: (
+                [[u64; 4]; INVERSE_POWER_TABLE_LEN],
+                [[u64; 4]; INVERSE_POWER_TABLE_LEN],
+            ) = m255::two_adic_root_tables!(&Self::MODULUS, GENERATOR, TWO_ADICITY);
         }
 
         impl sealed::Parameters for $marker {
-            const MONTGOMERY_INV: u64 = Self::PARAMETERS.context.reduction_coefficient();
-            const R: [u64; 4] = Self::PARAMETERS.context.one();
-            const R2: [u64; 4] = Self::PARAMETERS.context.r2();
-            const R3: [u64; 4] = Self::PARAMETERS.r3;
-            const ROOTS: [[u64; 4]; INVERSE_POWER_TABLE_LEN] = Self::PARAMETERS.roots;
-            const INVERSE_ROOTS: [[u64; 4]; INVERSE_POWER_TABLE_LEN] = Self::PARAMETERS.inverse_roots;
-            const B448: [u64; 4] = Self::PARAMETERS.b448;
+            const MONTGOMERY_INV: u64 = m255::reduction_coefficient!(Self::MODULUS[0]);
+            const R: [u64; 4] = m255::one!(&Self::MODULUS);
+            const R2: [u64; 4] = m255::r2!(&Self::MODULUS);
+            const R3: [u64; 4] = m255::mul!(&Self::MODULUS, &Self::R2, &Self::R2);
+            const ROOTS: [[u64; 4]; INVERSE_POWER_TABLE_LEN] = Self::ROOT_TABLES.0;
+            const INVERSE_ROOTS: [[u64; 4]; INVERSE_POWER_TABLE_LEN] = Self::ROOT_TABLES.1;
+            const B448: [u64; 4] = m255::from_u256!(&Self::MODULUS, &[0, 0, 0, 1]);
             const SQRT_EXPONENT: [u64; 4] =
-                u256::tonelli_shanks_exponent(&Self::MODULUS, TWO_ADICITY);
-            const TWO_INVERSE: [u64; 4] = Self::PARAMETERS.inverse_powers[1];
+                u256::tonelli_shanks_exponent!(&Self::MODULUS, TWO_ADICITY);
+            const TWO_INVERSE: [u64; 4] = Self::POWER_OF_TWO_INVERSES[1];
             const ROOT_OF_UNITY: [u64; 4] =
-                Self::PARAMETERS.roots[TWO_ADICITY as usize];
+                Self::ROOT_TABLES.0[TWO_ADICITY as usize];
             const ROOT_OF_UNITY_INVERSE: [u64; 4] =
-                Self::PARAMETERS.inverse_roots[TWO_ADICITY as usize];
-            const DELTA: [u64; 4] = Self::PARAMETERS.delta;
+                Self::ROOT_TABLES.1[TWO_ADICITY as usize];
+            const DELTA: [u64; 4] = m255::odd_order_generator!(&Self::MODULUS, GENERATOR, TWO_ADICITY);
             const MODULUS_SIGNED62: [i64; 5] = to_signed62(&Self::MODULUS);
             const SAFEGCD_CORRECTIONS: [[u64; 4]; SAFEGCD_BATCHES] =
-                Self::PARAMETERS.corrections;
+                m255::safegcd_corrections_62_64!(&Self::MODULUS);
             const POWER_OF_TWO_INVERSES: [[u64; 4]; INVERSE_POWER_TABLE_LEN] =
-                Self::PARAMETERS.inverse_powers;
+                m255::inverse_powers_of_two!(&Self::MODULUS);
             $($zeta)*
 
             fn pow_sqrt_exponent(value: &PastaField<Self>) -> PastaField<Self> {
@@ -149,16 +153,20 @@ macro_rules! pasta_field_parameters {
         }
 
         const _: () = {
-            // The derivations assume the validated modulus domain, the
-            // orientation arms must pair the pinned zeta
-            // with its actual inverse.
-            m255::assert_modulus(&<$marker as PrimeModulus>::MODULUS);
+            // These bounds justify the runtime kernels' reduction shortcuts.
+            assert_kernel_bounds(
+                &<$marker as PrimeModulus>::MODULUS,
+                &<$marker as sealed::Parameters>::R2,
+                &<$marker as sealed::Parameters>::R3,
+            );
+            m255::assert_modulus!(&<$marker as PrimeModulus>::MODULUS);
             let modulus = <$marker as PrimeModulus>::MODULUS;
             assert!(
                 modulus[2] == 0 && modulus[3] == 1 << 62,
                 "Montgomery kernels require p = 2^254 plus a 128-bit integer"
             );
-            let product = m255::mul(
+            // Each orientation arm must pair zeta with its actual inverse.
+            let product = m255::mul!(
                 &<$marker as PrimeModulus>::MODULUS,
                 &<$marker as sealed::Parameters>::ZETA,
                 &<$marker as sealed::Parameters>::ZETA_INVERSE,
@@ -285,20 +293,6 @@ impl<M: PrimeModulus> Power<M> {
     }
 }
 
-// One setup feeds every parameter and table. Raw table entries remain checked
-// residues; field constructors preserve the representation boundary.
-struct FieldParameters {
-    context: m255::MontgomeryContext,
-    r3: [u64; 4],
-    b448: [u64; 4],
-    roots: [[u64; 4]; INVERSE_POWER_TABLE_LEN],
-    inverse_roots: [[u64; 4]; INVERSE_POWER_TABLE_LEN],
-    inverse_powers: [[u64; 4]; INVERSE_POWER_TABLE_LEN],
-    corrections: [[u64; 4]; SAFEGCD_BATCHES],
-    cube_root: [u64; 4],
-    delta: [u64; 4],
-}
-
 const fn add_wide(a: [u64; 8], b: [u64; 8]) -> [u64; 8] {
     let mut result = [0; 8];
     let mut carry = 0u128;
@@ -315,116 +309,67 @@ const fn add_wide(a: [u64; 8], b: [u64; 8]) -> [u64; 8] {
 
 const fn assert_redc_bound(value: [u64; 8], modulus: &[u64; 4]) {
     assert!(
-        !u256::ge(&[value[4], value[5], value[6], value[7]], modulus),
+        compare_limbs(&[value[4], value[5], value[6], value[7]], modulus).is_lt(),
         "kernel input must be below pR"
     );
 }
 
-impl FieldParameters {
-    const fn new(modulus: [u64; 4]) -> Self {
-        let context = m255::MontgomeryContext::new(modulus);
-        let r2 = context.r2();
-        let r3 = context.mul(&r2, &r2);
-        let (sum, carry) = u256::add_with_carry(&r2, &r3);
+// Use Udon's integer operations because function parameters cannot cross
+// Bento's inline const blocks. Bento has already validated the modulus and
+// derived r2 and r3. In these bounds, p = modulus and R = 2^256.
+const fn assert_kernel_bounds(modulus: &[u64; 4], r2: &[u64; 4], r3: &[u64; 4]) {
+    let minus_one = subtract_limbs(modulus, &[1, 0, 0, 0]).0;
+    let (sum, carry) = add_limbs(r2, r3);
+    assert!(
+        carry == 0 && compare_limbs(&sum, modulus).is_lt(),
+        "wide decoder requires R2 + R3 < p"
+    );
+    // The Horner numerator is (V + D)*R2, V < p, D < R.
+    assert_redc_bound(
+        add_wide(
+            multiply_wide(&minus_one, r2),
+            multiply_wide(&[u64::MAX; 4], r2),
+        ),
+        modulus,
+    );
+    let product = multiply_wide(&minus_one, &minus_one);
+    let three_products = add_wide(add_wide(product, product), product);
+    assert_redc_bound(three_products, modulus);
+    let four_products = add_wide(three_products, product);
+    assert!(
+        compare_limbs(
+            &[
+                four_products[4],
+                four_products[5],
+                four_products[6],
+                four_products[7]
+            ],
+            modulus
+        )
+        .is_ge(),
+        "four products require a wider reduction bound"
+    );
+    // Bound every lazy square by floor((B² + (R-1)p)/R), starting
+    // from B=p-1. Checking all 256 steps avoids an asymptotic argument.
+    let correction = multiply_wide(&[u64::MAX; 4], modulus);
+    let (twice_p, carry) = add_limbs(modulus, modulus);
+    assert!(carry == 0);
+    let mut bound = minus_one;
+    let mut i = 0;
+    while i < 256 {
+        let square = multiply_wide(&bound, &bound);
+        assert_redc_bound(square, modulus);
+        let next = add_wide(square, correction);
+        let next_bound = [next[4], next[5], next[6], next[7]];
         assert!(
-            carry == 0 && !u256::ge(&sum, &modulus),
-            "wide decoder requires R2 + R3 < p"
+            compare_limbs(&next_bound, &bound).is_ge(),
+            "lazy bounds must be monotone"
         );
-        // The Horner numerator is (V + D)*R2, V < p, D < R.
-        assert_redc_bound(
-            add_wide(
-                u256::mul_wide(&u256::sub_u64(&modulus, 1), &r2),
-                u256::mul_wide(&[u64::MAX; 4], &r2),
-            ),
-            &modulus,
-        );
-        let product = u256::mul_wide(&u256::sub_u64(&modulus, 1), &u256::sub_u64(&modulus, 1));
-        let three_products = add_wide(add_wide(product, product), product);
-        assert_redc_bound(three_products, &modulus);
-        let four_products = add_wide(three_products, product);
-        assert!(
-            u256::ge(
-                &[
-                    four_products[4],
-                    four_products[5],
-                    four_products[6],
-                    four_products[7]
-                ],
-                &modulus
-            ),
-            "four products require a wider reduction bound"
-        );
-        // Bound every lazy square by floor((B² + (R-1)p)/R), starting
-        // from B=p-1. Checking all 256 steps avoids an asymptotic argument.
-        let correction = u256::mul_wide(&[u64::MAX; 4], &modulus);
-        let (twice_p, carry) = u256::add_with_carry(&modulus, &modulus);
-        assert!(carry == 0);
-        let mut bound = u256::sub_u64(&modulus, 1);
-        let mut i = 0;
-        while i < 256 {
-            let square = u256::mul_wide(&bound, &bound);
-            assert_redc_bound(square, &modulus);
-            let next = add_wide(square, correction);
-            let next_bound = [next[4], next[5], next[6], next[7]];
-            assert!(
-                u256::ge(&next_bound, &bound),
-                "lazy bounds must be monotone"
-            );
-            bound = next_bound;
-            assert!(!u256::ge(&bound, &twice_p));
-            i += 1;
-        }
-        assert_redc_bound(
-            u256::mul_wide(&bound, &u256::sub_u64(&modulus, 1)),
-            &modulus,
-        );
-        let base = context.from_u64(GENERATOR);
-        let mut roots = [[0; 4]; INVERSE_POWER_TABLE_LEN];
-        let mut inverse_roots = roots;
-        roots[TWO_ADICITY as usize] =
-            context.pow(&base, &u256::odd_cofactor(&modulus, TWO_ADICITY));
-        inverse_roots[TWO_ADICITY as usize] =
-            context.pow(&roots[TWO_ADICITY as usize], &u256::sub_u64(&modulus, 2));
-        let mut i = TWO_ADICITY as usize;
-        while i > 0 {
-            roots[i - 1] = context.mul(&roots[i], &roots[i]);
-            inverse_roots[i - 1] = context.mul(&inverse_roots[i], &inverse_roots[i]);
-            i -= 1;
-        }
-        let mut inverse_powers = [[0; 4]; INVERSE_POWER_TABLE_LEN];
-        inverse_powers[0] = context.one();
-        let mut i = 1;
-        while i < INVERSE_POWER_TABLE_LEN {
-            let prev = inverse_powers[i - 1];
-            let even = if prev[0] & 1 == 0 {
-                prev
-            } else {
-                u256::add_with_carry(&prev, &modulus).0
-            };
-            inverse_powers[i] = u256::shr(&even, 1);
-            i += 1;
-        }
-        let mut corrections = [[0; 4]; SAFEGCD_BATCHES];
-        let mut value = context.one();
-        let mut i = 0;
-        while i < SAFEGCD_BATCHES {
-            value = m255::add(&modulus, &value, &value);
-            value = m255::add(&modulus, &value, &value);
-            corrections[i] = value;
-            i += 1;
-        }
-        Self {
-            context,
-            r3,
-            b448: context.from_u256(&[0, 0, 0, 1]),
-            roots,
-            inverse_roots,
-            inverse_powers,
-            corrections,
-            cube_root: context.pow(&base, &u256::div_exact_u64(&u256::sub_u64(&modulus, 1), 3)),
-            delta: context.pow(&base, &[1u64 << TWO_ADICITY, 0, 0, 0]),
-        }
+        bound = next_bound;
+        assert!(compare_limbs(&bound, &twice_p).is_lt());
+        i += 1;
     }
+    assert_redc_bound(multiply_wide(&bound, &minus_one), modulus);
 }
 
 #[cfg(test)]

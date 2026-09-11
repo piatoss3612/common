@@ -1,7 +1,52 @@
-//! Tables of powers of two for field and inversion parameters.
+//! Root and power-of-two tables for field and inversion parameters.
 
 use super::super::U256;
 use super::{add, assert_modulus, one, pow2_mod};
+
+/// Builds forward and inverse root tables indexed by logarithmic order.
+///
+/// Returns `(roots, inverse_roots)`, each of length `N = two_adicity + 1`.
+/// Entry `k` in `roots` is the reduced Montgomery representation of
+/// `generator^((modulus - 1) / 2^k)`. The corresponding inverse is in
+/// `inverse_roots`. Entry zero represents one and entry `two_adicity` in
+/// `roots` matches [`super::two_adic_root_of_unity`]. `generator` is an
+/// ordinary integer, interpreted modulo `modulus`.
+///
+/// The caller must supply a prime modulus and a generator of its nonzero
+/// residues. Primality and generator order are not checked. The exact
+/// two-adicity of `modulus - 1` is checked by [`super::super::u256::odd_cofactor`].
+///
+/// # Panics
+///
+/// Panics if `modulus` is outside the [supported domain](super::assert_modulus),
+/// if [`super::super::u256::odd_cofactor`] rejects `two_adicity`, or if
+/// `N != two_adicity + 1`.
+pub const fn two_adic_root_tables<const N: usize>(
+    modulus: &U256,
+    generator: u64,
+    two_adicity: u32,
+) -> ([U256; N], [U256; N]) {
+    use super::super::u256::{odd_cofactor, sub_u64};
+    // Share Montgomery setup across both tables, then square down from the
+    // highest order instead of exponentiating each entry independently.
+    let context = super::MontgomeryContext::new(*modulus);
+    let exponent = odd_cofactor(modulus, two_adicity);
+    assert!(
+        N == two_adicity as usize + 1,
+        "root table length must equal two_adicity + 1"
+    );
+    let mut roots = [[0; 4]; N];
+    let mut inverses = roots;
+    let mut index = N - 1;
+    roots[index] = context.pow(&context.from_u64(generator), &exponent);
+    inverses[index] = context.pow(&roots[index], &sub_u64(modulus, 2));
+    while index > 0 {
+        roots[index - 1] = context.mul(&roots[index], &roots[index]);
+        inverses[index - 1] = context.mul(&inverses[index], &inverses[index]);
+        index -= 1;
+    }
+    (roots, inverses)
+}
 
 /// Builds a table of inverse powers of two in Montgomery form.
 ///

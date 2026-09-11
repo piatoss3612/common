@@ -79,10 +79,6 @@ fn check_encodings<M: PrimeModulus>() {
             PastaField::<M>::from_montgomery_limbs(value.montgomery_limbs()),
             value
         );
-        assert_eq!(
-            PastaField::<M>::from_hex(&std::format!("0x{x:064x}")),
-            value
-        );
         assert_eq!(value.is_odd(), x.bit(0));
     }
     for signed in [i64::MIN, -(1 << 62), -1, 0, 1, 1 << 62, i64::MAX] {
@@ -90,17 +86,6 @@ fn check_encodings<M: PrimeModulus>() {
             PastaField::<M>::from_i64(signed),
             &signed_mod(BigInt::from(signed), &p),
         );
-    }
-    for malformed in [
-        "",
-        "0x01",
-        "0000000000000000000000000000000000000000000000000000000000000001",
-        "0X0000000000000000000000000000000000000000000000000000000000000001",
-        "0x000000000000000000000000000000000000000000000000000000000000000g",
-        "0x00000000000000000000000000000000000000000000000000000000000000001",
-        "0x00000000000000000000000000000000000000000000000000000000000000é",
-    ] {
-        assert!(std::panic::catch_unwind(|| PastaField::<M>::from_hex(malformed)).is_err());
     }
 }
 

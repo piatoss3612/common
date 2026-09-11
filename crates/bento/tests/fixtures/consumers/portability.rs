@@ -8,24 +8,24 @@ use udon::field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, Pr
 // Numeric word order is independent of the target's byte order. These
 // assertions run during compilation, including on targets we cannot execute.
 pub const MODULUS: U256 =
-    u256::from_hex("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
-pub const ENCODED: U256 = m255::from_u256(&MODULUS, &[u64::MAX; 4]);
-pub const ROOT: U256 = m255::two_adic_root_of_unity(&[97, 0, 0, 0], 5, 5);
-pub const RATIO: U320 = u256::round_shifted_ratio(&[u64::MAX; 4], u128::MAX, 384);
+    u256::from_hex!("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
+pub const ENCODED: U256 = m255::from_u256!(&MODULUS, &[u64::MAX; 4]);
+pub const ROOT: U256 = m255::two_adic_root_of_unity!(&[97, 0, 0, 0], 5, 5);
+pub const RATIO: U320 = u256::round_shifted_ratio!(&[u64::MAX; 4], u128::MAX, 384);
 pub const FP: Fp =
     udon::fp_hex!("0x0000000000000000000000000000000100000000000000000123456789abcdef");
 pub const FQ: Fq =
     udon::fq_hex!("0x0000000000000000000000000000000100000000000000000123456789abcdef",);
 
 const _: () = {
-    let decoded = m255::to_u256(&MODULUS, &ENCODED);
+    let decoded = m255::to_u256!(&MODULUS, &ENCODED);
     assert!(decoded[0] == 37 && decoded[1] == 0 && decoded[2] == 0 && decoded[3] == 0);
-    let root = m255::to_u256(&[97, 0, 0, 0], &ROOT);
+    let root = m255::to_u256!(&[97, 0, 0, 0], &ROOT);
     assert!(root[0] == 28 && root[1] == 0 && root[2] == 0 && root[3] == 0);
     assert!(RATIO[0] == 1 && RATIO[1] == 0 && RATIO[2] == u64::MAX);
     assert!(RATIO[3] == u64::MAX && RATIO[4] == 0);
-    let fp = m255::to_u256(&PallasBase::MODULUS, &FP.montgomery_limbs());
-    let fq = m255::to_u256(&PallasScalar::MODULUS, &FQ.montgomery_limbs());
+    let fp = m255::to_u256!(&PallasBase::MODULUS, &FP.montgomery_limbs());
+    let fq = m255::to_u256!(&PallasScalar::MODULUS, &FQ.montgomery_limbs());
     assert!(fp[0] == 0x0123_4567_89ab_cdef && fp[1] == 0 && fp[2] == 1 && fp[3] == 0);
     assert!(fq[0] == fp[0] && fq[1] == fp[1] && fq[2] == fp[2] && fq[3] == fp[3]);
 };

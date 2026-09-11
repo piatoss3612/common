@@ -40,6 +40,9 @@ fn limb_kernels_match_full_width_integer_arithmetic() {
             let y = integer(b);
             assert_eq!(integer(&word::multiply_wide(a, b)), &x * &y);
             assert_eq!(word::compare_limbs(a, b), x.cmp(&y));
+            let (sum, carry) = word::add_limbs(a, b);
+            assert_eq!(carry != 0, &x + &y >= radix);
+            assert_eq!(integer(&sum), (&x + &y) % &radix);
             let (difference, borrow) = word::subtract_limbs(a, b);
             assert_eq!(borrow != 0, x < y);
             assert_eq!(integer(&difference), (&x + &radix - &y) % &radix);

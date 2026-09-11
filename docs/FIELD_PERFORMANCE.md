@@ -8,6 +8,9 @@ identities, input bounds, and performance were checked separately. The changes
 use the existing dependencies and preserve the target crates' `no_std` and
 variable-time contracts.
 
+The measurements predate the Bento facade redesign and removal of runtime hex
+parsing. Timing and size measurements have not been repeated for those changes.
+
 ## Method
 
 The before implementation is Udon revision
@@ -38,6 +41,10 @@ cargo bench --locked -p zakura-udon --bench field -- 'corpus/|encoding/from_wide
 ## Runtime results
 
 All times are in nanoseconds. Brackets give 95% confidence intervals for the mean.
+
+The runtime hex measurements are historical: field hex construction now uses
+only the compile-time `fp_hex!` and `fq_hex!` macros, and the runtime benchmark
+has been removed.
 
 | Operation | Field | Before | After | Time change |
 | --- | --- | ---: | ---: | ---: |
@@ -86,12 +93,14 @@ both fields, matching the array dispatch improvement.
 
 ## Implementation choices
 
-One checked `MontgomeryContext` now derives each field's parameter bundle.
+The measured implementation shared one checked `MontgomeryContext` across each
+field's parameters. The current [parameter derivation](../crates/udon/src/field/parameters.rs)
+uses Bento's compile-time macros, sharing setup within the root tables.
 Wide decoding combines two raw products with one REDC, with a compile-time
 check of `R2 + R3 < p`. Arbitrary-width decoding uses 32-byte Horner digits;
-its separate numerator bound is also checked. Hex conversion reuses `R2`.
-Product differences add `pR` only after a negative subtraction, so one final
-correction suffices.
+its separate numerator bound is also checked. Runtime hex conversion reused
+`R2` in the measured implementation. Product differences add `pR` only after
+a negative subtraction, so one final correction suffices.
 
 Forward and inverse root ladders replace repeated root construction and supply
 Tonelli–Shanks corrections directly. Their combined raw payload is 4,224 bytes
@@ -100,8 +109,8 @@ their field entries alone require 57,408 bytes for both fields, before lookup
 metadata. The generic small-field square-root algorithm remains a test oracle.
 
 REDC cancels the low half before adding the high half once. The private batched
-squaring hook retains raw intermediates until the end of a run. The parameter
-bundle checks the integer bound recurrence for every run length through 256,
+squaring hook retains raw intermediates until the end of a run. Compile-time
+checks verify the integer bound recurrence for every run length through 256,
 including the final fused product; longer runs normalize between batches.
 Public field values remain reduced. This uses a finite bound check because
 both Pasta primes are slightly above `2^254`; treating arbitrary residues below

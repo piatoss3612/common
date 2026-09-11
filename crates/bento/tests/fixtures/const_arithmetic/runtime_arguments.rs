@@ -34,6 +34,9 @@ fn arithmetic(value: &U256, word: u64, hex: &str) {
     let _ = m255::inverse_powers_of_two!(value; 3); // rejected
     let _: [U256; 2] = m255::safegcd_corrections_62_64!(value); // rejected
     let _ = m255::safegcd_corrections_62_64!(value; 2); // rejected
+    let _: [U256; 3] = m255::powers!(value, &[0; 4]); // rejected
+    let _ = m255::powers!(value, &[0; 4]; 3); // rejected
+    let _ = m255::powers!(&[97, 0, 0, 0], value; 3); // rejected
     let _: ([U256; 6], [U256; 6]) = m255::two_adic_root_tables!(value, 5, 5); // rejected
     let _ = m255::two_adic_root_tables!(value, 5, 5; 6); // rejected
 }

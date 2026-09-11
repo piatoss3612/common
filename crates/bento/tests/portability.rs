@@ -31,6 +31,9 @@ record = []
 empty-record = []
 primitive = []
 zero-array = []
+field = []
+field-record = []
+sqrt-table-large = ["udon/sqrt-table-large"]
 "#
         ),
     )
@@ -46,9 +49,14 @@ zero-array = []
     for (target, features) in [
         (
             "thumbv7em-none-eabi",
-            "record,empty-record,primitive,zero-array",
+            "record,empty-record,primitive,zero-array,field,field-record",
+        ),
+        (
+            "thumbv7em-none-eabi",
+            "record,empty-record,primitive,zero-array,field,field-record,sqrt-table-large",
         ),
         ("s390x-unknown-linux-gnu", ""),
+        ("s390x-unknown-linux-gnu", "sqrt-table-large"),
     ] {
         let output = cargo(
             root,
@@ -69,7 +77,14 @@ zero-array = []
         );
     }
 
-    for feature in ["record", "empty-record", "primitive", "zero-array"] {
+    for feature in [
+        "record",
+        "empty-record",
+        "primitive",
+        "zero-array",
+        "field",
+        "field-record",
+    ] {
         let output = cargo(
             root,
             &[

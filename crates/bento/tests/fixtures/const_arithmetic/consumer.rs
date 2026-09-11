@@ -21,6 +21,10 @@ pub fn generic_inverses<M: Parameters, const N: usize>() -> [U256; N] {
     m255::inverse_powers_of_two!(&M::MODULUS; N)
 }
 
+pub fn generic_powers<M: Parameters, const N: usize>() -> [U256; N] {
+    m255::powers!(&M::MODULUS, &m255::from_u64!(&M::MODULUS, 7); N)
+}
+
 pub fn check() {
     assert_eq!(MODULUS, [97, 0, 0, 0]);
     assert!(u256::ge!(&MODULUS, &[96, 0, 0, 0]));
@@ -69,6 +73,14 @@ pub fn check() {
     assert_eq!(m255::two_inverse!(&MODULUS), [79, 0, 0, 0]);
 
     // Table lengths support both type inference and an explicit const argument.
+    let powers: [U256; 4] = m255::powers!(&MODULUS, &A,);
+    assert_eq!(
+        powers,
+        [[61, 0, 0, 0], [39, 0, 0, 0], [79, 0, 0, 0], [68, 0, 0, 0]]
+    );
+    assert_eq!(m255::powers!(&MODULUS, &A; 4,), powers);
+    assert_eq!(generic_powers::<SmallPrime, 4>(), powers);
+    assert_eq!(generic_powers::<SmallPrime, 0>(), [[0u64; 4]; 0]);
     let inverses: [U256; 3] = m255::inverse_powers_of_two!(&MODULUS,);
     assert_eq!(inverses, [[61, 0, 0, 0], [79, 0, 0, 0], [88, 0, 0, 0]]);
     assert_eq!(generic_inverses::<SmallPrime, 3>(), inverses);

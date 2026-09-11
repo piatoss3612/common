@@ -10,12 +10,17 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+# Selects larger square-root tables; see the crate-level feature documentation.
+sqrt-table-large = []
+
 [dependencies]
 bento.workspace = true
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 num-bigint = "0.4"
+tempfile = "3"
 
 [[bench]]
 name = "field"

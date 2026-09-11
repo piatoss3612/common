@@ -142,6 +142,48 @@ fn padded_layouts_are_checked_at_storage_operations(consumer: &Consumer) {
         },
         None,
     );
+    let wrapper = quote! {
+        #pair
+        #[repr(transparent)]
+        #[derive(Clone, Copy, bento::Pod)]
+        struct Wrapper<M>(Bad, core::marker::PhantomData<M>);
+    };
+    consumer.build(
+        "ordinary_fixed_padded_field",
+        quote! {
+            #wrapper
+            fn main() {
+                std::hint::black_box(Wrapper(Pair(1_u8, 2_u32), core::marker::PhantomData::<u64>));
+            }
+        },
+        None,
+    );
+    consumer.build(
+        "stored_fixed_padded_field",
+        quote! {
+            #wrapper
+            fn main() {
+                let value = Wrapper(Pair(1_u8, 2_u32), core::marker::PhantomData::<u64>);
+                std::hint::black_box(bento::bytes_of(&value));
+            }
+        },
+        Some("Pod struct must have no padding"),
+    );
+    consumer.build(
+        "returned_fixed_padded_bytes",
+        quote! {
+            #wrapper
+            fn view(value: &Wrapper<u64>) -> &[u8] {
+                bento::bytes_of(value)
+            }
+            fn main() {
+                let view: fn(&Wrapper<u64>) -> &[u8] = std::hint::black_box(view);
+                let value = Wrapper(Pair(1_u8, 2_u32), core::marker::PhantomData::<u64>);
+                std::hint::black_box(view(&value));
+            }
+        },
+        Some("Pod struct must have no padding"),
+    );
     for (name, body) in [
         ("shadowed_assert_macro", quote! {
             macro_rules! assert { ($($tokens:tt)*) => {}; }

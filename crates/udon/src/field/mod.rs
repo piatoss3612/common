@@ -23,6 +23,7 @@ mod montgomery;
 mod parameters;
 mod products;
 mod safegcd;
+mod sqrt;
 mod uint;
 mod word;
 
@@ -31,7 +32,6 @@ pub use products::ProductSum;
 pub use uint::CanonicalUint;
 
 use montgomery::{montgomery_multiply, montgomery_square, reduce_once};
-use parameters::TWO_ADICITY;
 use word::{adc, subtract_limbs};
 
 #[cfg(test)]
@@ -41,20 +41,33 @@ const ENCODED_SIZE: usize = 32;
 
 /// An element of a Pasta prime field stored as four Montgomery limbs.
 ///
-/// Values hold `x * 2^256 mod p` in `[0, p)`. This unique reduced
-/// representation makes structural equality valid; ordering and debug output
-/// convert back to the ordinary integer `x`.
+/// A valid value holds `x * 2^256 mod p` in `[0, p)`, where `p` is
+/// [`M::MODULUS`](PrimeModulus::MODULUS) and `x` is the canonical field integer.
+/// This unique reduced representation makes structural equality valid; ordering
+/// and debug output convert back to `x`.
 ///
-/// For [`bento::Pod`] storage, store the [`montgomery_limbs`](Self::montgomery_limbs)
-/// as `[u64; 4]` and validate them with
-/// [`from_montgomery_limbs`](Self::from_montgomery_limbs). Field elements do not
-/// implement `Pod`, because arbitrary bytes can violate the reduced-residue
-/// invariant. Use [`to_bytes`](Self::to_bytes) for canonical protocol encoding.
+/// Implements [`bento::Pod`] so generators can write field values or records
+/// containing them, then embed the bytes as field values without conversion
+/// or initialization. Embedded bytes must encode a reduced Montgomery residue
+/// for the correct field; layout validation does not check this invariant.
+/// Arithmetic and comparison contracts assume reduced residues. Other bit
+/// patterns remain memory-safe but may cause panics or incorrect results.
+/// [`from_montgomery_limbs`](Self::from_montgomery_limbs) provides checked
+/// construction from raw limbs.
 ///
-/// ```compile_fail
-/// let _: &zakura_udon::field::Fp = bento::AlignedBytes([0; 32]).as_value();
+/// [`crate::stored_form!`] identifies the stored representation of both fields.
+/// Use [`to_bytes`](Self::to_bytes) for canonical protocol encoding.
+///
 /// ```
-#[derive(Clone, Copy, Eq, PartialEq)]
+/// use zakura_udon::field::Fp;
+/// static ZERO: &Fp = bento::AlignedBytes([0; 32]).as_value();
+/// assert_eq!(ZERO.add(&Fp::ONE), Fp::ONE);
+/// ```
+// SAFETY: The derive checks the integer array and marker layout. All limb bit
+// patterns are valid to read and share. Field operations use safe Rust; reduced
+// residues are required for their mathematical results, not memory safety.
+// Any future unsafe kernel must preserve memory safety for arbitrary limbs too.
+#[derive(Clone, Copy, Eq, PartialEq, bento::Pod)]
 #[repr(transparent)]
 pub struct PastaField<M: PrimeModulus> {
     limbs: [u64; 4],
@@ -250,31 +263,11 @@ impl<M: PrimeModulus> PastaField<M> {
         let value = Self::from_u64(coefficient.unsigned_abs());
         if coefficient < 0 { value.neg() } else { value }
     }
-
-    /// Computes a square root with Tonelli-Shanks, or `None` for a nonsquare.
-    ///
-    /// Either root may be returned; branches depend on the input.
-    pub fn sqrt(&self) -> Option<Self> {
-        if self.is_zero() {
-            return Some(Self::zero());
-        }
-
-        // With p - 1 = t * 2^32, the fixed exponent is (t - 1) / 2.
-        // This initializes x = self^((t + 1) / 2) and t = self^t with one
-        // exponentiation. The exponent is fixed per field, so the
-        // multiplication schedule is planned at compile time.
-        let w = M::pow_sqrt_exponent(self);
-        crate::field::algorithms::tonelli_shanks_with_roots(
-            self,
-            w,
-            |k| Self::from_montgomery(M::ROOTS[k as usize]),
-            TWO_ADICITY,
-        )
-    }
 }
 
 // Inline the wrappers so generic exponentiation uses the specialized kernels.
 impl<M: PrimeModulus> crate::field::algorithms::Field for PastaField<M> {
+    #[cfg(any(test, not(feature = "sqrt-table-large")))]
     #[inline(always)]
     fn zero() -> Self {
         Self::zero()
@@ -283,6 +276,7 @@ impl<M: PrimeModulus> crate::field::algorithms::Field for PastaField<M> {
     fn one() -> Self {
         Self::one()
     }
+    #[cfg(any(test, not(feature = "sqrt-table-large")))]
     #[inline(always)]
     fn is_zero(&self) -> bool {
         self.is_zero()

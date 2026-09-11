@@ -8,10 +8,12 @@
 /// Implementations must obey field laws and compare by field value.
 pub(super) trait Field: Copy + Eq {
     /// The additive identity.
+    #[cfg(any(test, not(feature = "sqrt-table-large")))]
     fn zero() -> Self;
     /// The multiplicative identity.
     fn one() -> Self;
     /// Whether this is the additive identity.
+    #[cfg(any(test, not(feature = "sqrt-table-large")))]
     fn is_zero(&self) -> bool {
         *self == Self::zero()
     }
@@ -53,6 +55,7 @@ pub(super) fn pow_u64<F: Field>(value: &F, exponent: u64) -> F {
 ///
 /// Returns either square root, or `None` for a nonsquare; branches depend on
 /// the input.
+#[cfg(any(test, not(feature = "sqrt-table-large")))]
 pub(super) fn tonelli_shanks_with_roots<F: Field>(
     value: &F,
     w: F,

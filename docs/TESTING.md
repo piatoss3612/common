@@ -14,7 +14,17 @@ growth in generated addition chains:
 
 ```console
 cargo test --locked -p zakura-udon --lib
+cargo test --locked -p zakura-udon --lib --all-features
 ```
+
+CI also runs the release field tests with both default and all features to
+exercise both [square-root configurations](../crates/udon/src/lib.rs), and
+lints the default configuration separately because workspace lints enable
+all features. Tests compare field operations against independent integer
+arithmetic and square roots against a conventional Tonelli–Shanks reference.
+Checks of the larger tables cover every stored power and all 256 subgroup
+hash inputs, and table construction rejects colliding hash multipliers and
+unreduced entries.
 
 ## Test roles
 
@@ -39,17 +49,18 @@ cargo test --locked -p zakura-udon --lib
   Doctests verify focused public API examples.
 
 Safety and portability need targeted evidence as well as native tests. CI runs
-Miri over storage unit tests and the public storage integration tests; nested
-Cargo tests stay in the native suite. The portability test builds `no_std`
-libraries for a 32-bit little-endian target and separately checks that big-endian
-storage fails while addition chains, constant arithmetic, and runtime Pasta
-field operations compile. The arithmetic fixture also asserts computed values
-during constant evaluation; cross-target runtime field operations are built but
-not executed.
-The test is ignored in ordinary runs because target libraries must be installed,
-and explicitly executed in CI.
-These checks do not establish correctness on every target or constant-time
-behavior; extend validation when new code introduces new assumptions.
+Miri over storage unit tests and the public Bento and Udon storage integration
+tests, including field arrays and nested records; nested Cargo tests stay in
+the native suite. The portability test builds `no_std` libraries for a 32-bit
+little-endian target and separately checks that big-endian storage fails while
+addition chains, constant arithmetic, and runtime Pasta
+field operations compile with either square-root configuration. The arithmetic
+fixture also asserts computed values during constant evaluation; cross-target
+runtime field operations are built but not executed. The test is ignored in
+ordinary runs because target libraries must be installed, and explicitly
+executed in CI. These checks do not establish correctness on every target or
+constant-time behavior; extend validation when new code introduces new
+assumptions.
 
 ## Field benchmarks
 
@@ -69,6 +80,7 @@ every case once without collecting timing samples:
 ```console
 cargo bench --locked -p zakura-udon --bench field -- Fp/inner_product
 cargo bench --locked -p zakura-udon --bench field -- --test
+cargo bench --locked -p zakura-udon --bench field --features sqrt-table-large -- --test
 ```
 
 Inputs are deterministic and prepared before timing. Ordinary arithmetic uses

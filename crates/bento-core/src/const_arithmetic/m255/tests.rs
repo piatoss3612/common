@@ -162,6 +162,63 @@ fn full_width_tables_are_const_evaluable_and_match_independent_integers() {
 }
 
 #[test]
+fn power_tables_match_independent_integers() {
+    const MODULUS: U256 = [97, 0, 0, 0];
+    const BASE: U256 = from_u64(&MODULUS, 7);
+    const TABLE: [U256; 256] = powers(&MODULUS, &BASE);
+    const SINGLE: [U256; 1] = powers(&MODULUS, &BASE);
+    const EMPTY: [U256; 0] = powers(&MODULUS, &BASE);
+    assert_eq!(SINGLE, [TABLE[0]]);
+    assert_eq!(EMPTY, [[0u64; 4]; 0]);
+
+    // Include a composite modulus and nonunits: powers require no inverse.
+    for modulus in [
+        MODULUS,
+        [15, 0, 0, 0],
+        [u64::MAX - 18, u64::MAX, u64::MAX, (1 << 63) - 1],
+    ] {
+        let p = integer(&modulus);
+        let radix = (BigUint::from(1u8) << 256) % &p;
+        for base in [
+            BigUint::from(0u8),
+            BigUint::from(1u8),
+            BigUint::from(3u8),
+            BigUint::from(7u8),
+            &p - 1u8,
+        ] {
+            let encoded = limbs(&((&base * &radix) % &p));
+            let table = powers::<256>(&modulus, &encoded);
+            if modulus == MODULUS && base == BigUint::from(7u8) {
+                assert_eq!(table, TABLE);
+            }
+            for (k, value) in table.into_iter().enumerate() {
+                assert_eq!(
+                    value,
+                    limbs(&((base.modpow(&BigUint::from(k), &p) * &radix) % &p))
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn power_tables_validate_inputs_even_when_empty() {
+    for modulus in [
+        [0; 4],
+        [1, 0, 0, 0],
+        [2, 0, 0, 0],
+        [4, 0, 0, 0],
+        [u64::MAX; 4],
+    ] {
+        assert!(std::panic::catch_unwind(|| powers::<0>(&modulus, &[0; 4])).is_err());
+    }
+    for base in [[97, 0, 0, 0], [u64::MAX; 4]] {
+        assert!(std::panic::catch_unwind(|| powers::<0>(&[97, 0, 0, 0], &base)).is_err());
+        assert!(std::panic::catch_unwind(|| powers::<1>(&[97, 0, 0, 0], &base)).is_err());
+    }
+}
+
+#[test]
 fn root_tables_match_independent_integers() {
     fn check<const N: usize>(modulus: U256, generator: u64) {
         let (roots, inverses) = two_adic_root_tables::<N>(&modulus, generator, (N - 1) as u32);

@@ -98,8 +98,8 @@ fn expansion_preserves_generics_and_bounds_complete_field_types() {
             ::core::marker::PhantomData<M>: ::renamed::support::Pod
         {
             const ASSERT_LAYOUT: () = {
-                let () = <[T; N] as ::renamed::support::Pod>::ASSERT_LAYOUT;
-                let () = <::core::marker::PhantomData<M> as ::renamed::support::Pod>::ASSERT_LAYOUT;
+                <Self as ::renamed::support::Pod>::__LAYOUT.assert_field::<[T; N]>();
+                <Self as ::renamed::support::Pod>::__LAYOUT.assert_field::<::core::marker::PhantomData<M> >();
                 <Self as ::renamed::support::Pod>::__LAYOUT.assert_record(
                     &[
                         <[T; N] as ::renamed::support::Pod>::__LAYOUT,

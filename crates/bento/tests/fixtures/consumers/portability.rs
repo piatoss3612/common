@@ -32,11 +32,18 @@ const _: () = {
 
 // Concrete wrappers force code generation of both fields' runtime kernels.
 // Input bytes remain unknown at compile time, and no allocator is available.
-fn field_operations<M: PrimeModulus>(wide: &[u8; 64], bytes: [u8; 32]) -> Option<[u8; 32]> {
+fn field_operations<M: PrimeModulus>(
+    wide: &[u8; 64],
+    bytes: [u8; 32],
+    log_size: u32,
+) -> Option<[u8; 32]> {
     let value = PastaField::<M>::from_wide_bytes_reduced(wide);
     let other = PastaField::from_bytes(bytes)?;
     let inverse = value.invert()?;
-    let root = other.sqrt()?;
+    let root = other
+        .sqrt()?
+        .mul(&PastaField::root_of_unity(log_size)?)
+        .mul(&PastaField::root_of_unity_inverse(log_size)?);
     let mut sum = ProductSum::new();
     sum.add_product(&value, &other);
     sum.add_term(&value.mul_sub_double_product(&root, &other, &inverse));
@@ -45,12 +52,21 @@ fn field_operations<M: PrimeModulus>(wide: &[u8; 64], bytes: [u8; 32]) -> Option
     Some(merged.finish().mul_add(&inverse, &root).to_bytes())
 }
 
-pub fn fp_operations(wide: &[u8; 64], bytes: [u8; 32]) -> Option<[u8; 32]> {
-    field_operations::<PallasBase>(wide, bytes)
+pub fn fp_operations(wide: &[u8; 64], bytes: [u8; 32], log_size: u32) -> Option<[u8; 32]> {
+    field_operations::<PallasBase>(wide, bytes, log_size)
 }
 
-pub fn fq_operations(wide: &[u8; 64], bytes: [u8; 32]) -> Option<[u8; 32]> {
-    field_operations::<PallasScalar>(wide, bytes)
+pub fn fq_operations(wide: &[u8; 64], bytes: [u8; 32], log_size: u32) -> Option<[u8; 32]> {
+    field_operations::<PallasScalar>(wide, bytes, log_size)
+}
+
+// Deriving a concrete field record must not restrict ordinary arithmetic on
+// big-endian targets. Requesting its storage below must still fail there.
+#[repr(C)]
+#[derive(Clone, Copy, bento::Pod)]
+pub struct FieldRecord {
+    pub fp: Fp,
+    pub fq: Fq,
 }
 
 #[repr(transparent)]
@@ -89,13 +105,14 @@ pub static EMPTY: &Empty = bento::AlignedBytes([]).as_value();
 #[cfg(feature = "primitive")]
 pub static PRIMITIVE: &u64 = bento::AlignedBytes([0; 8]).as_value();
 
-#[cfg(feature = "primitive")]
-pub static FIELD_LIMBS: &[u64; 4] = bento::AlignedBytes([0; 32]).as_value();
+#[cfg(feature = "field")]
+pub static STORED_FP: &Fp = bento::AlignedBytes([0; 32]).as_value();
 
-#[cfg(feature = "primitive")]
-pub fn stored_field() -> Fp {
-    Fp::from_montgomery_limbs(*FIELD_LIMBS)
-}
+#[cfg(feature = "field")]
+pub static STORED_FQ: &Fq = bento::AlignedBytes([0; 32]).as_value();
+
+#[cfg(feature = "field-record")]
+pub static STORED_FIELDS: &FieldRecord = bento::AlignedBytes([0; 64]).as_value();
 
 #[cfg(feature = "zero-array")]
 pub static ZERO_ARRAY: &[Value; 0] = bento::AlignedBytes([]).as_array();

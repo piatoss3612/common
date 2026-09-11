@@ -23,7 +23,11 @@ pub enum PallasScalar {}
 mod sealed {
     use super::{INVERSE_POWER_TABLE_LEN, PastaField, SAFEGCD_BATCHES};
 
-    pub trait Parameters: Sized {
+    pub trait Parameters<M: super::PrimeModulus>: Sized {
+        /// Field values for [`PastaField::root_of_unity`], indexed by `log_size`.
+        const ROOTS: &'static [PastaField<M>; INVERSE_POWER_TABLE_LEN];
+        /// Inverses of the corresponding forward roots.
+        const INVERSE_ROOTS: &'static [PastaField<M>; INVERSE_POWER_TABLE_LEN];
         /// `-p^-1 mod 2^64`, used to cancel each low limb during reduction.
         const MONTGOMERY_INV: u64;
         /// `2^256 mod p`, also the Montgomery representation of one.
@@ -32,20 +36,12 @@ mod sealed {
         const R2: [u64; 4];
         /// `2^768 mod p`, used by wide decoding.
         const R3: [u64; 4];
-        /// Forward roots indexed by logarithmic order.
-        const ROOTS: [[u64; 4]; INVERSE_POWER_TABLE_LEN];
-        /// Inverse roots indexed by logarithmic order.
-        const INVERSE_ROOTS: [[u64; 4]; INVERSE_POWER_TABLE_LEN];
         /// `2^448 mod p`, used to fold the upper limb of a product sum.
         const B448: [u64; 4];
         /// The ordinary exponent `(t - 1) / 2`, where `p - 1 = t * 2^32`.
         const SQRT_EXPONENT: [u64; 4];
         /// The Montgomery representation of `2^-1`.
         const TWO_INVERSE: [u64; 4];
-        /// The selected primitive `2^32`-th root of unity in Montgomery form.
-        const ROOT_OF_UNITY: [u64; 4];
-        /// The inverse of `ROOT_OF_UNITY`, in Montgomery form.
-        const ROOT_OF_UNITY_INVERSE: [u64; 4];
         /// The Montgomery representation of `5^(2^32)`.
         const DELTA: [u64; 4];
         /// The protocol-selected primitive cube root of unity in Montgomery form.
@@ -65,9 +61,13 @@ mod sealed {
         ///
         /// `bento::addition_chain!` plans the multiplication schedule at
         /// compile time; only powers of the base are computed at runtime.
-        fn pow_sqrt_exponent(value: &PastaField<Self>) -> PastaField<Self>
-        where
-            Self: super::PrimeModulus;
+        fn pow_sqrt_exponent(value: &PastaField<M>) -> PastaField<M>;
+
+        /// Computes a square root using this modulus's larger table.
+        ///
+        /// Requires a nonzero `value` and `w = pow_sqrt_exponent(value)`.
+        #[cfg(feature = "sqrt-table-large")]
+        fn sqrt_large(value: &PastaField<M>, w: PastaField<M>) -> Option<PastaField<M>>;
     }
 }
 
@@ -83,7 +83,7 @@ mod sealed {
 ///     const MODULUS: [u64; 4] = [97, 0, 0, 0];
 /// }
 /// ```
-pub trait PrimeModulus: sealed::Parameters + Copy + Eq + Send + Sync + 'static {
+pub trait PrimeModulus: sealed::Parameters<Self> + Copy + Eq + Send + Sync + 'static {
     /// The prime modulus as four ordinary little-endian 64-bit limbs.
     const MODULUS: [u64; 4];
 }
@@ -93,51 +93,72 @@ pub trait PrimeModulus: sealed::Parameters + Copy + Eq + Send + Sync + 'static {
 // inverse pairing at compile time. The chain macro derives its exponent from
 // the same modulus literal.
 macro_rules! pasta_field_parameters {
-    ($marker:ty, modulus: $modulus:literal,
+    ($marker:ty, modulus: $modulus:literal, sqrt_hash: $hash:literal,
      zeta: canonical_root $(,)?) => {
         pasta_field_parameters! {
-            @impl $marker, $modulus,
+            @impl $marker, $modulus, $hash,
             const ZETA: [u64; 4] = m255::cube_root_of_unity!(&Self::MODULUS, GENERATOR);
             const ZETA_INVERSE: [u64; 4] =
                 m255::mul!(&Self::MODULUS, &Self::ZETA, &Self::ZETA);
         }
     };
-    ($marker:ty, modulus: $modulus:literal,
+    ($marker:ty, modulus: $modulus:literal, sqrt_hash: $hash:literal,
      zeta: squared_canonical_root $(,)?) => {
         pasta_field_parameters! {
-            @impl $marker, $modulus,
+            @impl $marker, $modulus, $hash,
             const ZETA: [u64; 4] =
                 m255::mul!(&Self::MODULUS, &Self::ZETA_INVERSE, &Self::ZETA_INVERSE);
             const ZETA_INVERSE: [u64; 4] = m255::cube_root_of_unity!(&Self::MODULUS, GENERATOR);
         }
     };
-    (@impl $marker:ty, $modulus:literal, $($zeta:item)*) => {
+    (@impl $marker:ty, $modulus:literal, $hash:literal, $($zeta:item)*) => {
         impl PrimeModulus for $marker {
             const MODULUS: [u64; 4] = u256::from_hex!($modulus);
         }
 
         impl $marker {
-            const ROOT_TABLES: (
-                [[u64; 4]; INVERSE_POWER_TABLE_LEN],
-                [[u64; 4]; INVERSE_POWER_TABLE_LEN],
-            ) = m255::two_adic_root_tables!(&Self::MODULUS, GENERATOR, TWO_ADICITY);
+            // A named static shares one validated table across lookups; the
+            // associated const only borrows it.
+            const ROOT_TABLES: &'static (
+                [PastaField<Self>; INVERSE_POWER_TABLE_LEN],
+                [PastaField<Self>; INVERSE_POWER_TABLE_LEN],
+            ) = {
+                static TABLES: (
+                    [PastaField<$marker>; INVERSE_POWER_TABLE_LEN],
+                    [PastaField<$marker>; INVERSE_POWER_TABLE_LEN],
+                ) = {
+                    let roots = m255::two_adic_root_tables!(&<$marker>::MODULUS, GENERATOR, TWO_ADICITY);
+                    (super::sqrt::field_elements(roots.0), super::sqrt::field_elements(roots.1))
+                };
+                &TABLES
+            };
+
+            #[cfg(feature = "sqrt-table-large")]
+            pub(super) const SQRT_TABLE: &'static super::sqrt::LargeSqrtTable<PastaField<Self>> = {
+                static TABLE: super::sqrt::LargeSqrtTable<PastaField<$marker>> =
+                    super::sqrt::LargeSqrtTable::from_powers([
+                        m255::powers!(&<$marker>::MODULUS, &<$marker>::ROOT_TABLES.0[32].montgomery_limbs(); 256),
+                        m255::powers!(&<$marker>::MODULUS, &<$marker>::ROOT_TABLES.0[24].montgomery_limbs(); 256),
+                        m255::powers!(&<$marker>::MODULUS, &<$marker>::ROOT_TABLES.0[16].montgomery_limbs(); 256),
+                        m255::powers!(&<$marker>::MODULUS, &<$marker>::ROOT_TABLES.0[8].montgomery_limbs(); 256),
+                    ], $hash);
+                &TABLE
+            };
         }
 
-        impl sealed::Parameters for $marker {
+        impl sealed::Parameters<Self> for $marker {
+            const ROOTS: &'static [PastaField<Self>; INVERSE_POWER_TABLE_LEN] =
+                &Self::ROOT_TABLES.0;
+            const INVERSE_ROOTS: &'static [PastaField<Self>; INVERSE_POWER_TABLE_LEN] =
+                &Self::ROOT_TABLES.1;
             const MONTGOMERY_INV: u64 = m255::reduction_coefficient!(Self::MODULUS[0]);
             const R: [u64; 4] = m255::one!(&Self::MODULUS);
             const R2: [u64; 4] = m255::r2!(&Self::MODULUS);
             const R3: [u64; 4] = m255::mul!(&Self::MODULUS, &Self::R2, &Self::R2);
-            const ROOTS: [[u64; 4]; INVERSE_POWER_TABLE_LEN] = Self::ROOT_TABLES.0;
-            const INVERSE_ROOTS: [[u64; 4]; INVERSE_POWER_TABLE_LEN] = Self::ROOT_TABLES.1;
             const B448: [u64; 4] = m255::from_u256!(&Self::MODULUS, &[0, 0, 0, 1]);
             const SQRT_EXPONENT: [u64; 4] =
                 u256::tonelli_shanks_exponent!(&Self::MODULUS, TWO_ADICITY);
             const TWO_INVERSE: [u64; 4] = Self::POWER_OF_TWO_INVERSES[1];
-            const ROOT_OF_UNITY: [u64; 4] =
-                Self::ROOT_TABLES.0[TWO_ADICITY as usize];
-            const ROOT_OF_UNITY_INVERSE: [u64; 4] =
-                Self::ROOT_TABLES.1[TWO_ADICITY as usize];
             const DELTA: [u64; 4] = m255::odd_order_generator!(&Self::MODULUS, GENERATOR, TWO_ADICITY);
             const MODULUS_SIGNED62: [i64; 5] = to_signed62(&Self::MODULUS);
             const SAFEGCD_CORRECTIONS: [[u64; 4]; SAFEGCD_BATCHES] =
@@ -150,14 +171,19 @@ macro_rules! pasta_field_parameters {
                 bento::addition_chain!(Power(*value), tonelli_shanks($modulus, 32),
                     emission = batched).0
             }
+
+            #[cfg(feature = "sqrt-table-large")]
+            fn sqrt_large(value: &PastaField<Self>, w: PastaField<Self>) -> Option<PastaField<Self>> {
+                Self::SQRT_TABLE.sqrt(value, w, $hash)
+            }
         }
 
         const _: () = {
             // These bounds justify the runtime kernels' reduction shortcuts.
             assert_kernel_bounds(
                 &<$marker as PrimeModulus>::MODULUS,
-                &<$marker as sealed::Parameters>::R2,
-                &<$marker as sealed::Parameters>::R3,
+                &<$marker as sealed::Parameters<$marker>>::R2,
+                &<$marker as sealed::Parameters<$marker>>::R3,
             );
             m255::assert_modulus!(&<$marker as PrimeModulus>::MODULUS);
             let modulus = <$marker as PrimeModulus>::MODULUS;
@@ -168,10 +194,10 @@ macro_rules! pasta_field_parameters {
             // Each orientation arm must pair zeta with its actual inverse.
             let product = m255::mul!(
                 &<$marker as PrimeModulus>::MODULUS,
-                &<$marker as sealed::Parameters>::ZETA,
-                &<$marker as sealed::Parameters>::ZETA_INVERSE,
+                &<$marker as sealed::Parameters<$marker>>::ZETA,
+                &<$marker as sealed::Parameters<$marker>>::ZETA_INVERSE,
             );
-            let one = <$marker as sealed::Parameters>::R;
+            let one = <$marker as sealed::Parameters<$marker>>::R;
             assert!(
                 product[0] == one[0]
                     && product[1] == one[1]
@@ -185,15 +211,20 @@ macro_rules! pasta_field_parameters {
 
 // Batched emission and the planner's smaller odd-power table matched the
 // supplied common chains in local measurements; keep the generated schedules.
+// Hash multipliers apply to reduced R = 2^256 Montgomery representatives.
+// Each larger table checks all 256 subgroup hashes during constant evaluation;
+// a representation change requires revalidating these multipliers.
 pasta_field_parameters! {
     PallasBase,
     modulus: "0x40000000000000000000000000000000224698fc094cf91b992d30ed00000001",
+    sqrt_hash: 0x54c1_1db5,
     zeta: squared_canonical_root,
 }
 
 pasta_field_parameters! {
     PallasScalar,
     modulus: "0x40000000000000000000000000000000224698fc0994a8dd8c46eb2100000001",
+    sqrt_hash: 0x4b7f_dd31,
     zeta: canonical_root,
 }
 
@@ -201,24 +232,6 @@ pasta_field_parameters! {
 const INVERSE_POWER_TABLE_LEN: usize = TWO_ADICITY as usize + 1;
 
 impl<M: PrimeModulus> PastaField<M> {
-    /// Returns a primitive root of order `2^log_size`, or `None` above 32.
-    ///
-    /// The selected root is `5^((p - 1) / 2^log_size)`; order one returns one.
-    pub const fn root_of_unity(log_size: u32) -> Option<Self> {
-        if log_size > TWO_ADICITY {
-            return None;
-        }
-        Some(Self::from_montgomery(M::ROOTS[log_size as usize]))
-    }
-
-    /// Returns the inverse of [`Self::root_of_unity`], or `None` above 32.
-    pub const fn root_of_unity_inverse(log_size: u32) -> Option<Self> {
-        if log_size > TWO_ADICITY {
-            return None;
-        }
-        Some(Self::from_montgomery(M::INVERSE_ROOTS[log_size as usize]))
-    }
-
     /// Returns the inverse of two.
     pub const fn two_inverse() -> Self {
         Self::from_montgomery(M::TWO_INVERSE)

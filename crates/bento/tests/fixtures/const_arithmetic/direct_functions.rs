@@ -31,5 +31,6 @@ fn main() {
     let _ = m255::two_inverse; // rejected
     let _ = m255::inverse_powers_of_two::<3>; // rejected
     let _ = m255::safegcd_corrections_62_64::<2>; // rejected
+    let _ = m255::powers::<3>; // rejected
     let _ = m255::two_adic_root_tables::<6>; // rejected
 }

@@ -32,6 +32,20 @@
 //! assert_eq!(TABLES.0[0], m255::one!(&MODULUS));
 //! assert_eq!(m255::mul!(&MODULUS, &TABLES.0[5], &TABLES.1[5]), TABLES.0[0]);
 //! ```
+//!
+//! [`powers!`] builds consecutive powers of a Montgomery base. Decode entries
+//! to recover ordinary powers modulo the modulus:
+//!
+//! ```
+//! use zakura_bento::const_arithmetic::{U256, m255};
+//!
+//! const MODULUS: U256 = [97, 0, 0, 0];
+//! const BASE: U256 = m255::from_u64!(&MODULUS, 7);
+//! const POWERS: [U256; 4] = m255::powers!(&MODULUS, &BASE);
+//! assert_eq!(POWERS[0], m255::one!(&MODULUS));
+//! assert_eq!(m255::to_u256!(&MODULUS, &POWERS[3]), [52, 0, 0, 0]); // 7^3 mod 97
+//! assert_eq!(m255::powers!(&MODULUS, &BASE; 4), POWERS);
+//! ```
 
 #[doc(inline)]
 pub use bento_core::{
@@ -40,8 +54,8 @@ pub use bento_core::{
     m255_from_u256 as from_u256, m255_inverse_powers_of_two as inverse_powers_of_two,
     m255_invert_prime as invert_prime, m255_mul as mul,
     m255_odd_order_generator as odd_order_generator, m255_one as one, m255_pow as pow,
-    m255_pow2_mod as pow2_mod, m255_r2 as r2, m255_reduce_wide as reduce_wide,
-    m255_reduction_coefficient as reduction_coefficient,
+    m255_pow2_mod as pow2_mod, m255_powers as powers, m255_r2 as r2,
+    m255_reduce_wide as reduce_wide, m255_reduction_coefficient as reduction_coefficient,
     m255_safegcd_corrections_62_64 as safegcd_corrections_62_64, m255_to_u256 as to_u256,
     m255_two_adic_root_of_unity as two_adic_root_of_unity,
     m255_two_adic_root_tables as two_adic_root_tables, m255_two_inverse as two_inverse,

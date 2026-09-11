@@ -8,8 +8,10 @@ identities, input bounds, and performance were checked separately. The changes
 use the existing dependencies and preserve the target crates' `no_std` and
 variable-time contracts.
 
-The measurements predate the Bento facade redesign and removal of runtime hex
-parsing. Timing and size measurements have not been repeated for those changes.
+The initial measurements predate the Bento facade redesign and removal of
+runtime hex parsing. The [optional larger-table
+comparison](#optional-larger-square-root-tables) was measured after those
+changes; the earlier comparisons have not been repeated for them.
 
 ## Method
 
@@ -104,9 +106,10 @@ a negative subtraction, so one final correction suffices.
 
 Forward and inverse root ladders replace repeated root construction and supply
 Tonelli–Shanks corrections directly. Their combined raw payload is 4,224 bytes
-for both fields. The larger square-root tables in the reference were deferred:
-their field entries alone require 57,408 bytes for both fields, before lookup
-metadata. The generic small-field square-root algorithm remains a test oracle.
+for both fields, stored directly as field elements. The larger tables from the
+reference are available through `sqrt-table-large`; see the [optional table
+measurements](#optional-larger-square-root-tables). The generic small-field
+square-root algorithm remains a test oracle.
 
 REDC cancels the low half before adding the high half once. The private batched
 squaring hook retains raw intermediates until the end of a run. Compile-time
@@ -172,20 +175,13 @@ are complete; the following distinctions preserve the review's remaining work.
   reasons appear above. Support for verified supplied chains remains available
   in Bento. These results concern the tested implementations and host, not every
   possible implementation of those techniques.
-- **Deferred without a runtime benchmark:** the larger square-root tables.
-  The 57,408-byte payload is a cost estimate, not evidence that they would be
-  slower. A future candidate should derive immutable tables at compile time,
-  validate the subgroup hash and every lookup, preserve field and root
-  orientation, and measure latency and linked size before choosing a default
-  or optional configuration. The reference is common's
-  `crates/pasta_curves/src/arithmetic/fields.rs`, with field-specific helpers in
-  `src/fields/fp.rs` and `src/fields/fq.rs` at the revision above.
+- **Implemented after the initial pass:** the [optional larger square-root
+  tables](#optional-larger-square-root-tables).
 - **Unimplemented API suggestion:** a non-panicking
   `try_from_montgomery_limbs` returning `Option`. The existing const constructor
-  still rejects unreduced limbs by panicking. The field remains non-POD, and
-  generated roots are validated raw constants. A general table-mapping helper
-  and artifact metadata for the field, Montgomery scale, and root orientation
-  remain future work when an external table format needs them.
+  still rejects unreduced limbs by panicking. For the separate workflow of
+  embedding generated field values, see the [field storage
+  guide](POD.md#storing-field-elements).
 - **Further common candidates:** the x86-64 interleaved lazy-square kernel in
   `src/fields/portable.rs`, batched runtime exponentiation in the field files,
   and direct multiplication by inverse powers of two in `src/fields.rs` were
@@ -222,7 +218,7 @@ library. `size -m` reported:
 
 This probe includes Rust's standard-library code and linker choices. It shows
 the linked tradeoff for these call sites, not an intrinsic size of either field
-type. Its source was:
+type. The source below uses the current API:
 
 ```rust
 use std::hint::black_box;
@@ -250,6 +246,89 @@ fn main() {
 }
 ```
 
+## Optional larger square-root tables
+
+The `sqrt-table-large` feature selects a table-assisted algorithm adapted from
+the same common revision cited above. The [crate feature
+documentation](../crates/udon/src/lib.rs) describes configuration and the
+[square-root implementation](../crates/udon/src/field/sqrt/large.rs) explains the
+exponent recovery and subgroup lookup. Both algorithms remain variable-time;
+the [public square-root contract](../crates/udon/src/field/sqrt.rs) leaves the
+choice of root unspecified.
+
+Each field's larger table contains 897 field elements and 1,024 hash bytes:
+29,728 bytes, or 59,456 bytes (58.06 KiB) for both fields. These are additional to
+the 4,224-byte small ladders, which remain available for root-of-unity lookups.
+These payload sizes describe the table definitions; linked section sizes also
+depend on which fields and operations an executable uses.
+
+The [parameter derivation](../crates/udon/src/field/parameters.rs) builds field
+entries in immutable statics at compile time. No table conversion, initialization,
+or allocation is charged to the runtime measurements. The feature preserves the
+[stored field representation](POD.md#storing-field-elements).
+
+### Runtime measurements
+
+This comparison records the optional-table implementation from the September 11,
+2026 pass on `aarch64-apple-darwin`, Rust 1.91.0 and LLVM 21.1.2. Runs were
+sequential with no concurrent builds or tests: 50 samples, 0.5 seconds of warmup,
+and two seconds of measurement. Longer runs followed a noisier initial 30-sample
+comparison.
+Local Criterion snapshots are `sqrt-small-final` and `sqrt-large-final`.
+
+These times cover batches of 128 operations, in microseconds. Brackets give
+95% confidence intervals for the mean.
+
+| Operation | Field | Default small | Large | Time change |
+| --- | --- | ---: | ---: | ---: |
+| Square roots of squares | Fp | 730.46 [728.38, 732.79] | 363.55 [362.81, 364.31] | -50.2% |
+| Square roots of squares | Fq | 726.44 [725.08, 727.81] | 368.36 [366.96, 369.91] | -49.3% |
+| Square roots of nonsquares | Fp | 372.75 [371.92, 373.59] | 365.70 [364.44, 367.15] | -1.9% |
+| Square roots of nonsquares | Fq | 374.39 [373.38, 375.60] | 367.68 [366.95, 368.41] | -1.8% |
+
+The larger algorithm roughly halves the time for this square corpus. Nonsquare
+changes are below the 2% practical threshold. It does more fixed work even for
+one: individual `sqrt(1)` calls rose from 2.518 to 2.826 microseconds for Fp
+(+12.2%) and 2.517 to 2.859 microseconds for Fq (+13.6%). Zero keeps the shared
+early return and measured about 1.8 nanoseconds in both configurations. These
+are repeated calls into one field's tables; applications with competing cache
+pressure, different inputs, or other architectures can have different results.
+
+```console
+cargo bench --locked -p zakura-udon --bench field -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-small-final
+cargo bench --locked -p zakura-udon --bench field --features sqrt-table-large -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-large-final
+```
+
+### Build cost and linked storage
+
+With dependencies already built, recompiling only Udon in release mode took a
+median 1.206 seconds with the default tables and 2.105 seconds with the larger
+tables. Three alternating trials ranged from 1.203–1.207 seconds and
+2.103–2.122 seconds, respectively. Each used
+`cargo rustc --release --locked -p zakura-udon --lib`, adding
+`--features sqrt-table-large` for the larger configuration and a unique
+`-- -C metadata=sqrt-build-cost-MODE-TRIAL` to force recompilation. This includes
+Cargo overhead and excludes rebuilding dependencies; it is not a cold-build
+measurement.
+
+The standalone probe above was rebuilt and run against both configurations'
+release libraries from this comparison, with the same `rustc` options.
+`size -m` reported:
+
+| Mach-O section | Default small (bytes) | Large (bytes) |
+| --- | ---: | ---: |
+| `__TEXT,__text` | 260,748 | 271,972 |
+| `__TEXT,__const` | 18,128 | 77,536 |
+| `__DATA_CONST,__const` | 10,104 | 10,040 |
+
+`nm -nm` placed both fields' root ladders and larger tables in `__TEXT,__const`.
+`otool -l` reported `__TEXT` permissions `0x5` (read and execute, no write).
+The table symbols occupy 2,112 bytes per field for the ladders and 29,728 bytes
+per field for the larger tables. The writable `__DATA` segment's section totals
+were unchanged. This confirms static read-only residency in this linked probe;
+the section differences also include code generation and linker decisions,
+beyond the table payload itself.
+
 ## Correctness and portability
 
 The release workspace suite, debug Udon unit tests, Criterion smoke run,
@@ -263,7 +342,11 @@ constants, wide-decoder boundary halves, exact lazy REDC intermediates at every
 supported length, raw maximal product sums, and square-root table agreement on
 exhaustive small fields. Existing forced-overflow accumulator tests remain.
 Macro tests cover symbolic replay, invalid schedules, non-`Copy` values, hook
-dispatch, value lifetimes, caller-name
-collisions, and caller control flow. Debug tests exercise the generated field
-chains and normalization across long-run boundaries; no debug stack-size claim
-is inferred from successful execution.
+dispatch, value lifetimes, caller-name collisions, and caller control flow.
+Debug tests exercise the generated field chains and normalization across long-run
+boundaries; no debug stack-size claim is inferred from successful execution.
+
+The optional-table comparison also passed release and debug tests, benchmark
+smoke runs, and the same cross-target checks in both configurations, plus Miri
+checks of field POD storage. The [testing guide](TESTING.md) describes the table
+oracles, embedding consumers, and compiler checks that support these results.

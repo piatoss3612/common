@@ -20,6 +20,8 @@ jobs:
         run: python3 ci/check-format
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Clippy with the default square-root tables
+        run: cargo clippy -p zakura-udon --all-targets --locked -- -D warnings
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
@@ -34,10 +36,18 @@ jobs:
         run: rustup toolchain install
       - name: Run test suite (all workspace crates, all features)
         run: cargo test --release --locked --workspace --all-features
+      - name: Check fields with the default square-root tables
+        # The embedding consumer pins its own feature matrix, so the
+        # all-features step above already covers it; skip its nested builds.
+        run: cargo test --release --locked -p zakura-udon -- --skip generated_fields_embed
       - name: Check field arithmetic with debug assertions
-        run: cargo test --locked -p zakura-udon --lib
+        run: |
+          cargo test --locked -p zakura-udon --lib
+          cargo test --locked -p zakura-udon --lib --all-features
       - name: Exercise field benchmarks
-        run: cargo bench --locked -p zakura-udon --bench field -- --test
+        run: |
+          cargo bench --locked -p zakura-udon --bench field -- --test
+          cargo bench --locked -p zakura-udon --bench field --features sqrt-table-large -- --test
 
   miri:
     name: Unsafe storage checks
@@ -52,6 +62,8 @@ jobs:
         run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib pod::
       - name: Check public storage API
         run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod
+      - name: Check field storage
+        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --test pod
 
   portability:
     name: Target portability contracts

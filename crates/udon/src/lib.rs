@@ -3,6 +3,9 @@
 //! [`field::Fp`] and [`field::Fq`] provide field arithmetic, canonical encodings,
 //! inversion, square roots, and product sums without allocation. Constants and
 //! fixed exponentiation schedules use this workspace's `bento` support.
+//! Field elements implement [`bento::Pod`] for direct embedded storage; see
+//! [`field::PastaField`] for its invariants and [`stored_form!`] for naming
+//! artifacts by representation.
 //!
 //! Arithmetic is variable-time and provides no constant-time guarantee for
 //! secret inputs.
@@ -15,6 +18,18 @@
 //! assert_eq!(value.mul(&value.invert().unwrap()), Fp::ONE);
 //! assert_eq!(Fp::from_bytes(value.to_bytes()), Some(value));
 //! ```
+//!
+//! # Features
+//!
+//! By default, [`field::PastaField::sqrt`] uses small tables of roots of unity.
+//! Enabling `sqrt-table-large` selects a larger table algorithm that reduces
+//! work for many square inputs, at the cost of additional static storage.
+//! Performance depends on the input and target. Both configurations use
+//! compile-time tables without allocation or runtime initialization, and
+//! preserve the same public API and stored field representation.
+//!
+//! Cargo features are additive: any consumer enabling `sqrt-table-large`
+//! selects it for that Udon build.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -22,6 +37,9 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 
 pub mod field;
+mod stored_form;
+
+pub use stored_form::{STORED_FORM, StoredForm};
 
 // Keep macro support anchored to Udon through dependency aliases and re-exports.
 // These expose only Bento's const-enforcing macros, never arithmetic functions.

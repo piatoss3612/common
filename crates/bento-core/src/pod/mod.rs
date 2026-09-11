@@ -61,14 +61,17 @@ pub use storage::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 /// Every admitted bit pattern must be memory-safe for all safe operations on the
 /// resulting type, including operations implemented internally with unsafe code.
 /// A trusted generator cannot establish this obligation for arbitrary-byte
-/// conversions. Types whose operations require stronger invariants need a
-/// validated construction boundary before those operations become available.
+/// conversions. Types whose operations require stronger invariants for memory
+/// safety need a validated construction boundary before those operations become
+/// available.
 ///
-/// Unsafe consumers must force compile-time evaluation with
-/// `const { T::ASSERT_LAYOUT };` before relying on these guarantees. A
-/// `T: Pod` bound alone is insufficient. Handwritten implementations must
-/// validate nested types too; an empty assertion is appropriate only when
-/// every obligation has already been established independently.
+/// Unsafe consumers must force compile-time evaluation before relying on these
+/// guarantees. Use `const { T::ASSERT_LAYOUT; size_of::<T>() }` as the conversion's
+/// element size, so using the size requires evaluating the assertion. A `T: Pod`
+/// bound or an unused unit-valued assertion alone is insufficient. Handwritten
+/// implementations must validate nested types too; an empty assertion is
+/// appropriate only when every obligation has already been established
+/// independently.
 /// Implementations must retain the default `__LAYOUT` metadata, which measures
 /// `Self` for generated record checks. Violating these requirements can cause
 /// undefined behavior.
@@ -107,6 +110,19 @@ impl Layout {
             size: size_of::<T>(),
             align: align_of::<T>(),
         }
+    }
+
+    /// Evaluates a nested field's [`Pod::ASSERT_LAYOUT`].
+    ///
+    /// Generated implementations call this on the containing record's `__LAYOUT`
+    /// before [`Self::assert_record`]. The receiver keeps concrete field checks
+    /// dependent on that record's generic arguments.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `T`'s layout assertion fails.
+    pub const fn assert_field<T: Pod>(&self) {
+        T::ASSERT_LAYOUT
     }
 
     /// Checks a record's byte order, total field size, and alignment.

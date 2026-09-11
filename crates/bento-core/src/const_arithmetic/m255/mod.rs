@@ -36,7 +36,7 @@ pub use montgomery::{
     MontgomeryContext, from_u64, from_u256, invert_prime, mul, one, pow, r2, reduce_wide,
     reduction_coefficient, to_u256,
 };
-pub use tables::{inverse_powers_of_two, safegcd_corrections_62_64, two_adic_root_tables};
+pub use tables::{inverse_powers_of_two, powers, safegcd_corrections_62_64, two_adic_root_tables};
 
 #[cfg(test)]
 mod tests;

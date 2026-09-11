@@ -2,7 +2,7 @@
 
 use bento::const_arithmetic::U256;
 
-use super::{PallasBase, PallasScalar, PrimeModulus};
+use super::{PallasBase, PallasScalar, PastaField, PrimeModulus};
 
 // Fixed literals pin root orientation as well as algebraic identities.
 struct Vectors {
@@ -170,8 +170,18 @@ fn check_field<M: PrimeModulus>(vectors: &Vectors) {
     assert_eq!(M::B448, vectors.b448);
     assert_eq!(M::SQRT_EXPONENT, vectors.sqrt_exponent);
     assert_eq!(M::TWO_INVERSE, vectors.two_inverse);
-    assert_eq!(M::ROOT_OF_UNITY, vectors.root_of_unity);
-    assert_eq!(M::ROOT_OF_UNITY_INVERSE, vectors.root_of_unity_inverse);
+    assert_eq!(
+        PastaField::<M>::root_of_unity(32)
+            .unwrap()
+            .montgomery_limbs(),
+        vectors.root_of_unity,
+    );
+    assert_eq!(
+        PastaField::<M>::root_of_unity_inverse(32)
+            .unwrap()
+            .montgomery_limbs(),
+        vectors.root_of_unity_inverse,
+    );
     assert_eq!(M::DELTA, vectors.delta);
     assert_eq!(M::ZETA, vectors.zeta);
     assert_eq!(M::ZETA_INVERSE, vectors.zeta_inverse);

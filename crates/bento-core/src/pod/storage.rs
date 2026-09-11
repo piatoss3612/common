@@ -46,13 +46,16 @@ impl<const N: usize> AlignedBytes<N> {
     /// In a static initializer, this is a compilation error.
     #[track_caller]
     pub const fn as_value<T: Pod>(&'static self) -> &'static T {
-        const {
+        // Make the length check consume the const result: an unused unit-valued
+        // assertion can be discarded during optimization.
+        let size = const {
             super::assert_little_endian();
             let () = T::ASSERT_LAYOUT;
             assert!(align_of::<T>() <= MAX_ALIGN, "over-aligned Pod type");
-        }
+            size_of::<T>()
+        };
         assert!(
-            size_of::<T>() == N,
+            size == N,
             "embedded byte length must equal the requested type's size"
         );
 
@@ -83,17 +86,23 @@ pub fn bytes_of<T: Pod>(value: &T) -> &[u8] {
 /// The element type must pass [`Pod::ASSERT_LAYOUT`] during compilation,
 /// including for empty slices.
 pub fn bytes_of_slice<T: Pod>(values: &[T]) -> &[u8] {
-    const {
+    // As in as_value, consuming the const result keeps validation tied to the
+    // conversion even when a byte-view wrapper is inlined.
+    let element_size = const {
         super::assert_little_endian();
-        T::ASSERT_LAYOUT
+        let () = T::ASSERT_LAYOUT;
+        size_of::<T>()
     };
 
     // SAFETY: The validated `Pod` contract excludes padding and uninitialized
-    // bytes. Slice elements are contiguous, and `size_of_val` gives their total
-    // byte length. The pointer remains non-null and aligned for `u8` even for an
+    // bytes. Slice elements are contiguous, and their count times the validated
+    // element size is their total byte length, which cannot overflow for a valid
+    // slice. The pointer remains non-null and aligned for `u8` even for an
     // empty slice or zero-sized `T`. The view borrows the original allocation,
     // whose bytes cannot be mutated through a shared reference.
-    unsafe { core::slice::from_raw_parts(values.as_ptr().cast::<u8>(), size_of_val(values)) }
+    unsafe {
+        core::slice::from_raw_parts(values.as_ptr().cast::<u8>(), values.len() * element_size)
+    }
 }
 
 #[cfg(test)]

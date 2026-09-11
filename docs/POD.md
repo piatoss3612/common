@@ -38,9 +38,9 @@ can check a particular format without converting a value:
 const _: () = <Record as bento::Pod>::ASSERT_LAYOUT;
 ```
 
-When implementing a new unsafe storage consumer, force this validation with
-`const { T::ASSERT_LAYOUT };` before relying on the
-[`Pod` guarantees][pod-contract].
+New unsafe storage consumers must follow the [`Pod` safety
+requirements][pod-contract] for evaluating layout assertions as part of the
+conversion.
 
 ## Writing and embedding files
 
@@ -79,6 +79,77 @@ cargo run --release -p zakura-bento --example embed
 Use [`AlignedBytes`][byte-views] when the bytes are already available. Its typed
 views enforce the same layout and length checks.
 
+## Storing field elements
+
+Udon's [`Fp` and `Fq`][field-storage] implement `Pod`. A generator constructs
+field values normally and writes their existing Montgomery representation.
+Consumers embed those same types and use them directly in arithmetic, including
+when they are fields of a larger record. The field types' storage contract
+requires reduced Montgomery residues for the correct modulus; embedding checks
+layout and length but does not validate those residues. Canonical protocol bytes
+from `to_bytes()` encode a different representation and must not be embedded as
+field storage bytes.
+
+Give the artifact's crate both `udon` and `bento` dependencies under
+`[dependencies]` and `[build-dependencies]` so its build script and consumer use
+the same types, following the
+[dependency naming guide](CRATES.md#dependencies-and-names).
+For example, a downstream `build.rs` can write an `Fp` array:
+
+```rust
+use std::{env, fs, path::PathBuf};
+use udon::{StoredForm, field::Fp};
+
+fn main() {
+    println!("cargo::rerun-if-changed=build.rs");
+    let directory = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let pointer_width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap();
+    let form = StoredForm::for_target(&pointer_width);
+    let values = [0, 1, 7, u64::MAX].map(|n| Fp::from_u64(n).square());
+    fs::write(
+        directory.join(format!("fp-values-{}.bin", form.descriptor())),
+        bento::bytes_of_slice(&values),
+    )
+    .unwrap();
+}
+```
+
+The consumer borrows those fields from aligned static storage:
+
+```rust
+use udon::field::Fp;
+
+bento::embed_array! {
+    static VALUES: [Fp; 4] =
+        concat!(env!("OUT_DIR"), "/fp-values-", udon::stored_form!(), ".bin");
+}
+
+fn main() {
+    assert_eq!(VALUES[2], Fp::from_u64(49));
+    assert_eq!(VALUES[2].sqrt().unwrap().square(), VALUES[2]);
+}
+```
+
+The [`StoredForm` registry][stored-forms] defines each descriptor's representation
+and scope. Build scripts pass the target's pointer width to select a descriptor;
+consumers obtain the matching string literal through
+`stored_form!`. The artifact owner must still define the record schema and
+distinguish the two field moduli.
+
+Generators and consumers may choose different `sqrt-table-large` configurations:
+the feature preserves the stored field representation. See the [performance
+report](FIELD_PERFORMANCE.md#optional-larger-square-root-tables) for table
+tradeoffs.
+
+The [field embedding test](../crates/udon/tests/embedding.rs) runs a complete
+build script and consumer with both table configurations and checks that the
+generated artifacts are byte-identical across them. It embeds a shared record
+containing arrays of both fields and a separate array of `Fp`:
+
+```console
+cargo test --release --locked -p zakura-udon --test embedding
+```
+
 ## Format ownership
 
 Generator and consumer must agree on the stored type definitions, representation
@@ -86,13 +157,11 @@ attributes, and any semantic invariants. Layout validation cannot detect a file
 generated for a different type of the same size, check canonical field residues,
 or establish curve membership. Those checks belong to the artifact's owner.
 
-Every bit pattern admitted by the safe byte-conversion APIs must nevertheless
-be memory-safe for every safe operation on the resulting type. A generator
-cannot establish that obligation for arbitrary bytes supplied by another safe
-caller. If arithmetic needs stronger invariants, keep the stored representation
-separate from the arithmetic type and establish those invariants through checked
-conversion or a narrowly scoped trusted construction path. The complete unsafe
-implementation obligations belong to the [`Pod` contract][pod-contract].
+These format requirements are separate from the [`Pod` contract][pod-contract],
+which requires memory safety for every bit pattern admitted by the safe storage
+APIs. A trusted generator cannot satisfy that obligation on behalf of arbitrary
+callers. Udon's [field storage contract][field-storage] describes the distinction
+for field residues.
 
 POD storage uses little-endian bytes and validates primitive size and alignment
 on the target. Unsupported endianness or layouts fail when their layout
@@ -114,3 +183,5 @@ files through the storage API when testing the artifact workflow. The
 [pod-contract]: ../crates/bento-core/src/pod/mod.rs
 [byte-views]: ../crates/bento-core/src/pod/storage.rs
 [embedding]: ../crates/bento-core/src/pod/macros.rs
+[field-storage]: ../crates/udon/src/field/mod.rs
+[stored-forms]: ../crates/udon/src/stored_form.rs

@@ -49,6 +49,12 @@ The [`bento`](crates/bento/src/lib.rs) crate is a facade over
 and product sums. These operations require no allocation. Arithmetic is
 variable-time and provides no constant-time guarantee for secret inputs.
 Field parameters and fixed exponentiation schedules use `bento` at compile time.
+Fields implement `bento::Pod`, so downstream build scripts can generate them
+with Udon and embed their Montgomery representations for direct runtime use;
+see the [field storage example](docs/POD.md#storing-field-elements).
+The optional `sqrt-table-large` feature selects larger square-root tables; see
+the [performance report](docs/FIELD_PERFORMANCE.md#optional-larger-square-root-tables)
+for latency, build-time, and storage tradeoffs.
 
 Curve arithmetic and the traits and utilities needed downstream for Tachyon
 remain planned.

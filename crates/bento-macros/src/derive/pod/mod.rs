@@ -95,9 +95,11 @@ pub fn derive(input: DeriveInput, core: BentoCorePath) -> syn::Result<TokenStrea
         predicates.push(parse_quote_spanned!(ty.span()=> #ty: #core::Pod));
     }
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
-    let field_assertions = fields
-        .iter()
-        .map(|ty| quote_spanned!(ty.span()=> let () = <#ty as #core::Pod>::ASSERT_LAYOUT;));
+    // Keep even concrete field checks dependent on the containing type. A direct
+    // reference to their constants can fail before a generic record is stored.
+    let field_assertions = fields.iter().map(
+        |ty| quote_spanned!(ty.span()=> <Self as #core::Pod>::__LAYOUT.assert_field::<#ty>();),
+    );
 
     // SAFETY: The representation fixes field order, and each field implements `Pod`.
     // Recursive validation establishes field validity and target layout. Equality

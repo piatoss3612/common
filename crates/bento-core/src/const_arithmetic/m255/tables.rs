@@ -1,7 +1,36 @@
-//! Root and power-of-two tables for field and inversion parameters.
+//! Root and power tables for field and inversion parameters.
 
 use super::super::U256;
 use super::{add, assert_modulus, one, pow2_mod};
+
+/// Builds consecutive powers of a reduced Montgomery base.
+///
+/// If `base` represents the integer `b`, entry `k` is the reduced Montgomery
+/// representation of `b^k`: `b^k * 2^256 mod modulus`, for `0 <= k < N`.
+/// Entry zero represents one, including for a zero base. With `N = 0`, the
+/// result is empty; the modulus and base are still checked. Primality is not
+/// required.
+///
+/// # Panics
+///
+/// Panics if [`assert_modulus`] rejects `modulus`, or if `base >= modulus`.
+pub const fn powers<const N: usize>(modulus: &U256, base: &U256) -> [U256; N] {
+    let context = super::MontgomeryContext::new(*modulus);
+    assert!(
+        !super::super::u256::ge(base, modulus),
+        "base must be reduced"
+    );
+    let mut table = [[0; 4]; N];
+    if N > 0 {
+        table[0] = context.one();
+        let mut k = 1;
+        while k < N {
+            table[k] = context.mul(&table[k - 1], base);
+            k += 1;
+        }
+    }
+    table
+}
 
 /// Builds forward and inverse root tables indexed by logarithmic order.
 ///

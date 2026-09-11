@@ -218,6 +218,10 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         ),
         ("const_arithmetic/unreduced_base", "base must be reduced"),
         (
+            "const_arithmetic/unreduced_power_table",
+            "base must be reduced",
+        ),
+        (
             "const_arithmetic/ratio_overflow",
             "quotient exceeds five limbs",
         ),

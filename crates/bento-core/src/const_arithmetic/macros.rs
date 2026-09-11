@@ -412,6 +412,23 @@ macro_rules! m255_safegcd_corrections_62_64 {
     };
 }
 
+/// Builds consecutive Montgomery powers, starting at exponent zero.
+///
+/// Evaluates [`m255::powers`](crate::const_arithmetic::m255::powers) inside
+/// `const { ... }`, with the same input bounds and result. All arguments must
+/// be constant expressions; panics become compilation errors, including for
+/// an empty table. The length is inferred from the result type or supplied as
+/// `powers!(modulus, base; N)`.
+#[macro_export]
+macro_rules! m255_powers {
+    ($modulus:expr, $base:expr $(,)?) => {
+        const { $crate::const_arithmetic::m255::powers($modulus, $base) }
+    };
+    ($modulus:expr, $base:expr; $len:expr $(,)?) => {
+        const { $crate::const_arithmetic::m255::powers::<{ $len }>($modulus, $base) }
+    };
+}
+
 /// Builds forward and inverse Montgomery root tables indexed by logarithmic order.
 ///
 /// Evaluates

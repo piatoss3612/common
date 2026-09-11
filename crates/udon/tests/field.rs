@@ -78,6 +78,26 @@ fn checked_encodings_enforce_both_moduli() {
 }
 
 #[test]
+fn root_accessors_remain_const() {
+    const FP: [Fp; 2] = [
+        Fp::root_of_unity(32).unwrap(),
+        Fp::root_of_unity_inverse(32).unwrap(),
+    ];
+    const FQ: [Fq; 2] = [
+        Fq::root_of_unity(32).unwrap(),
+        Fq::root_of_unity_inverse(32).unwrap(),
+    ];
+    const FP_NONE: Option<Fp> = Fp::root_of_unity(33);
+    const FQ_NONE: Option<Fq> = Fq::root_of_unity_inverse(u32::MAX);
+    assert_eq!(FP[0].mul(&FP[1]), Fp::ONE);
+    assert_eq!(FQ[0].mul(&FQ[1]), Fq::ONE);
+    assert_ne!(FP[0].pow_u64(1 << 31), Fp::ONE);
+    assert_ne!(FQ[0].pow_u64(1 << 31), Fq::ONE);
+    assert_eq!(FP_NONE, None);
+    assert_eq!(FQ_NONE, None);
+}
+
+#[test]
 fn repeatedly_merging_product_sums_preserves_the_field_value() {
     fn check<M: PrimeModulus>() {
         let mut sum = ProductSum::<M>::new();
@@ -91,37 +111,6 @@ fn repeatedly_merging_product_sums_preserves_the_field_value() {
             expected = expected.double();
         }
         assert_eq!(sum.finish(), expected);
-    }
-    check::<PallasBase>();
-    check::<PallasScalar>();
-}
-
-#[test]
-#[cfg(target_endian = "little")]
-fn stored_limbs_are_validated_before_field_arithmetic() {
-    fn check<M: PrimeModulus>() {
-        let value = PastaField::<M>::from_u64(7);
-        let mut expected = [0; 32];
-        for (chunk, limb) in expected.chunks_exact_mut(8).zip(value.montgomery_limbs()) {
-            chunk.copy_from_slice(&limb.to_le_bytes());
-        }
-        assert_eq!(bento::bytes_of(&value.montgomery_limbs()), expected);
-        static BYTES: bento::AlignedBytes<32> = bento::AlignedBytes({
-            let mut bytes = [0; 32];
-            bytes[0] = 1;
-            bytes
-        });
-        assert_eq!(
-            PastaField::<M>::from_montgomery_limbs(*BYTES.as_value::<[u64; 4]>()),
-            PastaField::<M>::from_montgomery_limbs([1, 0, 0, 0])
-        );
-        // POD decoding establishes memory validity, so field construction must
-        // still reject bytes that represent an unreduced Montgomery residue.
-        static INVALID: bento::AlignedBytes<32> = bento::AlignedBytes([0xff; 32]);
-        let limbs = *INVALID.as_value::<[u64; 4]>();
-        assert!(
-            std::panic::catch_unwind(|| PastaField::<M>::from_montgomery_limbs(limbs)).is_err()
-        );
     }
     check::<PallasBase>();
     check::<PallasScalar>();

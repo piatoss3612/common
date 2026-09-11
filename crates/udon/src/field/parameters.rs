@@ -204,7 +204,7 @@ impl<M: PrimeModulus> PastaField<M> {
     /// Returns a primitive root of order `2^log_size`, or `None` above 32.
     ///
     /// The selected root is `5^((p - 1) / 2^log_size)`; order one returns one.
-    pub fn root_of_unity(log_size: u32) -> Option<Self> {
+    pub const fn root_of_unity(log_size: u32) -> Option<Self> {
         if log_size > TWO_ADICITY {
             return None;
         }
@@ -212,7 +212,7 @@ impl<M: PrimeModulus> PastaField<M> {
     }
 
     /// Returns the inverse of [`Self::root_of_unity`], or `None` above 32.
-    pub fn root_of_unity_inverse(log_size: u32) -> Option<Self> {
+    pub const fn root_of_unity_inverse(log_size: u32) -> Option<Self> {
         if log_size > TWO_ADICITY {
             return None;
         }
@@ -229,6 +229,9 @@ impl<M: PrimeModulus> PastaField<M> {
         if let Some(entry) = M::POWER_OF_TWO_INVERSES.get(log_size as usize) {
             return Self::from_montgomery(*entry);
         }
+        // TODO: Establish whether callers need exponents above TWO_ADICITY
+        // before considering a table of 2^(-2^j) for this fallback. Supported
+        // transform sizes already use the compile-time table above.
         Self::two_inverse().pow_u64(u64::from(log_size))
     }
 

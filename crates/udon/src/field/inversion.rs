@@ -39,7 +39,7 @@ impl<M: PrimeModulus> PastaField<M> {
     #[inline]
     fn bezout_row_update(u: i64, lhs: &Self, v: i64, rhs: &Self) -> Self {
         debug_assert!(u.unsigned_abs() + v.unsigned_abs() <= 1 << 62);
-        let offset = bezout_offset(&M::MODULUS);
+        let offset = const { bezout_offset(&M::MODULUS) };
         let (u, v) = (i128::from(u), i128::from(v));
         let mut limbs = [0u64; 5];
         let mut carry = 0i128;

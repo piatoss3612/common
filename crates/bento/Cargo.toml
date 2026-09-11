@@ -1,7 +1,7 @@
 [package]
 name = "zakura-bento"
 description = """
-Compile-time addition chains and checked POD storage and embedding
+Compile-time arithmetic, addition chains, and checked POD storage and embedding
 for Zakura Common
 """
 version.workspace = true
@@ -28,5 +28,10 @@ harness = false
 
 [[example]]
 name = "embed"
+test = true
+harness = false
+
+[[example]]
+name = "field_constants"
 test = true
 harness = false

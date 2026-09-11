@@ -22,4 +22,3 @@ publish = false
 bento = { package = "zakura-bento", path = "crates/bento" }
 bento-core = { package = "zakura-bento-core", path = "crates/bento-core" }
 bento-macros = { package = "zakura-bento-macros", path = "crates/bento-macros" }
-udon = { package = "zakura-udon", path = "crates/udon" }

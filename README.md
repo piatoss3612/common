@@ -4,8 +4,9 @@ This is an experimental stack of Rust crates for Zakura Common.
 
 * This repository is one virtual Cargo workspace; every crate lives under
   [`crates/`](crates/).
-* The current implementation provides addition chains and checked POD storage
-  and embedding. Field and curve arithmetic remain scaffolded.
+* The current implementation provides reference integer and Montgomery
+  arithmetic, addition chains, and checked POD storage and embedding.
+  Optimized field and curve arithmetic in `udon` remains scaffolded.
 * All target crates (`bento`, `bento-core`, and `udon`) currently use `no_std`.
 * See [the crate development guide](docs/CRATES.md) for dependency naming,
   workspace inheritance, macro path resolution, and publication conventions.
@@ -20,15 +21,20 @@ positive integer using operations supplied by the value's type. Its
 [POD storage APIs](docs/POD.md) let generators write records as bytes and
 consumers embed those files as typed static data.
 
-The planned scope also includes:
+The [`const_arithmetic`](crates/bento-core/src/const_arithmetic/mod.rs) module
+derives field and curve parameters with `const fn` integer and Montgomery
+arithmetic. It operates on public parameters and provides no constant-time
+guarantee. The [field constants example](crates/bento/examples/field_constants.rs)
+derives a root of unity and its inverse from a modulus and generator:
 
-- **Compile-time arithmetic.** Reference arithmetic will derive constants needed
-  to define fields and curves in [`udon`](crates/udon/src/lib.rs). Downstream
-  artifact generators will use the built [`udon`](crates/udon/src/lib.rs) crate
-  for runtime arithmetic.
-- **Procedural macros.** Additional macros will generate code needed to define
-  field and group operations. Artifact-specific generation will belong
-  downstream with the data's owner.
+```console
+cargo run --release --locked -p zakura-bento --example field_constants
+```
+
+Additional procedural macros will generate code needed to define field and
+group operations. Downstream artifact generators will use the built
+[`udon`](crates/udon/src/lib.rs) crate for runtime arithmetic; artifact formats
+and their generation belong with the data's owner.
 
 The [`bento`](crates/bento/src/lib.rs) crate is a facade over
 [`bento-macros`](docs/MACROS.md) and

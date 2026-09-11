@@ -2,6 +2,12 @@
 //!
 //! Use [`addition_chain!`] to scale a value by a fixed positive integer. The
 //! [`addchain`] module defines the operations that a value supplies for scaling.
+//! [`const_arithmetic::u256`] provides full-width integer arithmetic, and
+//! [`const_arithmetic::m255`] provides Montgomery arithmetic for odd moduli
+//! below `2^255`. Use them to derive field and curve constants at compile time.
+//!
+//! See [`const_arithmetic::m255::two_adic_root_of_unity`] for an example deriving
+//! a field constant from a modulus and a generator.
 //!
 //! Store records with the [`Pod`](trait@Pod) trait and its
 //! [derive macro](macro@Pod). [`bytes_of`] and [`bytes_of_slice`] expose their
@@ -17,6 +23,9 @@
 extern crate self as zakura_bento;
 
 pub use bento_core::{AlignedBytes, MAX_ALIGN, Pod, addchain, bytes_of, bytes_of_slice};
+
+#[doc(inline)]
+pub use bento_core::const_arithmetic;
 
 #[doc(hidden)]
 pub use bento_macros::addition_chain as __addition_chain;

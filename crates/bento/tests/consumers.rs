@@ -1,4 +1,4 @@
-//! Cargo consumer tests for dependency path resolution and diagnostics.
+//! Cargo consumers check dependency paths, const evaluation, and diagnostics.
 //!
 //! Tests inside the facade already see its direct core dependency, so
 //! separate consumer manifests exercise the dependencies available to callers.
@@ -182,33 +182,50 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
     fs::create_dir_all(package.join("src/bin")).unwrap();
     let manifest_path = package.join("Cargo.toml");
     let mut manifest_text = fs::read_to_string(&manifest_path).unwrap();
-    for (name, expected) in [
+    for (fixture, expected) in [
         (
-            "zero",
+            "addition_chain/zero",
             "addition_chain! scalar must be nonzero; the trait has no identity operation",
         ),
         (
-            "suffix",
+            "addition_chain/suffix",
             "addition_chain! scalar must be an unsuffixed integer literal",
         ),
-        ("constant", "expected integer literal"),
-        ("negative", "addition_chain! scalar must be positive"),
+        ("addition_chain/constant", "expected integer literal"),
         (
-            "forwarded_negative",
+            "addition_chain/negative",
             "addition_chain! scalar must be positive",
         ),
-        ("missing_trait", "Value: AdditionChain"),
-        ("missing_clone", "Value: Clone"),
-        ("moved_value", "use of moved value: `value`"),
+        (
+            "addition_chain/forwarded_negative",
+            "addition_chain! scalar must be positive",
+        ),
+        ("addition_chain/missing_trait", "Value: AdditionChain"),
+        ("addition_chain/missing_clone", "Value: Clone"),
+        ("addition_chain/moved_value", "use of moved value: `value`"),
+        ("const_arithmetic/invalid_modulus", "modulus must be odd"),
+        (
+            "const_arithmetic/invalid_two_adicity",
+            "two_adicity exceeds the trailing zeros",
+        ),
+        ("const_arithmetic/unreduced_base", "base must be reduced"),
+        (
+            "const_arithmetic/ratio_overflow",
+            "quotient exceeds five limbs",
+        ),
     ] {
+        let name = Path::new(fixture).file_name().unwrap().to_str().unwrap();
         fs::copy(
-            fixtures.join(format!("addition_chain/{name}.rs")),
+            fixtures.join(format!("{fixture}.rs")),
             package.join(format!("src/bin/{name}.rs")),
         )
         .unwrap();
         manifest_text.push_str(&format!("\n[[bin]]\nname = {name:?}\n"));
         fs::write(&manifest_path, &manifest_text).unwrap();
-        let output = cargo(root, &["check", "-p", "facade-default", "--bin", name]);
+        let output = cargo(
+            root,
+            &["build", "--release", "-p", "facade-default", "--bin", name],
+        );
         let diagnostic = diagnostics(&output);
         assert!(!output.status.success(), "{name} unexpectedly compiled");
         assert!(diagnostic.contains(expected), "{name}: {diagnostic}");

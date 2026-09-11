@@ -296,6 +296,9 @@ dependencies = [
 [[package]]
 name = "zakura-bento-core"
 version = "0.1.0"
+dependencies = [
+ "num-bigint",
+]
 
 [[package]]
 name = "zakura-bento-macros"

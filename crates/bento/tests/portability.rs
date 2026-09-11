@@ -1,4 +1,4 @@
-//! Full library builds exercise target layout without requiring a target linker.
+//! Full library builds check layout and const arithmetic without a target linker.
 
 use std::{fs, path::Path};
 
@@ -7,7 +7,7 @@ use support::{cargo, diagnostics};
 
 #[test]
 #[ignore = "requires thumbv7em-none-eabi and s390x-unknown-linux-gnu target libraries"]
-fn target_layout_contracts() {
+fn target_portability_contracts() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repository = manifest.join("../..").canonicalize().unwrap();
     let temporary = support::workspace("bento-portability-");

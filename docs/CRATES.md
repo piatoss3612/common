@@ -24,7 +24,7 @@ their declaration serves an actual workspace need.
 
 | Crate | Responsibility |
 | --- | --- |
-| `bento-core` | Shared traits, storage support, and planned reference arithmetic; `no_std` |
+| `bento-core` | Shared traits, storage support, and reference arithmetic; `no_std` |
 | `bento-macros` | Parsing, validation, and code generation on the build host |
 | `bento` | Public `no_std` facade over core and macros |
 | `udon` | Planned optimized field and curve arithmetic; `no_std` |

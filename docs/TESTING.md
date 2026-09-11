@@ -14,8 +14,9 @@ depend on debug assertions.
 
 - Unit tests check algorithms, parsers, and local contracts beside their code.
   Use independent references for arithmetic and representation checks, including
-  boundary values and inputs wider than native integers. Replaying output with
-  the same algorithm is not an independent correctness check.
+  boundary values and inputs wider than native integers. Reference arithmetic
+  tests use `num-bigint` as a development dependency for this purpose. Replaying
+  output with the same algorithm is not an independent correctness check.
 - Public API tests check observable behavior and interactions between components.
   Token snapshots establish expansion structure, not successful compilation or
   runtime semantics.
@@ -31,8 +32,10 @@ Safety and portability need targeted evidence as well as native tests. CI runs
 Miri over storage unit tests and the public storage integration tests; nested
 Cargo tests stay in the native suite. The portability test builds `no_std`
 libraries for a 32-bit little-endian target and separately checks that big-endian
-storage fails while unrelated functionality compiles. It is ignored in ordinary
-runs because target libraries must be installed, and explicitly executed in CI.
+storage fails while addition chains and constant arithmetic compile. The
+arithmetic fixture also asserts computed values during constant evaluation.
+The test is ignored in ordinary runs because target libraries must be installed,
+and explicitly executed in CI.
 These checks do not establish correctness on every target or constant-time
 behavior; extend validation when new code introduces new assumptions.
 

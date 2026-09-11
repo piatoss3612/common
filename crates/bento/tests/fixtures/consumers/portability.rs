@@ -2,6 +2,25 @@
 #![deny(warnings)]
 #![forbid(unsafe_code)]
 
+use bento::const_arithmetic::{U256, U320, m255, u256};
+
+// Numeric word order is independent of the target's byte order. These
+// assertions run during compilation, including on targets we cannot execute.
+pub const MODULUS: U256 =
+    u256::from_hex("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
+pub const ENCODED: U256 = m255::from_u256(&MODULUS, &[u64::MAX; 4]);
+pub const ROOT: U256 = m255::two_adic_root_of_unity(&[97, 0, 0, 0], 5, 5);
+pub const RATIO: U320 = u256::round_shifted_ratio(&[u64::MAX; 4], u128::MAX, 384);
+
+const _: () = {
+    let decoded = m255::to_u256(&MODULUS, &ENCODED);
+    assert!(decoded[0] == 37 && decoded[1] == 0 && decoded[2] == 0 && decoded[3] == 0);
+    let root = m255::to_u256(&[97, 0, 0, 0], &ROOT);
+    assert!(root[0] == 28 && root[1] == 0 && root[2] == 0 && root[3] == 0);
+    assert!(RATIO[0] == 1 && RATIO[1] == 0 && RATIO[2] == u64::MAX);
+    assert!(RATIO[3] == u64::MAX && RATIO[4] == 0);
+};
+
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 #[cfg_attr(any(feature = "record", feature = "zero-array"), derive(bento::Pod))]

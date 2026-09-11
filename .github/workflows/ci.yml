@@ -45,12 +45,12 @@ jobs:
       - name: Install Miri toolchain
         run: rustup toolchain install "$MIRI_TOOLCHAIN" --profile minimal --component miri,rust-src
       - name: Check core storage
-        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib
+        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib pod::
       - name: Check public storage API
         run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod
 
   portability:
-    name: Target layout contracts
+    name: Target portability contracts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0

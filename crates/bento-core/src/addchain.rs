@@ -23,4 +23,29 @@ pub trait AdditionChain: Clone {
 
     /// Returns the sum of this value and `rhs`, preserving both inputs.
     fn add(&self, rhs: &Self) -> Self;
+
+    /// Doubles this value `count` times; zero returns a clone.
+    ///
+    /// Overrides must have the same value as repeated calls to `double`.
+    fn double_n(&self, count: usize) -> Self {
+        if count == 0 {
+            return self.clone();
+        }
+        let mut value = self.double();
+        for _ in 1..count {
+            value = value.double();
+        }
+        value
+    }
+
+    /// Doubles this value `count` times, then adds `rhs`.
+    ///
+    /// Overrides may fuse the operations but must preserve their value.
+    fn double_n_add(&self, count: usize, rhs: &Self) -> Self {
+        if count == 0 {
+            self.add(rhs)
+        } else {
+            self.double_n(count).add(rhs)
+        }
+    }
 }

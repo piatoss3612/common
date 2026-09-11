@@ -6,7 +6,7 @@
 
 use super::super::U256;
 use super::super::u256::{add_with_carry, div_exact_u64, odd_cofactor, shr, sub_u64};
-use super::{assert_modulus, from_u64, from_u256, mul, pow};
+use super::{MontgomeryContext, assert_modulus};
 
 /// Derives a root of unity for the field's subgroup of power-of-two order.
 ///
@@ -43,8 +43,9 @@ use super::{assert_modulus, from_u64, from_u256, mul, pow};
 pub const fn two_adic_root_of_unity(modulus: &U256, generator: u64, two_adicity: u32) -> U256 {
     assert_modulus(modulus);
     let exponent = odd_cofactor(modulus, two_adicity);
-    let base = from_u64(modulus, generator);
-    pow(modulus, &base, &exponent)
+    let context = MontgomeryContext::new(*modulus);
+    let base = context.from_u64(generator);
+    context.pow(&base, &exponent)
 }
 
 /// Derives a generator for the field's subgroup of odd order.
@@ -66,10 +67,11 @@ pub const fn two_adic_root_of_unity(modulus: &U256, generator: u64, two_adicity:
 pub const fn odd_order_generator(modulus: &U256, generator: u64, two_adicity: u32) -> U256 {
     assert_modulus(modulus);
     let _ = odd_cofactor(modulus, two_adicity);
-    let mut value = from_u64(modulus, generator);
+    let context = MontgomeryContext::new(*modulus);
+    let mut value = context.from_u64(generator);
     let mut squaring = 0;
     while squaring < two_adicity {
-        value = mul(modulus, &value, &value);
+        value = context.mul(&value, &value);
         squaring += 1;
     }
     value
@@ -94,8 +96,9 @@ pub const fn odd_order_generator(modulus: &U256, generator: u64, two_adicity: u3
 pub const fn cube_root_of_unity(modulus: &U256, generator: u64) -> U256 {
     assert_modulus(modulus);
     let exponent = div_exact_u64(&sub_u64(modulus, 1), 3);
-    let base = from_u64(modulus, generator);
-    pow(modulus, &base, &exponent)
+    let context = MontgomeryContext::new(*modulus);
+    let base = context.from_u64(generator);
+    context.pow(&base, &exponent)
 }
 
 /// Returns the reduced Montgomery representation of the inverse of two.
@@ -113,5 +116,5 @@ pub const fn two_inverse(modulus: &U256) -> U256 {
     // overflow because p >> 1 < 2^254.
     let (half_plus_one, carry) = add_with_carry(&shr(modulus, 1), &[1, 0, 0, 0]);
     assert!(carry == 0);
-    from_u256(modulus, &half_plus_one)
+    MontgomeryContext::new(*modulus).from_u256(&half_plus_one)
 }

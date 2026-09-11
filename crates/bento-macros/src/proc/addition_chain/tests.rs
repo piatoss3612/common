@@ -56,40 +56,130 @@ fn decoding_is_not_limited_to_target_integer_sizes() {
     }
 }
 
-#[rustfmt::skip]
 #[test]
-fn expansion_unrolls_a_windowed_chain_with_qualified_calls() {
-    // This snapshot intentionally fixes the tie-breaking and code-generation policy.
-    // 181 uses ten operations, including the odd table, versus eleven for binary.
-    let expansion = evaluate(parse_quote!(f(y), 0xb5), BentoCorePath::default()).unwrap();
-    let expected = quote! {
-        ({
-            #[allow(dead_code)] fn __bento_odd_0() {}
-            #[allow(dead_code)] fn __bento_odd_1() {}
-            #[allow(dead_code)] fn __bento_odd_2() {}
-            #[allow(dead_code)] fn __bento_doubled() {}
-            #[allow(dead_code)] fn __bento_accumulator() {}
-            fn __bento_chain<__BentoValue: ::bento_core::addchain::AdditionChain>(
-                __bento_odd_0: __BentoValue
-            ) -> __BentoValue {
-                let __bento_doubled = ::bento_core::addchain::AdditionChain::double(&__bento_odd_0);
-                let __bento_odd_1 = ::bento_core::addchain::AdditionChain::add(&__bento_odd_0, &__bento_doubled);
-                let __bento_odd_2 = ::bento_core::addchain::AdditionChain::add(&__bento_odd_1, &__bento_doubled);
-                let mut __bento_accumulator = __BentoValue::clone(&__bento_odd_2);
-                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-                __bento_accumulator = ::bento_core::addchain::AdditionChain::add(&__bento_accumulator, &__bento_odd_2);
-                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-                __bento_accumulator = ::bento_core::addchain::AdditionChain::double(&__bento_accumulator);
-                __bento_accumulator = ::bento_core::addchain::AdditionChain::add(&__bento_accumulator, &__bento_odd_0);
-                __bento_accumulator
-            }
-            __bento_chain
-        })(f(y))
-    };
-    assert_eq!(expansion.to_string(), expected.to_string());
-    syn::parse2::<Expr>(expansion).unwrap();
+fn emission_modes_preserve_qualified_calls_and_compact_long_runs() {
+    for mode in [quote!(compact), quote!(unrolled), quote!(batched)] {
+        let input = syn::parse2(quote!(f(y), 0x1_0000000000000001, emission = #mode)).unwrap();
+        let expansion = evaluate(input, BentoCorePath::default()).unwrap();
+        let text = expansion.to_string();
+        assert!(text.contains(":: bento_core :: addchain :: AdditionChain"));
+        if mode.to_string() == "compact" {
+            assert!(text.contains("for _ in"));
+        }
+        if mode.to_string() == "batched" {
+            assert!(text.contains("double_n_add"));
+        }
+        syn::parse2::<Expr>(expansion).unwrap();
+    }
+}
+
+#[test]
+fn supplied_chains_are_replayed_exactly_before_emission() {
+    for mode in [quote!(compact), quote!(unrolled), quote!(batched)] {
+        let input = syn::parse2(quote!(x, 9, chain = |a| {
+            let b = double(a, 3);
+            let c = add(b, a);
+            c
+        }, emission = #mode))
+        .unwrap();
+        syn::parse2::<Expr>(evaluate(input, BentoCorePath::default()).unwrap()).unwrap();
+    }
+    for body in [
+        quote!(|a| {
+            let b = double(a, 2);
+            b
+        }), // Wrong exponent.
+        quote!(|a| {
+            let b = add(c, a);
+            let c = double(a, 3);
+            b
+        }),
+        quote!(|a| {
+            let a = double(a, 3);
+            a
+        }),
+        quote!(|a| {
+            let b = double(a, 0);
+            b
+        }),
+        quote!(|a| {
+            let b = double(a, 18446744073709551615);
+            b
+        }),
+        quote!(|a| {
+            let b = double(a, 4);
+            b
+        }), // Overshoots.
+        quote!(|a| {
+            let b = other(a, 3);
+            b
+        }),
+        quote!(|a| {
+            let mut b = double(a, 3);
+            b
+        }),
+        quote!(|a| {
+            let b = add(a, a);
+            b;
+        }),
+    ] {
+        let input = syn::parse2(quote!(x, 9, chain = #body)).unwrap();
+        assert!(evaluate(input, BentoCorePath::default()).is_err());
+    }
+}
+
+#[test]
+fn supplied_chain_coefficients_cross_integer_word_boundaries() {
+    use num_bigint::BigUint;
+    for bits in [63usize, 64, 127, 128, 255, 256, 511] {
+        let count = LitInt::new(&bits.to_string(), Span::call_site());
+        let power = BigUint::from(1u8) << bits;
+        for (scalar, valid) in [(&power + 1u8, true), (power, false)] {
+            let scalar = LitInt::new(&scalar.to_str_radix(10), Span::call_site());
+            let input = syn::parse2(quote!(x, #scalar, chain = |a| {
+                let b = double(a, #count);
+                let c = add(b, a);
+                c
+            }))
+            .unwrap();
+            assert_eq!(evaluate(input, BentoCorePath::default()).is_ok(), valid);
+        }
+    }
+}
+
+#[test]
+fn derived_exponents_require_the_exact_factorization() {
+    let input: Input = syn::parse2(quote!(
+        x,
+        tonelli_shanks(
+            "0x0000000000000000000000000000000000000000000000000000000000000061",
+            5
+        )
+    ))
+    .unwrap();
+    assert_eq!(input.scalar.base10_digits(), "1");
+    for (modulus, adicity) in [
+        ("61", 5),
+        (
+            "0000000000000000000000000000000000000000000000000000000000000061",
+            5,
+        ),
+        (
+            "0x0000000000000000000000000000000000000000000000000000000000000061",
+            4,
+        ),
+        (
+            "0x0000000000000000000000000000000000000000000000000000000000000062",
+            1,
+        ),
+        (
+            "0x0000000000000000000000000000000000000000000000000000000000000001",
+            0,
+        ),
+    ] {
+        let adicity = LitInt::new(&adicity.to_string(), Span::call_site());
+        assert!(syn::parse2::<Input>(quote!(x, tonelli_shanks(#modulus, #adicity))).is_err());
+    }
 }
 
 #[test]

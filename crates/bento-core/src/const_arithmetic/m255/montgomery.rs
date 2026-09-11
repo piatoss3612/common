@@ -75,7 +75,11 @@ pub const fn reduce_wide(modulus: &U256, value: &U512) -> U256 {
         !ge(&[value[4], value[5], value[6], value[7]], modulus),
         "wide input must be below modulus * R"
     );
-    let coefficient = reduction_coefficient(modulus[0]);
+    reduce_with_coefficient(modulus, value, reduction_coefficient(modulus[0]))
+}
+
+// The caller establishes the modulus and wide-input bounds.
+const fn reduce_with_coefficient(modulus: &U256, value: &U512, coefficient: u64) -> U256 {
     let mut t = *value;
     let mut carry_top = 0u64;
     let mut i = 0;
@@ -178,17 +182,12 @@ pub const fn to_u256(modulus: &U256, value: &U256) -> U256 {
 /// Panics if [`assert_modulus`] rejects `modulus`, or `base >= modulus`,
 /// including when the exponent is zero.
 pub const fn pow(modulus: &U256, base: &U256, exponent: &U256) -> U256 {
-    let mut accumulator = one(modulus);
+    assert_modulus(modulus);
     assert!(!ge(base, modulus), "base must be reduced");
-    let mut bit = 256;
-    while bit > 0 {
-        bit -= 1;
-        accumulator = mul(modulus, &accumulator, &accumulator);
-        if exponent[bit / 64] >> (bit % 64) & 1 == 1 {
-            accumulator = mul(modulus, &accumulator, base);
-        }
+    match pow_with_coefficient(modulus, reduction_coefficient(modulus[0]), base, exponent) {
+        Some(value) => value,
+        None => one(modulus),
     }
-    accumulator
 }
 
 /// Inverts a nonzero field element in Montgomery form.
@@ -225,4 +224,151 @@ pub const fn invert_prime(modulus: &U256, value: &U256) -> U256 {
         "cannot invert zero"
     );
     pow(modulus, value, &sub_u64(modulus, 2))
+}
+
+/// Reusable checked Montgomery arithmetic for one odd modulus below `2^255`.
+///
+/// Construction caches the modulus, cancellation coefficient, and conversion
+/// factors. Values use the same representation and bounds as the free functions.
+/// Primality is not required. This is public-parameter reference arithmetic.
+#[derive(Clone, Copy, Debug)]
+pub struct MontgomeryContext {
+    modulus: U256,
+    coefficient: u64,
+    one: U256,
+    r2: U256,
+}
+
+impl MontgomeryContext {
+    /// Validates `modulus` and derives its Montgomery setup once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if [`assert_modulus`] rejects the modulus.
+    pub const fn new(modulus: U256) -> Self {
+        assert_modulus(&modulus);
+        let one = one(&modulus);
+        let mut r2 = one;
+        let mut i = 0;
+        while i < 256 {
+            r2 = super::add(&modulus, &r2, &r2);
+            i += 1;
+        }
+        Self {
+            modulus,
+            coefficient: reduction_coefficient(modulus[0]),
+            one,
+            r2,
+        }
+    }
+
+    /// Returns the ordinary modulus.
+    pub const fn modulus(&self) -> U256 {
+        self.modulus
+    }
+
+    /// Returns `-modulus^-1 mod 2^64`.
+    pub const fn reduction_coefficient(&self) -> u64 {
+        self.coefficient
+    }
+
+    /// Returns the reduced Montgomery representation of one.
+    pub const fn one(&self) -> U256 {
+        self.one
+    }
+
+    /// Returns the ordinary conversion factor `2^512 mod modulus`.
+    pub const fn r2(&self) -> U256 {
+        self.r2
+    }
+
+    /// Removes one Montgomery factor, returning a reduced residue.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `value >= modulus * 2^256`.
+    pub const fn reduce_wide(&self, value: &U512) -> U256 {
+        assert!(
+            !ge(&[value[4], value[5], value[6], value[7]], &self.modulus),
+            "wide input must be below modulus * R"
+        );
+        reduce_with_coefficient(&self.modulus, value, self.coefficient)
+    }
+
+    /// Multiplies integers and removes one Montgomery factor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `a * b >= modulus * 2^256`; reduced operands satisfy the bound.
+    pub const fn mul(&self, a: &U256, b: &U256) -> U256 {
+        self.reduce_wide(&mul_wide(a, b))
+    }
+
+    /// Converts any ordinary 256-bit integer to a reduced Montgomery residue.
+    pub const fn from_u256(&self, value: &U256) -> U256 {
+        reduce_with_coefficient(&self.modulus, &mul_wide(value, &self.r2), self.coefficient)
+    }
+
+    /// Converts any ordinary 64-bit integer to a reduced Montgomery residue.
+    pub const fn from_u64(&self, value: u64) -> U256 {
+        self.from_u256(&[value, 0, 0, 0])
+    }
+
+    /// Decodes a reduced Montgomery residue to an ordinary integer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `value >= modulus`.
+    pub const fn to_u256(&self, value: &U256) -> U256 {
+        assert!(!ge(value, &self.modulus), "value must be reduced");
+        reduce_with_coefficient(
+            &self.modulus,
+            &[value[0], value[1], value[2], value[3], 0, 0, 0, 0],
+            self.coefficient,
+        )
+    }
+
+    /// Raises a reduced Montgomery residue to an ordinary unsigned exponent.
+    ///
+    /// A zero exponent returns one, including for a zero base.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `base >= modulus`, even for exponent zero.
+    pub const fn pow(&self, base: &U256, exponent: &U256) -> U256 {
+        assert!(!ge(base, &self.modulus), "base must be reduced");
+        match pow_with_coefficient(&self.modulus, self.coefficient, base, exponent) {
+            Some(value) => value,
+            None => self.one,
+        }
+    }
+}
+
+// Zero has no leading bit; the caller supplies its cached identity or derives
+// it only when needed. Nonzero one-shot powers need no conversion setup.
+const fn pow_with_coefficient(
+    modulus: &U256,
+    coefficient: u64,
+    base: &U256,
+    exponent: &U256,
+) -> Option<U256> {
+    let mut bit = 256;
+    while bit > 0 && exponent[(bit - 1) / 64] >> ((bit - 1) % 64) & 1 == 0 {
+        bit -= 1;
+    }
+    if bit == 0 {
+        return None;
+    }
+    let mut accumulator = *base;
+    bit -= 1;
+    while bit > 0 {
+        bit -= 1;
+        accumulator =
+            reduce_with_coefficient(modulus, &mul_wide(&accumulator, &accumulator), coefficient);
+        if exponent[bit / 64] >> (bit % 64) & 1 == 1 {
+            accumulator =
+                reduce_with_coefficient(modulus, &mul_wide(&accumulator, base), coefficient);
+        }
+    }
+    Some(accumulator)
 }

@@ -14,4 +14,9 @@ publish.workspace = true
 bento.workspace = true
 
 [dev-dependencies]
+criterion = { version = "0.8", features = ["html_reports"] }
 num-bigint = "0.4"
+
+[[bench]]
+name = "field"
+harness = false

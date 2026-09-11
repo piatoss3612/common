@@ -15,8 +15,22 @@ fn caller_constants_cannot_become_generated_patterns() {
         pub const __bento_accumulator: u128 = 5;
         pub const __bento_clone: u128 = 6;
         pub const __bento_chain: u128 = 7;
+        pub const __bento_value_0: u128 = 8;
     }
     use names::*;
+    assert_eq!(
+        bento::addition_chain!(
+            Value(__bento_value_0),
+            9,
+            chain = |x| {
+                let y = double(x, 3);
+                let result = add(y, x);
+                result
+            },
+            emission = batched
+        ),
+        Value(72)
+    );
     assert_eq!(bento::addition_chain!(Value(__bento_odd_0), 1), Value(1));
     assert_eq!(
         bento::addition_chain!(
@@ -312,6 +326,22 @@ fn superseded_accumulators_drop_between_steps() {
 
     check(|value| bento::addition_chain!(value, 1), 1);
     check(
+        |value| {
+            bento::addition_chain!(
+                value,
+                9,
+                chain = |x| {
+                    let unused = double(x, 1);
+                    let eight = double(x, 3);
+                    let nine = add(eight, x);
+                    nine
+                },
+                emission = batched
+            )
+        },
+        9,
+    );
+    check(
         |value| bento::addition_chain!(value, 0x1_0000000000000000),
         0,
     );
@@ -358,5 +388,85 @@ fn caller_bindings_and_expression_syntax_survive_expansion() {
     assert_eq!(
         bento::addition_chain!((|a: u128, b: u128| Value(a + b))(3, 4), 3),
         Value(21)
+    );
+}
+
+#[test]
+fn supplied_chains_and_all_emission_modes_support_non_copy_values() {
+    assert_eq!(
+        bento::addition_chain!(
+            Value(7),
+            9,
+            chain = |x| {
+                let x8 = double(x, 3);
+                let x9 = add(x8, x);
+                x9
+            }
+        ),
+        Value(63)
+    );
+    assert_eq!(
+        bento::addition_chain!(
+            Value(7),
+            9,
+            chain = |x| {
+                let x8 = double(x, 3);
+                let x9 = add(x8, x);
+                x9
+            },
+            emission = unrolled
+        ),
+        Value(63)
+    );
+    assert_eq!(
+        bento::addition_chain!(
+            Value(7),
+            9,
+            chain = |x| {
+                let x8 = double(x, 3);
+                let x9 = add(x8, x);
+                x9
+            },
+            emission = batched
+        ),
+        Value(63)
+    );
+    assert_eq!(
+        bento::addition_chain!(
+            Value(7),
+            tonelli_shanks(
+                "0x0000000000000000000000000000000000000000000000000000000000000061",
+                5
+            )
+        ),
+        Value(7)
+    );
+}
+
+#[test]
+fn batched_emission_dispatches_to_overrides() {
+    #[derive(Clone)]
+    struct Batch(u64);
+    impl bento::addchain::AdditionChain for Batch {
+        fn double(&self) -> Self {
+            panic!("run should use override")
+        }
+        fn add(&self, _: &Self) -> Self {
+            panic!("add should be fused")
+        }
+        fn double_n(&self, n: usize) -> Self {
+            Self(self.0 << n)
+        }
+        fn double_n_add(&self, n: usize, rhs: &Self) -> Self {
+            Self((self.0 << n) + rhs.0)
+        }
+    }
+    assert_eq!(
+        bento::addition_chain!(Batch(3), 0x101, emission = batched).0,
+        771
+    );
+    assert_eq!(
+        bento::addition_chain!(Batch(3), 0x100, emission = batched).0,
+        768
     );
 }

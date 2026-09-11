@@ -17,6 +17,25 @@ fn check_reduction<M: PrimeModulus>() {
             &BigUint::from_bytes_le(wide),
         );
     }
+    let halves = [
+        BigUint::from(0u8),
+        BigUint::from(1u8),
+        &p - 1u8,
+        p.clone(),
+        &p + 1u8,
+        (BigUint::from(1u8) << 256usize) - 1u8,
+    ];
+    for low in &halves {
+        for high in &halves {
+            let mut bytes = [0; 64];
+            bytes[..32].copy_from_slice(&CanonicalUint::from_limbs(limbs(low)).to_le_bytes());
+            bytes[32..].copy_from_slice(&CanonicalUint::from_limbs(limbs(high)).to_le_bytes());
+            assert_value(
+                PastaField::<M>::from_wide_bytes_reduced(&bytes),
+                &(low + (high << 256usize)),
+            );
+        }
+    }
     for _ in 0..256 {
         let bytes = deterministic_bytes::<32>(&mut state);
         let x = BigUint::from_bytes_le(&bytes);

@@ -5,7 +5,7 @@
 
 use core::marker::PhantomData;
 
-use super::montgomery::{montgomery_reduce, montgomery_reduce_unreduced, reduce_once};
+use super::montgomery::montgomery_reduce;
 use super::word::{adc, mac, multiply_wide, sbb};
 use super::{PastaField, PrimeModulus};
 
@@ -48,6 +48,14 @@ impl<M: PrimeModulus> ProductSum<M> {
     /// Adds `lhs * rhs` to the sum.
     #[inline(always)]
     pub fn add_product(&mut self, lhs: &PastaField<M>, rhs: &PastaField<M>) {
+        self.add_product_inner::<false>(lhs, rhs);
+    }
+
+    // Bounded callers start from zero and feed at most one physical slice.
+    // On 32/64-bit targets its byte-size bound implies fewer than 2^59 terms;
+    // with each product below 2^510, the 576-bit accumulator cannot overflow.
+    #[inline(always)]
+    fn add_product_inner<const BOUNDED: bool>(&mut self, lhs: &PastaField<M>, rhs: &PastaField<M>) {
         let (d0, carry) = mac(self.wide[0], lhs.limbs[0], rhs.limbs[0], 0);
         let (d1, carry) = mac(self.wide[1], lhs.limbs[0], rhs.limbs[1], carry);
         let (d2, carry) = mac(self.wide[2], lhs.limbs[0], rhs.limbs[2], carry);
@@ -75,7 +83,108 @@ impl<M: PrimeModulus> ProductSum<M> {
         self.wide = [d0, d1, d2, d3, d4, d5, d6, d7];
         let (carry, carry_overflow) = adc(self.carry, overflow, 0);
         self.carry = carry;
-        self.fold_overflow(carry_overflow);
+        if BOUNDED {
+            debug_assert_eq!(carry_overflow, 0);
+        } else {
+            self.fold_overflow(carry_overflow);
+        }
+    }
+
+    // Column accumulation adapted from common's deferred.rs at revision
+    // 812e867748943ba3830f0f16cd627da456cc58cd. A block shares carry handoffs
+    // across terms. Only fresh, physically bounded slice sums call this path.
+    #[cfg(target_arch = "aarch64")]
+    fn add_product_block(&mut self, lhs: &[PastaField<M>], rhs: &[PastaField<M>]) {
+        assert_eq!(lhs.len(), rhs.len());
+
+        macro_rules! add_block {
+            ($columns:ident, $lhs_limb:literal, $rhs_limb:literal) => {{
+                let (lhs_quads, lhs_remainder) = lhs.as_chunks::<4>();
+                let (rhs_quads, rhs_remainder) = rhs.as_chunks::<4>();
+                for (lhs, rhs) in lhs_quads.iter().zip(rhs_quads) {
+                    add_product(
+                        &mut $columns[0],
+                        lhs[0].limbs[$lhs_limb],
+                        rhs[0].limbs[$rhs_limb],
+                    );
+                    add_product(
+                        &mut $columns[1],
+                        lhs[1].limbs[$lhs_limb],
+                        rhs[1].limbs[$rhs_limb],
+                    );
+                    add_product(
+                        &mut $columns[2],
+                        lhs[2].limbs[$lhs_limb],
+                        rhs[2].limbs[$rhs_limb],
+                    );
+                    add_product(
+                        &mut $columns[3],
+                        lhs[3].limbs[$lhs_limb],
+                        rhs[3].limbs[$rhs_limb],
+                    );
+                }
+                for (lhs, rhs) in lhs_remainder.iter().zip(rhs_remainder) {
+                    let lhs = &lhs.limbs;
+                    let rhs = &rhs.limbs;
+                    add_product(&mut $columns[0], lhs[$lhs_limb], rhs[$rhs_limb]);
+                }
+            }};
+        }
+
+        // Comba columns let every product in the block share each carry
+        // handoff. Three limbs suffice for every realizable input slice: a
+        // 64-bit target can hold fewer than 2^59 four-limb values, so the
+        // widest column sums fewer than 2^61 128-bit products.
+        let mut columns = [[self.wide[0], 0, 0], [0; 3], [0; 3], [0; 3]];
+        add_block!(columns, 0, 0);
+        let mut column = merge_columns(columns);
+        self.wide[0] = column[0];
+
+        columns = start_columns(self.wide[1], column[1], column[2]);
+        add_block!(columns, 0, 1);
+        add_block!(columns, 1, 0);
+        column = merge_columns(columns);
+        self.wide[1] = column[0];
+
+        columns = start_columns(self.wide[2], column[1], column[2]);
+        add_block!(columns, 0, 2);
+        add_block!(columns, 1, 1);
+        add_block!(columns, 2, 0);
+        column = merge_columns(columns);
+        self.wide[2] = column[0];
+
+        columns = start_columns(self.wide[3], column[1], column[2]);
+        add_block!(columns, 0, 3);
+        add_block!(columns, 1, 2);
+        add_block!(columns, 2, 1);
+        add_block!(columns, 3, 0);
+        column = merge_columns(columns);
+        self.wide[3] = column[0];
+
+        columns = start_columns(self.wide[4], column[1], column[2]);
+        add_block!(columns, 1, 3);
+        add_block!(columns, 2, 2);
+        add_block!(columns, 3, 1);
+        column = merge_columns(columns);
+        self.wide[4] = column[0];
+
+        columns = start_columns(self.wide[5], column[1], column[2]);
+        add_block!(columns, 2, 3);
+        add_block!(columns, 3, 2);
+        column = merge_columns(columns);
+        self.wide[5] = column[0];
+
+        columns = start_columns(self.wide[6], column[1], column[2]);
+        add_block!(columns, 3, 3);
+        column = merge_columns(columns);
+        self.wide[6] = column[0];
+
+        column = start_column(self.wide[7], column[1], column[2]);
+        self.wide[7] = column[0];
+        debug_assert_eq!(column[2], 0);
+        let (carry, overflow) = self.carry.overflowing_add(column[1]);
+        debug_assert!(!overflow, "carry overflow: too many accumulated products");
+        self.carry = carry;
     }
 
     /// Adds one field value to the sum.
@@ -189,17 +298,9 @@ impl<M: PrimeModulus> PastaField<M> {
         lhs: &Self,
         rhs: &Self,
     ) -> Self {
-        // Represent the difference as a*b + pR - c*d (or -2c*d).
-        // Since p < R/3, even 2c*d < 2p² < pR, so it is nonnegative.
-        // The input is below p² + pR. Unreduced REDC returns less than 3p,
-        // requiring two conditional subtractions for a reduced residue.
+        // Subtract first; only a negative difference needs pR. Since
+        // -2p² < delta < p² and p < R/3, either result lies in [0,pR).
         let mut wide = multiply_wide(&self.limbs, &multiplier.limbs);
-        let mut carry = 0;
-        for (upper, modulus) in wide[4..].iter_mut().zip(M::MODULUS) {
-            (*upper, carry) = adc(*upper, modulus, carry);
-        }
-        debug_assert_eq!(carry, 0);
-
         let mut product = multiply_wide(&lhs.limbs, &rhs.limbs);
         if DOUBLE {
             let mut carry = 0;
@@ -214,17 +315,21 @@ impl<M: PrimeModulus> PastaField<M> {
         for (accumulator, product) in wide.iter_mut().zip(product) {
             (*accumulator, borrow) = sbb(*accumulator, product, borrow);
         }
-        debug_assert_eq!(borrow, 0);
-
-        let reduced = reduce_once::<M>(montgomery_reduce_unreduced::<M>(wide));
-        Self::from_montgomery(reduce_once::<M>(reduced))
+        let mask = 0u64.wrapping_sub(borrow);
+        let mut carry = 0;
+        for (upper, modulus) in wide[4..].iter_mut().zip(M::MODULUS) {
+            (*upper, carry) = adc(*upper, modulus & mask, carry);
+        }
+        // A negative subtraction wrapped modulo R²; restoration wraps once.
+        debug_assert_eq!(carry, borrow);
+        Self::from_montgomery(montgomery_reduce::<M>(wide))
     }
 
     /// Returns the inner product of two arrays, or zero for empty arrays.
     ///
     /// The lengths agree by type. Products share one Montgomery reduction.
     pub fn sum_of_products<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
-        Self::sum_of_product_pairs(lhs.iter().zip(rhs))
+        Self::sum_of_products_slice(lhs, rhs)
     }
 
     /// Returns the inner product of equal-length slices.
@@ -235,30 +340,73 @@ impl<M: PrimeModulus> PastaField<M> {
         if lhs.len() != rhs.len() {
             return None;
         }
+        Some(Self::sum_of_products_slice(lhs, rhs))
+    }
+
+    #[inline]
+    fn sum_of_products_slice(lhs: &[Self], rhs: &[Self]) -> Self {
+        const {
+            assert!(
+                usize::BITS <= 64,
+                "bounded sums require at most 64-bit pointers"
+            );
+        }
+        if lhs.is_empty() {
+            return Self::ZERO;
+        }
+        if lhs.len() == 1 {
+            return lhs[0].mul(&rhs[0]);
+        }
+        if lhs.len() <= 3 {
+            // 3(p-1)² < pR for both Pasta primes. Four terms exceed this
+            // bound even though their sum still fits in eight limbs.
+            let mut wide = [0; 8];
+            for (lhs, rhs) in lhs.iter().zip(rhs) {
+                let product = multiply_wide(&lhs.limbs, &rhs.limbs);
+                let mut carry = 0;
+                for (limb, term) in wide.iter_mut().zip(product) {
+                    (*limb, carry) = adc(*limb, term, carry);
+                }
+                debug_assert_eq!(carry, 0);
+            }
+            return Self::from_montgomery(montgomery_reduce::<M>(wide));
+        }
+        #[cfg(target_arch = "aarch64")]
+        if lhs.len() >= 32 {
+            let mut sum = ProductSum::new();
+            for (lhs, rhs) in lhs.chunks(32).zip(rhs.chunks(32)) {
+                sum.add_product_block(lhs, rhs);
+            }
+            return sum.finish();
+        }
         // Long inner products run four independent accumulator lanes, each
         // a carry chain of its own, merged by limb addition before the one
         // reduction; merging preserves the sum modulo p.
         const LANES: usize = 4;
         const LANE_THRESHOLD: usize = 64;
         if lhs.len() < LANE_THRESHOLD {
-            return Some(Self::sum_of_product_pairs(lhs.iter().zip(rhs)));
+            let mut sum = ProductSum::new();
+            for (lhs, rhs) in lhs.iter().zip(rhs) {
+                sum.add_product_inner::<true>(lhs, rhs);
+            }
+            return sum.finish();
         }
         let mut lanes: [ProductSum<M>; LANES] = core::array::from_fn(|_| ProductSum::new());
         let mut lhs_chunks = lhs.chunks_exact(LANES);
         let mut rhs_chunks = rhs.chunks_exact(LANES);
         for (lhs, rhs) in lhs_chunks.by_ref().zip(rhs_chunks.by_ref()) {
             for (lane, (lhs, rhs)) in lanes.iter_mut().zip(lhs.iter().zip(rhs)) {
-                lane.add_product(lhs, rhs);
+                lane.add_product_inner::<true>(lhs, rhs);
             }
         }
         for (lhs, rhs) in lhs_chunks.remainder().iter().zip(rhs_chunks.remainder()) {
-            lanes[0].add_product(lhs, rhs);
+            lanes[0].add_product_inner::<true>(lhs, rhs);
         }
         let mut sum = ProductSum::new();
         for lane in &lanes {
             sum.merge(lane);
         }
-        Some(sum.finish())
+        sum.finish()
     }
 
     /// Returns the sum of pairwise products, or zero for an empty iterator.
@@ -272,4 +420,50 @@ impl<M: PrimeModulus> PastaField<M> {
         }
         sum.finish()
     }
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn add_product(column: &mut [u64; 3], lhs: u64, rhs: u64) {
+    let product = (lhs as u128) * (rhs as u128);
+    let (low, low_carry) = column[0].overflowing_add(product as u64);
+    let (middle, high_carry) = column[1].overflowing_add((product >> 64) as u64);
+    let (middle, middle_carry) = middle.overflowing_add(low_carry as u64);
+    let carry = high_carry as u64 + middle_carry as u64;
+    let (high, overflow) = column[2].overflowing_add(carry);
+    debug_assert!(!overflow);
+    *column = [low, middle, high];
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn start_column(accumulator: u64, carry_low: u64, carry_high: u64) -> [u64; 3] {
+    let (low, carry) = accumulator.overflowing_add(carry_low);
+    let (middle, high) = carry_high.overflowing_add(carry as u64);
+    [low, middle, high as u64]
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn start_columns(accumulator: u64, carry_low: u64, carry_high: u64) -> [[u64; 3]; 4] {
+    [
+        start_column(accumulator, carry_low, carry_high),
+        [0; 3],
+        [0; 3],
+        [0; 3],
+    ]
+}
+
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+fn merge_columns(columns: [[u64; 3]; 4]) -> [u64; 3] {
+    let [mut result, column1, column2, column3] = columns;
+    for column in [column1, column2, column3] {
+        let (low, carry) = adc(result[0], column[0], 0);
+        let (middle, carry) = adc(result[1], column[1], carry);
+        let (high, overflow) = adc(result[2], column[2], carry);
+        debug_assert_eq!(overflow, 0);
+        result = [low, middle, high];
+    }
+    result
 }

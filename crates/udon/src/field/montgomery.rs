@@ -70,57 +70,51 @@ pub(super) fn montgomery_reduce<M: PrimeModulus>(limbs: [u64; 8]) -> [u64; 4] {
 /// The result is below `2p + p²/R < 3p`.
 /// For Pasta, `p < R/3`, so `limbs + (R - 1)p < 2pR + p² < R²`;
 /// cancellation therefore fits in eight limbs throughout. A caller with
-/// input below `pR` needs one subtraction; signed product differences need two.
+/// input below `pR` needs one subtraction; the wider bound requires two.
 #[inline(always)]
-pub(super) fn montgomery_reduce_unreduced<M: PrimeModulus>(mut limbs: [u64; 8]) -> [u64; 4] {
-    debug_assert_eq!(M::MODULUS[2], 0);
-    debug_assert_eq!(M::MODULUS[3], 1 << 62);
+pub(super) fn montgomery_reduce_unreduced<M: PrimeModulus>(limbs: [u64; 8]) -> [u64; 4] {
+    // Cancel only the low half, then add the untouched high half once.
+    // This is the same REDC integer as full-width cancellation. Under the
+    // documented bound the final sum is below 3p < R, so no carry is lost.
+    let [mut r0, mut r1, mut r2, mut r3, t4, t5, t6, t7] = limbs;
+    for _ in 0..4 {
+        let k = r0.wrapping_mul(M::MONTGOMERY_INV);
+        let (cancelled, carry) = mac(r0, k, M::MODULUS[0], 0);
+        debug_assert_eq!(cancelled, 0);
+        let (s0, carry) = mac(r1, k, M::MODULUS[1], carry);
+        let (s1, carry) = adc(r2, 0, carry);
+        let (s2, carry) = adc(r3, k << 62, carry);
+        let s3 = (k >> 2) + carry;
+        (r0, r1, r2, r3) = (s0, s1, s2, s3);
+    }
+    let (r0, carry) = adc(r0, t4, 0);
+    let (r1, carry) = adc(r1, t5, carry);
+    let (r2, carry) = adc(r2, t6, carry);
+    let (r3, carry) = adc(r3, t7, carry);
+    debug_assert_eq!(carry, 0);
+    [r0, r1, r2, r3]
+}
 
-    let multiplier = limbs[0].wrapping_mul(M::MONTGOMERY_INV);
-    let (cancelled, carry) = mac(limbs[0], multiplier, M::MODULUS[0], 0);
-    debug_assert_eq!(cancelled, 0);
-    let (r1, carry) = mac(limbs[1], multiplier, M::MODULUS[1], carry);
-    let (r2, carry) = adc(limbs[2], 0, carry);
-    let (r3, carry) = adc(limbs[3], multiplier << 62, carry);
-    let (r4, overflow) = adc(limbs[4], multiplier >> 2, carry);
-    let (r5, overflow) = adc(limbs[5], 0, overflow);
-    let (r6, overflow) = adc(limbs[6], 0, overflow);
-    let (r7, overflow) = adc(limbs[7], 0, overflow);
-    debug_assert_eq!(overflow, 0);
-    limbs = [0, r1, r2, r3, r4, r5, r6, r7];
-
-    let multiplier = limbs[1].wrapping_mul(M::MONTGOMERY_INV);
-    let (cancelled, carry) = mac(limbs[1], multiplier, M::MODULUS[0], 0);
-    debug_assert_eq!(cancelled, 0);
-    let (r2, carry) = mac(limbs[2], multiplier, M::MODULUS[1], carry);
-    let (r3, carry) = adc(limbs[3], 0, carry);
-    let (r4, carry) = adc(limbs[4], multiplier << 62, carry);
-    let (r5, overflow) = adc(limbs[5], multiplier >> 2, carry);
-    let (r6, overflow) = adc(limbs[6], 0, overflow);
-    let (r7, overflow) = adc(limbs[7], 0, overflow);
-    debug_assert_eq!(overflow, 0);
-    limbs = [0, 0, r2, r3, r4, r5, r6, r7];
-
-    let multiplier = limbs[2].wrapping_mul(M::MONTGOMERY_INV);
-    let (cancelled, carry) = mac(limbs[2], multiplier, M::MODULUS[0], 0);
-    debug_assert_eq!(cancelled, 0);
-    let (r3, carry) = mac(limbs[3], multiplier, M::MODULUS[1], carry);
-    let (r4, carry) = adc(limbs[4], 0, carry);
-    let (r5, carry) = adc(limbs[5], multiplier << 62, carry);
-    let (r6, overflow) = adc(limbs[6], multiplier >> 2, carry);
-    let (r7, overflow) = adc(limbs[7], 0, overflow);
-    debug_assert_eq!(overflow, 0);
-    limbs = [0, 0, 0, r3, r4, r5, r6, r7];
-
-    let multiplier = limbs[3].wrapping_mul(M::MONTGOMERY_INV);
-    let (cancelled, carry) = mac(limbs[3], multiplier, M::MODULUS[0], 0);
-    debug_assert_eq!(cancelled, 0);
-    let (r4, carry) = mac(limbs[4], multiplier, M::MODULUS[1], carry);
-    let (r5, carry) = adc(limbs[5], 0, carry);
-    let (r6, carry) = adc(limbs[6], multiplier << 62, carry);
-    let (r7, overflow) = adc(limbs[7], multiplier >> 2, carry);
-    debug_assert_eq!(overflow, 0);
-    limbs = [0, 0, 0, 0, r4, r5, r6, r7];
-
-    limbs[4..].try_into().unwrap()
+/// Repeated squaring with raw, unreduced intermediates, followed by an
+/// optional multiplication by a reduced residue. No field value crosses the
+/// canonical representation boundary until the final reduction.
+///
+/// Requires a reduced input and at most 256 squares. The parameter bundle
+/// checks the exact REDC recurrence for every permitted run length, including
+/// the final product bound. Larger runs are split by the caller.
+#[inline]
+pub(super) fn square_run<M: PrimeModulus>(
+    value: &[u64; 4],
+    count: usize,
+    factor: Option<&[u64; 4]>,
+) -> [u64; 4] {
+    debug_assert!(count <= 256);
+    let mut value = *value;
+    for _ in 0..count {
+        value = montgomery_reduce_unreduced::<M>(super::word::square_wide(&value));
+    }
+    match factor {
+        Some(factor) => montgomery_multiply::<M>(&value, factor),
+        None => reduce_once::<M>(value),
+    }
 }

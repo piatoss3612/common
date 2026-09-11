@@ -6,6 +6,11 @@ fn check_parameters<M: PrimeModulus>(zeta_power: u32) {
     let five = BigUint::from(5u8);
     assert_eq!(integer(&M::R), (&one << 256usize) % &p);
     assert_eq!(integer(&M::R2), (&one << 512usize) % &p);
+    assert_eq!(integer(&M::R3), (&one << 768usize) % &p);
+    assert!(integer(&M::R2) + integer(&M::R3) < p);
+    let maximal_product = (&p - 1u8).pow(2);
+    assert!(&maximal_product * 3u8 < &p << 256usize);
+    assert!(&maximal_product * 4u8 >= &p << 256usize);
     assert_eq!(integer(&M::B448), (&one << 448usize) % &p);
     assert_eq!(M::MODULUS[0].wrapping_mul(M::MONTGOMERY_INV), u64::MAX);
     assert_eq!(signed62(&M::MODULUS_SIGNED62), BigInt::from(p.clone()));

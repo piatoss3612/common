@@ -108,6 +108,29 @@ pub use bento_macros::Pod;
 /// comma. Literals wider than 128 bits are supported. Constants, expressions,
 /// negative values, and zero are not accepted.
 ///
+/// Alternatively, `tonelli_shanks("0x…", s)` derives `(t - 1) / 2` from
+/// `p - 1 = t * 2^s`. Supply an odd modulus above two as `0x` followed by
+/// exactly 64 hexadecimal digits, and its exact two-adicity as an unsuffixed
+/// literal in `1..=255`. Primality is not checked; a zero derived exponent is
+/// rejected. This syntax evaluates no arbitrary Rust constants or expressions.
+///
+/// Two optional named arguments follow the scalar:
+///
+/// - `chain = |input| { ...; result }` supplies a schedule. Each statement must
+///   bind a unique plain name to `double(previous, positive_literal_count)` or
+///   `add(previous, previous)`. References must name the input or earlier
+///   bindings. The final expression names the result. Integer replay checks
+///   every coefficient and rejects schedules that overshoot or do not compute
+///   the requested scalar. The closure is syntax for the generator; it does not
+///   execute Rust code.
+/// - `emission = compact | unrolled | batched` selects code generation.
+///   `compact` is the default and emits loops for long runs of doublings;
+///   `unrolled` emits individual operations. `batched` uses
+///   [`double_n`](addchain::AdditionChain::double_n) and
+///   [`double_n_add`](addchain::AdditionChain::double_n_add), whose default
+///   implementations preserve the same arithmetic. Types may override these
+///   hooks to reduce the cost of intermediate representations.
+///
 /// Implement [`addchain::AdditionChain`] on the value's type or on an adapter, as
 /// shown below. The trait need not be imported to invoke the macro.
 ///
@@ -156,6 +179,11 @@ pub use bento_macros::Pod;
 /// }
 ///
 /// assert_eq!(bento::addition_chain!(Power(3), 9), Power(19_683));
+/// assert_eq!(bento::addition_chain!(Power(3), 9, chain = |x| {
+///     let eight = double(x, 3);
+///     let nine = add(eight, x);
+///     nine
+/// }, emission = batched), Power(19_683));
 /// ```
 #[macro_export]
 macro_rules! addition_chain {

@@ -92,3 +92,46 @@ fn montgomery_kernels_cover_their_full_input_bounds() {
     check_montgomery::<PallasBase>();
     check_montgomery::<PallasScalar>();
 }
+
+fn check_lazy_squares<M: PrimeModulus>() {
+    let p = modulus::<M>();
+    let radix = BigUint::from(1u8) << 256usize;
+    let inverse_r = radix.modinv(&p).unwrap();
+    // Check the actual unreduced intermediates against exact REDC, not just
+    // field equality, at every supported run length.
+    let negative_inverse = (&radix - p.modinv(&radix).unwrap()) % &radix;
+    for (value, _) in samples::<M>(32) {
+        let mut raw = value.limbs;
+        let mut expected = integer(&raw);
+        for count in 0..=256 {
+            assert_eq!(integer(&raw), expected);
+            assert!(expected < &p * 2u8);
+            assert_eq!(
+                integer(&montgomery::square_run::<M>(&value.limbs, count, None)),
+                &expected % &p,
+            );
+            let factor = limbs(&(&p - 1u8));
+            assert_eq!(
+                integer(&montgomery::square_run::<M>(
+                    &value.limbs,
+                    count,
+                    Some(&factor)
+                )),
+                &expected * (&p - 1u8) * &inverse_r % &p,
+            );
+            if count != 256 {
+                let square = &expected * &expected;
+                assert!(square < &p * &radix);
+                let q = &square * &negative_inverse % &radix;
+                expected = (&square + q * &p) / &radix;
+                raw = montgomery::montgomery_reduce_unreduced::<M>(word::square_wide(&raw));
+            }
+        }
+    }
+}
+
+#[test]
+fn lazy_squares_preserve_exact_redc_bounds_for_every_run_length() {
+    check_lazy_squares::<PallasBase>();
+    check_lazy_squares::<PallasScalar>();
+}

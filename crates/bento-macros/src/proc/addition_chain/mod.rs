@@ -17,6 +17,7 @@ use syn::{
 
 use crate::path_resolution::BentoCorePath;
 
+mod chain;
 mod schedule;
 
 /// The internal protocol used by the facade wrapper and direct core consumers.
@@ -45,29 +46,134 @@ impl Parse for Invocation {
 pub(crate) struct Input {
     value: Expr,
     scalar: LitInt,
+    chain: Option<syn::ExprClosure>,
+    emission: Emission,
+}
+
+#[derive(Clone, Copy)]
+enum Emission {
+    Compact,
+    Unrolled,
+    Batched,
 }
 
 impl Parse for Input {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        // The full expression parser distinguishes commas inside closures and
-        // generic arguments from the macro's argument separator.
         let value = input.parse()?;
         input.parse::<Token![,]>()?;
         if input.peek(Token![-]) {
             return Err(input.error("addition_chain! scalar must be positive"));
         }
-        let scalar = input.parse()?;
-        input.parse::<Option<Token![,]>>()?;
-        if !input.is_empty() {
-            return Err(input.error("unexpected tokens after the scalar"));
+        let scalar = if input.peek(syn::Ident) {
+            derived_scalar(input)?
+        } else {
+            input.parse()?
+        };
+        let mut chain = None;
+        let mut emission = None;
+        while !input.is_empty() {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+            let option: syn::Ident = input.parse()?;
+            input.parse::<Token![=]>()?;
+            if option == "chain" && chain.is_none() {
+                chain = Some(input.parse()?);
+            } else if option == "emission" && emission.is_none() {
+                let mode: syn::Ident = input.parse()?;
+                emission = Some(match mode.to_string().as_str() {
+                    "compact" => Emission::Compact,
+                    "unrolled" => Emission::Unrolled,
+                    "batched" => Emission::Batched,
+                    _ => {
+                        return Err(Error::new_spanned(
+                            mode,
+                            "expected compact, unrolled, or batched",
+                        ));
+                    }
+                });
+            } else {
+                return Err(Error::new_spanned(
+                    option,
+                    "unknown or duplicate addition-chain option",
+                ));
+            }
         }
-        Ok(Self { value, scalar })
+        Ok(Self {
+            value,
+            scalar,
+            chain,
+            emission: emission.unwrap_or(Emission::Compact),
+        })
     }
+}
+
+// This deliberately narrow derived form does not evaluate arbitrary Rust.
+fn derived_scalar(input: ParseStream<'_>) -> Result<LitInt> {
+    use bento_core::const_arithmetic::u256;
+    let name: syn::Ident = input.parse()?;
+    if name != "tonelli_shanks" {
+        return Err(Error::new_spanned(
+            name,
+            "expected an integer literal or tonelli_shanks(modulus, two_adicity)",
+        ));
+    }
+    let args;
+    syn::parenthesized!(args in input);
+    let modulus: syn::LitStr = args.parse()?;
+    args.parse::<Token![,]>()?;
+    let two_adicity: LitInt = args.parse()?;
+    if !args.is_empty() || !two_adicity.suffix().is_empty() {
+        return Err(args.error("expected modulus string and unsuffixed two-adicity"));
+    }
+    let literal = modulus.value();
+    let digits = literal.strip_prefix("0x").unwrap_or(&literal);
+    if !literal.starts_with("0x")
+        || digits.len() != 64
+        || !digits.bytes().all(|c| c.is_ascii_hexdigit())
+    {
+        return Err(Error::new_spanned(
+            modulus,
+            "modulus must contain 0x followed by exactly 64 hexadecimal digits",
+        ));
+    }
+    let p = u256::from_hex(&literal);
+    let s: u32 = two_adicity.base10_parse()?;
+    if p[0] & 1 == 0 || !u256::ge(&p, &[3, 0, 0, 0]) || !(1..=255).contains(&s) {
+        return Err(Error::new_spanned(
+            name,
+            "requires an odd modulus above two and two-adicity in 1..=255",
+        ));
+    }
+    let pm1 = u256::sub_u64(&p, 1);
+    let trailing = pm1.iter().take_while(|limb| **limb == 0).count() as u32 * 64
+        + pm1
+            .iter()
+            .find(|limb| **limb != 0)
+            .unwrap()
+            .trailing_zeros();
+    if trailing != s {
+        return Err(Error::new_spanned(
+            two_adicity,
+            "two-adicity must equal the valuation of modulus minus one",
+        ));
+    }
+    let e = u256::tonelli_shanks_exponent(&p, s);
+    Ok(LitInt::new(
+        &format!("0x{:016x}{:016x}{:016x}{:016x}", e[3], e[2], e[1], e[0]),
+        modulus.span(),
+    ))
 }
 
 /// Validates the scalar and expands the invocation into a scaling expression.
 pub(crate) fn evaluate(input: Input, core: BentoCorePath) -> Result<TokenStream> {
-    let Input { value, scalar } = input;
+    let Input {
+        value,
+        scalar,
+        chain,
+        emission,
+    } = input;
     if !scalar.suffix().is_empty() {
         return Err(Error::new(
             scalar.span(),
@@ -75,65 +181,17 @@ pub(crate) fn evaluate(input: Input, core: BentoCorePath) -> Result<TokenStream>
         ));
     }
     let limbs = limbs_from_decimal(scalar.base10_digits());
-    let Some(schedule) = schedule::plan(&limbs) else {
+    if limbs.is_empty() {
         return Err(Error::new(
             scalar.span(),
             "addition_chain! scalar must be nonzero; the trait has no identity operation",
         ));
     };
-
-    // Mixed-site spans isolate caller locals, but constants still participate
-    // in pattern resolution. Functions in the helper's enclosing scope shield
-    // every generated binding name. The caller expression stays outside that
-    // scope as the argument to the generated function.
-    let odd = |index| format_ident!("__bento_odd_{index}", span = Span::mixed_site());
-    let base = odd(0);
-    let doubled = format_ident!("__bento_doubled", span = Span::mixed_site());
-    let accumulator = format_ident!("__bento_accumulator", span = Span::mixed_site());
-    let chain = format_ident!("__bento_chain", span = Span::mixed_site());
-    let support = quote!(#core::addchain::AdditionChain);
-    let table = if schedule.max_odd_index == 0 {
-        quote!()
-    } else {
-        let entries = (1..=schedule.max_odd_index).map(|index| {
-            let current = odd(index);
-            let previous = odd(index - 1);
-            quote!(let #current = #support::add(&#previous, &#doubled);)
-        });
-        quote! {
-            let #doubled = #support::double(&#base);
-            #(#entries)*
-        }
+    let chain = match chain {
+        Some(chain) => chain::Chain::supplied(chain, &limbs)?,
+        None => chain::Chain::planned(schedule::plan(&limbs).unwrap()),
     };
-    let first = odd(schedule.first);
-
-    // Reassignment drops superseded accumulators after each operation. Chains
-    // completed by table preparation alone need no mutable binding.
-    let mutability = (!schedule.steps.is_empty()).then(|| quote!(mut));
-    let steps = schedule.steps.iter().map(|step| match step {
-        schedule::Step::Double => {
-            quote!(#accumulator = #support::double(&#accumulator);)
-        }
-        schedule::Step::AddOdd(index) => {
-            let entry = odd(*index);
-            quote!(#accumulator = #support::add(&#accumulator, &#entry);)
-        }
-    });
-    let shields = (0..=schedule.max_odd_index)
-        .map(odd)
-        .chain([doubled.clone(), accumulator.clone()]);
-    Ok(quote! {
-        ({
-            #(#[allow(dead_code)] fn #shields() {})*
-            fn #chain<__BentoValue: #support>(#base: __BentoValue) -> __BentoValue {
-                #table
-                let #mutability #accumulator = __BentoValue::clone(&#first);
-                #(#steps)*
-                #accumulator
-            }
-            #chain
-        })(#value)
-    })
+    Ok(chain.emit(core, value, emission))
 }
 
 /// Decodes decimal digits into little-endian limbs without a fixed integer size.

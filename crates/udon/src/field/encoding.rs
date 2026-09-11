@@ -8,7 +8,7 @@ use core::marker::PhantomData;
 use bento::const_arithmetic::{m255, u256};
 
 use super::montgomery::{montgomery_multiply, montgomery_reduce};
-use super::word::compare_limbs;
+use super::word::{adc, compare_limbs, multiply_wide};
 use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus};
 
 /// Constructs an [`Fp`](crate::field::Fp) constant from hexadecimal text.
@@ -95,21 +95,26 @@ impl<M: PrimeModulus> PastaField<M> {
             encoded[..bytes.len()].copy_from_slice(bytes);
             return Self::from_uint_reduced(CanonicalUint::from_le_bytes(encoded));
         }
-        if let Ok(wide) = <&[u8; 2 * ENCODED_SIZE]>::try_from(bytes) {
-            return Self::from_wide_bytes_reduced(wide);
+        if bytes.len() <= 2 * ENCODED_SIZE {
+            let mut wide = [0; 2 * ENCODED_SIZE];
+            wide[..bytes.len()].copy_from_slice(bytes);
+            return Self::from_wide_bytes_reduced(&wide);
         }
 
-        let mut chunks = bytes.chunks(8).rev();
-        let Some(high_chunk) = chunks.next() else {
-            return Self::zero();
-        };
-        let mut high_bytes = [0; 8];
-        high_bytes[..high_chunk.len()].copy_from_slice(high_chunk);
-        let mut value = Self::from_u64(u64::from_le_bytes(high_bytes));
-        let radix = Self::from_canonical_limbs([0, 1, 0, 0]);
+        let mut chunks = bytes.chunks(ENCODED_SIZE).rev();
+        let high = chunks.next().unwrap();
+        let mut high_bytes = [0; ENCODED_SIZE];
+        high_bytes[..high.len()].copy_from_slice(high);
+        let mut value = Self::from_uint_reduced(CanonicalUint::from_le_bytes(high_bytes));
         for chunk in chunks {
-            let digit = Self::from_u64(u64::from_le_bytes(chunk.try_into().unwrap()));
-            value = value.mul_add(&radix, &digit);
+            let digit = CanonicalUint::from_le_bytes(chunk.try_into().unwrap());
+            // Stored V=xR and ordinary D yield (V+D)R, representing xR+D.
+            value = Self::from_montgomery(raw_product_sum::<M>(
+                &value.limbs,
+                &M::R2,
+                &digit.limbs(),
+                &M::R2,
+            ));
         }
         value
     }
@@ -120,8 +125,12 @@ impl<M: PrimeModulus> PastaField<M> {
     pub fn from_wide_bytes_reduced(bytes: &[u8; 2 * ENCODED_SIZE]) -> Self {
         let low = CanonicalUint::from_le_bytes(bytes[..ENCODED_SIZE].try_into().unwrap());
         let high = CanonicalUint::from_le_bytes(bytes[ENCODED_SIZE..].try_into().unwrap());
-        let radix = Self::from_montgomery(M::R2);
-        Self::from_uint_reduced(low).add(&Self::from_uint_reduced(high).mul(&radix))
+        Self::from_montgomery(raw_product_sum::<M>(
+            &low.limbs(),
+            &M::R2,
+            &high.limbs(),
+            &M::R3,
+        ))
     }
 
     /// Returns the canonical fixed-width integer representation.
@@ -178,11 +187,30 @@ impl<M: PrimeModulus> PastaField<M> {
             !u256::ge(&canonical, &M::MODULUS),
             "field constants must be canonical residues"
         );
-        Self::from_montgomery_limbs(m255::from_u256(&M::MODULUS, &canonical))
+        Self::from_montgomery_limbs(m255::mul(&M::MODULUS, &canonical, &M::R2))
     }
 
     /// Returns the parity of the canonical integer representative.
     pub fn is_odd(&self) -> bool {
         self.to_canonical_uint().bit(0) == Some(true)
     }
+}
+
+// Raw operands may exceed p. The parameter bundle checks the constant bounds
+// for both callers, establishing a*b+c*d < pR without field constructors.
+#[inline]
+fn raw_product_sum<M: PrimeModulus>(
+    a: &[u64; 4],
+    b: &[u64; 4],
+    c: &[u64; 4],
+    d: &[u64; 4],
+) -> [u64; 4] {
+    let mut sum = multiply_wide(a, b);
+    let product = multiply_wide(c, d);
+    let mut carry = 0;
+    for (limb, term) in sum.iter_mut().zip(product) {
+        (*limb, carry) = adc(*limb, term, carry);
+    }
+    debug_assert_eq!(carry, 0);
+    montgomery_reduce::<M>(sum)
 }

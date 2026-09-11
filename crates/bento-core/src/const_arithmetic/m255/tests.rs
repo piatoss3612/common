@@ -416,3 +416,55 @@ fn decoding_requires_a_reduced_residue() {
 fn prime_inversion_rejects_zero() {
     invert_prime(&[97, 0, 0, 0], &[0; 4]);
 }
+
+#[test]
+fn reusable_context_preserves_checked_boundaries_and_const_evaluation() {
+    const CONTEXT: MontgomeryContext = MontgomeryContext::new([97, 0, 0, 0]);
+    const SEVEN: U256 = CONTEXT.from_u64(7);
+    const POWER: U256 = CONTEXT.pow(&SEVEN, &[13, 0, 0, 0]);
+    assert_eq!(CONTEXT.to_u256(&POWER), [38, 0, 0, 0]);
+    let radix = BigUint::from(1u8) << 256usize;
+    for modulus in [
+        [9, 0, 0, 0],
+        [97, 0, 0, 0],
+        [u64::MAX - 18, u64::MAX, u64::MAX, (1 << 63) - 1],
+    ] {
+        let context = MontgomeryContext::new(modulus);
+        let p = integer(&modulus);
+        assert_eq!(context.modulus(), modulus);
+        assert_eq!(
+            context.reduction_coefficient(),
+            reduction_coefficient(modulus[0])
+        );
+        assert_eq!(integer(&context.one()), &radix % &p);
+        assert_eq!(integer(&context.r2()), &radix * &radix % &p);
+        let inverse_r = radix.modinv(&p).unwrap();
+        for value in samples() {
+            let n = integer(&value);
+            let encoded = context.from_u256(&value);
+            assert_eq!(integer(&encoded), &n * &radix % &p);
+            assert_eq!(integer(&context.to_u256(&encoded)), &n % &p);
+            assert_eq!(
+                integer(&context.pow(&encoded, &value)),
+                n.modpow(&n, &p) * &radix % &p
+            );
+            assert_eq!(context.pow(&encoded, &[0; 4]), context.one());
+            assert_eq!(
+                integer(&context.mul(&value, &encoded)),
+                &n * integer(&encoded) * &inverse_r % &p
+            );
+        }
+        let last = &p * &radix - 1u8;
+        assert_eq!(
+            integer(&context.reduce_wide(&limbs(&last))),
+            &last * &inverse_r % &p
+        );
+        assert!(std::panic::catch_unwind(|| context.reduce_wide(&limbs(&(&p * &radix)))).is_err());
+        assert!(std::panic::catch_unwind(|| context.mul(&[u64::MAX; 4], &[u64::MAX; 4])).is_err());
+        assert!(std::panic::catch_unwind(|| context.to_u256(&modulus)).is_err());
+        assert!(std::panic::catch_unwind(|| context.pow(&modulus, &[0; 4])).is_err());
+    }
+    for invalid in [[0; 4], [1, 0, 0, 0], [2, 0, 0, 0], [0, 0, 0, 1 << 63]] {
+        assert!(std::panic::catch_unwind(|| MontgomeryContext::new(invalid)).is_err());
+    }
+}

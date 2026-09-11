@@ -46,9 +46,55 @@ pub(super) fn pow_u64<F: Field>(value: &F, exponent: u64) -> F {
 
 /// Tonelli–Shanks over an odd prime field with `p - 1 = t * 2^two_adicity`.
 ///
-/// The caller supplies `w = value^((t - 1) / 2)` and a primitive root of order
-/// `2^two_adicity`. Requires `1 <= two_adicity <= 64`. Returns either square
-/// root, or `None` for a nonsquare; branches depend on the input.
+/// Requires odd `t` and `1 <= two_adicity <= 64`. The caller supplies
+/// `w = value^((t - 1) / 2)`. For every `k` in `1..=two_adicity`, `root(k)`
+/// must return a primitive root of order `2^k`. These roots must satisfy
+/// `root(k + 1).square() == root(k)` for `1 <= k < two_adicity`.
+///
+/// Returns either square root, or `None` for a nonsquare; branches depend on
+/// the input.
+pub(super) fn tonelli_shanks_with_roots<F: Field>(
+    value: &F,
+    w: F,
+    root: impl Fn(u32) -> F,
+    two_adicity: u32,
+) -> Option<F> {
+    assert!(
+        (1..=64).contains(&two_adicity),
+        "two_adicity must be within 1..=64"
+    );
+    if value.is_zero() {
+        return Some(F::zero());
+    }
+    let mut x = w.mul(value);
+    let mut t = x.mul(&w);
+    let mut m = two_adicity;
+
+    while t != F::one() {
+        let mut i = 1u32;
+        let mut t_squared = t.square();
+        while i < m && t_squared != F::one() {
+            t_squared = t_squared.square();
+            i += 1;
+        }
+        if i == m {
+            return None;
+        }
+
+        // Matching root orientations ensure b_squared = b^2, preserving
+        // x^2 = value * t when both accumulators are updated.
+        let b = root(i + 1);
+        let b_squared = root(i);
+        x = x.mul(&b);
+        t = t.mul(&b_squared);
+        m = i;
+    }
+
+    Some(x)
+}
+
+// Simple reference retains the independently evolving c ladder.
+#[cfg(test)]
 pub(super) fn tonelli_shanks<F: Field>(value: &F, w: F, root: F, two_adicity: u32) -> Option<F> {
     assert!(
         (1..=64).contains(&two_adicity),
@@ -122,6 +168,15 @@ mod tests {
             let odd_cofactor = (P - 1) >> two_adicity;
             let w = pow_u64(&base, (odd_cofactor - 1) / 2);
             let result = tonelli_shanks(&base, w, SmallField(root), two_adicity);
+            assert_eq!(
+                result,
+                tonelli_shanks_with_roots(
+                    &base,
+                    w,
+                    |k| pow_u64(&SmallField(root), 1u64 << (two_adicity - k)),
+                    two_adicity
+                )
+            );
             let has_root = (0..P).any(|candidate| candidate * candidate % P == value);
             assert_eq!(result.is_some(), has_root);
             if let Some(root) = result {

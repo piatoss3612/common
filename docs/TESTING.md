@@ -48,6 +48,44 @@ and explicitly executed in CI.
 These checks do not establish correctness on every target or constant-time
 behavior; extend validation when new code introduces new assumptions.
 
+## Field benchmarks
+
+The [`udon` Criterion suite](../crates/udon/benches/field.rs) measures the
+nontrivial public field operations for both `Fp` and `Fq`, including arithmetic,
+encoding and reduction, roots and inverses, and product accumulation. It also
+measures the `CanonicalUint` integer helpers. Constant accessors and plain
+copies are omitted.
+
+```console
+cargo bench --locked -p zakura-udon --bench field
+```
+
+Filter by benchmark name to focus a run, or use Criterion's test mode to execute
+every case once without collecting timing samples:
+
+```console
+cargo bench --locked -p zakura-udon --bench field -- Fp/inner_product
+cargo bench --locked -p zakura-udon --bench field -- --test
+```
+
+Inputs are deterministic and prepared before timing. Ordinary arithmetic uses
+operands spanning all four limbs; variable-time operations have separate cases
+for different inputs, exponent shapes, and lengths. Byte reduction covers its
+short, wide, and arbitrary-width paths. Inner products include sizes around the
+32- and 64-term dispatch thresholds and report throughput in products per second.
+The 128-value corpus measures dependent and independent multiplication/squaring,
+and varied inversion and square-root inputs. Byte reduction reports bytes per
+second. See the [field performance report](FIELD_PERFORMANCE.md) for measured
+optimization choices and their limits.
+
+The `ProductSum` method benchmarks prepare a fresh populated accumulator outside
+each timed iteration. Debug formatting reuses a preallocated output buffer.
+Inputs and results pass through optimization barriers. Timings describe these
+particular inputs and do not establish a constant-time guarantee. Criterion
+stores results and HTML reports under `target/criterion/`, falling back to
+`crates/udon/target/criterion/` when Cargo metadata is unavailable. These
+measurements are separate from the correctness suite.
+
 ## Fixtures and nested builds
 
 Keep complete Rust consumer programs in `.rs` files under `tests/fixtures/`,

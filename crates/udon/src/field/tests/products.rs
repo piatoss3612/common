@@ -3,7 +3,14 @@ use crate::field::tests::*;
 
 fn check_products<M: PrimeModulus>() {
     let p = modulus::<M>();
-    let values = samples::<M>(64);
+    let mut values = samples::<M>(64);
+    let inverse_r = (BigUint::from(1u8) << 256usize).modinv(&p).unwrap();
+    for raw in [BigUint::from(1u8), &p - 1u8, &p - 2u8] {
+        values.push((
+            PastaField::from_montgomery_limbs(limbs(&raw)),
+            &raw * &inverse_r % &p,
+        ));
+    }
     for (index, (a, x)) in values.iter().enumerate() {
         let (b, y) = &values[(index * 7 + 3) % values.len()];
         for (other, (c, z)) in values.iter().enumerate() {
@@ -76,7 +83,7 @@ fn check_products<M: PrimeModulus>() {
             assert_value(PastaField::<M>::sum_of_products(&lhs, &rhs), &expected);
         )*};
     }
-    check_arrays!(0, 1, 3, 4, 11, 12, 23, 64);
+    check_arrays!(0, 1, 2, 3, 4, 11, 12, 23, 31, 32, 33, 64, 65);
 }
 
 #[test]

@@ -264,10 +264,10 @@ impl<M: PrimeModulus> PastaField<M> {
         // exponentiation. The exponent is fixed per field, so the
         // multiplication schedule is planned at compile time.
         let w = M::pow_sqrt_exponent(self);
-        crate::field::algorithms::tonelli_shanks(
+        crate::field::algorithms::tonelli_shanks_with_roots(
             self,
             w,
-            Self::from_montgomery(M::ROOT_OF_UNITY),
+            |k| Self::from_montgomery(M::ROOTS[k as usize]),
             TWO_ADICITY,
         )
     }

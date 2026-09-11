@@ -36,6 +36,8 @@ jobs:
         run: cargo test --release --locked --workspace --all-features
       - name: Check field arithmetic with debug assertions
         run: cargo test --locked -p zakura-udon --lib
+      - name: Exercise field benchmarks
+        run: cargo bench --locked -p zakura-udon --bench field -- --test
 
   miri:
     name: Unsafe storage checks

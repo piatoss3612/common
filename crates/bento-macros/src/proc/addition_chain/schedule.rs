@@ -63,12 +63,10 @@ pub(super) fn plan(limbs: &[u64]) -> Option<Schedule> {
     let top_index = limbs.iter().rposition(|limb| *limb != 0)?;
     let bits = top_index * 64 + (64 - limbs[top_index].leading_zeros() as usize);
 
-    // Compare widths six through one. The first minimum wins, so ties prefer
-    // wider windows.
+    // Equal-cost schedules prefer fewer prepared values, then narrower windows.
     (1..=6)
-        .rev()
         .map(|width| plan_with_width(limbs, bits, width))
-        .min_by_key(Schedule::cost)
+        .min_by_key(|schedule| (schedule.cost(), schedule.max_odd_index))
 }
 
 fn plan_with_width(limbs: &[u64], bits: usize, width: usize) -> Schedule {

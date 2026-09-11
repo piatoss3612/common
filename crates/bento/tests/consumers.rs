@@ -191,7 +191,10 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
             "addition_chain/suffix",
             "addition_chain! scalar must be an unsuffixed integer literal",
         ),
-        ("addition_chain/constant", "expected integer literal"),
+        (
+            "addition_chain/constant",
+            "expected an integer literal or tonelli_shanks",
+        ),
         (
             "addition_chain/negative",
             "addition_chain! scalar must be positive",

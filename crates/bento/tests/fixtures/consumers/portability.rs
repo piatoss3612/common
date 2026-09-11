@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use bento::const_arithmetic::{U256, U320, m255, u256};
+use udon::field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum};
 
 // Numeric word order is independent of the target's byte order. These
 // assertions run during compilation, including on targets we cannot execute.
@@ -11,6 +12,10 @@ pub const MODULUS: U256 =
 pub const ENCODED: U256 = m255::from_u256(&MODULUS, &[u64::MAX; 4]);
 pub const ROOT: U256 = m255::two_adic_root_of_unity(&[97, 0, 0, 0], 5, 5);
 pub const RATIO: U320 = u256::round_shifted_ratio(&[u64::MAX; 4], u128::MAX, 384);
+pub const FP: Fp =
+    udon::fp_hex!("0x0000000000000000000000000000000100000000000000000123456789abcdef");
+pub const FQ: Fq =
+    udon::fq_hex!("0x0000000000000000000000000000000100000000000000000123456789abcdef",);
 
 const _: () = {
     let decoded = m255::to_u256(&MODULUS, &ENCODED);
@@ -19,7 +24,34 @@ const _: () = {
     assert!(root[0] == 28 && root[1] == 0 && root[2] == 0 && root[3] == 0);
     assert!(RATIO[0] == 1 && RATIO[1] == 0 && RATIO[2] == u64::MAX);
     assert!(RATIO[3] == u64::MAX && RATIO[4] == 0);
+    let fp = m255::to_u256(&PallasBase::MODULUS, &FP.montgomery_limbs());
+    let fq = m255::to_u256(&PallasScalar::MODULUS, &FQ.montgomery_limbs());
+    assert!(fp[0] == 0x0123_4567_89ab_cdef && fp[1] == 0 && fp[2] == 1 && fp[3] == 0);
+    assert!(fq[0] == fp[0] && fq[1] == fp[1] && fq[2] == fp[2] && fq[3] == fp[3]);
 };
+
+// Concrete wrappers force code generation of both fields' runtime kernels.
+// Input bytes remain unknown at compile time, and no allocator is available.
+fn field_operations<M: PrimeModulus>(wide: &[u8; 64], bytes: [u8; 32]) -> Option<[u8; 32]> {
+    let value = PastaField::<M>::from_wide_bytes_reduced(wide);
+    let other = PastaField::from_bytes(bytes)?;
+    let inverse = value.invert()?;
+    let root = other.sqrt()?;
+    let mut sum = ProductSum::new();
+    sum.add_product(&value, &other);
+    sum.add_term(&value.mul_sub_double_product(&root, &other, &inverse));
+    let mut merged = ProductSum::new();
+    merged.merge(&sum);
+    Some(merged.finish().mul_add(&inverse, &root).to_bytes())
+}
+
+pub fn fp_operations(wide: &[u8; 64], bytes: [u8; 32]) -> Option<[u8; 32]> {
+    field_operations::<PallasBase>(wide, bytes)
+}
+
+pub fn fq_operations(wide: &[u8; 64], bytes: [u8; 32]) -> Option<[u8; 32]> {
+    field_operations::<PallasScalar>(wide, bytes)
+}
 
 #[repr(transparent)]
 #[derive(Clone, Copy)]
@@ -56,6 +88,14 @@ pub static EMPTY: &Empty = bento::AlignedBytes([]).as_value();
 
 #[cfg(feature = "primitive")]
 pub static PRIMITIVE: &u64 = bento::AlignedBytes([0; 8]).as_value();
+
+#[cfg(feature = "primitive")]
+pub static FIELD_LIMBS: &[u64; 4] = bento::AlignedBytes([0; 32]).as_value();
+
+#[cfg(feature = "primitive")]
+pub fn stored_field() -> Fp {
+    Fp::from_montgomery_limbs(*FIELD_LIMBS)
+}
 
 #[cfg(feature = "zero-array")]
 pub static ZERO_ARRAY: &[Value; 0] = bento::AlignedBytes([]).as_array();

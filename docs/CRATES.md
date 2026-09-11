@@ -27,7 +27,7 @@ their declaration serves an actual workspace need.
 | `bento-core` | Shared traits, storage support, and reference arithmetic; `no_std` |
 | `bento-macros` | Parsing, validation, and code generation on the build host |
 | `bento` | Public `no_std` facade over core and macros |
-| `udon` | Planned optimized field and curve arithmetic; `no_std` |
+| `udon` | Runtime Pasta fields and planned curve arithmetic; `no_std` |
 
 Keep dependencies directed from arithmetic consumers through the facade to
 support code. Core must not depend on the facade or invoke its procedural

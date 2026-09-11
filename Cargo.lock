@@ -316,5 +316,6 @@ dependencies = [
 name = "zakura-udon"
 version = "0.1.0"
 dependencies = [
+ "num-bigint",
  "zakura-bento",
 ]

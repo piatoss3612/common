@@ -1,4 +1,4 @@
-//! Full library builds check layout and const arithmetic without a target linker.
+//! Full library builds check storage and arithmetic without a target linker.
 
 use std::{fs, path::Path};
 

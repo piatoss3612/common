@@ -5,8 +5,8 @@ This is an experimental stack of Rust crates for Zakura Common.
 * This repository is one virtual Cargo workspace; every crate lives under
   [`crates/`](crates/).
 * The current implementation provides reference integer and Montgomery
-  arithmetic, addition chains, and checked POD storage and embedding.
-  Optimized field and curve arithmetic in `udon` remains scaffolded.
+  arithmetic, addition chains, checked POD storage and embedding, and runtime
+  Pasta field arithmetic. Curve arithmetic remains planned.
 * All target crates (`bento`, `bento-core`, and `udon`) currently use `no_std`.
 * See [the crate development guide](docs/CRATES.md) for dependency naming,
   workspace inheritance, macro path resolution, and publication conventions.
@@ -42,10 +42,14 @@ The [`bento`](crates/bento/src/lib.rs) crate is a facade over
 
 ## `zakura-udon`
 
-[`udon`](crates/udon/src/lib.rs) is reserved for Pasta field and curve arithmetic.
-The planned implementation will adapt Zakura Common's fork of `pasta_curves`
-and provide the traits and utilities needed downstream for Tachyon. The crate
-does not yet expose arithmetic APIs.
+[`udon`](crates/udon/src/lib.rs) provides the two Pasta prime fields, `Fp` and
+`Fq`, with Montgomery arithmetic, canonical encodings, inversion, square roots,
+and product sums. These operations require no allocation. Arithmetic is
+variable-time and provides no constant-time guarantee for secret inputs.
+Field parameters and fixed exponentiation schedules use `bento` at compile time.
+
+Curve arithmetic and the traits and utilities needed downstream for Tachyon
+remain planned.
 
 ## Testing
 
@@ -70,5 +74,5 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-de
 ```
 
 The [CI workflow](.github/workflows/ci.yml) defines these gates plus focused
-Miri and cross-target checks. The format script also checks standalone Rust
-fixtures that Cargo does not discover.
+Miri checks, field tests without optimizations, and cross-target checks. The
+format script also checks standalone Rust fixtures that Cargo does not discover.

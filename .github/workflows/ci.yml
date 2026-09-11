@@ -34,6 +34,8 @@ jobs:
         run: rustup toolchain install
       - name: Run test suite (all workspace crates, all features)
         run: cargo test --release --locked --workspace --all-features
+      - name: Check field arithmetic with debug assertions
+        run: cargo test --locked -p zakura-udon --lib
 
   miri:
     name: Unsafe storage checks

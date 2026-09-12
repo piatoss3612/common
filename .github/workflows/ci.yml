@@ -37,10 +37,14 @@ jobs:
       - name: Run test suite (all workspace crates, all features)
         run: cargo test --release --locked --workspace --all-features
       - name: Check Udon with the default square-root tables
-        # The embedding consumers pin their own feature matrices, so the
-        # all-features step above already covers them; skip their nested builds.
-        run: cargo test --release --locked -p zakura-udon -- --skip generated_fields_embed --skip generated_fft_tables_embed
-      - name: Check field arithmetic and FFTs with debug assertions
+        run: cargo test --release --locked -p zakura-udon
+      - name: Run Udon compiler and artifact consumers (slow)
+        # Each consumer selects its own dependency feature matrix.
+        run: >-
+          cargo test --release --locked -p zakura-udon
+          --test embedding --test fft_embedding
+          --test curve_constants --test curve_embedding -- --ignored
+      - name: Check arithmetic and FFTs with debug assertions
         run: |
           cargo test --locked -p zakura-udon --lib
           cargo test --locked -p zakura-udon --lib --all-features
@@ -52,6 +56,10 @@ jobs:
         run: |
           cargo bench --locked -p zakura-udon --bench fft -- --test
           cargo bench --locked -p zakura-udon --bench fft_strategies -- --test
+      - name: Exercise curve benchmarks
+        run: |
+          cargo bench --locked -p zakura-udon --bench curve -- --test
+          cargo bench --locked -p zakura-udon --bench curve --features sqrt-table-large -- --test
 
   miri:
     name: Unsafe storage checks
@@ -66,7 +74,7 @@ jobs:
         run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib pod::
       - name: Check public storage API
         run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod
-      - name: Check field storage
+      - name: Check field and affine point storage
         run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --test pod
 
   portability:

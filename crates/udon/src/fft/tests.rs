@@ -1,5 +1,6 @@
 use super::*;
-use crate::field::{CanonicalUint, Fp, PallasBase, PallasScalar};
+use crate::field::{Fp, PallasBase, PallasScalar};
+use crate::test_support::field_samples;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::atomic::{AtomicUsize, Ordering},
@@ -51,21 +52,12 @@ impl<M: PrimeModulus> Prepared<M> {
 }
 
 fn inputs<M: PrimeModulus>(size: usize) -> Vec<PastaField<M>> {
-    let mut seed = 0x243f_6a88_85a3_08d3u64;
+    let mut samples = field_samples();
     (0..size)
         .map(|index| match index % 17 {
             0 => PastaField::ZERO,
             1 => PastaField::ONE.neg(),
-            _ => {
-                let mut limbs = core::array::from_fn(|_| {
-                    seed ^= seed << 13;
-                    seed ^= seed >> 7;
-                    seed ^= seed << 17;
-                    seed
-                });
-                limbs[3] &= (1 << 62) - 1;
-                PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs)).unwrap()
-            }
+            _ => samples.next().unwrap(),
         })
         .collect()
 }

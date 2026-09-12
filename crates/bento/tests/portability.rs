@@ -33,6 +33,8 @@ primitive = []
 zero-array = []
 field = []
 field-record = []
+curve = []
+curve-record = []
 sqrt-table-large = ["udon/sqrt-table-large"]
 "#
         ),
@@ -49,11 +51,11 @@ sqrt-table-large = ["udon/sqrt-table-large"]
     for (target, features) in [
         (
             "thumbv7em-none-eabi",
-            "record,empty-record,primitive,zero-array,field,field-record",
+            "record,empty-record,primitive,zero-array,field,field-record,curve,curve-record",
         ),
         (
             "thumbv7em-none-eabi",
-            "record,empty-record,primitive,zero-array,field,field-record,sqrt-table-large",
+            "record,empty-record,primitive,zero-array,field,field-record,curve,curve-record,sqrt-table-large",
         ),
         ("s390x-unknown-linux-gnu", ""),
         ("s390x-unknown-linux-gnu", "sqrt-table-large"),
@@ -84,6 +86,8 @@ sqrt-table-large = ["udon/sqrt-table-large"]
         "zero-array",
         "field",
         "field-record",
+        "curve",
+        "curve-record",
     ] {
         let output = cargo(
             root,

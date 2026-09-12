@@ -1,6 +1,8 @@
 //! Independent integer references for runtime field arithmetic.
 
 pub(super) use super::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus};
+use crate::test_support::xorshift64;
+pub(super) use crate::test_support::{integer, modulus};
 pub(super) use num_bigint::{BigInt, BigUint};
 pub(super) use std::{vec, vec::Vec};
 
@@ -11,25 +13,12 @@ mod kernels;
 mod parameters;
 mod uint;
 
-pub(super) fn integer(limbs: &[u64]) -> BigUint {
-    BigUint::from_bytes_le(
-        &limbs
-            .iter()
-            .flat_map(|limb| limb.to_le_bytes())
-            .collect::<Vec<_>>(),
-    )
-}
-
 pub(super) fn limbs<const N: usize>(value: &BigUint) -> [u64; N] {
     let digits = value.to_u64_digits();
     assert!(digits.len() <= N);
     let mut result = [0; N];
     result[..digits.len()].copy_from_slice(&digits);
     result
-}
-
-pub(super) fn modulus<M: PrimeModulus>() -> BigUint {
-    integer(&M::MODULUS)
 }
 
 pub(super) fn field<M: PrimeModulus>(value: &BigUint) -> PastaField<M> {
@@ -46,12 +35,7 @@ pub(super) fn assert_value<M: PrimeModulus>(actual: PastaField<M>, expected: &Bi
 }
 
 pub(super) fn deterministic_bytes<const N: usize>(state: &mut u64) -> [u8; N] {
-    core::array::from_fn(|_| {
-        *state ^= *state << 13;
-        *state ^= *state >> 7;
-        *state ^= *state << 17;
-        *state as u8
-    })
+    core::array::from_fn(|_| xorshift64(state) as u8)
 }
 
 pub(super) fn samples<M: PrimeModulus>(count: usize) -> Vec<(PastaField<M>, BigUint)> {

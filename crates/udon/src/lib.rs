@@ -1,15 +1,18 @@
-//! Pasta field arithmetic and allocation-free field FFTs.
+//! Pasta field and curve arithmetic and allocation-free field FFTs.
 //!
 //! [`field::Fp`] and [`field::Fq`] provide field arithmetic, canonical encodings,
 //! inversion, square roots, and product sums without allocation. Constants and
 //! fixed exponentiation schedules use this workspace's `bento` support.
+//! [`curve`] provides Pallas and Vesta points, canonical encodings, scalar
+//! multiplication, batch normalization, and borrowed fixed-base tables.
 //! [`fft`] provides power-of-two transforms, cosets, residue expansion, and fused
 //! interpolation with caller-owned tables, buffers, scratch, and execution.
 //! [`exec`] provides scoped fork/join, task budgets, and borrowed work helpers
 //! shared by arithmetic and downstream workloads.
-//! Field elements implement [`bento::Pod`] for direct embedded storage; see
-//! [`field::PastaField`] for its invariants and [`stored_form!`] for naming
-//! artifacts by representation.
+//! Field elements and nonidentity [`curve::AffinePoint`] values implement
+//! [`bento::Pod`] for direct embedded storage. Their type docs distinguish
+//! mathematical invariants from memory validity. [`stored_form!`] names the
+//! field representation; artifact owners identify the curve and record schema.
 //!
 //! Arithmetic is variable-time and provides no constant-time guarantee for
 //! secret inputs.
@@ -25,10 +28,10 @@
 //!
 //! # Features
 //!
-//! FFTs are always available; there is no `fft` feature. All current APIs work
-//! without an allocator. The additive `alloc` feature is reserved for future
+//! Curves and FFTs are always available without feature flags. All current APIs
+//! work without an allocator. The additive `alloc` feature is reserved for future
 //! allocating APIs and currently changes no behavior. Enabling it does not
-//! cause FFT setup or execution to allocate.
+//! cause curve or FFT setup or execution to allocate.
 //!
 //! By default, [`field::PastaField::sqrt`] uses small tables of roots of unity.
 //! Enabling `sqrt-table-large` selects a larger table algorithm that reduces
@@ -45,6 +48,7 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod curve;
 pub mod exec;
 pub mod fft;
 pub mod field;
@@ -62,3 +66,6 @@ pub use bento::const_arithmetic::{
 
 #[cfg(test)]
 extern crate std;
+
+#[cfg(test)]
+mod test_support;

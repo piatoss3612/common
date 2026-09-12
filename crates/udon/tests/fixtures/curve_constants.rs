@@ -1,0 +1,65 @@
+#![forbid(unsafe_code)]
+#![deny(warnings)]
+
+use arithmetic::{
+    curve::{
+        PallasAffine, PallasPoint, PallasProjective, VestaAffine, VestaPoint, VestaProjective,
+    },
+    field::{Fp, Fq},
+};
+
+mod literals {
+    pub use arithmetic::{pallas_affine as pallas, vesta_affine as vesta};
+}
+
+// Re-exported macros and const lifts must work through the renamed dependency.
+const X: Fp = *PallasAffine::GENERATOR.coordinates().0;
+const Y: Fp = *PallasAffine::GENERATOR.coordinates().1;
+const PALLAS: PallasAffine = literals::pallas!(X, Y,);
+const VESTA: VestaAffine = literals::vesta!(
+    *VestaAffine::GENERATOR.coordinates().0,
+    *VestaAffine::GENERATOR.coordinates().1,
+);
+const PALLAS_POINT: PallasPoint = PALLAS.to_point();
+const VESTA_POINT: VestaPoint = VESTA.to_point();
+const PALLAS_PROJECTIVE: PallasProjective = PALLAS_POINT.to_projective();
+const VESTA_PROJECTIVE: VestaProjective = VESTA_POINT.to_projective();
+
+fn main() {
+    assert_eq!(PALLAS, PallasAffine::GENERATOR);
+    assert_eq!(VESTA, VestaAffine::GENERATOR);
+    assert_eq!(PALLAS_PROJECTIVE, PallasProjective::GENERATOR);
+    assert_eq!(VESTA_PROJECTIVE, VestaProjective::GENERATOR);
+    assert_eq!(literals::pallas!(X, Y), PALLAS);
+    assert_eq!(
+        literals::vesta!(*VESTA.coordinates().0, *VESTA.coordinates().1),
+        VESTA
+    );
+    assert_eq!(PALLAS.mul_projective(&Fq::ONE), PALLAS_PROJECTIVE);
+    assert_eq!(VESTA.mul_projective(&Fp::ONE), VESTA_PROJECTIVE);
+
+    #[cfg(feature = "invalid-pallas")]
+    let _ = literals::pallas!(Fp::ZERO, Fp::ZERO);
+    #[cfg(feature = "invalid-vesta")]
+    let _ = literals::vesta!(Fq::ONE, Fq::ONE);
+
+    #[cfg(feature = "runtime-pallas")]
+    {
+        let runtime = std::hint::black_box(X);
+        let _ = literals::pallas!(runtime, Y);
+    }
+    #[cfg(feature = "runtime-vesta")]
+    {
+        let runtime = std::hint::black_box(*VESTA.coordinates().0);
+        let _ = literals::vesta!(runtime, *VESTA.coordinates().1);
+    }
+
+    #[cfg(feature = "wrong-pallas-field")]
+    let _ = literals::pallas!(Fq::ZERO, Fq::ZERO);
+    #[cfg(feature = "wrong-vesta-field")]
+    let _ = literals::vesta!(Fp::ZERO, Fp::ZERO);
+    #[cfg(feature = "wrong-curve")]
+    let _ = PALLAS_PROJECTIVE.add(&VESTA_PROJECTIVE);
+    #[cfg(feature = "wrong-scalar")]
+    let _ = PALLAS.mul_projective(&Fp::ONE);
+}

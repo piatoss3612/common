@@ -8,9 +8,10 @@ arithmetic tests need not live in the support facade.
 The [CI workflow](../.github/workflows/ci.yml) defines the required checks and
 pins the additional toolchain and targets. The [README](../README.md#testing)
 lists the local baseline. The main suite runs with optimizations so validation
-must not depend on debug assertions. CI also runs the runtime field and FFT unit
-tests without optimizations to exercise internal bounds assertions, including
-the loose FFT butterflies, and catch stack growth in generated addition chains:
+must not depend on debug assertions. CI also runs the runtime field, curve, and
+FFT unit tests without optimizations to exercise internal bounds assertions,
+including the loose FFT butterflies, and catch stack growth in generated
+addition chains:
 
 ```console
 cargo test --locked -p zakura-udon --lib
@@ -25,6 +26,17 @@ arithmetic and square roots against a conventional Tonelli–Shanks reference.
 Checks of the larger tables cover every stored power and all 256 subgroup
 hash inputs, and table construction rejects colliding hash multipliers and
 unreduced entries.
+
+Curve tests compare both Pasta groups against an independent affine reference
+using `num-bigint`, including full-width scalars, identity and inverse cases,
+different Jacobian scalings, and canonical encoding rejection. The group-order
+check walks the raw integer order instead of reducing it to a zero scalar.
+Fixed-base checks cover every supported window width and compare every table
+entry with the independent reference, including the final carry. Batch and
+preparation tests cover scratch reuse, untouched tails, and rejection before
+mutation. Full compiler builds check both constant point macros through an
+aliased dependency and re-exports, and reject invalid coordinates, runtime
+arguments, wrong fields, wrong curves, and wrong scalar types.
 
 FFT tests cover both fields against direct polynomial evaluation and an
 independently scheduled reference FFT, all subsets of optional tables, coset
@@ -75,19 +87,24 @@ allowances of active callbacks, independently of how many threads run them.
   examples with `test = true` and `harness = false` so the suite executes them.
   Doctests verify focused public API examples.
 
+Udon's unit tests share deterministic sampling and integer conversions in
+[`test_support`](../crates/udon/src/test_support.rs), compiled only with
+`cfg(test)`. Keep operation-specific boundary cases and reference algorithms
+beside their tests.
+
 Safety and portability need targeted evidence as well as native tests. CI runs
 Miri over storage unit tests and the public Bento and Udon storage integration
-tests, including field arrays and nested records; nested Cargo tests stay in
-the native suite. The portability test builds `no_std` libraries for a 32-bit
-little-endian target and separately checks that big-endian storage fails while
-addition chains, constant arithmetic, shared execution helpers, and runtime
-Pasta field and FFT operations compile with either square-root configuration.
-The fixture also asserts computed values during constant evaluation; runtime
-field and FFT operations and execution helpers are built but not executed on
-those targets. The test is ignored in ordinary runs because target libraries
-must be installed, and explicitly executed in CI. These checks do not establish
-correctness on every target or constant-time behavior; extend validation when
-new code introduces new assumptions.
+tests, including field arrays, affine points, and nested records; nested Cargo
+tests stay in the native suite. The portability test builds `no_std` libraries
+for a 32-bit little-endian target and separately checks that big-endian storage
+fails while addition chains, constant arithmetic, shared execution helpers, and
+runtime Pasta field, curve, and FFT operations compile with either square-root
+configuration. The fixture also asserts computed values during constant
+evaluation; runtime field, curve, and FFT operations and execution helpers are
+built but not executed on those targets. The test is ignored in ordinary runs
+because target libraries must be installed, and explicitly executed in CI.
+These checks do not establish correctness on every target or constant-time
+behavior; extend validation when new code introduces new assumptions.
 
 ## Field benchmarks
 
@@ -127,6 +144,30 @@ particular inputs and do not establish a constant-time guarantee. Criterion
 stores results and HTML reports under `target/criterion/`, falling back to
 `crates/udon/target/criterion/` when Cargo metadata is unavailable. These
 measurements are separate from the correctness suite.
+
+## Curve benchmarks
+
+The [curve Criterion suite](../crates/udon/benches/curve.rs) measures Pallas and
+Vesta addition, mixed addition, doubling, normalization, decoding, ordinary
+scalar multiplication, and batch normalization. Fixed-base cases report
+preparation, checked binding, and repeated multiplication separately for
+window widths 4 and 8. See the [curve guide](CURVES.md#fixed-base-multiplication)
+for table and scratch storage costs.
+
+```console
+cargo bench --locked -p zakura-udon --bench curve
+cargo bench --locked -p zakura-udon --bench curve -- Pallas/fixed_base
+cargo bench --locked -p zakura-udon --bench curve -- --test
+cargo bench --locked -p zakura-udon --bench curve --features sqrt-table-large -- --test
+```
+
+Inputs are deterministic, with a dense scalar spanning all four limbs and
+nontrivial projective coordinates. Setup and allocation occur outside timed
+execution; preparation measures filling existing buffers, and checked binding
+measures validation of existing entries. Batch normalization covers 1, 8, and
+64 points and reports points per second. Inputs and results pass through
+optimization barriers. These measurements describe the chosen inputs, not a
+constant-time guarantee.
 
 ## FFT benchmarks
 
@@ -217,6 +258,36 @@ Cargo lock. Seed resolution from the workspace lockfile and run offline, allowin
 Cargo to adapt the seed to the fixture's dependency graph. The parent build must
 first fetch any dependencies those consumers require.
 
+Udon's compiler and embedding tests use the shared
+[consumer utility](../crates/udon/tests/support/consumer.rs) for workspace
+isolation and Cargo outcome checks. Keep case tables and artifact-specific
+assertions in the individual tests.
+
+### Slow consumer tests
+
+Udon's field, FFT, and curve embedding tests and curve constant compiler tests
+are marked `#[ignore]`. They create fresh Cargo workspaces and run release builds
+across feature and rejection cases, so their compilation cost recurs even when
+the parent workspace is already built. Keep arithmetic correctness, encoding,
+and in-process storage checks in the default suite.
+
+Run the slow consumers explicitly when changing their fixtures or harness,
+constant macros, storage contracts, or artifact preparation and validation:
+
+```console
+cargo test --release --locked -p zakura-udon \
+  --test embedding --test fft_embedding \
+  --test curve_constants --test curve_embedding -- --ignored
+```
+
+CI runs this command in a separate step. Each consumer selects its own dependency
+feature matrix, so it only needs to run once. Naming these integration targets
+also avoids selecting the ignored FFT timing experiment, which has its own
+command. Target portability checks belong to Bento and run separately. To run
+one consumer, retain just its `--test` argument and `-- --ignored`.
+
+### Generated artifacts
+
 Fixed bytes test format interpretation and length checks. A generator-to-consumer
 round trip must actually generate the artifact through the writing API before
 building its consumer; copying a golden file does not exercise generation.
@@ -230,3 +301,12 @@ It also injects damage after generation: a truncated record must fail in
 residue scales, unsupported schema or twiddle-kind metadata, wrong normalization
 metadata, and corrupted packed powers must reach the embedded consumer and fail
 its explicit validation before operations use the damaged data.
+
+The [curve embedding consumer](../crates/udon/tests/fixtures/curve_embedding)
+also owns its record schema and generator. It prepares both curves' fixed-base
+tables through Udon, writes them through Bento POD, and checks multiplication
+from borrowed embedded records against ordinary multiplication. Both feature
+configurations run the consumer and damage cases. Truncation must fail during
+compilation; unsupported schema, curve, or window metadata, unreduced or
+off-curve entries, reordered multiples, wrong bases, and incorrect final carry
+entries must fail validation before multiplication.

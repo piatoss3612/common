@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::field::{PallasBase, PallasScalar};
+use crate::test_support::{CORPUS_SEED, xorshift64};
 use std::{hint::black_box, time::Instant};
 
 // These experiments exercise the private [0, 2p) representation. The ordinary
@@ -118,16 +119,11 @@ fn timed<M: PrimeModulus, const MASKED: bool, const INTERLEAVED: bool>(
 }
 
 fn measure<M: PrimeModulus>(field: &str) {
-    let mut seed = 0x243f_6a88_85a3_08d3u64;
+    let mut seed = CORPUS_SEED;
     let random: std::vec::Vec<[PastaField<M>; 4]> = (0..1024)
         .map(|_| {
             core::array::from_fn(|_| {
-                let mut limbs = core::array::from_fn(|_| {
-                    seed ^= seed << 13;
-                    seed ^= seed >> 7;
-                    seed ^= seed << 17;
-                    seed
-                });
+                let mut limbs = core::array::from_fn(|_| xorshift64(&mut seed));
                 limbs[3] &= (1 << 63) - 1;
                 loose(limbs)
             })

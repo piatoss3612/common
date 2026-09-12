@@ -1,0 +1,239 @@
+//! Jacobian formulas specialized to the Pasta equation's zero linear term.
+
+use core::{fmt, marker::PhantomData};
+
+use super::{AffinePoint, PastaCurve, Point, ProjectivePoint};
+use crate::field::PastaField;
+
+impl<C: PastaCurve> fmt::Debug for ProjectivePoint<C> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProjectivePoint")
+            .field("x", &self.x)
+            .field("y", &self.y)
+            .field("z", &self.z)
+            .finish()
+    }
+}
+
+impl<C: PastaCurve> Default for ProjectivePoint<C> {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
+impl<C: PastaCurve> PartialEq for ProjectivePoint<C> {
+    fn eq(&self, rhs: &Self) -> bool {
+        if self.is_identity() || rhs.is_identity() {
+            return self.is_identity() == rhs.is_identity();
+        }
+        // Cross-multiplication compares affine x and y without dividing by z.
+        let z1_squared = self.z.square();
+        let z2_squared = rhs.z.square();
+        self.x.mul(&z2_squared) == rhs.x.mul(&z1_squared)
+            && self.y.mul(&z2_squared).mul(&rhs.z) == rhs.y.mul(&z1_squared).mul(&self.z)
+    }
+}
+
+impl<C: PastaCurve> Eq for ProjectivePoint<C> {}
+
+impl<C: PastaCurve> ProjectivePoint<C> {
+    /// The additive identity, represented by zero coordinates.
+    pub const IDENTITY: Self = Self {
+        x: PastaField::ZERO,
+        y: PastaField::ZERO,
+        z: PastaField::ZERO,
+        marker: PhantomData,
+    };
+    /// The generator `(-1, 2)` with `z = 1`.
+    pub const GENERATOR: Self = AffinePoint::GENERATOR.to_projective();
+
+    /// Returns the additive identity.
+    pub const fn identity() -> Self {
+        Self::IDENTITY
+    }
+
+    /// Returns the generator `(-1, 2)` with `z = 1`.
+    pub const fn generator() -> Self {
+        Self::GENERATOR
+    }
+
+    /// Lifts a nonidentity affine point with `z = 1`.
+    pub const fn from_affine(point: &AffinePoint<C>) -> Self {
+        Self {
+            x: point.x,
+            y: point.y,
+            z: PastaField::ONE,
+            marker: PhantomData,
+        }
+    }
+
+    /// Lifts an affine point, preserving identity.
+    pub const fn from_point(point: &Point<C>) -> Self {
+        match point.as_affine() {
+            Some(point) => Self::from_affine(point),
+            None => Self::IDENTITY,
+        }
+    }
+
+    /// Returns whether `z = 0`.
+    pub const fn is_identity(&self) -> bool {
+        self.z.is_zero()
+    }
+
+    /// Borrows the Jacobian coordinates `(x, y, z)`.
+    #[expect(
+        clippy::type_complexity,
+        reason = "Expose coordinates in Jacobian order."
+    )]
+    pub const fn coordinates(
+        &self,
+    ) -> (
+        &PastaField<C::Base>,
+        &PastaField<C::Base>,
+        &PastaField<C::Base>,
+    ) {
+        (&self.x, &self.y, &self.z)
+    }
+
+    /// Recovers affine coordinates with one inversion for a nonidentity point.
+    ///
+    /// Identity maps to [`Point::IDENTITY`].
+    /// Use [`super::batch_normalize`] to share the inversion across a slice.
+    pub fn to_point(&self) -> Point<C> {
+        match self.z.invert() {
+            Some(inverse) => self.normalize_with_inverse(&inverse).to_point(),
+            None => Point::IDENTITY,
+        }
+    }
+
+    // Callers establish z != 0 and supply z^-1; this helper cannot represent
+    // identity. The squared and cubed inverse undo Jacobian scaling.
+    pub(super) fn normalize_with_inverse(&self, inverse: &PastaField<C::Base>) -> AffinePoint<C> {
+        let squared = inverse.square();
+        AffinePoint {
+            x: self.x.mul(&squared),
+            y: self.y.mul(&squared).mul(inverse),
+            marker: PhantomData,
+        }
+    }
+
+    /// Returns the additive inverse `(x, -y, z)`.
+    pub fn neg(&self) -> Self {
+        Self {
+            y: self.y.neg(),
+            ..*self
+        }
+    }
+
+    /// Returns `2 * self`, without inversion.
+    pub fn double(&self) -> Self {
+        if self.is_identity() {
+            return Self::IDENTITY;
+        }
+        // With no linear term in the curve equation, the tangent numerator is
+        // 3*x^2. Taking z' = 2*y*z absorbs its denominator into Jacobian scaling.
+        let a = self.x.square();
+        let b = self.y.square();
+        let c = b.square();
+        let d = self.x.mul(&b).mul_by_4();
+        let e = a.triple();
+        let f = e.square();
+        let z = self.z.mul(&self.y).double();
+        let x = f.sub(&d.double());
+        let y = e.mul_sub(&d.sub(&x), &c.mul_by_8());
+        Self {
+            x,
+            y,
+            z,
+            marker: PhantomData,
+        }
+    }
+
+    /// Returns `self + rhs`, handling identity, equal points, and inverse pairs
+    /// without inversion.
+    pub fn add(&self, rhs: &Self) -> Self {
+        if self.is_identity() {
+            return *rhs;
+        }
+        if rhs.is_identity() {
+            return *self;
+        }
+        let z1_squared = self.z.square();
+        let z2_squared = rhs.z.square();
+        let u1 = self.x.mul(&z2_squared);
+        let u2 = rhs.x.mul(&z1_squared);
+        let s1 = self.y.mul(&z2_squared).mul(&rhs.z);
+        let s2 = rhs.y.mul(&z1_squared).mul(&self.z);
+        // u1/u2 and s1/s2 use the common scale z1*z2. Equal x coordinates
+        // require doubling or identity; the addition formula needs h != 0.
+        if u1 == u2 {
+            return if s1 == s2 {
+                self.double()
+            } else {
+                Self::IDENTITY
+            };
+        }
+        let h = u2.sub(&u1);
+        let i = h.double().square();
+        let j = h.mul(&i);
+        let r = s2.sub(&s1).double();
+        let v = u1.mul(&i);
+        let x = r.square().sub(&j).sub(&v.double());
+        let y = r.mul_sub_double_product(&v.sub(&x), &s1, &j);
+        let z = self.z.mul(&rhs.z).mul(&h).double();
+        Self {
+            x,
+            y,
+            z,
+            marker: PhantomData,
+        }
+    }
+
+    /// Adds a nonidentity affine point without inversion.
+    ///
+    /// Handles identity, equal points, and inverse pairs.
+    pub fn add_mixed(&self, rhs: &AffinePoint<C>) -> Self {
+        if self.is_identity() {
+            return Self::from_affine(rhs);
+        }
+        let z1_squared = self.z.square();
+        let u2 = rhs.x.mul(&z1_squared);
+        let s2 = rhs.y.mul(&z1_squared).mul(&self.z);
+        // This is the general addition formula with the affine operand's z = 1.
+        if self.x == u2 {
+            return if self.y == s2 {
+                self.double()
+            } else {
+                Self::IDENTITY
+            };
+        }
+        let h = u2.sub(&self.x);
+        let i = h.double().square();
+        let j = h.mul(&i);
+        let r = s2.sub(&self.y).double();
+        let v = self.x.mul(&i);
+        let x = r.square().sub(&j).sub(&v.double());
+        let y = r.mul_sub_double_product(&v.sub(&x), &self.y, &j);
+        let z = self.z.mul(&h).double();
+        Self {
+            x,
+            y,
+            z,
+            marker: PhantomData,
+        }
+    }
+
+    /// Returns `self - rhs`, without inversion.
+    pub fn sub(&self, rhs: &Self) -> Self {
+        self.add(&rhs.neg())
+    }
+
+    /// Multiplies by a scalar using variable-time doubling and addition.
+    ///
+    /// Processes the full canonical scalar; zero returns identity. The scalar
+    /// must satisfy [`PastaField`]'s reduced-residue invariant. Requires no
+    /// table, allocation, or scratch.
+    pub fn mul(&self, scalar: &PastaField<C::Scalar>) -> Self {
+        super::scalar::multiply(scalar, |point| point.add(self))
+    }
+}

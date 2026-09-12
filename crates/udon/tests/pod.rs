@@ -1,4 +1,4 @@
-//! Field storage through the public APIs, also exercised under Miri.
+//! Field and affine point storage through the public APIs, also under Miri.
 #![forbid(unsafe_code)]
 #![cfg(target_endian = "little")]
 
@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use bento::{AlignedBytes, bytes_of, bytes_of_slice};
 use zakura_udon::{
     STORED_FORM, StoredForm,
+    curve::{AffinePoint, Pallas, PallasAffine, PastaCurve, Vesta, VestaAffine},
     field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus},
     stored_form,
 };
@@ -48,6 +49,66 @@ fn fields_borrow_their_reduced_montgomery_bytes() {
     }
     check::<PallasBase>();
     check::<PallasScalar>();
+}
+
+#[test]
+fn affine_points_borrow_coordinate_bytes_and_reject_invalid_values() {
+    fn check<C: PastaCurve>() {
+        assert_eq!(size_of::<AffinePoint<C>>(), 64);
+        assert_eq!(align_of::<AffinePoint<C>>(), 8);
+        let generator = AffinePoint::<C>::GENERATOR;
+        let (x, y) = generator.coordinates();
+        let mut expected = Vec::from(bytes_of(x));
+        expected.extend_from_slice(bytes_of(y));
+        assert_eq!(bytes_of(&generator), expected);
+        assert!(bytes_of_slice::<AffinePoint<C>>(&[]).is_empty());
+        static INVALID: AlignedBytes<64> = AlignedBytes([0xff; 64]);
+        let invalid: &AffinePoint<C> = INVALID.as_value();
+        let (x, y) = invalid.coordinates();
+        assert_eq!(x.montgomery_limbs(), [u64::MAX; 4]);
+        assert_eq!(y.montgomery_limbs(), [u64::MAX; 4]);
+        assert!(AffinePoint::<C>::from_xy(*x, *y).is_none());
+        assert_eq!(bytes_of(invalid).as_ptr(), INVALID.0.as_ptr());
+        static ZERO: AlignedBytes<64> = AlignedBytes([0; 64]);
+        let zero: &AffinePoint<C> = ZERO.as_value();
+        let (x, y) = zero.coordinates();
+        assert!(AffinePoint::<C>::from_xy(*x, *y).is_none());
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, bento::Pod)]
+struct CurveRecord {
+    pallas: [PallasAffine; 2],
+    vesta: [VestaAffine; 2],
+}
+
+#[test]
+fn affine_arrays_in_nested_records_round_trip() {
+    let record = CurveRecord {
+        pallas: [PallasAffine::GENERATOR, PallasAffine::GENERATOR.neg()],
+        vesta: [VestaAffine::GENERATOR, VestaAffine::GENERATOR.neg()],
+    };
+    assert_eq!(size_of::<CurveRecord>(), 256);
+    static RECORD: OnceLock<AlignedBytes<256>> = OnceLock::new();
+    let bytes = RECORD.get_or_init(|| AlignedBytes(bytes_of(&record).try_into().unwrap()));
+    let stored: &CurveRecord = bytes.as_value();
+    assert_eq!(*stored, record);
+    assert_eq!(bytes_of(stored).as_ptr(), bytes.0.as_ptr());
+    assert!(
+        stored.pallas[0]
+            .to_point()
+            .add(&stored.pallas[1].to_point())
+            .is_identity()
+    );
+    assert!(
+        stored.vesta[0]
+            .to_point()
+            .add(&stored.vesta[1].to_point())
+            .is_identity()
+    );
 }
 
 #[repr(C)]

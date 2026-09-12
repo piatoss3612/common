@@ -6,7 +6,7 @@ This is an experimental stack of Rust crates for Zakura.
   [`crates/`](crates/).
 * The current implementation provides reference integer and Montgomery
   arithmetic, addition chains, checked POD storage and embedding, and runtime
-  Pasta field arithmetic and field FFTs. Curve arithmetic remains planned.
+  Pasta field and curve arithmetic and field FFTs.
 * All target crates (`bento`, `bento-core`, and `udon`) currently use `no_std`.
 * See [the crate development guide](docs/CRATES.md) for dependency naming,
   workspace inheritance, macro path resolution, and publication conventions.
@@ -64,20 +64,30 @@ setup and execution do not allocate or require a feature flag. See the
 generation with Bento POD, and the [crate docs](crates/udon/src/lib.rs) for
 feature definitions.
 
-Curve arithmetic and the traits and utilities needed downstream for Tachyon
-remain planned.
+The [`curve` module](crates/udon/src/curve/mod.rs) provides Pallas and Vesta
+points, canonical encodings, scalar multiplication, batch normalization, and
+borrowed fixed-base tables. Nonidentity affine points implement `bento::Pod`
+for direct storage. All curve operations are variable-time and require no
+allocation. See the [curve guide](docs/CURVES.md) for point representations,
+caller-owned preparation buffers, and table validation.
+
+Additional traits and utilities needed downstream for Tachyon remain planned.
 
 ## Testing
 
 See the [testing guide](docs/TESTING.md) for test roles, fixture organization,
 and executable examples.
 
-Run the full test suite (every workspace crate, all features) with optimizations
+Run the default test suite (every workspace crate, all features) with optimizations
 enabled:
 
 ```console
 cargo test --release --locked --workspace --all-features
 ```
+
+Udon's slower compiler and artifact consumer tests are ignored by default.
+Run them explicitly with `--ignored` as described in the
+[testing guide](docs/TESTING.md#slow-consumer-tests); CI runs them separately.
 
 The pinned toolchain ([`rust-toolchain.toml`](rust-toolchain.toml), the crates'
 MSRV) is also used to check formatting, lints, and documentation across the
@@ -90,5 +100,6 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-de
 ```
 
 The [CI workflow](.github/workflows/ci.yml) defines these gates plus focused
-Miri checks, field and FFT tests without optimizations, and cross-target checks.
-The format script also checks standalone Rust fixtures that Cargo does not discover.
+Miri checks, field, curve, and FFT tests without optimizations, and cross-target
+checks. The format script also checks standalone Rust fixtures that Cargo does
+not discover.

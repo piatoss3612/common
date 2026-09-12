@@ -147,7 +147,43 @@ generated artifacts are byte-identical across them. It embeds a shared record
 containing arrays of both fields and a separate array of `Fp`:
 
 ```console
-cargo test --release --locked -p zakura-udon --test embedding
+cargo test --release --locked -p zakura-udon --test embedding -- --ignored
+```
+
+## Storing affine points and fixed-base tables
+
+Udon's [`AffinePoint`](../crates/udon/src/curve/mod.rs) implements `Pod` for both
+Pallas and Vesta. Its type docs define the coordinate layout and mathematical
+invariants. The 32-byte compressed protocol encoding is a different
+representation. Identity-capable `Point` and Jacobian `ProjectivePoint` do not
+implement `Pod`.
+
+Every stored coordinate bit pattern is memory-safe, but point arithmetic and
+encoding assume reduced coordinates satisfying the curve equation. Validate
+individual points by passing the values from `coordinates()` to
+`AffinePoint::from_xy` before use when their producer has not established these
+properties. POD layout checks do not validate mathematical contents.
+
+For repeated multiplication, prepare `FixedBaseTable` entries into caller-owned
+affine storage and write the resulting slice or an enclosing record through
+Bento POD. Embed the same types in the consumer and use `FixedBaseTable::bind`
+to check their mathematical contents. `bind_trusted` is available when the
+owner has already established the specified multiples; it only checks the
+description, base, and length. The
+[table API docs](../crates/udon/src/curve/fixed_base.rs) define the required
+multiples and entry order; the [curve guide](CURVES.md#fixed-base-multiplication)
+shows preparation and storage costs.
+
+`STORED_FORM` identifies the field representation, unchanged by curve support.
+The owner must separately identify the curve, base, window width, and record
+schema. The [curve embedding fixture](../crates/udon/tests/fixtures/curve_embedding)
+shares its record definition between its generator and `no_std` consumer,
+prepares both curves' tables, writes them through Bento POD, and multiplies
+directly from embedded storage. Its harness checks rejection of damaged
+artifacts as described in the [testing guide](TESTING.md#generated-artifacts):
+
+```console
+cargo test --release --locked -p zakura-udon --test curve_embedding -- --ignored
 ```
 
 ## Format ownership

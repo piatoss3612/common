@@ -3,6 +3,10 @@
 #![forbid(unsafe_code)]
 
 use bento::const_arithmetic::{U256, U320, m255, u256};
+use udon::curve::{
+    AffinePoint, CurveError, FixedBaseDescription, FixedBaseRequirements, FixedBaseTable, Pallas,
+    PallasAffine, PastaCurve, Point, ProjectivePoint, Vesta, VestaAffine, batch_normalize,
+};
 use udon::exec::{Executor, SerialExecutor, TaskBudget, for_each_chunk_mut, for_each_mut};
 use udon::fft::{
     Class, Domain, ExecutionOptions, Expansion, ExpansionOptions, FftError, InputOrder, Plan,
@@ -63,6 +67,56 @@ pub fn fp_operations(wide: &[u8; 64], bytes: [u8; 32], log_size: u32) -> Option<
 
 pub fn fq_operations(wide: &[u8; 64], bytes: [u8; 32], log_size: u32) -> Option<[u8; 32]> {
     field_operations::<PallasScalar>(wide, bytes, log_size)
+}
+
+pub const PALLAS: PallasAffine = udon::pallas_affine!(
+    *PallasAffine::GENERATOR.coordinates().0,
+    *PallasAffine::GENERATOR.coordinates().1,
+);
+pub const VESTA: VestaAffine = udon::vesta_affine!(
+    *VestaAffine::GENERATOR.coordinates().0,
+    *VestaAffine::GENERATOR.coordinates().1,
+);
+
+fn curve_operations<C: PastaCurve>(
+    bytes: [u8; 32],
+    scalar: &PastaField<C::Scalar>,
+) -> Result<[u8; 32], CurveError> {
+    let base = AffinePoint::<C>::from_bytes(bytes).ok_or(CurveError::InvalidBase)?;
+    let point = base.mul_projective(scalar).double().add_mixed(&base);
+    let points = [point, point.neg().add(&point)];
+    let mut output = [Point::IDENTITY; 2];
+    let mut normalization_scratch = [PastaField::ZERO; 2];
+    batch_normalize(&points, &mut output, &mut normalization_scratch)?;
+    const DESCRIPTION: FixedBaseDescription = FixedBaseDescription { window_bits: 4 };
+    const REQUIREMENTS: FixedBaseRequirements = match DESCRIPTION.requirements() {
+        Ok(required) => required,
+        Err(_) => panic!("unsupported fixed-base description"),
+    };
+    let mut entries = [AffinePoint::GENERATOR; REQUIREMENTS.affine_points];
+    let mut projective = [ProjectivePoint::IDENTITY; REQUIREMENTS.projective_scratch];
+    let mut field = [PastaField::ZERO; REQUIREMENTS.field_scratch];
+    let table = FixedBaseTable::prepare(
+        DESCRIPTION,
+        &base,
+        &mut entries,
+        &mut projective,
+        &mut field,
+    )?;
+    let bound = FixedBaseTable::bind(DESCRIPTION, &base, table.as_slice())?;
+    let product = bound.mul(scalar);
+    assert_eq!(product, base.to_projective().mul(scalar));
+    assert_eq!(point, output[0].to_projective());
+    assert!(output[1].is_identity());
+    Ok(product.to_point().to_bytes())
+}
+
+pub fn pallas_operations(bytes: [u8; 32], scalar: &Fq) -> Result<[u8; 32], CurveError> {
+    curve_operations::<Pallas>(bytes, scalar)
+}
+
+pub fn vesta_operations(bytes: [u8; 32], scalar: &Fp) -> Result<[u8; 32], CurveError> {
+    curve_operations::<Vesta>(bytes, scalar)
 }
 
 const _: () = {
@@ -228,6 +282,13 @@ pub struct FieldRecord {
     pub fq: Fq,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, bento::Pod)]
+pub struct CurveRecord {
+    pub pallas: PallasAffine,
+    pub vesta: VestaAffine,
+}
+
 #[repr(transparent)]
 #[derive(Clone, Copy)]
 #[cfg_attr(any(feature = "record", feature = "zero-array"), derive(bento::Pod))]
@@ -272,6 +333,15 @@ pub static STORED_FQ: &Fq = bento::AlignedBytes([0; 32]).as_value();
 
 #[cfg(feature = "field-record")]
 pub static STORED_FIELDS: &FieldRecord = bento::AlignedBytes([0; 64]).as_value();
+
+#[cfg(feature = "curve")]
+pub static STORED_PALLAS: &PallasAffine = bento::AlignedBytes([0; 64]).as_value();
+
+#[cfg(feature = "curve")]
+pub static STORED_VESTA: &VestaAffine = bento::AlignedBytes([0; 64]).as_value();
+
+#[cfg(feature = "curve-record")]
+pub static STORED_CURVES: &CurveRecord = bento::AlignedBytes([0; 128]).as_value();
 
 #[cfg(feature = "zero-array")]
 pub static ZERO_ARRAY: &[Value; 0] = bento::AlignedBytes([]).as_array();

@@ -209,6 +209,7 @@ pub(crate) fn butterfly_dif<M: PrimeModulus>(
 mod tests {
     use super::*;
     use crate::field::{PallasBase, PallasScalar};
+    use crate::test_support::{CORPUS_SEED, xorshift64};
     use num_bigint::BigUint;
 
     fn integer(limbs: [u64; 4]) -> BigUint {
@@ -316,14 +317,9 @@ mod tests {
                 }
             }
         }
-        let mut seed = 0x243f_6a88_85a3_08d3u64;
+        let mut seed = CORPUS_SEED;
         for _ in 0..128 {
-            let mut limbs = core::array::from_fn(|_| {
-                seed ^= seed << 13;
-                seed ^= seed >> 7;
-                seed ^= seed << 17;
-                seed
-            });
+            let mut limbs = core::array::from_fn(|_| xorshift64(&mut seed));
             limbs[3] &= (1 << 63) - 1;
             values.push(integer(limbs));
         }

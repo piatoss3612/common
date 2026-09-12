@@ -164,7 +164,9 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
             .map(|values| (values, self.inverse()))
             .or_else(|| opposite.map(|values| (values, !self.inverse())))?;
         Some(
-            TwiddleTable::bind(
+            // Plan already binds these immutable entries. Adapting the provider
+            // must not repeat linear validation at every butterfly stage.
+            TwiddleTable::bind_trusted(
                 TwiddleDescription {
                     size: self.plan.domain.size(),
                     inverse,

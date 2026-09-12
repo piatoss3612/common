@@ -259,6 +259,172 @@ fn expansion_storage_normalization_streaming_and_direct_bridge() {
     expansions::<PallasScalar>();
 }
 
+fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
+    for log in [0, 4, 8, 11] {
+        let subgroup = Domain::<M>::new(log).unwrap().subgroup();
+        let domain = Domain::new(log + 3)
+            .unwrap()
+            .coset(PastaField::zeta())
+            .unwrap();
+        let prepared = Prepared::new(subgroup);
+        let mut coefficients = inputs(subgroup.size());
+        coefficients[0] = PastaField::from_u64(9);
+        let factors = inputs(domain.size());
+        for len in [0, 1, 10, subgroup.size() / 16, subgroup.size() / 16 + 1] {
+            if len > subgroup.size() {
+                continue;
+            }
+            let expected = reference_coset(&coefficients[..len], domain);
+            for with_tables in [false, true] {
+                let base = if with_tables {
+                    // Exercise reconstruction from the opposite table direction.
+                    Plan::new(
+                        Tables {
+                            inverse: Some(&prepared.inverse),
+                            ..Tables::default()
+                        }
+                        .bind(subgroup)
+                        .unwrap(),
+                    )
+                } else {
+                    Plan::without_tables(subgroup)
+                };
+                for normalization in [
+                    None,
+                    Some(ExpansionScaleNormalization::Coefficients),
+                    Some(ExpansionScaleNormalization::UnscaledInverse),
+                ] {
+                    let mut scales = vec![PastaField::ZERO; domain.size()];
+                    let expansion = Expansion::new(base, domain, None).unwrap();
+                    let expansion = if let Some(normalization) = normalization {
+                        expansion
+                            .with_scales(
+                                ExpansionScales::prepare(
+                                    subgroup.size(),
+                                    domain,
+                                    normalization,
+                                    &mut scales,
+                                )
+                                .unwrap(),
+                            )
+                            .unwrap()
+                    } else {
+                        expansion
+                    };
+                    let operation = expansion
+                        .configure(
+                            ExpansionOrder::BitReversed,
+                            ExpansionStorage::Coefficients,
+                            expansion_strategy(),
+                        )
+                        .unwrap();
+                    let mut ordered_factors = vec![PastaField::ZERO; domain.size()];
+                    for (row, factor) in factors.iter().enumerate() {
+                        ordered_factors[operation.layout().index(row, domain.size()).unwrap()] =
+                            *factor;
+                    }
+                    let factor = operation.view(&ordered_factors).unwrap();
+                    let mut output = vec![PastaField::ONE; domain.size()];
+                    let mut scratch =
+                        vec![PastaField::ONE; operation.requirements().scratch_fields + 1];
+                    operation
+                        .execute_into(&coefficients[..len], &mut output, executor, &mut scratch)
+                        .unwrap();
+                    let view = operation.view(&output).unwrap();
+                    for (row, expected) in expected.iter().enumerate() {
+                        assert_eq!(view.get(row), Some(expected));
+                    }
+                    operation
+                        .execute_product_into(
+                            &coefficients[..len],
+                            factor,
+                            &mut output,
+                            executor,
+                            &mut scratch,
+                        )
+                        .unwrap();
+                    let view = operation.view(&output).unwrap();
+                    for (row, expected) in expected.iter().enumerate() {
+                        assert_eq!(view.get(row), Some(&expected.mul(&factors[row])));
+                    }
+                    // A retained inverse can also be a short prefix of this base.
+                    if len.is_power_of_two() {
+                        let raw: Vec<_> = coefficients[..len]
+                            .iter()
+                            .map(|value| value.mul(&PastaField::from_u64(len as u64)))
+                            .collect();
+                        let mut product = vec![PastaField::ZERO; domain.size()];
+                        operation
+                            .execute_product_into(
+                                CoefficientView::new(&raw, InverseScale::Unscaled),
+                                factor,
+                                &mut product,
+                                executor,
+                                &mut scratch,
+                            )
+                            .unwrap();
+                        assert_eq!(product, output);
+                    }
+                    assert_canonical(&scratch);
+                    assert_eq!(scratch.last(), Some(&PastaField::ONE));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn short_bit_reversed_products_match_reference_at_pruning_boundary() {
+    short_bit_reversed_expansions::<PallasBase, _>(&SerialExecutor);
+    short_bit_reversed_expansions::<PallasScalar, _>(&Threads);
+}
+
+#[test]
+fn short_bit_reversed_residues_restore_fields_on_panic() {
+    let base = Plan::without_tables(Domain::<PallasBase>::new(8).unwrap().subgroup());
+    let domain = Domain::new(11).unwrap().coset(Fp::zeta()).unwrap();
+    let expansion = Expansion::new(base, domain, None).unwrap();
+    let residue = expansion.residue(5, InputOrder::BitReversed).unwrap();
+    let input = inputs(10);
+    let expected = direct(&input, residue.domain());
+    let options = expansion_strategy().transform;
+    let mut output = vec![Fp::ONE; base.domain().size()];
+    let mut scratch = vec![
+        Fp::ONE;
+        residue
+            .scratch_requirements(options)
+            .unwrap()
+            .field_elements
+            + 1
+    ];
+    let joins = CountJoins::default();
+    residue
+        .coefficients(&input, &mut output, options, &joins, &mut scratch)
+        .unwrap();
+    let view =
+        EvaluationView::bind(&output, residue.domain(), EvaluationLayout::BitReversed).unwrap();
+    for (row, expected) in expected.iter().enumerate() {
+        assert_eq!(view.get(row), Some(expected));
+    }
+    let count = joins.take();
+    assert!(count > 0);
+    for index in 0..count {
+        let executor = FailAt {
+            calls: AtomicUsize::new(0),
+            index,
+        };
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                residue.coefficients(&input, &mut output, options, &executor, &mut scratch)
+            }))
+            .is_err()
+        );
+        assert_canonical(&output);
+        assert_canonical(&scratch);
+        assert_eq!(scratch.last(), Some(&Fp::ONE));
+    }
+}
+
 #[test]
 fn expansion_metadata_storage_errors_and_panics() {
     let base = Plan::without_tables(Domain::<PallasBase>::new(5).unwrap().subgroup());

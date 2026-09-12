@@ -6,9 +6,11 @@ in the [prepared-strategy suite](../crates/udon/benches/fft_strategies.rs).
 They do not select runtime defaults. See the [FFT guide](FFT.md) for operation
 contracts and const resource queries.
 
-These estimates were collected before the removal of experimental backends and
-table representations. This report retains measurements for the remaining
-strategies; rerun the commands below to measure the current revision.
+The original strategy comparisons were collected before the removal of
+experimental backends and table representations. This report retains
+measurements for the remaining strategies. The
+[upgrade refinements](#measured-upgrade-refinements) record a later comparison
+against revision `d0c00ac`; rerun the commands below to measure another revision.
 
 ## Method
 
@@ -48,6 +50,83 @@ can measure candidate descriptions under its own limits and persist a selected
 description. A mathematically valid table does not identify the fastest strategy
 on another machine. These results do not establish x86-64 performance or
 constant-time behavior.
+
+## Measured upgrade refinements
+
+Reviewing the [Sensei migration guide](FFT_UPGRADE.md) and its sibling
+implementation identified two execution costs in the rewrite: prepared stages
+revalidated ordinary `Plan` twiddles on every stage, and bit-reversed expansion
+always ran full DIF transforms even for a ten-coefficient prefix. These
+September 12, 2026 comparisons use `d0c00ac` as the implementation baseline,
+with the same added benchmark cases compiled against both implementations.
+The platform and timing boundaries follow the method above. Values in this
+section are sample means in microseconds.
+
+Prepared stages now adapt already-bound twiddle slices without rescanning
+their entries. Imported contents are still checked by `Tables::bind`; trusted
+binding keeps its existing caller obligations. All cases below borrow one
+ordinary forward half-table, including inverse transforms that reconstruct
+the opposite powers. Inputs and outputs use natural order on the zeta coset.
+
+| Field | Size | Direction | Tasks | Before, µs | After, µs | Less time |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| Fp | 2,048 | Forward | 1 | 317.2 | 201.1 | 36.6% |
+| Fp | 2,048 | Inverse | 1 | 331.2 | 215.8 | 34.8% |
+| Fp | 16,384 | Forward | 1 | 3,901.1 | 2,666.5 | 31.6% |
+| Fq | 2,048 | Forward | 1 | 331.6 | 202.3 | 39.0% |
+| Fq | 2,048 | Forward | 4 | 357.5 | 65.6 | 81.7% |
+| Fq | 2,048 | Inverse | 4 | 359.5 | 68.2 | 81.0% |
+
+The larger parallel improvement removes validation work that was repeated in
+each stage's calling task before its butterflies could run concurrently. The
+2,048-element cases retain 32,768 table bytes; the 16,384-element case retains
+262,144. None requires scratch fields. The change introduces no new storage.
+
+Short bit-reversed expansions now broadcast the scaled coefficient prefix,
+skip the initial zero-only DIT stages, and permute each completed residue into
+its requested order. Terminal stores read factors in that order before the
+permutation. The following cases expand ten coefficients from a 2,048-element
+base to the 16,384-element zeta coset and multiply a nonconstant factor.
+Timing includes coefficient initialization, scaling, the local permutations,
+and the fused factor product. There is no base inverse in these cases.
+
+| Field | Tasks | Twiddles | Before, µs | After, µs | Less time |
+| --- | ---: | --- | ---: | ---: | ---: |
+| Fp | 1 | Computed | 1,979.2 | 1,138.8 | 42.5% |
+| Fp | 1 | Forward table | 2,335.4 | 738.0 | 68.4% |
+| Fp | 4 | Computed | 541.4 | 305.6 | 43.6% |
+| Fp | 4 | Forward table | 635.4 | 202.2 | 68.2% |
+| Fq | 1 | Computed | 2,025.1 | 1,172.4 | 42.1% |
+| Fq | 1 | Forward table | 2,362.6 | 759.9 | 67.8% |
+| Fq | 4 | Computed | 545.6 | 310.0 | 43.2% |
+| Fq | 4 | Forward table | 637.4 | 208.5 | 67.3% |
+
+Table cases benefit from both changes and retain 32,768 bytes. All cases
+require zero scratch fields and produce 524,288 output bytes; the factor
+also occupies 524,288 bytes. No expansion-scale table is retained.
+
+The pruning cutoff is `base_size / 16`, saving at least four initial stages
+for nonempty input. At the 128-coefficient boundary, table-free products took
+7–8% less time across these fields and task budgets. Trying a 256-coefficient
+cutoff did not consistently improve the table-free product, so longer prefixes
+retain DIF. Consecutive before/after control runs of table-free inverses and
+256- or 2,048-coefficient expansions changed by −2.1% to +0.2%. Longer runs
+showed timing drift; small differences do not establish additional wins.
+
+The suite covers constants, the pruning boundary, and full coefficients in
+both expansion orders. To compare revisions, use the same benchmark harness
+on the baseline implementation and save its samples, then repeat on the changed
+implementation with `--baseline fft_upgrade_before`:
+
+```console
+cargo bench --locked -p zakura-udon --bench fft_strategies -- \
+  '(Fp|Fq)/strategies/2048/zeta/tasks_[14]/plan_twiddles|expansion_prefixes' \
+  --save-baseline fft_upgrade_before
+```
+
+These are kernel and expansion measurements. Sensei's complete quotient fold,
+allocation behavior, and proof-generation latency still require downstream
+measurements with its actual ownership and rotation access patterns.
 
 ## Transform backends and initialization
 

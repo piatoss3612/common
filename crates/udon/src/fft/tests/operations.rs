@@ -373,6 +373,70 @@ fn twiddle_shapes_strides_directions_and_coset_powers_are_compatible() {
     power_tables::<PallasScalar, _>(&Threads);
 }
 
+fn bound_plan_tables<M: PrimeModulus>() {
+    for shift in [
+        PastaField::ONE,
+        PastaField::zeta(),
+        PastaField::zeta_inverse(),
+        PastaField::from_u64(7),
+    ] {
+        let domain = Domain::<M>::new(5).unwrap().coset(shift).unwrap();
+        let prepared = Prepared::new(domain);
+        let input = inputs(domain.size());
+        let expected_forward = direct(&input, domain);
+        for mask in 1..=3 {
+            let plan = Plan::new(
+                Tables {
+                    forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
+                    inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
+                    ..Tables::default()
+                }
+                .bind(domain)
+                .unwrap(),
+            );
+            for direction in [Direction::Forward, Direction::Inverse] {
+                for inverse_scale in [InverseScale::Normalized, InverseScale::Unscaled] {
+                    if direction == Direction::Forward && inverse_scale == InverseScale::Unscaled {
+                        continue;
+                    }
+                    let expected = if direction == Direction::Forward {
+                        expected_forward.clone()
+                    } else {
+                        inverse_direct(&input, domain, inverse_scale == InverseScale::Normalized)
+                    };
+                    for input_order in [InputOrder::Natural, InputOrder::BitReversed] {
+                        for codelet in [Codelet::Radix2, Codelet::Radix8] {
+                            let request = TransformRequest {
+                                input_order,
+                                inverse_scale,
+                                ..TransformRequest::new(direction)
+                            };
+                            let operation = plan
+                                .configure(
+                                    request,
+                                    Strategy {
+                                        codelet,
+                                        ..strategy(Backend::InPlace)
+                                    },
+                                )
+                                .unwrap();
+                            let mut output = ordered(&input, input_order);
+                            operation.execute(&mut output, &Threads, &mut []).unwrap();
+                            assert_eq!(output, expected, "mask={mask}, request={request:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bound_plan_table_directions_and_inverse_scales_match_direct_sums() {
+    bound_plan_tables::<PallasBase>();
+    bound_plan_tables::<PallasScalar>();
+}
+
 #[test]
 fn prepared_validation_and_batch_resources_precede_mutation() {
     const DESCRIPTION: OperationDescription = OperationDescription {

@@ -151,7 +151,9 @@ cargo bench --locked -p zakura-udon --bench fft -- --test
 The [prepared-strategy suite](../crates/udon/benches/fft_strategies.rs) compares
 in-place and blocked backends; scatter, gather, and blocked initialization;
 radix-2/4/8 codelets producing bit-reversed output; dense, local stage-packed,
-full packed, and strided tables; and forward coset powers. It also compares
+full packed, and strided tables; ordinary bound `Plan` tables in both root
+orientations; and forward coset powers. It also compares short coefficient
+expansions and fused products, including the ten-coefficient instance case,
 expansion storage and normalization policies in both output orders,
 polynomial-major batches, and sequential, parallel, or destructive class sums.
 Both fields run with one task and a persistent four-worker Rayon pool.
@@ -160,6 +162,7 @@ Preparation of twiddles and scale tables is timed separately.
 ```console
 cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/strategies/2048/generic_7/tasks_1
 cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/expansion_strategies/tasks_4
+cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/expansion_prefixes/tasks_1
 cargo bench --locked -p zakura-udon --bench fft_strategies -- --test
 cargo test --release --locked -p zakura-udon compare_fft_butterfly_candidates -- --ignored --nocapture
 ```

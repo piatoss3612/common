@@ -180,6 +180,30 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                     );
                 }
             }
+            for inverse in [false, true] {
+                let mut values = vec![PastaField::ZERO; size / 2];
+                let tables = if inverse {
+                    TablesMut {
+                        inverse: Some(&mut values),
+                        ..TablesMut::default()
+                    }
+                } else {
+                    TablesMut {
+                        forward: Some(&mut values),
+                        ..TablesMut::default()
+                    }
+                }
+                .prepare(domain)
+                .unwrap();
+                for direction in [Direction::Forward, Direction::Inverse] {
+                    bench(
+                        &format!("plan_twiddles/inverse_{inverse}/{direction:?}"),
+                        Plan::new(tables)
+                            .configure(TransformRequest::new(direction), strategy)
+                            .unwrap(),
+                    );
+                }
+            }
             let mut powers = vec![PastaField::ZERO; size];
             let scales = PowerTable::prepare(PastaField::ONE, shift, &mut powers).unwrap();
             bench(
@@ -420,6 +444,83 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
     group.finish();
 }
 
+fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &Runner) {
+    let domain = Domain::<M>::new(11).unwrap().subgroup();
+    let extended = Domain::new(14).unwrap().coset(PastaField::zeta()).unwrap();
+    let mut twiddles = vec![PastaField::ZERO; domain.size() / 2];
+    let tables = TablesMut {
+        forward: Some(&mut twiddles),
+        ..TablesMut::default()
+    }
+    .prepare(domain)
+    .unwrap();
+    let input = inputs(domain.size());
+    let factor = inputs(extended.size());
+    let mut group =
+        criterion.benchmark_group(format!("{field}/expansion_prefixes/tasks_{}", runner.tasks));
+    group.throughput(Throughput::Elements(extended.size() as u64));
+    for (name, base) in [
+        ("computed", Plan::without_tables(domain)),
+        ("table", Plan::new(tables)),
+    ] {
+        let expansion = Expansion::new(base, extended, None).unwrap();
+        for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
+            let strategy = runner.strategy(domain.size());
+            let operation = expansion
+                .configure(
+                    order,
+                    ExpansionStorage::Coefficients,
+                    ExpansionStrategy {
+                        transform: strategy.execution,
+                        budget: strategy.budget,
+                    },
+                )
+                .unwrap();
+            let mut scratch = vec![PastaField::ZERO; operation.requirements().scratch_fields];
+            let mut output = vec![PastaField::ZERO; extended.size()];
+            // Give each order the same factor by natural evaluation row.
+            let mut ordered_factor = vec![PastaField::ZERO; extended.size()];
+            for (row, value) in factor.iter().enumerate() {
+                ordered_factor[operation.layout().index(row, extended.size()).unwrap()] = *value;
+            }
+            let factor = operation.view(&ordered_factor).unwrap();
+            for prefix in [1, 10, 128, 256, domain.size()] {
+                for product in [false, true] {
+                    group.bench_function(
+                        format!("{name}/{order:?}/prefix_{prefix}/product_{product}"),
+                        |b| {
+                            runner.install(|| {
+                                b.iter(|| {
+                                    let input = black_box(&input[..prefix]);
+                                    if product {
+                                        operation.execute_product_into(
+                                            input,
+                                            factor,
+                                            &mut output,
+                                            runner,
+                                            &mut scratch,
+                                        )
+                                    } else {
+                                        operation.execute_into(
+                                            input,
+                                            &mut output,
+                                            runner,
+                                            &mut scratch,
+                                        )
+                                    }
+                                    .unwrap();
+                                    black_box(&output);
+                                })
+                            })
+                        },
+                    );
+                }
+            }
+        }
+    }
+    group.finish();
+}
+
 fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     let mut group = criterion.benchmark_group(format!("{field}/strategy_preparation"));
     for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
@@ -506,6 +607,8 @@ fn benchmarks(criterion: &mut Criterion) {
         transforms::<PallasScalar>(criterion, "Fq", &runner);
         pipelines::<PallasBase>(criterion, "Fp", &runner);
         pipelines::<PallasScalar>(criterion, "Fq", &runner);
+        expansion_prefixes::<PallasBase>(criterion, "Fp", &runner);
+        expansion_prefixes::<PallasScalar>(criterion, "Fq", &runner);
     }
     preparation::<PallasBase>(criterion, "Fp");
     preparation::<PallasScalar>(criterion, "Fq");

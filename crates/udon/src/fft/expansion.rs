@@ -656,6 +656,30 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
             .factor
             .map(|factor| &factor[block * size..(block + 1) * size]);
         if self.order == ExpansionOrder::BitReversed {
+            // With at least four zero-only stages, broadcasting a short
+            // prefix and permuting the DIT result saves more work than a full
+            // DIF. The terminal store reads the factor in its declared order.
+            if self.coefficients.len() <= size / 16 {
+                let first = expansion.base.fill_prefix(
+                    self.coefficients,
+                    output,
+                    shift,
+                    scales,
+                    self.extra,
+                );
+                super::stages::StageKernel {
+                    plan: expansion.base,
+                    inverse: false,
+                    dif: false,
+                    scale: InverseScale::Normalized,
+                    codelet: Codelet::Radix2,
+                    twiddles: None,
+                    output_order: InputOrder::BitReversed,
+                    factor,
+                }
+                .run(output, first, self.options.max_tasks, self.executor);
+                return;
+            }
             let (prefix, tail) = output.split_at_mut(self.coefficients.len());
             tail.fill(PastaField::ZERO);
             if let Some(scales) = scales {

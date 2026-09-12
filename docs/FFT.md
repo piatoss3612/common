@@ -13,6 +13,9 @@ do not allocate. An executor's resource use belongs to the caller. Arithmetic
 is variable-time, with no constant-time guarantee for secret inputs; see the
 [field contract](../crates/udon/src/field/mod.rs).
 
+For a worked application migration from the sibling Bento workspace, see the
+[Sensei FFT upgrade guide](FFT_UPGRADE.md).
+
 ## Domains and transform order
 
 [`Domain`](../crates/udon/src/fft/domain.rs) constructs a subgroup with the

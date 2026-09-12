@@ -6,7 +6,7 @@ This is an experimental stack of Rust crates for Zakura.
   [`crates/`](crates/).
 * The current implementation provides reference integer and Montgomery
   arithmetic, addition chains, checked POD storage and embedding, and runtime
-  Pasta field arithmetic. Curve arithmetic remains planned.
+  Pasta field arithmetic and field FFTs. Curve arithmetic remains planned.
 * All target crates (`bento`, `bento-core`, and `udon`) currently use `no_std`.
 * See [the crate development guide](docs/CRATES.md) for dependency naming,
   workspace inheritance, macro path resolution, and publication conventions.
@@ -56,6 +56,14 @@ The optional `sqrt-table-large` feature selects larger square-root tables; see
 the [performance report](docs/FIELD_PERFORMANCE.md#optional-larger-square-root-tables)
 for latency, build-time, and storage tradeoffs.
 
+The [`fft` module](crates/udon/src/fft/mod.rs) provides radix-2 transforms,
+cosets, residue expansion, and fused class interpolation for both fields.
+Callers own all tables, buffers, scratch, and parallel execution; Udon's FFT
+setup and execution do not allocate or require a feature flag. See the
+[FFT guide](docs/FFT.md) for layouts, scratch requirements, and downstream table
+generation with Bento POD, and the [crate docs](crates/udon/src/lib.rs) for
+feature definitions.
+
 Curve arithmetic and the traits and utilities needed downstream for Tachyon
 remain planned.
 
@@ -82,5 +90,5 @@ RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --all-features --no-de
 ```
 
 The [CI workflow](.github/workflows/ci.yml) defines these gates plus focused
-Miri checks, field tests without optimizations, and cross-target checks. The
-format script also checks standalone Rust fixtures that Cargo does not discover.
+Miri checks, field and FFT tests without optimizations, and cross-target checks.
+The format script also checks standalone Rust fixtures that Cargo does not discover.

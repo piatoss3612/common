@@ -18,6 +18,7 @@ use core::{fmt, marker::PhantomData};
 
 mod algorithms;
 mod encoding;
+pub(crate) mod fft;
 mod inversion;
 mod montgomery;
 mod parameters;

@@ -36,11 +36,11 @@ jobs:
         run: rustup toolchain install
       - name: Run test suite (all workspace crates, all features)
         run: cargo test --release --locked --workspace --all-features
-      - name: Check fields with the default square-root tables
-        # The embedding consumer pins its own feature matrix, so the
-        # all-features step above already covers it; skip its nested builds.
-        run: cargo test --release --locked -p zakura-udon -- --skip generated_fields_embed
-      - name: Check field arithmetic with debug assertions
+      - name: Check Udon with the default square-root tables
+        # The embedding consumers pin their own feature matrices, so the
+        # all-features step above already covers them; skip their nested builds.
+        run: cargo test --release --locked -p zakura-udon -- --skip generated_fields_embed --skip generated_fft_tables_embed
+      - name: Check field arithmetic and FFTs with debug assertions
         run: |
           cargo test --locked -p zakura-udon --lib
           cargo test --locked -p zakura-udon --lib --all-features
@@ -48,6 +48,8 @@ jobs:
         run: |
           cargo bench --locked -p zakura-udon --bench field -- --test
           cargo bench --locked -p zakura-udon --bench field --features sqrt-table-large -- --test
+      - name: Exercise FFT benchmarks
+        run: cargo bench --locked -p zakura-udon --bench fft -- --test
 
   miri:
     name: Unsafe storage checks

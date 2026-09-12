@@ -27,7 +27,7 @@ their declaration serves an actual workspace need.
 | `bento-core` | Shared traits, storage support, and reference arithmetic; `no_std` |
 | `bento-macros` | Parsing, validation, and code generation on the build host |
 | `bento` | Public `no_std` facade over core and macros |
-| `udon` | Runtime Pasta fields and planned curve arithmetic; `no_std` |
+| `udon` | Runtime Pasta fields and field FFTs; planned curve arithmetic; `no_std` |
 
 Keep dependencies directed from arithmetic consumers through the facade to
 support code. Core must not depend on the facade or invoke its procedural
@@ -45,6 +45,12 @@ embedded representations must satisfy the target's layout and platform
 requirements. Keep host parsing and generation dependencies out of target
 libraries. Reference arithmetic used to derive constants belongs in support
 code; artifact formats and their generators belong with the data's owner.
+
+Keep FFT artifact schemas and execution runtimes downstream: Udon borrows
+caller tables, buffers, scratch, and an executor. Future allocating APIs must
+require the crate's `alloc` feature. See the [FFT guide](FFT.md) for the
+downstream preparation workflow and [crate docs](../crates/udon/src/lib.rs) for
+feature definitions.
 
 As arithmetic grows, distinguish memory validity, mathematical invariants, and
 side-channel guarantees. Safe constructors must establish any invariants needed

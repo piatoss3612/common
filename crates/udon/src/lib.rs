@@ -1,8 +1,10 @@
-//! Montgomery-form arithmetic for the two Pasta prime fields.
+//! Pasta field arithmetic and allocation-free field FFTs.
 //!
 //! [`field::Fp`] and [`field::Fq`] provide field arithmetic, canonical encodings,
 //! inversion, square roots, and product sums without allocation. Constants and
 //! fixed exponentiation schedules use this workspace's `bento` support.
+//! [`fft`] provides radix-2 transforms, cosets, residue expansion, and fused
+//! interpolation with caller-owned tables, buffers, scratch, and execution.
 //! Field elements implement [`bento::Pod`] for direct embedded storage; see
 //! [`field::PastaField`] for its invariants and [`stored_form!`] for naming
 //! artifacts by representation.
@@ -21,6 +23,11 @@
 //!
 //! # Features
 //!
+//! FFTs are always available; there is no `fft` feature. All current APIs work
+//! without an allocator. The additive `alloc` feature is reserved for future
+//! allocating APIs and currently changes no behavior. Enabling it does not
+//! cause FFT setup or execution to allocate.
+//!
 //! By default, [`field::PastaField::sqrt`] uses small tables of roots of unity.
 //! Enabling `sqrt-table-large` selects a larger table algorithm that reduces
 //! work for many square inputs, at the cost of additional static storage.
@@ -36,6 +43,7 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod fft;
 pub mod field;
 mod stored_form;
 

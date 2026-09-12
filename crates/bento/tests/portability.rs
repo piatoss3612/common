@@ -25,7 +25,7 @@ edition = "2024"
 [workspace]
 [dependencies]
 bento = {{ package = "zakura-bento", path = {facade:?} }}
-udon = {{ package = "zakura-udon", path = {udon:?} }}
+udon = {{ package = "zakura-udon", path = {udon:?}, default-features = false }}
 [features]
 record = []
 empty-record = []

@@ -30,11 +30,11 @@ sqrt-table-large = ["udon/sqrt-table-large"]
 
 [dependencies]
 bento = {{ package = "zakura-bento", path = {bento:?} }}
-udon = {{ package = "zakura-udon", path = {udon:?} }}
+udon = {{ package = "zakura-udon", path = {udon:?}, default-features = false }}
 
 [build-dependencies]
 bento = {{ package = "zakura-bento", path = {bento:?} }}
-udon = {{ package = "zakura-udon", path = {udon:?} }}
+udon = {{ package = "zakura-udon", path = {udon:?}, default-features = false }}
 "#
         ),
     )

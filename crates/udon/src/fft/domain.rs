@@ -86,8 +86,12 @@ impl<M: PrimeModulus> Domain<M> {
 
     /// Constructs the evaluation points `shift * root^j` for `0 <= j < size`.
     ///
-    /// Returns [`FftError::ZeroShift`] when `shift` is zero.
+    /// Returns [`FftError::ZeroShift`] when `shift` is zero, or
+    /// [`FftError::InvalidShift`] for an unreduced Montgomery representation.
     pub fn coset(self, shift: PastaField<M>) -> Result<CosetDomain<M>, FftError> {
+        if !super::is_reduced(shift) {
+            return Err(FftError::InvalidShift);
+        }
         let inverse = shift.invert().ok_or(FftError::ZeroShift)?;
         Ok(CosetDomain::with_inverse(self, shift, inverse))
     }

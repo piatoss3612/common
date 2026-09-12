@@ -7,6 +7,8 @@ use std::{
     vec::Vec,
 };
 
+mod composition;
+mod contracts;
 mod operations;
 mod pipelines;
 
@@ -34,8 +36,6 @@ impl<M: PrimeModulus> Prepared<M> {
             inverse_scales: Some(&mut result.scales),
         }
         .prepare(domain)
-        .unwrap()
-        .validate(domain)
         .unwrap();
         result
     }
@@ -193,7 +193,7 @@ fn small_transforms<M: PrimeModulus>() {
                     inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
                     inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 };
-                let plan = Plan::new(domain, tables).unwrap();
+                let plan = Plan::new(tables.bind(domain).unwrap());
                 for (index, options) in OPTIONS.into_iter().enumerate() {
                     let count = SCRATCH[log as usize][index];
                     assert_eq!(
@@ -258,7 +258,7 @@ fn prefixes<M: PrimeModulus>() {
         let prepared = Prepared::new(domain);
         let input = inputs(domain.size());
         for table in [Tables::default(), prepared.tables()] {
-            let plan = Plan::new(domain, table).unwrap();
+            let plan = Plan::new(table.bind(domain).unwrap());
             for len in [
                 0,
                 1,
@@ -326,7 +326,7 @@ fn source_sizes<M: PrimeModulus>() {
             .coset(PastaField::zeta())
             .unwrap();
         let prepared = Prepared::new(domain);
-        let plan = Plan::new(domain, prepared.tables()).unwrap();
+        let plan = Plan::new(prepared.tables().bind(domain).unwrap());
         let coefficients = inputs(domain.size());
         let expected = reference_coset(&coefficients, domain);
         let options = ExecutionOptions {
@@ -369,7 +369,7 @@ fn larger_transform<M: PrimeModulus>() {
     assert_eq!(subgroup.log_size(), 16);
     let domain = subgroup.coset(PastaField::from_u64(7)).unwrap();
     let prepared = Prepared::new(domain);
-    let plan = Plan::new(domain, prepared.tables()).unwrap();
+    let plan = Plan::new(prepared.tables().bind(domain).unwrap());
     let coefficients = inputs(domain.size());
     let expected = reference_coset(&coefficients, domain);
     let options = ExecutionOptions {
@@ -408,7 +408,7 @@ fn expansions<M: PrimeModulus>() {
     for log in [0, 1, 3, 6] {
         let base_domain = Domain::<M>::new(log).unwrap();
         let base_tables = Prepared::new(base_domain.subgroup());
-        let base = Plan::new(base_domain.subgroup(), base_tables.tables()).unwrap();
+        let base = Plan::new(base_tables.tables().bind(base_domain.subgroup()).unwrap());
         let coefficients = inputs(base_domain.size());
         let evaluations = direct(&coefficients, base_domain.subgroup());
         for extra in [0, 1, 2, 3] {
@@ -416,8 +416,8 @@ fn expansions<M: PrimeModulus>() {
                 let domain = Domain::new(log + extra).unwrap().coset(shift).unwrap();
                 let expansion = Expansion::new(base, domain, None).unwrap();
                 let mut scales = vec![PastaField::ZERO; expansion.scale_count()];
-                expansion.prepare_scales(&mut scales).unwrap();
-                for scales in [None, Some(scales.as_slice())] {
+                let scales = expansion.prepare_scales(&mut scales).unwrap();
+                for scales in [None, Some(scales)] {
                     let expansion = Expansion::new(base, domain, scales).unwrap();
                     expansion.validate_scales().unwrap();
                     let expected = direct(&coefficients, domain);
@@ -460,7 +460,7 @@ fn expansions<M: PrimeModulus>() {
                             )
                             .unwrap();
                         assert_eq!(scratch[count], PastaField::ONE);
-                        let view = ResidueView::new(&output, expansion.layout()).unwrap();
+                        let view = expansion.view(&output).unwrap();
                         for (row, expected) in expected.iter().enumerate() {
                             assert_eq!(view.get(row), Some(expected));
                         }
@@ -483,7 +483,7 @@ fn expansions<M: PrimeModulus>() {
                                 .iter()
                                 .all(|value| *value == PastaField::ONE)
                         );
-                        let view = ResidueView::new(&output, expansion.layout()).unwrap();
+                        let view = expansion.view(&output).unwrap();
                         for (row, expected) in expected.iter().enumerate() {
                             assert_eq!(view.get(row), Some(expected));
                         }
@@ -501,7 +501,7 @@ fn expansions<M: PrimeModulus>() {
                                 )
                                 .unwrap();
                             let short_values = direct(short, domain);
-                            let product = ResidueView::new(&product, expansion.layout()).unwrap();
+                            let product = expansion.view(&product).unwrap();
                             for row in 0..domain.size() {
                                 assert_eq!(
                                     product.get(row),
@@ -529,7 +529,7 @@ fn residue_expansion_and_fused_short_products_match_direct_evaluation() {
 fn large_expansion<M: PrimeModulus>() {
     let base_domain = Domain::<M>::new(11).unwrap();
     let prepared = Prepared::new(base_domain.subgroup());
-    let base = Plan::new(base_domain.subgroup(), prepared.tables()).unwrap();
+    let base = Plan::new(prepared.tables().bind(base_domain.subgroup()).unwrap());
     let coefficients = inputs(base_domain.size());
     for extra in [1, 3] {
         let domain = Domain::new(11 + extra)
@@ -572,7 +572,7 @@ fn large_expansion<M: PrimeModulus>() {
             .copy_to_natural(&output, &mut natural)
             .unwrap();
         assert_eq!(natural, expected);
-        let factor = ResidueView::new(&output, expansion.layout()).unwrap();
+        let factor = expansion.view(&output).unwrap();
         let mut product = vec![PastaField::ZERO; domain.size()];
         expansion
             .short_product(
@@ -585,7 +585,7 @@ fn large_expansion<M: PrimeModulus>() {
             )
             .unwrap();
         let short_values = direct(&coefficients[..5], domain);
-        let product = ResidueView::new(&product, expansion.layout()).unwrap();
+        let product = expansion.view(&product).unwrap();
         for row in 0..domain.size() {
             assert_eq!(
                 product.get(row),
@@ -681,7 +681,7 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
         assert_eq!(executor.take(), inverse_joins + residues * forward_joins);
         assert_eq!(output, expected);
         let ones = vec![Fp::ONE; domain.size()];
-        let factor = ResidueView::new(&ones, expansion.layout()).unwrap();
+        let factor = expansion.view(&ones).unwrap();
         expansion
             .short_product(
                 &coefficients[..5],
@@ -695,7 +695,7 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
         let pruned_joins = executor.take();
         assert!(pruned_joins > 0 && pruned_joins < residues * forward_joins);
         let expected_short = direct(&coefficients[..5], domain);
-        let view = ResidueView::new(&output, expansion.layout()).unwrap();
+        let view = expansion.view(&output).unwrap();
         for (row, expected) in expected_short.iter().enumerate() {
             assert_eq!(view.get(row), Some(expected));
         }
@@ -732,7 +732,7 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
             let extended = Domain::new(6 + extra).unwrap().coset(shift).unwrap();
             let expected = reference_coset(&coefficients, extended);
             let mut scales = vec![PastaField::ZERO; extended.size()];
-            Expansion::new(Plan::without_tables(subgroup), extended, None)
+            let scales = Expansion::new(Plan::without_tables(subgroup), extended, None)
                 .unwrap()
                 .prepare_scales(&mut scales)
                 .unwrap();
@@ -744,9 +744,9 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
                     inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 };
                 let expansion = Expansion::new(
-                    Plan::new(subgroup, tables).unwrap(),
+                    Plan::new(tables.bind(subgroup).unwrap()),
                     extended,
-                    Some(&scales),
+                    Some(scales),
                 )
                 .unwrap();
                 for transform in [
@@ -776,7 +776,7 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
                             &mut scratch,
                         )
                         .unwrap();
-                    let view = ResidueView::new(&output, expansion.layout()).unwrap();
+                    let view = expansion.view(&output).unwrap();
                     for (row, expected) in expected.iter().enumerate() {
                         assert_eq!(view.get(row), Some(expected));
                     }
@@ -853,7 +853,7 @@ fn constant_prefixes<M: PrimeModulus>() {
             expansion
                 .short_product(
                     &constant,
-                    ResidueView::new(&factor, expansion.layout()).unwrap(),
+                    expansion.view(&factor).unwrap(),
                     &mut output,
                     options,
                     &executor,
@@ -902,7 +902,7 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
             Expansion::new(base, Domain::new(6 + extra).unwrap().subgroup(), None).unwrap();
         let mut output = vec![Fp::ONE; expansion.layout().size()];
         let factors = output.clone();
-        let factor = ResidueView::new(&factors, expansion.layout()).unwrap();
+        let factor = expansion.view(&factors).unwrap();
         for tasks in [1, 2, 3, usize::MAX] {
             let options = ExpansionOptions {
                 max_residue_tasks: tasks,
@@ -1060,8 +1060,8 @@ fn classed<M: PrimeModulus>(log: u32) {
     let smallest_values = reference_coset(&smallest_coefficients, smallest);
     let prepared = Prepared::new(domain);
     let small_prepared = Prepared::new(smaller);
-    let plan = Plan::new(domain, prepared.tables()).unwrap();
-    let small_plan = Plan::new(smaller, small_prepared.tables()).unwrap();
+    let plan = Plan::new(prepared.tables().bind(domain).unwrap());
+    let small_plan = Plan::new(small_prepared.tables().bind(smaller).unwrap());
     for order in [InputOrder::Natural, InputOrder::BitReversed] {
         let mut full = vec![PastaField::ZERO; domain.size()];
         let mut small = vec![PastaField::ZERO; smaller.size()];
@@ -1593,7 +1593,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         "input prefix must contain 0..=64 elements, received 65"
     );
     let factor_values = [Fp::ONE; 128];
-    let factor = ResidueView::new(&factor_values, expansion.layout()).unwrap();
+    let factor = expansion.view(&factor_values).unwrap();
     for len in [0, 65] {
         let error = expansion
             .short_product(
@@ -1653,7 +1653,10 @@ fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() 
     assert_eq!(wrong, [Fp::ONE; 3]);
     let mut prepared = Prepared::new(domain);
     prepared.inverse[1] = Fp::ZERO;
-    assert!(Plan::new(domain, prepared.tables()).is_ok());
+    assert!(matches!(
+        prepared.tables().bind(domain),
+        Err(FftError::InvalidTables)
+    ));
     assert_eq!(
         prepared.tables().validate(domain),
         Err(FftError::InvalidTables)
@@ -1679,16 +1682,15 @@ fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() 
     let mut scales = [Fp::ZERO; 8];
     expansion.prepare_scales(&mut scales).unwrap();
     scales[2] = Fp::ZERO;
-    assert_eq!(
-        Expansion::new(
-            Plan::without_tables(domain.domain().subgroup()),
+    assert!(matches!(
+        ExpansionScales::bind(
+            domain.size(),
             domain,
-            Some(&scales)
-        )
-        .unwrap()
-        .validate_scales(),
+            ExpansionScaleNormalization::Coefficients,
+            &scales
+        ),
         Err(FftError::InvalidTables)
-    );
+    ));
 }
 
 #[test]
@@ -1795,7 +1797,7 @@ fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
             let domain = subgroup.coset(shift).unwrap();
             let prepared = Prepared::new(domain);
             for tables in [Tables::default(), prepared.tables()] {
-                let plan = Plan::new(domain, tables).unwrap();
+                let plan = Plan::new(tables.bind(domain).unwrap());
                 let count = plan.scratch_requirements(options).unwrap().field_elements;
                 let mut scratch = vec![PastaField::ONE; count + 2];
                 let joins = CountJoins::default();
@@ -1856,7 +1858,7 @@ fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
         .unwrap();
     let inverse_joins = count.take();
     let factors = vec![Fp::ONE; expansion.layout().size()];
-    let factor = ResidueView::new(&factors, expansion.layout()).unwrap();
+    let factor = expansion.view(&factors).unwrap();
     for operation in 0..3 {
         let mut output = factors.clone();
         let executor = FailAt {

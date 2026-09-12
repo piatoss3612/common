@@ -181,7 +181,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                 }
             }
             let mut powers = vec![PastaField::ZERO; size];
-            let scales = PowerTable::prepare(PastaField::ONE, shift, &mut powers);
+            let scales = PowerTable::prepare(PastaField::ONE, shift, &mut powers).unwrap();
             bench(
                 "coefficient_scales",
                 plan.configure(TransformRequest::new(Direction::Forward), strategy)
@@ -229,10 +229,21 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
             expansion
         };
         for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
-            for storage in [
-                ExpansionStorage::ReuseOutput,
-                ExpansionStorage::CoefficientWorkspace,
-                ExpansionStorage::DisposableInput,
+            let scale = if normalization == Some(ExpansionScaleNormalization::Coefficients) {
+                InverseScale::Normalized
+            } else {
+                InverseScale::Unscaled
+            };
+            for (storage_name, storage) in [
+                ("ReuseOutput", ExpansionStorage::ReuseOutput),
+                (
+                    "CoefficientWorkspace",
+                    ExpansionStorage::CoefficientWorkspace { scale },
+                ),
+                (
+                    "DisposableInput",
+                    ExpansionStorage::DisposableInput { scale },
+                ),
             ] {
                 let strategy = runner.strategy(base.domain().size());
                 let operation = expansion
@@ -250,7 +261,7 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                 let mut workspace = vec![PastaField::ZERO; required.coefficient_fields];
                 let mut scratch = vec![PastaField::ZERO; required.scratch_fields];
                 let id = format!(
-                    "{normalization:?}/{order:?}/{storage:?}/tables_{}_scratch_{}_coefficients_{}",
+                    "{normalization:?}/{order:?}/{storage_name}/tables_{}_scratch_{}_coefficients_{}",
                     required.retained_table_bytes,
                     scratch.len() * 32,
                     workspace.len() * 32
@@ -267,21 +278,27 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                                         runner,
                                         &mut scratch,
                                     ),
-                                    ExpansionStorage::CoefficientWorkspace => operation
+                                    ExpansionStorage::CoefficientWorkspace { .. } => operation
                                         .execute_with_workspace(
                                             black_box(&input),
                                             &mut output,
                                             &mut workspace,
                                             runner,
                                             &mut scratch,
-                                        ),
-                                    ExpansionStorage::DisposableInput => operation
+                                        )
+                                        .map(|view| {
+                                            black_box(view);
+                                        }),
+                                    ExpansionStorage::DisposableInput { .. } => operation
                                         .execute_disposable(
                                             black_box(working),
                                             &mut output,
                                             runner,
                                             &mut scratch,
-                                        ),
+                                        )
+                                        .map(|view| {
+                                            black_box(view);
+                                        }),
                                     ExpansionStorage::Coefficients => unreachable!(),
                                 }
                                 .unwrap();
@@ -418,6 +435,21 @@ fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
             })
         });
     }
+    // Import validation is setup work; keep it outside execution measurements.
+    for size in [1 << 14, 1 << 20] {
+        for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
+            let description = TwiddleDescription {
+                size,
+                inverse: false,
+                storage,
+            };
+            let mut values = vec![PastaField::<M>::ZERO; description.requirements().unwrap()];
+            TwiddleTable::prepare(description, &mut values).unwrap();
+            group.bench_function(format!("checked_import/{storage:?}/{size}"), |b| {
+                b.iter(|| black_box(TwiddleTable::bind(description, black_box(&values)).unwrap()))
+            });
+        }
+    }
     let base_size = 2048;
     let extended = Domain::<M>::for_size(16384)
         .unwrap()
@@ -449,11 +481,10 @@ fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
         format!("coefficient_powers/bytes_{}", scales.len() * 32),
         |b| {
             b.iter(|| {
-                black_box(PowerTable::prepare(
-                    PastaField::ONE,
-                    extended.shift(),
-                    black_box(&mut scales),
-                ));
+                black_box(
+                    PowerTable::prepare(PastaField::ONE, extended.shift(), black_box(&mut scales))
+                        .unwrap(),
+                );
             })
         },
     );

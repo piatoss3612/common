@@ -54,13 +54,9 @@ fn exercise_field<M: PrimeModulus>(
         .expect("embedded metadata must match the domain");
     let plan = tables
         .bind(domain)
-        .unwrap()
-        .validate()
         .expect("embedded FFT tables must match the domain")
         .plan();
     let twiddles = TwiddleTable::bind(record::TWIDDLES, packed)
-        .unwrap()
-        .validate()
         .expect("embedded packed twiddles must match the domain");
     const OPTIONS: ExecutionOptions = ExecutionOptions {
         tile_len: 4,
@@ -113,14 +109,11 @@ fn exercise_field<M: PrimeModulus>(
         ExpansionScaleNormalization::UnscaledInverse,
         scales,
     )
-    .unwrap();
+    .expect("embedded residue scales must match the domain");
     let expansion = Expansion::new(plan, extended, None)
         .unwrap()
         .with_scales(scales)
         .unwrap();
-    expansion
-        .validate_scales()
-        .expect("embedded residue scales must match the domain");
     let mut output = [PastaField::ZERO; record::EXTENDED_SIZE];
     const EXPANSION_OPTIONS: ExpansionOptions = ExpansionOptions {
         max_residue_tasks: 2,

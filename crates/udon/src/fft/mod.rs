@@ -27,10 +27,15 @@
 //! Length mismatches identify the buffer parameter or table field, along with
 //! its expected and actual lengths. Invalid input prefixes report the
 //! supported length range separately from unsupported domain sizes.
-//! Binding table slices checks structure; each table handle's `validate` method
-//! checks mathematical contents. Native preparation writes valid tables and
-//! returns the same borrowed interface. Invalid contents can cause incorrect results
-//! or panics. The generic [`mod@reference`] transforms have their own contracts.
+//!
+//! Checked table binding, such as [`Tables::bind`], validates dimensions and
+//! mathematical contents before returning a reusable handle. Native
+//! preparation returns the same immutable handles without rescanning entries.
+//! Explicit constructors such as [`Tables::bind_trusted`] rely on the caller
+//! for correct contents, as documented by each table family;
+//! invalid contents can cause incorrect results or panics. Configuration checks
+//! compatibility, and execution does not revalidate entries. The generic
+//! [`mod@reference`] transforms have their own contracts.
 //!
 //! Scratch consists of initialized field elements. Its initial values do not
 //! affect the result, and it may be reused after execution. Elements beyond the
@@ -87,7 +92,7 @@
 //!     inverse: Some(&mut inverse),
 //!     ..TablesMut::default()
 //! }.prepare(domain).unwrap();
-//! let plan = Plan::new(domain, tables).unwrap();
+//! let plan = Plan::new(tables);
 //! let mut scratch = [Fq::ZERO; SCRATCH];
 //! let coefficients = [Fq::ONE; SIZE];
 //! let mut values = coefficients;
@@ -164,7 +169,9 @@ pub use interpolation::{
 pub use interpolation_parallel::{
     InterpolationOptions, InterpolationRequirements, interpolate_classes_parallel, interpolate_sum,
 };
-pub use layout::{CoefficientTiles, EvaluationLayout, EvaluationView, ResidueLayout, ResidueView};
+pub use layout::{
+    CoefficientTiles, CoefficientView, EvaluationLayout, EvaluationView, ResidueLayout, ResidueView,
+};
 pub use operation::{
     Backend, Codelet, Direction, Initialization, InputPolicy, InputSupport, InverseScale,
     OperationDescription, OperationRequirements, PreparedOperation, ResourceBudget, Strategy,
@@ -192,6 +199,8 @@ pub enum FftError {
     SizeOverflow,
     /// A coset shift is zero.
     ZeroShift,
+    /// A coset shift has an unreduced Montgomery representation.
+    InvalidShift,
     /// An execution setting or combination of request options is invalid.
     InvalidExecution,
     /// The requested storage exceeds an explicit resource ceiling.
@@ -232,6 +241,7 @@ impl core::fmt::Display for FftError {
             ),
             Self::SizeOverflow => f.write_str("FFT storage or index size overflow"),
             Self::ZeroShift => f.write_str("coset shift must be nonzero"),
+            Self::InvalidShift => f.write_str("coset shift must have reduced Montgomery limbs"),
             Self::InvalidExecution => f.write_str("invalid FFT execution settings"),
             Self::ResourceLimit => f.write_str("FFT resource ceiling exceeded"),
             Self::LengthMismatch {
@@ -259,6 +269,15 @@ impl core::fmt::Display for FftError {
 }
 
 impl core::error::Error for FftError {}
+
+fn is_reduced<M: PrimeModulus>(value: PastaField<M>) -> bool {
+    value
+        .montgomery_limbs()
+        .iter()
+        .rev()
+        .cmp(M::MODULUS.iter().rev())
+        .is_lt()
+}
 
 fn check_len(buffer: &'static str, actual: usize, expected: usize) -> Result<(), FftError> {
     if actual == expected {

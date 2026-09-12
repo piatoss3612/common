@@ -1,9 +1,9 @@
 use super::transform::Run;
 use super::{
-    Codelet, CosetDomain, ExecutionOptions, Executor, ExpansionOrder, ExpansionScaleNormalization,
-    ExpansionScales, FftError, InputOrder, InverseScale, PastaField, Plan, PrimeModulus,
-    ResidueLayout, ResidueView, ScratchRequirements, check_domain_size, check_field_count,
-    check_len, check_prefix, min, reverse,
+    Codelet, CosetDomain, EvaluationLayout, EvaluationView, ExecutionOptions, Executor,
+    ExpansionOrder, ExpansionScaleNormalization, ExpansionScales, FftError, InputOrder,
+    InverseScale, PastaField, Plan, PrimeModulus, ResidueLayout, ScratchRequirements,
+    check_domain_size, check_field_count, check_len, check_prefix, min, reverse,
 };
 
 /// Caller-selected concurrency across residues and within each base transform.
@@ -116,7 +116,7 @@ impl Default for ExpansionOptions {
 /// For base size `n` and extended size `r*n`, residue `s` contains the extended
 /// domain's natural rows `s + r*k`, for `0 <= s < r` and `0 <= k < n`. Direct
 /// methods store each residue contiguously, as described by [`Self::layout`];
-/// use [`ResidueView`] for lookup by natural row. [`Self::configure`] also
+/// use [`super::ResidueView`] for lookup by natural row. [`Self::configure`] also
 /// supports bit-reversed output. The ratio `r` can be any supported power of
 /// two, including one.
 ///
@@ -171,43 +171,48 @@ impl<M: PrimeModulus> core::fmt::Debug for Expansion<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> Expansion<'a, M> {
-    /// Checks domain compatibility and the optional residue-scaling table length.
+    /// Constructs an expansion after checking the base and optional scale domains.
     ///
     /// `base` must describe a subgroup (shift one) and fit in `extended`, or
     /// this returns [`FftError::InvalidLayout`].
     ///
-    /// Optional scales have `extended.size()` entries, in residue-major order:
-    /// entry `s*n + j` is `(shift * root^s)^j`, where `n` is the base size and
-    /// `shift` and `root` come from `extended`. A wrong length returns
-    /// [`FftError::LengthMismatch`]. Contents are trusted as with
-    /// [`super::Tables`]; use [`Self::validate_scales`] for a full check.
+    /// Optional scales retain their domain and normalization. Compatibility
+    /// checks and scale usage follow [`Self::with_scales`]; construction does
+    /// not rescan table entries.
     pub fn new(
         base: Plan<'a, M>,
         extended: CosetDomain<M>,
-        scales: Option<&'a [PastaField<M>]>,
+        scales: Option<ExpansionScales<'a, M>>,
     ) -> Result<Self, FftError> {
         if base.domain().shift() != PastaField::ONE || base.domain().size() > extended.size() {
             return Err(FftError::InvalidLayout);
         }
-        if let Some(scales) = scales {
-            check_len("scales", scales.len(), extended.size())?;
-        }
-        Ok(Self {
+        let expansion = Self {
             base,
             extended,
-            scales,
+            scales: None,
             normalization: ExpansionScaleNormalization::Coefficients,
             layout: ResidueLayout::new(extended.size(), extended.size() / base.domain().size())?,
-        })
+        };
+        match scales {
+            Some(scales) => expansion.with_scales(scales),
+            None => Ok(expansion),
+        }
     }
 
     /// Replaces the scaling table after checking its domain and base size.
     ///
     /// A domain or base-size mismatch returns [`FftError::InvalidTables`].
-    /// Coefficient expansion uses ordinary powers and ignores tables declared
-    /// for an unscaled inverse. Evaluation expansion accepts either
-    /// [`ExpansionScaleNormalization`]. Call [`ExpansionScales::validate`] to
-    /// check imported entries.
+    /// Normalized coefficient input uses ordinary powers, ignoring tables with
+    /// [`ExpansionScaleNormalization::UnscaledInverse`]. An unscaled
+    /// [`CoefficientView`](super::CoefficientView) can use either convention;
+    /// initialization accounts for the view's source base size and any factor
+    /// already present in the table. [`Self::evaluations`] accepts either
+    /// convention. Prepared expansions that retain coefficients additionally
+    /// require the scale compatibility described by [`Self::configure`].
+    ///
+    /// Table contents follow [`ExpansionScales`]' preparation and binding
+    /// contract. Attachment does not rescan entries.
     pub fn with_scales(mut self, scales: ExpansionScales<'a, M>) -> Result<Self, FftError> {
         if scales.base_size != self.base.domain().size()
             || !scales.extended.same_domain(self.extended)
@@ -226,6 +231,18 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     pub const fn layout(self) -> ResidueLayout {
         self.layout
     }
+
+    /// Binds values to the extended domain and direct methods' residue layout.
+    ///
+    /// Returns [`FftError::LengthMismatch`] unless `values` has the extended
+    /// size. Contents are not checked; see [`EvaluationView::bind`].
+    pub fn view(self, values: &[PastaField<M>]) -> Result<EvaluationView<'_, M>, FftError> {
+        EvaluationView::bind(
+            values,
+            self.extended,
+            EvaluationLayout::Residues(self.layout),
+        )
+    }
     /// Number of field elements in the optional residue-scaling table.
     pub const fn scale_count(self) -> usize {
         self.extended.size()
@@ -233,11 +250,14 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Prepares residue scales into caller storage after checking its exact length.
     ///
-    /// Entries follow [`Self::new`]'s ordinary coefficient formula, regardless
+    /// Entries use [`ExpansionScaleNormalization::Coefficients`], regardless
     /// of any already borrowed scales. Use [`ExpansionScales::prepare`] to
     /// select another normalization. Returns [`FftError::LengthMismatch`]
     /// without writing if `output.len()` differs from [`Self::scale_count`].
-    pub fn prepare_scales(self, output: &mut [PastaField<M>]) -> Result<(), FftError> {
+    pub fn prepare_scales(
+        self,
+        output: &mut [PastaField<M>],
+    ) -> Result<ExpansionScales<'_, M>, FftError> {
         check_len("output", output.len(), self.scale_count())?;
         let mut step = self.extended.shift();
         for (index, residue) in output
@@ -255,7 +275,12 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
                 step = step.mul(&self.extended.domain().root());
             }
         }
-        Ok(())
+        Ok(ExpansionScales {
+            base_size: self.base.domain().size(),
+            extended: self.extended,
+            normalization: ExpansionScaleNormalization::Coefficients,
+            values: output,
+        })
     }
 
     /// Checks every supplied residue scale without allocating or mutating it.
@@ -263,7 +288,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// Checks the declared [`ExpansionScaleNormalization`], returning
     /// [`FftError::InvalidTables`] for an incorrect or unreduced entry.
     /// Succeeds immediately if scales were omitted. This does not validate the
-    /// base plan's tables; those are checked with [`super::Tables::validate`].
+    /// base plan's tables; their validity follows [`super::Tables`]' contract.
     pub fn validate_scales(self) -> Result<(), FftError> {
         if let Some(scales) = self.scales {
             ExpansionScales::bind(
@@ -271,8 +296,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
                 self.extended,
                 self.normalization,
                 scales,
-            )?
-            .validate()?;
+            )?;
         }
         Ok(())
     }
@@ -300,22 +324,29 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Expands a coefficient prefix into residue-major coset evaluations.
     ///
-    /// Coefficients are in increasing degree order; an empty prefix represents
-    /// zero. Execution uses [`ExpansionOptions`] across and within residues;
-    /// scratch must meet [`Self::coefficient_scratch`].
+    /// Accepts ordinary coefficients or a
+    /// [`CoefficientView`](super::CoefficientView) in increasing degree order;
+    /// an empty prefix represents zero. A view's normalization is applied
+    /// during initialization, with table usage as
+    /// described by [`Self::with_scales`]. Input is preserved. Execution uses
+    /// [`ExpansionOptions`] across and within residues; scratch must meet
+    /// [`Self::coefficient_scratch`].
     ///
     /// Returns [`FftError::InvalidPrefix`] if the prefix exceeds the base size,
     /// [`FftError::LengthMismatch`] if the output length differs from the
     /// extended size, or [`FftError::ScratchTooSmall`] for insufficient scratch.
     /// Options and storage limits have the errors of [`Self::coefficient_scratch`].
-    pub fn coefficients<E: Executor>(
+    pub fn coefficients<'input, E: Executor>(
         self,
-        coefficients: &[PastaField<M>],
+        coefficients: impl Into<super::CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],
         options: ExpansionOptions,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
+        let coefficients = coefficients.into();
+        let (normalized_coefficients, extra) = self.coefficient_input(coefficients);
+        let coefficients = coefficients.as_slice();
         self.check(coefficients.len(), 0, output.len())?;
         let required = self.coefficient_scratch(options)?;
         required.check(scratch.len())?;
@@ -327,9 +358,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             expansion: self,
             coefficients,
             factor: None,
-            normalized_coefficients: true,
+            normalized_coefficients,
             order: ExpansionOrder::Residues,
-            extra: PastaField::ONE,
+            extra,
             options: options.transform,
             executor,
         }
@@ -463,29 +494,35 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Evaluates a short polynomial times a supplied factor.
     ///
-    /// `short` contains coefficients in increasing degree order and must have
-    /// between one and the base size entries. Its expanded evaluations are
-    /// multiplied pointwise by `factor`. The factor must use this expansion's
-    /// layout and evaluation domain; only the layout is checked. A different
-    /// domain gives incorrect polynomial products without risking memory safety.
+    /// `short` accepts ordinary coefficients or a
+    /// [`CoefficientView`](super::CoefficientView), with ordering and scaling as
+    /// in [`Self::coefficients`]. It must have between one and the base size
+    /// entries. Its expanded evaluations are multiplied pointwise by `factor`.
+    /// The factor must use this expansion's layout and exact ordered evaluation
+    /// domain; both are checked.
     ///
     /// Scheduling, scratch requirements, and output-length errors are those of
     /// [`Self::coefficients`].
     /// An empty or oversized prefix returns [`FftError::InvalidPrefix`], and a
-    /// different factor layout returns [`FftError::InvalidLayout`]. The result
-    /// is an evaluation vector; recovering the full product by interpolation
-    /// additionally requires its degree to be below the extended domain size.
-    pub fn short_product<E: Executor>(
+    /// different factor layout or domain returns [`FftError::InvalidLayout`].
+    /// Recovering the full product by interpolation additionally requires its
+    /// degree to be below the extended domain size.
+    pub fn short_product<'input, E: Executor>(
         self,
-        short: &[PastaField<M>],
-        factor: ResidueView<'_, M>,
+        short: impl Into<super::CoefficientView<'input, M>>,
+        factor: EvaluationView<'_, M>,
         output: &mut [PastaField<M>],
         options: ExpansionOptions,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
+        let short = short.into();
+        let (normalized_coefficients, extra) = self.coefficient_input(short);
+        let short = short.as_slice();
         self.check(short.len(), 1, output.len())?;
-        if factor.layout() != self.layout {
+        if factor.layout() != EvaluationLayout::Residues(self.layout)
+            || !factor.domain().same_domain(self.extended)
+        {
             return Err(FftError::InvalidLayout);
         }
         let required = self.coefficient_scratch(options)?;
@@ -494,9 +531,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             expansion: self,
             coefficients: short,
             factor: Some(factor.as_slice()),
-            normalized_coefficients: true,
+            normalized_coefficients,
             order: ExpansionOrder::Residues,
-            extra: PastaField::ONE,
+            extra,
             options: options.transform,
             executor,
         }
@@ -507,6 +544,31 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             &mut scratch[..required.field_elements],
         );
         Ok(())
+    }
+
+    pub(super) fn coefficient_input(
+        self,
+        coefficients: super::CoefficientView<'_, M>,
+    ) -> (bool, PastaField<M>) {
+        let normalized = coefficients.scale() == InverseScale::Normalized;
+        let extra = if !normalized
+            && self.scales.is_some()
+            && self.normalization == ExpansionScaleNormalization::UnscaledInverse
+        {
+            // The table divides by this expansion's base size; the view needs
+            // division by its source size. Their ratio is a power of two.
+            // Oversized inputs are rejected before execution by every caller.
+            if self.base.domain().size() == coefficients.as_slice().len() {
+                PastaField::ONE
+            } else {
+                PastaField::from_u64(
+                    (self.base.domain().size() / coefficients.as_slice().len()) as u64,
+                )
+            }
+        } else {
+            coefficients.normalization_factor()
+        };
+        (normalized, extra)
     }
 }
 
@@ -582,23 +644,40 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
                     || expansion.normalization == ExpansionScaleNormalization::Coefficients
             })
             .map(|scales| &scales[residue * size..(residue + 1) * size]);
-        let shift = expansion
-            .extended
-            .shift()
-            .mul(&expansion.extended.domain().root().pow_u64(residue as u64));
+        let shift = if scales.is_some() {
+            PastaField::ONE
+        } else {
+            expansion
+                .extended
+                .shift()
+                .mul(&expansion.extended.domain().root().pow_u64(residue as u64))
+        };
         let factor = self
             .factor
             .map(|factor| &factor[block * size..(block + 1) * size]);
         if self.order == ExpansionOrder::BitReversed {
-            let mut power = self.extra;
-            for (index, output) in output.iter_mut().enumerate() {
-                *output = self
-                    .coefficients
-                    .get(index)
-                    .map_or(PastaField::ZERO, |value| {
-                        value.mul(&scales.map_or(power, |scales| scales[index].mul(&self.extra)))
-                    });
-                power = power.mul(&shift);
+            let (prefix, tail) = output.split_at_mut(self.coefficients.len());
+            tail.fill(PastaField::ZERO);
+            if let Some(scales) = scales {
+                if self.extra == PastaField::ONE {
+                    for ((output, value), scale) in
+                        prefix.iter_mut().zip(self.coefficients).zip(scales)
+                    {
+                        *output = value.mul(scale);
+                    }
+                } else {
+                    for ((output, value), scale) in
+                        prefix.iter_mut().zip(self.coefficients).zip(scales)
+                    {
+                        *output = value.mul(&scale.mul(&self.extra));
+                    }
+                }
+            } else {
+                let mut power = self.extra;
+                for (output, value) in prefix.iter_mut().zip(self.coefficients) {
+                    *output = value.mul(&power);
+                    power = power.mul(&shift);
+                }
             }
             super::stages::StageKernel {
                 plan: expansion.base,

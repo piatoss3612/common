@@ -9,7 +9,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use zakura_udon::{
     fft::{
         Class, CosetDomain, Domain, ExecutionOptions, Executor, Expansion, ExpansionOptions,
-        InputOrder, Plan, ResidueView, SerialExecutor, TableRequirements, Tables, TablesMut,
+        InputOrder, Plan, SerialExecutor, TableRequirements, Tables, TablesMut,
         interpolate_classes, reference,
     },
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
@@ -197,7 +197,7 @@ fn transforms<M: PrimeModulus>(
                     });
                     setup.finish();
                 }
-                let plan = Plan::new(domain, tables.tables()).unwrap();
+                let plan = Plan::new(tables.tables().bind(domain).unwrap());
                 let mut group = criterion.benchmark_group(format!(
                     "{field}/fft/{}/{shift_name}/{direction}/{profile}",
                     domain.size()
@@ -346,15 +346,15 @@ fn expansions<M: PrimeModulus>(
 ) {
     let base = Domain::new(11).unwrap().subgroup();
     let tables = Prepared::selected(base, 15);
-    let plan = Plan::new(base, tables.tables()).unwrap();
+    let plan = Plan::new(tables.tables().bind(base).unwrap());
     let coefficient_plan = Plan::new(
-        base,
-        Tables {
+        (Tables {
             forward: Some(&tables.forward),
             ..Tables::default()
-        },
-    )
-    .unwrap();
+        })
+        .bind(base)
+        .unwrap(),
+    );
     let coefficients = inputs::<M>(base.size());
     let mut evaluations = coefficients.clone();
     plan.forward(
@@ -370,14 +370,16 @@ fn expansions<M: PrimeModulus>(
         let mut scales = vec![PastaField::ZERO; expansion.scale_count()];
         let mut setup = criterion.benchmark_group(format!("{field}/fft_setup/{shift_name}"));
         setup.bench_function(BenchmarkId::new("residue_scales", extended.size()), |b| {
-            b.iter(|| expansion.prepare_scales(black_box(&mut scales)).unwrap());
+            b.iter(|| {
+                black_box(expansion.prepare_scales(black_box(&mut scales)).unwrap());
+            });
         });
         setup.finish();
-        expansion.prepare_scales(&mut scales).unwrap();
+        let scales = expansion.prepare_scales(&mut scales).unwrap();
         let dense_tables = Prepared::selected(extended, 1);
-        let dense_plan = Plan::new(extended, dense_tables.tables()).unwrap();
+        let dense_plan = Plan::new(dense_tables.tables().bind(extended).unwrap());
         let factor_values = inputs::<M>(extended.size());
-        let factor = ResidueView::new(&factor_values, expansion.layout()).unwrap();
+        let factor = expansion.view(&factor_values).unwrap();
         let mut natural_factor = vec![PastaField::ZERO; extended.size()];
         expansion
             .layout()
@@ -408,7 +410,7 @@ fn expansions<M: PrimeModulus>(
                             if natural_output { "natural" } else { "native" }
                         );
                         let expansion =
-                            Expansion::new(coefficient_plan, extended, Some(&scales)).unwrap();
+                            Expansion::new(coefficient_plan, extended, Some(scales)).unwrap();
                         group.bench_function(name, |b| {
                             b.iter(|| {
                                 let input = black_box(&coefficients[..prefix]);
@@ -475,7 +477,7 @@ fn expansions<M: PrimeModulus>(
             }
         }
         for prepared in [false, true] {
-            let scales = prepared.then_some(scales.as_slice());
+            let scales = prepared.then_some(scales);
             for runner in runners {
                 for scheduling in ["across", "within", "mixed"] {
                     // Across * within never exceeds the common task budget.
@@ -525,7 +527,8 @@ fn expansions<M: PrimeModulus>(
                             tables.bytes()
                         } else {
                             tables.forward.len() * 32
-                        } + scales.map_or(0, |scales| scales.len() * 32);
+                        } + scales
+                            .map_or(0, |scales| scales.as_slice().len() * 32);
                         eprintln!(
                             "{field}/expansion/{}/{shift_name}/{profile}/{}/{scheduling}/{}: tables {table_bytes} bytes; scratch {} bytes; dense tables {} bytes",
                             extended.size(),
@@ -593,8 +596,9 @@ fn interpolation<M: PrimeModulus>(
 ) {
     let domains = [14, 13, 12].map(|log| Domain::new(log).unwrap().coset(shift).unwrap());
     let tables = domains.map(Prepared::new);
-    let plans =
-        core::array::from_fn::<_, 3, _>(|i| Plan::new(domains[i], tables[i].tables()).unwrap());
+    let plans = core::array::from_fn::<_, 3, _>(|i| {
+        Plan::new(tables[i].tables().bind(domains[i]).unwrap())
+    });
     let input = domains.map(|domain| inputs::<M>(domain.size()));
     let mut scratch =
         vec![PastaField::ZERO; plans[0].scratch_requirements(TILED).unwrap().field_elements];

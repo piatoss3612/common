@@ -10,7 +10,7 @@ use udon::{
 };
 
 #[path = "src/record.rs"]
-mod record;
+pub mod record;
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
@@ -27,17 +27,8 @@ fn main() {
                 .coset(<$field>::zeta())
                 .unwrap();
             let mut record = <$record>::empty();
-            record
-                .destinations()
-                .prepare_bound(domain)
-                .unwrap()
-                .validate()
-                .unwrap();
-            record.tables().bind(domain).unwrap().validate().unwrap();
-            TwiddleTable::prepare(record::TWIDDLES, &mut record.packed)
-                .unwrap()
-                .validate()
-                .unwrap();
+            record.destinations().prepare(domain).unwrap();
+            TwiddleTable::prepare(record::TWIDDLES, &mut record.packed).unwrap();
             ExpansionScales::prepare(
                 record::SIZE,
                 extended,
@@ -46,8 +37,8 @@ fn main() {
             )
             .unwrap();
             record.header.validate(extended).unwrap();
-            // Fault injection happens after generation and validation so the
-            // consumer must detect damage to an otherwise valid artifact.
+            // Inject damage after generation so the consumer's import checks
+            // must reject an otherwise valid artifact.
             if $name == "fp-fft" {
                 match damage.as_str() {
                     "field" => record.forward[0] = *bento::AlignedBytes([0xff; 32]).as_value(),

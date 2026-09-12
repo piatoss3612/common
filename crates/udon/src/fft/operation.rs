@@ -2,9 +2,9 @@ use super::executor::for_chunks;
 use super::stages::StageKernel;
 use super::transform::Run;
 use super::{
-    ExecutionOptions, Executor, FftError, InputOrder, PastaField, Plan, PowerTable, PrimeModulus,
-    ScratchRequirements, SerialExecutor, TwiddleTable, check_domain_size, check_field_count,
-    check_len, min, reverse,
+    CoefficientView, ExecutionOptions, Executor, FftError, InputOrder, PastaField, Plan,
+    PowerTable, PrimeModulus, ScratchRequirements, SerialExecutor, TwiddleTable, check_domain_size,
+    check_field_count, check_len, min, reverse,
 };
 
 /// Whether an inverse divides by the domain size.
@@ -380,7 +380,7 @@ impl OperationDescription {
 /// returns [`FftError::ScratchTooSmall`]. Execution methods document additional
 /// restrictions. The module's [validation and working-storage rules](super)
 /// apply, including unchanged buffers on returned errors and partial results
-/// on panic. Configuration does not validate table contents.
+/// on panic. Configuration checks table compatibility without rescanning entries.
 #[derive(Clone, Copy)]
 pub struct PreparedOperation<'a, M: PrimeModulus> {
     pub(super) plan: Plan<'a, M>,
@@ -405,7 +405,8 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     ///
     /// Errors follow [`OperationDescription::requirements`], with
     /// [`FftError::SizeOverflow`] if the plan's retained table byte count overflows.
-    /// Table contents retain [`super::Tables`]' explicit validation contract.
+    /// Tables follow the module's [validation contract](super); configuration
+    /// does not rescan their entries.
     pub fn configure(
         self,
         request: TransformRequest,
@@ -527,6 +528,7 @@ pub(super) const fn stage_strategy(max_tasks: usize) -> Strategy {
 // of the coset shift, so each region can advance without repeated exponentiation.
 struct CoefficientPowers<M: PrimeModulus> {
     shift: PastaField<M>,
+    extra: PastaField<M>,
     ratios: [PastaField<M>; 32],
     order: InputOrder,
     log_size: u32,
@@ -555,6 +557,7 @@ impl<M: PrimeModulus> CoefficientPowers<M> {
         }
         Self {
             shift: domain.shift(),
+            extra: PastaField::ONE,
             ratios,
             order,
             log_size,
@@ -595,7 +598,11 @@ trait CoefficientScaling<M: PrimeModulus>: Sync {
 impl<M: PrimeModulus> CoefficientScaling<M> for CoefficientPowers<M> {
     type Seed = PastaField<M>;
     fn seed(&self, index: usize) -> Self::Seed {
-        self.at(index)
+        if self.extra == PastaField::ONE {
+            self.at(index)
+        } else {
+            self.at(index).mul(&self.extra)
+        }
     }
     fn scale(&self, value: PastaField<M>, _: usize, seed: &Self::Seed) -> PastaField<M> {
         value.mul(seed)
@@ -615,6 +622,29 @@ impl<M: PrimeModulus> CoefficientScaling<M> for &[PastaField<M>] {
 }
 
 struct IdentityScaling;
+
+impl<M: PrimeModulus> CoefficientScaling<M> for PastaField<M> {
+    type Seed = ();
+    fn seed(&self, _: usize) {}
+    fn scale(&self, value: PastaField<M>, _: usize, _: &()) -> PastaField<M> {
+        value.mul(self)
+    }
+    fn advance(&self, _: usize, _: &mut ()) {}
+}
+
+struct ScaledTable<'a, M: PrimeModulus> {
+    values: &'a [PastaField<M>],
+    extra: PastaField<M>,
+}
+
+impl<M: PrimeModulus> CoefficientScaling<M> for ScaledTable<'_, M> {
+    type Seed = ();
+    fn seed(&self, _: usize) {}
+    fn scale(&self, value: PastaField<M>, degree: usize, _: &()) -> PastaField<M> {
+        value.mul(&self.values[degree]).mul(&self.extra)
+    }
+    fn advance(&self, _: usize, _: &mut ()) {}
+}
 
 impl<M: PrimeModulus> CoefficientScaling<M> for IdentityScaling {
     type Seed = ();
@@ -638,7 +668,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
     /// Selects a twiddle provider for stage execution.
     ///
     /// [`TwiddleTable`] defines how its size and direction serve each transform.
-    /// Contents require separate validation with [`TwiddleTable::validate`].
+    /// Attachment does not rescan the table's entries.
     /// Explicit [`Backend::Blocked`] returns [`FftError::InvalidExecution`];
     /// [`Backend::Auto`] switches to [`Backend::InPlace`] if it selected blocked
     /// execution. Requirements are recomputed with the additional retained bytes,
@@ -660,7 +690,8 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
     /// Requires a forward request, `first = 1`, and `step` equal to the plan's
     /// coset shift, otherwise returning [`FftError::InvalidTables`]. The table
     /// must have the full domain length or this returns
-    /// [`FftError::LengthMismatch`]. Use [`PowerTable::validate`] to check entries.
+    /// [`FftError::LengthMismatch`]. Attachment does not rescan entries; their
+    /// validity follows [`PowerTable`]'s preparation and binding contract.
     /// Additional retained bytes are checked as in [`Self::with_twiddles`].
     pub fn with_forward_scales(mut self, table: PowerTable<'a, M>) -> Result<Self, FftError> {
         if self.description.request.direction != Direction::Forward
@@ -741,6 +772,8 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
     ///
     /// Both input policies are accepted. Full or prefix input lengths, scratch,
     /// and errors follow [`PreparedOperation`].
+    /// Forward input contains normalized coefficients. Use
+    /// [`Self::execute_coefficients`] to preserve a [`CoefficientView`]'s scale.
     pub fn execute_into<E: Executor>(
         self,
         input: &[PastaField<M>],
@@ -750,9 +783,49 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
     ) -> Result<(), FftError> {
         check_len("input", input.len(), self.required.input_fields)?;
         self.check(output.len(), scratch.len())?;
-        let first = self.initialize(input, output, executor);
+        let first = self.initialize(input, output, executor, PastaField::ONE);
         self.run(output, first, executor, scratch, None);
         Ok(())
+    }
+
+    /// Evaluates a coefficient view, folding its scale into initialization.
+    ///
+    /// Requires a forward request with natural input order, otherwise returning
+    /// [`FftError::InvalidExecution`]. Input must have exactly the configured
+    /// full or prefix length; a mismatch returns [`FftError::LengthMismatch`].
+    /// The view can come from a smaller expansion when the request declares
+    /// that prefix length. Output order, scratch, input preservation, and other
+    /// errors follow [`Self::execute_into`].
+    pub fn execute_coefficients<E: Executor>(
+        self,
+        input: CoefficientView<'_, M>,
+        output: &mut [PastaField<M>],
+        executor: &E,
+        scratch: &mut [PastaField<M>],
+    ) -> Result<(), FftError> {
+        self.check_coefficients(input, output.len(), scratch.len())?;
+        let first = self.initialize(
+            input.as_slice(),
+            output,
+            executor,
+            input.normalization_factor(),
+        );
+        self.run(output, first, executor, scratch, None);
+        Ok(())
+    }
+
+    fn check_coefficients(
+        self,
+        input: CoefficientView<'_, M>,
+        output_len: usize,
+        scratch_len: usize,
+    ) -> Result<(), FftError> {
+        let request = self.description.request;
+        if request.direction != Direction::Forward || request.input_order != InputOrder::Natural {
+            return Err(FftError::InvalidExecution);
+        }
+        check_len("input", input.as_slice().len(), self.required.input_fields)?;
+        self.check(output_len, scratch_len)
     }
 
     /// Writes the pointwise product of a forward transform and `factor`.
@@ -781,7 +854,39 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         }
         check_len("input", input.len(), self.required.input_fields)?;
         self.check(output.len(), scratch.len())?;
-        let first = self.initialize(input, output, executor);
+        let first = self.initialize(input, output, executor, PastaField::ONE);
+        self.run(output, first, executor, scratch, Some(factor.as_slice()));
+        Ok(())
+    }
+
+    /// Evaluates a coefficient view and multiplies the evaluations by `factor`.
+    ///
+    /// Coefficient scaling, request restrictions, lengths, scratch, and input
+    /// preservation follow [`Self::execute_coefficients`]. Returns
+    /// [`FftError::InvalidLayout`] if `factor` differs from the plan's coset
+    /// domain or requested output order.
+    pub fn execute_coefficient_product<E: Executor>(
+        self,
+        input: CoefficientView<'_, M>,
+        factor: super::EvaluationView<'_, M>,
+        output: &mut [PastaField<M>],
+        executor: &E,
+        scratch: &mut [PastaField<M>],
+    ) -> Result<(), FftError> {
+        self.check_coefficients(input, output.len(), scratch.len())?;
+        let layout = match self.description.request.output_order {
+            InputOrder::Natural => super::EvaluationLayout::Natural,
+            InputOrder::BitReversed => super::EvaluationLayout::BitReversed,
+        };
+        if !factor.domain().same_domain(self.plan.domain) || factor.layout() != layout {
+            return Err(FftError::InvalidLayout);
+        }
+        let first = self.initialize(
+            input.as_slice(),
+            output,
+            executor,
+            input.normalization_factor(),
+        );
         self.run(output, first, executor, scratch, Some(factor.as_slice()));
         Ok(())
     }
@@ -845,6 +950,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         input: &[PastaField<M>],
         output: &mut [PastaField<M>],
         executor: &E,
+        extra: PastaField<M>,
     ) -> usize {
         let request = self.description.request;
         // Sparse DIT initialization broadcasts the nonzero support through
@@ -861,27 +967,40 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
                     PastaField::ONE
                 },
                 self.forward_scales.map(|t| t.as_slice()),
-                PastaField::ONE,
+                extra,
             );
         }
         if request.direction == Direction::Inverse {
             self.initialize_with(input, output, executor, IdentityScaling);
         } else if let Some(table) = self.forward_scales {
-            self.initialize_with(input, output, executor, table.as_slice());
+            if extra == PastaField::ONE {
+                self.initialize_with(input, output, executor, table.as_slice());
+            } else {
+                self.initialize_with(
+                    input,
+                    output,
+                    executor,
+                    ScaledTable {
+                        values: table.as_slice(),
+                        extra,
+                    },
+                );
+            }
         } else if self.plan.domain.shift() == PastaField::ONE {
-            self.initialize_with(input, output, executor, IdentityScaling);
+            if extra == PastaField::ONE {
+                self.initialize_with(input, output, executor, IdentityScaling);
+            } else {
+                self.initialize_with(input, output, executor, extra);
+            }
         } else {
             let order = if self.description.strategy.initialization == Initialization::Scatter {
                 request.input_order
             } else {
                 self.working_order()
             };
-            self.initialize_with(
-                input,
-                output,
-                executor,
-                CoefficientPowers::new(self.plan.domain, order),
-            );
+            let mut powers = CoefficientPowers::new(self.plan.domain, order);
+            powers.extra = extra;
+            self.initialize_with(input, output, executor, powers);
         }
         2
     }

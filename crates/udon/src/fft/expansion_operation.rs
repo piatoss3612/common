@@ -1,9 +1,10 @@
 use super::expansion::ResidueJobs;
 use super::transform::Run;
 use super::{
-    Codelet, CosetDomain, EvaluationLayout, EvaluationView, ExecutionOptions, Executor, Expansion,
-    ExpansionOptions, FftError, InputOrder, InverseScale, PastaField, PrimeModulus, ResourceBudget,
-    ScratchRequirements, check_domain_size, check_field_count, check_len, check_prefix, min,
+    Codelet, CoefficientView, CosetDomain, EvaluationLayout, EvaluationView, ExecutionOptions,
+    Executor, Expansion, ExpansionOptions, ExpansionScaleNormalization, FftError, InputOrder,
+    InverseScale, PastaField, PrimeModulus, ResourceBudget, ScratchRequirements, check_domain_size,
+    check_field_count, check_len, check_prefix, min,
 };
 
 /// Persistent order of a complete expansion result.
@@ -19,16 +20,39 @@ pub enum ExpansionOrder {
 }
 
 /// Input liveness and coefficient storage for a prepared expansion.
+///
+/// Workspace and disposable-input policies return a [`CoefficientView`] of the
+/// retained buffer. Its mathematical scale uses the base subgroup size, as
+/// defined by [`InverseScale`]; output evaluations always have their ordinary
+/// values. Scale-table compatibility is checked by [`Expansion::configure`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExpansionStorage {
     /// Preserve a natural coefficient prefix, treating its missing suffix as zero.
+    ///
+    /// [`PreparedExpansion::execute_into`] accepts normalized coefficients;
+    /// [`PreparedExpansion::execute_coefficients`] also accepts unscaled views.
     Coefficients,
     /// Preserve natural base evaluations, using output storage for coefficients.
     ReuseOutput,
     /// Preserve natural base evaluations using a separate coefficient workspace.
-    CoefficientWorkspace,
+    CoefficientWorkspace {
+        /// Mathematical scale of the retained natural-order coefficients.
+        scale: InverseScale,
+    },
     /// Consume natural base evaluations in their own buffer as coefficient storage.
-    DisposableInput,
+    DisposableInput {
+        /// Mathematical scale of the retained natural-order coefficients.
+        scale: InverseScale,
+    },
+}
+
+impl ExpansionStorage {
+    const fn coefficient_scale(self) -> Option<InverseScale> {
+        match self {
+            Self::CoefficientWorkspace { scale } | Self::DisposableInput { scale } => Some(scale),
+            Self::Coefficients | Self::ReuseOutput => None,
+        }
+    }
 }
 
 /// Geometry and total resource ceilings for expansion.
@@ -168,11 +192,12 @@ impl ExpansionDescription {
         if let Err(e) = check_field_count(scratch_fields) {
             return Err(e);
         }
-        let coefficient_fields = if matches!(self.storage, ExpansionStorage::CoefficientWorkspace) {
-            self.base_size
-        } else {
-            0
-        };
+        let coefficient_fields =
+            if matches!(self.storage, ExpansionStorage::CoefficientWorkspace { .. }) {
+                self.base_size
+            } else {
+                0
+            };
         let temporary_fields = match scratch_fields.checked_add(coefficient_fields) {
             Some(n) => n,
             None => return Err(FftError::SizeOverflow),
@@ -209,7 +234,8 @@ impl ExpansionDescription {
 /// with an unsupported [`ExpansionStorage`] policy returns
 /// [`FftError::InvalidExecution`]. The module's [validation and working-storage
 /// rules](super) apply, including unchanged buffers on returned errors and
-/// partial results on panic. Configuration does not validate table contents.
+/// partial results on panic. Tables are prepared or bound before configuration;
+/// configuration checks their compatibility without rescanning entries.
 #[derive(Clone, Copy)]
 pub struct PreparedExpansion<'a, M: PrimeModulus> {
     expansion: Expansion<'a, M>,
@@ -217,6 +243,8 @@ pub struct PreparedExpansion<'a, M: PrimeModulus> {
     required: ExpansionRequirements,
     options: ExpansionOptions,
     inverse: ExecutionOptions,
+    inverse_scale: InverseScale,
+    residue_scale: PastaField<M>,
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for PreparedExpansion<'_, M> {
@@ -232,15 +260,48 @@ impl<M: PrimeModulus> core::fmt::Debug for PreparedExpansion<'_, M> {
 impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// Fixes output order, input liveness, and budgets for repeated expansion.
     ///
-    /// Errors follow [`ExpansionDescription::requirements`], with
+    /// [`ExpansionStorage::CoefficientWorkspace`] and
+    /// [`ExpansionStorage::DisposableInput`] require an explicit coefficient
+    /// scale. With residue scale tables, [`InverseScale::Normalized`] requires
+    /// [`ExpansionScaleNormalization::Coefficients`], and
+    /// [`InverseScale::Unscaled`] requires
+    /// [`ExpansionScaleNormalization::UnscaledInverse`]. A mismatch returns
+    /// [`FftError::InvalidTables`], including for singleton domains. Either
+    /// scale is supported without residue tables. These restrictions apply to
+    /// retained output coefficients; coefficient input follows
+    /// [`Self::with_scales`].
+    ///
+    /// Other errors follow [`ExpansionDescription::requirements`], with
     /// [`FftError::SizeOverflow`] if the retained table byte count overflows.
-    /// Table contents retain [`Expansion`]'s explicit validation contract.
     pub fn configure(
         self,
         order: ExpansionOrder,
         storage: ExpansionStorage,
         strategy: ExpansionStrategy,
     ) -> Result<PreparedExpansion<'a, M>, FftError> {
+        let inverse_scale = storage.coefficient_scale().unwrap_or(
+            if self.scales.is_some()
+                && self.normalization == ExpansionScaleNormalization::Coefficients
+            {
+                InverseScale::Normalized
+            } else {
+                InverseScale::Unscaled
+            },
+        );
+        if storage.coefficient_scale().is_some() && self.scales.is_some() {
+            let normalization = match inverse_scale {
+                InverseScale::Normalized => ExpansionScaleNormalization::Coefficients,
+                InverseScale::Unscaled => ExpansionScaleNormalization::UnscaledInverse,
+            };
+            if self.normalization != normalization {
+                return Err(FftError::InvalidTables);
+            }
+        }
+        let residue_scale = if inverse_scale == InverseScale::Unscaled && self.scales.is_none() {
+            self.base.domain().domain().size_inverse()
+        } else {
+            PastaField::ONE
+        };
         let description = ExpansionDescription {
             base_size: self.base.domain().size(),
             extended_size: self.extended.size(),
@@ -262,6 +323,8 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             required,
             options,
             inverse,
+            inverse_scale,
+            residue_scale,
         })
     }
 
@@ -286,6 +349,13 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
     /// Description used by the const sizing query.
     pub const fn description(self) -> ExpansionDescription {
         self.description
+    }
+    /// Scale of coefficients produced in a workspace or disposable input.
+    ///
+    /// Returns `None` for [`ExpansionStorage::Coefficients`] and
+    /// [`ExpansionStorage::ReuseOutput`], which produce only evaluations.
+    pub const fn coefficient_scale(self) -> Option<InverseScale> {
+        self.description.storage.coefficient_scale()
     }
     /// Fixed storage and total task requirements.
     pub const fn requirements(self) -> ExpansionRequirements {
@@ -322,6 +392,8 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
     ///
     /// Accepts [`ExpansionStorage::Coefficients`] or [`ExpansionStorage::ReuseOutput`].
     /// Lengths, scratch, and errors follow [`PreparedExpansion`].
+    /// Coefficient input must be normalized; use [`Self::execute_coefficients`]
+    /// to preserve an unscaled [`CoefficientView`]'s normalization.
     pub fn execute_into<E: Executor>(
         self,
         input: &[PastaField<M>],
@@ -331,16 +403,28 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
     ) -> Result<(), FftError> {
         self.check(input.len(), output.len(), scratch.len())?;
         match self.description.storage {
-            ExpansionStorage::Coefficients => {
-                self.residues(input, output, 0, true, None, executor, scratch)
-            }
+            ExpansionStorage::Coefficients => self.residues(
+                CoefficientView::normalized(input),
+                output,
+                0,
+                None,
+                executor,
+                scratch,
+            ),
             ExpansionStorage::ReuseOutput => {
                 let (first, rest) = output.split_at_mut(self.description.base_size);
                 self.expansion.base.scatter(input, first);
                 self.inverse_coefficients(first, executor, scratch);
-                self.residues(first, rest, 1, false, None, executor, scratch);
+                self.residues(
+                    CoefficientView::new(first, self.inverse_scale),
+                    rest,
+                    1,
+                    None,
+                    executor,
+                    scratch,
+                );
                 // All readers of this coefficient buffer have completed.
-                let (_, extra) = self.expansion.inverse_policy();
+                let extra = self.residue_scale;
                 if let Some(scales) = self.expansion.scales {
                     for (value, scale) in first.iter_mut().zip(scales) {
                         *value = value.mul(scale);
@@ -386,23 +470,23 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
     /// [`ExpansionRequirements::coefficient_fields`] entries in `coefficients`.
     /// Other lengths, scratch, and errors follow [`PreparedExpansion`].
     ///
-    /// On success the workspace uses natural coefficient order. With
-    /// [`super::ExpansionScaleNormalization::Coefficients`] tables it contains
-    /// the polynomial's coefficients. With pre-normalized tables or no table,
-    /// each coefficient is multiplied by the base size; the output evaluations
-    /// include the omitted inverse-size factor.
-    pub fn execute_with_workspace<E: Executor>(
+    /// On success `coefficients` contains the base polynomial in increasing
+    /// degree order, with the scale reported by [`Self::coefficient_scale`].
+    /// The returned view borrows only that buffer; input, output, and scratch
+    /// can be reused while the view is live. Initial workspace values do not
+    /// affect the result.
+    pub fn execute_with_workspace<'buffer, E: Executor>(
         self,
         input: &[PastaField<M>],
         output: &mut [PastaField<M>],
-        coefficients: &mut [PastaField<M>],
+        coefficients: &'buffer mut [PastaField<M>],
         executor: &E,
         scratch: &mut [PastaField<M>],
-    ) -> Result<(), FftError> {
+    ) -> Result<CoefficientView<'buffer, M>, FftError> {
         self.check(input.len(), output.len(), scratch.len())?;
-        if self.description.storage != ExpansionStorage::CoefficientWorkspace {
+        let ExpansionStorage::CoefficientWorkspace { scale } = self.description.storage else {
             return Err(FftError::InvalidExecution);
-        }
+        };
         check_len(
             "coefficients",
             coefficients.len(),
@@ -410,49 +494,67 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
         )?;
         self.expansion.base.scatter(input, coefficients);
         self.inverse_coefficients(coefficients, executor, scratch);
-        self.residues(coefficients, output, 0, false, None, executor, scratch);
-        Ok(())
+        self.residues(
+            CoefficientView::new(coefficients, scale),
+            output,
+            0,
+            None,
+            executor,
+            scratch,
+        );
+        Ok(CoefficientView::new(coefficients, scale))
     }
 
     /// Consumes base evaluations as coefficient storage.
     ///
-    /// Requires [`ExpansionStorage::DisposableInput`]. On success the input
-    /// follows the coefficient ordering and scaling of
-    /// [`Self::execute_with_workspace`]. Lengths, scratch, and errors follow
-    /// [`PreparedExpansion`].
-    pub fn execute_disposable<E: Executor>(
+    /// Requires [`ExpansionStorage::DisposableInput`]. On success `input`
+    /// contains the base polynomial's coefficients in increasing degree order,
+    /// with the scale reported by [`Self::coefficient_scale`]. The returned
+    /// view borrows only `input`; output and scratch can be reused while it is
+    /// live. Lengths, scratch, and errors follow [`PreparedExpansion`].
+    pub fn execute_disposable<'buffer, E: Executor>(
         self,
-        input: &mut [PastaField<M>],
+        input: &'buffer mut [PastaField<M>],
         output: &mut [PastaField<M>],
         executor: &E,
         scratch: &mut [PastaField<M>],
-    ) -> Result<(), FftError> {
+    ) -> Result<CoefficientView<'buffer, M>, FftError> {
         self.check(input.len(), output.len(), scratch.len())?;
-        if self.description.storage != ExpansionStorage::DisposableInput {
+        let ExpansionStorage::DisposableInput { scale } = self.description.storage else {
             return Err(FftError::InvalidExecution);
-        }
+        };
         self.expansion.base.permute(input);
         self.inverse_coefficients(input, executor, scratch);
-        self.residues(input, output, 0, false, None, executor, scratch);
-        Ok(())
+        self.residues(
+            CoefficientView::new(input, scale),
+            output,
+            0,
+            None,
+            executor,
+            scratch,
+        );
+        Ok(CoefficientView::new(input, scale))
     }
 
     /// Writes the pointwise product of a coefficient expansion and `factor`.
     ///
-    /// Requires [`ExpansionStorage::Coefficients`]. The factor must match the
+    /// Accepts ordinary coefficients or a [`CoefficientView`], whose scale is
+    /// applied during initialization as in [`Expansion::coefficients`]. Requires
+    /// [`ExpansionStorage::Coefficients`]. The factor must match the
     /// extended coset domain and [`Self::layout`], otherwise this returns
     /// [`FftError::InvalidLayout`]. Empty prefixes represent the zero polynomial.
     /// Input is preserved; lengths, scratch, and other errors follow
     /// [`PreparedExpansion`].
-    pub fn execute_product_into<E: Executor>(
+    pub fn execute_product_into<'input, E: Executor>(
         self,
-        input: &[PastaField<M>],
+        input: impl Into<CoefficientView<'input, M>>,
         factor: EvaluationView<'_, M>,
         output: &mut [PastaField<M>],
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
-        self.check(input.len(), output.len(), scratch.len())?;
+        let input = input.into();
+        self.check(input.as_slice().len(), output.len(), scratch.len())?;
         if self.description.storage != ExpansionStorage::Coefficients {
             return Err(FftError::InvalidExecution);
         }
@@ -460,15 +562,29 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
         {
             return Err(FftError::InvalidLayout);
         }
-        self.residues(
-            input,
-            output,
-            0,
-            true,
-            Some(factor.as_slice()),
-            executor,
-            scratch,
-        );
+        self.residues(input, output, 0, Some(factor.as_slice()), executor, scratch);
+        Ok(())
+    }
+
+    /// Expands a coefficient view, folding its scale into residue initialization.
+    ///
+    /// Requires [`ExpansionStorage::Coefficients`], otherwise returning
+    /// [`FftError::InvalidExecution`]. Input is preserved. Prefix lengths,
+    /// output order, scratch, and other errors follow [`Self::execute_into`].
+    /// Scaling and table usage follow [`Expansion::coefficients`], including
+    /// for a view retained by a smaller expansion.
+    pub fn execute_coefficients<E: Executor>(
+        self,
+        input: CoefficientView<'_, M>,
+        output: &mut [PastaField<M>],
+        executor: &E,
+        scratch: &mut [PastaField<M>],
+    ) -> Result<(), FftError> {
+        if self.description.storage != ExpansionStorage::Coefficients {
+            return Err(FftError::InvalidExecution);
+        }
+        self.check(input.as_slice().len(), output.len(), scratch.len())?;
+        self.residues(input, output, 0, None, executor, scratch);
         Ok(())
     }
 
@@ -483,36 +599,35 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
             self.inverse,
             executor,
             &mut scratch[..self.required.inverse_scratch_fields],
-            self.expansion.inverse_policy().0,
+            match self.inverse_scale {
+                InverseScale::Normalized => Run::inverse(&[]),
+                InverseScale::Unscaled => Run::inverse_unscaled(),
+            },
         );
     }
 
     #[allow(clippy::too_many_arguments)]
     fn residues<E: Executor>(
         self,
-        coefficients: &[PastaField<M>],
+        coefficients: CoefficientView<'_, M>,
         output: &mut [PastaField<M>],
         first: usize,
-        normalized: bool,
         factor: Option<&[PastaField<M>]>,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) {
+        let (normalized_coefficients, extra) = self.expansion.coefficient_input(coefficients);
         let tasks = self
             .options
             .max_residue_tasks
             .min(output.len() / self.description.base_size);
         ResidueJobs {
             expansion: self.expansion,
-            coefficients,
+            coefficients: coefficients.as_slice(),
             factor,
-            normalized_coefficients: normalized,
+            normalized_coefficients,
             order: self.description.order,
-            extra: if normalized {
-                PastaField::ONE
-            } else {
-                self.expansion.inverse_policy().1
-            },
+            extra,
             options: self.options.transform,
             executor,
         }
@@ -588,8 +703,10 @@ impl<M: PrimeModulus> Residue<'_, M> {
     /// Evaluates a coefficient prefix into a reusable base-sized output.
     ///
     /// For base size `n`, input contains `0..=n` natural-order coefficients,
-    /// with omitted coefficients treated as zero. Output has exactly `n` fields
-    /// and uses the order selected by [`Expansion::residue`].
+    /// with omitted coefficients treated as zero. Accepts ordinary coefficients
+    /// or a [`CoefficientView`], with scaling and table usage as in
+    /// [`Expansion::coefficients`]. Input is preserved. Output has exactly `n`
+    /// fields and uses the order selected by [`Expansion::residue`].
     /// Scratch must meet [`Self::scratch_requirements`], including for empty input.
     ///
     /// Returns [`FftError::InvalidPrefix`] for an oversized input,
@@ -597,14 +714,17 @@ impl<M: PrimeModulus> Residue<'_, M> {
     /// [`FftError::ScratchTooSmall`] for insufficient scratch. Option errors follow
     /// [`Self::scratch_requirements`]. The module's [validation and working-storage
     /// rules](super) apply.
-    pub fn coefficients<E: Executor>(
+    pub fn coefficients<'input, E: Executor>(
         self,
-        input: &[PastaField<M>],
+        input: impl Into<CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],
         options: ExecutionOptions,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
+        let input = input.into();
+        let (normalized_coefficients, extra) = self.expansion.coefficient_input(input);
+        let input = input.as_slice();
         check_prefix(input.len(), 0, self.expansion.base.domain().size())?;
         check_len("output", output.len(), self.expansion.base.domain().size())?;
         let required = self.scratch_requirements(options)?;
@@ -613,13 +733,13 @@ impl<M: PrimeModulus> Residue<'_, M> {
             expansion: self.expansion,
             coefficients: input,
             factor: None,
-            normalized_coefficients: true,
+            normalized_coefficients,
             order: if self.order == InputOrder::Natural {
                 ExpansionOrder::Residues
             } else {
                 ExpansionOrder::BitReversed
             },
-            extra: PastaField::ONE,
+            extra,
             options,
             executor,
         }

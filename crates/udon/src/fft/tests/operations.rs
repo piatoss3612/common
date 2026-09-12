@@ -317,10 +317,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
                     storage,
                 };
                 let mut values = vec![PastaField::ZERO; description.requirements().unwrap()];
-                let table = TwiddleTable::prepare(description, &mut values)
-                    .unwrap()
-                    .validate()
-                    .unwrap();
+                let table = TwiddleTable::prepare(description, &mut values).unwrap();
                 for direction in [Direction::Forward, Direction::Inverse] {
                     let operation = plan
                         .configure(TransformRequest::new(direction), strategy(Backend::InPlace))
@@ -346,7 +343,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
                 if let Some(value) = values.first_mut() {
                     *value = PastaField::ZERO;
                     assert!(matches!(
-                        TwiddleTable::bind(description, &values).unwrap().validate(),
+                        TwiddleTable::bind(description, &values),
                         Err(FftError::InvalidTables)
                     ));
                 }
@@ -354,9 +351,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
         }
     }
     let mut scales = vec![PastaField::ZERO; domain.size()];
-    let scales = PowerTable::prepare(PastaField::ONE, domain.shift(), &mut scales)
-        .validate()
-        .unwrap();
+    let scales = PowerTable::prepare(PastaField::ONE, domain.shift(), &mut scales).unwrap();
     let operation = plan
         .configure(
             TransformRequest::new(Direction::Forward),
@@ -490,7 +485,7 @@ fn prepared_table_budgets_and_auto_selection_preserve_blocked_partitions() {
         .coset(Fp::from_u64(7))
         .unwrap();
     let prepared = Prepared::new(domain);
-    let plan = Plan::new(domain, prepared.tables()).unwrap();
+    let plan = Plan::new(prepared.tables().bind(domain).unwrap());
     let request = TransformRequest::new(Direction::Forward);
     let table_bytes = 4 * (domain.size() / 2) * core::mem::size_of::<Fp>();
     let mut selection = strategy(Backend::Auto);
@@ -568,7 +563,7 @@ fn prepared_table_budgets_and_auto_selection_preserve_blocked_partitions() {
     )
     .unwrap();
     let mut scales = vec![Fp::ZERO; domain.size()];
-    let scales = PowerTable::prepare(Fp::ONE, domain.shift(), &mut scales);
+    let scales = PowerTable::prepare(Fp::ONE, domain.shift(), &mut scales).unwrap();
     for table in [dense, local] {
         assert!(matches!(
             plan.configure(request, strategy(Backend::Blocked))

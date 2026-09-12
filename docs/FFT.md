@@ -20,9 +20,10 @@ canonical Pasta root for its size. Use `Domain::new(k)` for `2^k` elements or
 `Domain::for_size(n)` for an element count. The constructor documents supported
 orders and target address-space limits. Size one is supported.
 
-`domain.subgroup()` selects shift one. `domain.coset(shift)` accepts any nonzero
-shift, including shifts inside the subgroup. For size `n`, canonical `root`,
-and coefficients `c[i]`, natural evaluation row `j` is
+`domain.subgroup()` selects shift one. `domain.coset(shift)` accepts any nonzero,
+reduced field element, including shifts inside the subgroup; it rejects
+unreduced Montgomery representations before arithmetic. For size `n`, canonical
+`root`, and coefficients `c[i]`, natural evaluation row `j` is
 
 ```text
 sum(c[i] * (shift * root^j)^i, i = 0..n), for 0 <= j < n.
@@ -81,8 +82,8 @@ total tasks. Requirements exclude input/output storage, fixed stack frames, and
 executor resources. Borrowed table slices are conservatively counted separately
 even if their storage aliases. `OperationRequirements` reports scratch in field
 elements, including the size and count of blocked column jobs' partitions.
-Configuration and table binding fail before execution when their fixed strategy
-exceeds a ceiling.
+Configuration and attaching tables to prepared operations reject strategies
+that exceed a ceiling before execution.
 
 | Backend | Scratch | Execution |
 | --- | --- | --- |
@@ -128,20 +129,32 @@ same sizes as `Domain::for_size`, applies to both fields and all coset shifts,
 and needs no domain construction. `TableRequirements::for_domain` is a
 convenience wrapper for an existing domain.
 
-`TablesMut::prepare_bound` returns a `BoundTables` handle; `Tables::bind` performs
-structural checks and returns the same interface. `BoundTables::plan` constructs
-a plan without rebinding. Call `BoundTables::validate` or `Tables::validate`
-to check an artifact's mathematical contents against its domain. Validation also
-rejects unreduced Montgomery entries. Incorrect table contents can cause wrong
-results or panics; all APIs remain memory safe. Prepared inverse-finish and
-scaling tables depend on the coset shift, even though ordinary twiddles do not.
+`TablesMut::prepare` returns a `BoundTables` handle tied to the generating coset.
+For imported slices, `Tables::bind` checks lengths and every mathematical entry,
+including reduced Montgomery limbs, then returns the same handle. `Plan::new`
+uses the handle's domain. Native generation requires no content scan; checked
+imports require linear work, with no entry validation during execution.
+Use `bound.for_coset(other_coset)?.plan()` to reuse validated ordinary forward
+and inverse twiddles on another coset of the same subgroup. This takes constant
+work and retains the original borrows, without inspecting entries again.
+Changing the shift drops inverse-finish and inverse-scaling tables, whose entries
+depend on that shift; the same domain retains every table. A different subgroup
+size is rejected.
+
+Every table family also offers `bind_trusted`, which relies on the caller to
+establish correct entries elsewhere. Each constructor documents the dimensions
+or seeds it still checks and the caller's obligations. Incorrect contents can
+cause wrong results or panics; these APIs remain memory safe. An explicit
+`validate` method remains available to check an existing handle. Bento checks the
+storage layout; artifact metadata identifies the field and conventions; checked
+binding establishes the mathematical contents. These are separate checks.
 
 Prepared stage operations additionally accept
 [`TwiddleTable`](../crates/udon/src/fft/powers.rs) through `with_twiddles`.
-`TwiddleDescription::requirements` sizes each representation; `prepare`,
-`bind`, and `validate` generate entries, check dimensions, and check mathematical
-contents respectively. For table domain size `N > 1`, retained field counts are
-listed below; size one needs no entries in either representation.
+`TwiddleDescription::requirements` sizes each representation; `prepare` and
+`bind` produce handles from native generation or checked imports. For table
+domain size `N > 1`, retained field counts are listed below; size one needs no
+entries in either representation.
 
 | Storage | Fields | Access cost |
 | --- | --- | --- |
@@ -158,8 +171,9 @@ selected blocked operation selects the stage backend instead.
 
 `PowerTable` describes entry `i` as `first * step^i`, including deliberate scaling.
 Forward coefficient tables use `first = 1`, `step = shift`, and exactly the
-transform size. `with_forward_scales` checks that metadata and length; use
-`validate` to check imported entries.
+transform size. `PowerTable::prepare` and `bind` return checked handles;
+`with_forward_scales` checks their compatibility without rescanning contents.
+Both seeds must be reduced, even for empty sequences.
 
 Callers can prepare table arrays at runtime and lend their slices, or prepare
 them in a downstream build script and embed them through [Bento POD](POD.md).
@@ -261,7 +275,9 @@ ranges; its tiles are not residue classes.
 
 `Expansion::coefficients` accepts any prefix fitting the base domain. An optional
 table holds exactly `extended_size` residue scales; `prepare_scales` fills caller
-storage and `validate_scales` checks an existing table.
+storage and returns a checked `ExpansionScales` handle with `Coefficients`
+normalization. Pass the handle to `Expansion::new` or `with_scales`;
+`validate_scales` is an optional explicit audit.
 
 The direct expansion methods accept
 [`ExpansionOptions`](../crates/udon/src/fft/expansion.rs).
@@ -307,11 +323,9 @@ subgroup. It preserves that input and needs no separate coefficient buffer;
 query `ExpansionOptions::evaluation_requirements(base_size, extended_size)` or
 `expansion.evaluation_scratch(options)` for its temporary storage requirement.
 The first output residue holds coefficients while the remaining residues read
-them. The slice supplied directly to `Expansion::new` always contains ordinary
-coefficient scales `(g*w_N^s)^i`, laid out by residue `s` and coefficient `i`.
-
-[`ExpansionScales`](../crates/udon/src/fft/expansion_scales.rs) makes the scale
-convention explicit. Bind it with `Expansion::with_scales`:
+them. [`ExpansionScales`](../crates/udon/src/fft/expansion_scales.rs) records the
+scale convention and domain. `Expansion::new` accepts an optional handle, and
+`Expansion::with_scales` attaches one to an existing expansion:
 
 | Normalization | Entry `(s,i)` | Base inverse for evaluation input |
 | --- | --- | --- |
@@ -319,17 +333,21 @@ convention explicit. Bind it with `Expansion::with_scales`:
 | `UnscaledInverse` | `n^-1 * (g*w_N^s)^i` | Omits the base-size factor |
 
 Both need `N` fields. `ExpansionScales::prepare` writes either convention;
-`validate` checks the full table. A coefficient-input expansion with a table for
-an unscaled inverse generates ordinary powers for the coefficient input.
+`bind` checks imported entries before returning a handle. Normalized coefficient
+input ignores `UnscaledInverse` tables and generates ordinary powers. Unscaled
+coefficient views can use either convention, with normalization adjusted during
+initialization; see [`Expansion::with_scales`](../crates/udon/src/fft/expansion.rs).
 
 Scratch is reused between the inverse and residue phases; the query accounts
 for concurrent residues. The required scratch and execution options are checked
 before writing, including when the input and output domains are equal.
 
 `short_product` expands a nonempty short prefix and multiplies a supplied
-residue-major factor into each completed residue. It checks the factor layout;
-the caller supplies factor values for the same coset. Its scheduling and scratch
-requirements are the same as `coefficients`.
+residue-major factor into each completed residue. It accepts an `EvaluationView`
+and checks both the ordered coset domain and residue layout before any writes
+or executor joins. `Expansion::view` binds a factor slice to those conventions;
+the caller establishes that its values evaluate the intended polynomial.
+Scheduling and scratch requirements are the same as `coefficients`.
 If the product will be interpolated, choose an extended domain larger than its
 degree to recover all coefficients.
 
@@ -348,10 +366,30 @@ one total task budget across concurrent residues and within-transform work.
 
 Use `execute_into` for the first two policies, `execute_with_workspace` for a
 separate coefficient buffer, and `execute_disposable` to consume the input.
-The latter two buffers retain coefficients after success when ordinary scales
-are supplied, and `n * coefficients` with pre-normalized scales or no table.
-All returned field storage is canonical in either case. The extra buffer removes
-a scheduling dependency; its latency benefit depends on the workload and target.
+The latter two policies require an explicit `scale: InverseScale` field and return
+a [`CoefficientView`](../crates/udon/src/fft/layout.rs) borrowing only the retained
+buffer. `Normalized` retains polynomial coefficients `c[i]`; `Unscaled` retains
+`n * c[i]`, where `n` is the source base size. Both use increasing degree order
+and reduced Montgomery representations. The view's `normalization_factor`
+recovers `c[i]`; output and scratch can be reused while the view is live.
+
+Pass the view itself to a coefficient consumer such as `Plan::forward_prefix`
+or `Expansion::coefficients` to apply normalization during output initialization.
+Passing `view.as_slice()` loses the scale information because ordinary slices
+are treated as normalized. The view's executable example shows a smaller
+expansion feeding a larger transform without copying or normalizing the retained
+buffer. Prepared transforms and expansions with `ExpansionStorage::Coefficients`
+provide `execute_coefficients` for this purpose. Prepared transforms require a
+forward request with natural input order and the configured full or prefix length.
+
+For the two policies that retain coefficients, scale tables must match the chosen
+inverse scale: `Normalized` requires `Coefficients` tables, and `Unscaled`
+requires `UnscaledInverse` tables. [`Expansion::configure`](../crates/udon/src/fft/expansion_operation.rs)
+rejects mismatches, including for singleton domains. Without residue tables,
+either scale is supported. These restrictions concern the retained coefficient
+output; consuming a view follows the table rules above. The extra coefficient
+buffer removes a scheduling dependency; its latency benefit depends on the
+workload and target.
 
 `ExpansionOrder::Residues` uses `ResidueLayout`. `ExpansionOrder::BitReversed`
 reverses both the residue blocks and their inner row order. For `r=2^a` residues

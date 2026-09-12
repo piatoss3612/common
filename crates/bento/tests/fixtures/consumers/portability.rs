@@ -120,7 +120,7 @@ fn fft_operations<M: PrimeModulus>(values: &mut [PastaField<M>; FFT_SIZE]) -> Re
         ..TablesMut::default()
     }
     .prepare(domain)?;
-    let plan = Plan::new(domain, tables)?;
+    let plan = Plan::new(tables);
     const OPTIONS: ExecutionOptions = ExecutionOptions {
         tile_len: 4,
         columns_per_task: 2,

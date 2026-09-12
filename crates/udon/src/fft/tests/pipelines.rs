@@ -11,6 +11,23 @@ fn expansion_strategy() -> ExpansionStrategy {
     }
 }
 
+fn check_coefficients<M: PrimeModulus>(
+    view: CoefficientView<'_, M>,
+    coefficients: &[PastaField<M>],
+    scale: InverseScale,
+) {
+    assert_eq!(view.scale(), scale);
+    let multiplier = match scale {
+        InverseScale::Normalized => PastaField::ONE,
+        InverseScale::Unscaled => PastaField::from_u64(coefficients.len() as u64),
+    };
+    assert_eq!(view.as_slice().len(), coefficients.len());
+    for (actual, coefficient) in view.as_slice().iter().zip(coefficients) {
+        assert_eq!(*actual, coefficient.mul(&multiplier));
+        assert_eq!(actual.mul(&view.normalization_factor()), *coefficient);
+    }
+}
+
 fn expansions<M: PrimeModulus>() {
     for log in [0, 2, 5] {
         let base = Plan::without_tables(Domain::<M>::new(log).unwrap().subgroup());
@@ -34,8 +51,6 @@ fn expansions<M: PrimeModulus>() {
                             normalization,
                             &mut scale_values,
                         )
-                        .unwrap()
-                        .validate()
                         .unwrap();
                         scales
                             .artifact()
@@ -64,12 +79,42 @@ fn expansions<M: PrimeModulus>() {
                         for storage in [
                             ExpansionStorage::Coefficients,
                             ExpansionStorage::ReuseOutput,
-                            ExpansionStorage::CoefficientWorkspace,
-                            ExpansionStorage::DisposableInput,
+                            ExpansionStorage::CoefficientWorkspace {
+                                scale: InverseScale::Normalized,
+                            },
+                            ExpansionStorage::CoefficientWorkspace {
+                                scale: InverseScale::Unscaled,
+                            },
+                            ExpansionStorage::DisposableInput {
+                                scale: InverseScale::Normalized,
+                            },
+                            ExpansionStorage::DisposableInput {
+                                scale: InverseScale::Unscaled,
+                            },
                         ] {
-                            let operation = expansion
-                                .configure(order, storage, expansion_strategy())
-                                .unwrap();
+                            let operation =
+                                expansion.configure(order, storage, expansion_strategy());
+                            let scale = match storage {
+                                ExpansionStorage::CoefficientWorkspace { scale }
+                                | ExpansionStorage::DisposableInput { scale } => Some(scale),
+                                _ => None,
+                            };
+                            if matches!(
+                                (scale, normalization),
+                                (
+                                    Some(InverseScale::Normalized),
+                                    Some(ExpansionScaleNormalization::UnscaledInverse)
+                                ) | (
+                                    Some(InverseScale::Unscaled),
+                                    Some(ExpansionScaleNormalization::Coefficients)
+                                )
+                            ) {
+                                assert!(matches!(operation, Err(FftError::InvalidTables)));
+                                continue;
+                            }
+                            let operation = operation.unwrap();
+                            assert_eq!(operation.coefficient_scale(), scale);
+                            assert_eq!(operation.description().storage, storage);
                             assert_eq!(
                                 operation
                                     .description()
@@ -84,32 +129,43 @@ fn expansions<M: PrimeModulus>() {
                                 vec![PastaField::ONE; operation.requirements().coefficient_fields];
                             let mut disposable = evaluations.clone();
                             match storage {
-                                ExpansionStorage::Coefficients => operation.execute_into(
-                                    &coefficients,
-                                    &mut output,
-                                    &SerialExecutor,
-                                    &mut scratch,
-                                ),
-                                ExpansionStorage::ReuseOutput => operation.execute_into(
-                                    &evaluations,
-                                    &mut output,
-                                    &SerialExecutor,
-                                    &mut scratch,
-                                ),
-                                ExpansionStorage::CoefficientWorkspace => operation
+                                ExpansionStorage::Coefficients => operation
+                                    .execute_into(
+                                        &coefficients,
+                                        &mut output,
+                                        &SerialExecutor,
+                                        &mut scratch,
+                                    )
+                                    .map(|_| ()),
+                                ExpansionStorage::ReuseOutput => operation
+                                    .execute_into(
+                                        &evaluations,
+                                        &mut output,
+                                        &SerialExecutor,
+                                        &mut scratch,
+                                    )
+                                    .map(|_| ()),
+                                ExpansionStorage::CoefficientWorkspace { .. } => operation
                                     .execute_with_workspace(
                                         &evaluations,
                                         &mut output,
                                         &mut working,
                                         &SerialExecutor,
                                         &mut scratch,
-                                    ),
-                                ExpansionStorage::DisposableInput => operation.execute_disposable(
-                                    &mut disposable,
-                                    &mut output,
-                                    &SerialExecutor,
-                                    &mut scratch,
-                                ),
+                                    )
+                                    .map(|view| {
+                                        check_coefficients(view, &coefficients, scale.unwrap())
+                                    }),
+                                ExpansionStorage::DisposableInput { .. } => operation
+                                    .execute_disposable(
+                                        &mut disposable,
+                                        &mut output,
+                                        &SerialExecutor,
+                                        &mut scratch,
+                                    )
+                                    .map(|view| {
+                                        check_coefficients(view, &coefficients, scale.unwrap())
+                                    }),
                             }
                             .unwrap();
                             let view = operation.view(&output).unwrap();
@@ -212,7 +268,9 @@ fn expansion_metadata_storage_errors_and_panics() {
     assert!(matches!(
         expansion.configure(
             ExpansionOrder::BitReversed,
-            ExpansionStorage::CoefficientWorkspace,
+            ExpansionStorage::CoefficientWorkspace {
+                scale: InverseScale::Unscaled
+            },
             ExpansionStrategy {
                 budget: ResourceBudget {
                     scratch_fields: base.domain().size() - 1,
@@ -228,8 +286,18 @@ fn expansion_metadata_storage_errors_and_panics() {
         for storage in [
             ExpansionStorage::Coefficients,
             ExpansionStorage::ReuseOutput,
-            ExpansionStorage::CoefficientWorkspace,
-            ExpansionStorage::DisposableInput,
+            ExpansionStorage::CoefficientWorkspace {
+                scale: InverseScale::Normalized,
+            },
+            ExpansionStorage::CoefficientWorkspace {
+                scale: InverseScale::Unscaled,
+            },
+            ExpansionStorage::DisposableInput {
+                scale: InverseScale::Normalized,
+            },
+            ExpansionStorage::DisposableInput {
+                scale: InverseScale::Unscaled,
+            },
         ] {
             let operation = expansion
                 .configure(order, storage, expansion_strategy())
@@ -250,16 +318,12 @@ fn expansion_metadata_storage_errors_and_panics() {
                     ExpansionStorage::ReuseOutput => {
                         operation.execute_into(&evaluations, output, executor, scratch)
                     }
-                    ExpansionStorage::CoefficientWorkspace => operation.execute_with_workspace(
-                        &evaluations,
-                        output,
-                        workspace,
-                        executor,
-                        scratch,
-                    ),
-                    ExpansionStorage::DisposableInput => {
-                        operation.execute_disposable(input, output, executor, scratch)
-                    }
+                    ExpansionStorage::CoefficientWorkspace { .. } => operation
+                        .execute_with_workspace(&evaluations, output, workspace, executor, scratch)
+                        .map(|_| ()),
+                    ExpansionStorage::DisposableInput { .. } => operation
+                        .execute_disposable(input, output, executor, scratch)
+                        .map(|_| ()),
                 }
             };
             let joins = CountJoins::default();
@@ -292,20 +356,23 @@ fn expansion_metadata_storage_errors_and_panics() {
                                 &executor,
                                 &mut scratch,
                             ),
-                            ExpansionStorage::CoefficientWorkspace => operation
+                            ExpansionStorage::CoefficientWorkspace { .. } => operation
                                 .execute_with_workspace(
                                     &evaluations,
                                     &mut output,
                                     &mut workspace,
                                     &executor,
                                     &mut scratch,
-                                ),
-                            ExpansionStorage::DisposableInput => operation.execute_disposable(
-                                &mut disposable,
-                                &mut output,
-                                &executor,
-                                &mut scratch,
-                            ),
+                                )
+                                .map(|_| ()),
+                            ExpansionStorage::DisposableInput { .. } => operation
+                                .execute_disposable(
+                                    &mut disposable,
+                                    &mut output,
+                                    &executor,
+                                    &mut scratch,
+                                )
+                                .map(|_| ()),
                         }
                     }))
                     .is_err()
@@ -317,6 +384,12 @@ fn expansion_metadata_storage_errors_and_panics() {
             output.fill(Fp::ONE);
             if !scratch.is_empty() {
                 let short = scratch.len() - 1;
+                let before = (
+                    disposable.clone(),
+                    output.clone(),
+                    workspace.clone(),
+                    scratch.clone(),
+                );
                 assert!(matches!(
                     execute(
                         &mut disposable,
@@ -327,7 +400,11 @@ fn expansion_metadata_storage_errors_and_panics() {
                     ),
                     Err(FftError::ScratchTooSmall { .. })
                 ));
-                assert!(output.iter().all(|v| *v == Fp::ONE));
+                assert_eq!(disposable, before.0);
+                assert_eq!(output, before.1);
+                assert_eq!(workspace, before.2);
+                assert_eq!(scratch, before.3);
+                assert_eq!(joins.take(), 0);
             }
         }
     }
@@ -348,14 +425,15 @@ fn expansion_metadata_storage_errors_and_panics() {
         ),
         Err(FftError::InvalidTables)
     );
+    let mut other_values = vec![Fp::ZERO; domain.size()];
     assert!(
         expansion
             .with_scales(
-                ExpansionScales::bind(
+                ExpansionScales::prepare(
                     base.domain().size(),
                     domain.domain().subgroup(),
                     ExpansionScaleNormalization::UnscaledInverse,
-                    &scales
+                    &mut other_values
                 )
                 .unwrap()
             )
@@ -368,9 +446,7 @@ fn expansion_metadata_storage_errors_and_panics() {
             domain,
             ExpansionScaleNormalization::UnscaledInverse,
             &scales
-        )
-        .unwrap()
-        .validate(),
+        ),
         Err(FftError::InvalidTables)
     ));
 }

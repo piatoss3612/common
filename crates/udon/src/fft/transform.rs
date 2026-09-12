@@ -1,7 +1,7 @@
 use super::executor::{Geometry, for_chunks};
 use super::{
-    CosetDomain, ExecutionOptions, Executor, FftError, PastaField, PrimeModulus,
-    ScratchRequirements, Tables, check_len, check_prefix, reverse,
+    BoundTables, CoefficientView, CosetDomain, ExecutionOptions, Executor, FftError, PastaField,
+    PrimeModulus, ScratchRequirements, Tables, check_len, check_prefix, reverse,
 };
 use crate::field::fft::{
     Guard, butterfly, divide_by_power_of_two, normalize, scale as scale_loose,
@@ -47,13 +47,22 @@ impl<M: PrimeModulus> core::fmt::Debug for Plan<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> Plan<'a, M> {
-    /// Binds tables after checking their lengths, without regenerating them.
+    /// Constructs a plan using the domain retained by its table handle.
     ///
-    /// Returns [`FftError::LengthMismatch`] if any supplied table has the wrong
-    /// length. Use [`Tables::validate`] to check contents against `domain`.
-    pub fn new(domain: CosetDomain<M>, tables: Tables<'a, M>) -> Result<Self, FftError> {
-        tables.check_shape(domain)?;
-        Ok(Self { domain, tables })
+    /// Prepare tables with [`super::TablesMut::prepare`] or check imported
+    /// entries with [`Tables::bind`]. Construction does not rescan contents.
+    /// Raw table descriptors cannot be used without binding their domain:
+    ///
+    /// ```compile_fail
+    /// use zakura_udon::{field::PallasBase, fft::{Plan, Tables}};
+    /// let raw = Tables::<PallasBase>::default();
+    /// let plan = Plan::new(raw);
+    /// ```
+    pub const fn new(tables: BoundTables<'a, M>) -> Self {
+        Self {
+            domain: tables.domain(),
+            tables: tables.tables(),
+        }
     }
 
     /// Constructs a plan that computes powers and permutations as needed.
@@ -169,19 +178,24 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
 
     /// Preserves the coefficients and writes their transform into `output`.
     ///
-    /// Both slices must have the domain size. Ordering, scratch requirements,
-    /// and errors are the same as for [`Self::forward`].
-    pub fn forward_into<E: Executor>(
+    /// Accepts ordinary coefficients or a [`CoefficientView`], whose scale is
+    /// folded into output initialization.
+    /// Both input and output must have the domain size. Ordering, scratch
+    /// requirements, and errors are the same as for [`Self::forward`].
+    pub fn forward_into<'input, E: Executor>(
         self,
-        input: &[PastaField<M>],
+        input: impl Into<CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],
         options: ExecutionOptions,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
+        let input = input.into();
+        let extra = input.normalization_factor();
+        let input = input.as_slice();
         check_len("input", input.len(), self.domain.size())?;
         let required = self.check("output", output.len(), options, scratch.len())?;
-        let first = self.fill_prefix(input, output, self.domain.shift(), None, PastaField::ONE);
+        let first = self.fill_prefix(input, output, self.domain.shift(), None, extra);
         self.run(
             output,
             options,
@@ -219,32 +233,32 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
 
     /// Evaluates a coefficient prefix, treating the remaining coefficients as zero.
     ///
-    /// `coefficients[i]` is the coefficient of degree `i`. An empty prefix
-    /// produces the zero polynomial; a prefix longer than the domain returns
-    /// [`FftError::InvalidPrefix`]. Output uses natural evaluation order and must
-    /// have the full domain size. Scratch requirements and other errors are
-    /// those of [`Self::forward`], even for an empty prefix.
-    pub fn forward_prefix<E: Executor>(
+    /// Input uses increasing degree order. Accepts ordinary coefficients or a
+    /// [`CoefficientView`], including one retained by a smaller expansion; its
+    /// scale is folded into initialization.
+    ///
+    /// An empty prefix produces the zero polynomial; a prefix longer than the
+    /// domain returns [`FftError::InvalidPrefix`]. Output uses natural evaluation
+    /// order and must have the full domain size. Scratch requirements and other
+    /// errors are those of [`Self::forward`], even for an empty prefix.
+    pub fn forward_prefix<'input, E: Executor>(
         self,
-        coefficients: &[PastaField<M>],
+        coefficients: impl Into<CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],
         options: ExecutionOptions,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
+        let coefficients = coefficients.into();
+        let extra = coefficients.normalization_factor();
+        let coefficients = coefficients.as_slice();
         let required = self.check("output", output.len(), options, scratch.len())?;
         check_prefix(coefficients.len(), 0, self.domain.size())?;
         if coefficients.is_empty() {
             output.fill(PastaField::ZERO);
             return Ok(());
         }
-        let first = self.fill_prefix(
-            coefficients,
-            output,
-            self.domain.shift(),
-            None,
-            PastaField::ONE,
-        );
+        let first = self.fill_prefix(coefficients, output, self.domain.shift(), None, extra);
         self.run(
             output,
             options,

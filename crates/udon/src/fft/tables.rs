@@ -40,10 +40,9 @@ impl TableRequirements {
 
 /// Independently optional immutable tables borrowed by a [`super::Plan`].
 ///
-/// Contents must belong to the plan's field and domain. Binding checks lengths
-/// without regenerating the contents. Use [`Self::validate`] when checking a
-/// generator or externally supplied artifact. Incorrect contents can produce
-/// incorrect answers or panics, but do not compromise memory safety.
+/// [`Self::bind`] checks lengths and mathematical contents once, returning a
+/// handle that retains the domain and immutable borrows. [`Self::bind_trusted`]
+/// skips content checks when the caller establishes correctness elsewhere.
 ///
 /// All field entries must be reduced Montgomery residues for correct arithmetic.
 /// Entries can use downstream Bento POD storage; this descriptor contains
@@ -89,13 +88,27 @@ impl<M: PrimeModulus> Default for Tables<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> Tables<'a, M> {
-    /// Binds the table set to its coset after checking supplied lengths.
+    /// Checks all supplied entries and binds the table set to its coset.
     ///
-    /// Lengths follow [`TableRequirements::for_domain`]; a mismatch returns
-    /// [`FftError::LengthMismatch`]. Shift-dependent finish tables remain
-    /// attached to the declared domain. Use [`BoundTables::validate`] to check
-    /// imported entries.
+    /// Performs the linear content checks of [`Self::validate`]. Shift-dependent
+    /// finish tables remain attached to this domain through plan construction.
+    /// Returns [`FftError::LengthMismatch`] for a wrong length or
+    /// [`FftError::InvalidTables`] for an incorrect or unreduced entry.
     pub fn bind(self, domain: CosetDomain<M>) -> Result<BoundTables<'a, M>, FftError> {
+        self.validate(domain)?;
+        Ok(BoundTables {
+            domain,
+            tables: self,
+        })
+    }
+
+    /// Binds caller-trusted contents after checking all supplied lengths.
+    ///
+    /// Length errors follow [`Self::validate`]. The caller must establish that
+    /// every entry matches [`Tables`]' formulas for this domain. Incorrect or
+    /// unreduced entries can cause wrong results or panics, but not memory
+    /// unsafety. Prefer [`Self::bind`] when importing unchecked artifacts.
+    pub fn bind_trusted(self, domain: CosetDomain<M>) -> Result<BoundTables<'a, M>, FftError> {
         self.check_shape(domain)?;
         Ok(BoundTables {
             domain,
@@ -207,19 +220,17 @@ impl<M: PrimeModulus> Default for TablesMut<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> TablesMut<'a, M> {
-    /// Prepares tables and returns a handle bound to their coset.
-    ///
-    /// Entries, optional destinations, and errors follow [`Self::prepare`].
+    /// Alias for [`Self::prepare`], with the same entries and errors.
     pub fn prepare_bound(self, domain: CosetDomain<M>) -> Result<BoundTables<'a, M>, FftError> {
-        self.prepare(domain)?.bind(domain)
+        self.prepare(domain)
     }
-    /// Fills the supplied tables and returns immutable borrows of their storage.
+    /// Fills the supplied tables and returns a handle bound to their coset.
     ///
     /// Entries follow the formulas in [`Tables`]. Returns
     /// [`FftError::LengthMismatch`] without writing any table if a supplied
     /// slice has the wrong length. Omitted destinations remain omitted in the
     /// result; preparing the default descriptor succeeds without writing.
-    pub fn prepare(self, domain: CosetDomain<M>) -> Result<Tables<'a, M>, FftError> {
+    pub fn prepare(self, domain: CosetDomain<M>) -> Result<BoundTables<'a, M>, FftError> {
         Tables {
             forward: self.forward.as_deref(),
             inverse: self.inverse.as_deref(),
@@ -244,19 +255,23 @@ impl<'a, M: PrimeModulus> TablesMut<'a, M> {
             })
         }
         let generators = generators(domain);
-        Ok(Tables {
-            forward: fill(self.forward, generators.forward),
-            inverse: fill(self.inverse, generators.inverse),
-            inverse_finish: fill(self.inverse_finish, generators.inverse_finish),
-            inverse_scales: fill(self.inverse_scales, generators.inverse_scales),
+        Ok(BoundTables {
+            domain,
+            tables: Tables {
+                forward: fill(self.forward, generators.forward),
+                inverse: fill(self.inverse, generators.inverse),
+                inverse_finish: fill(self.inverse_finish, generators.inverse_finish),
+                inverse_scales: fill(self.inverse_scales, generators.inverse_scales),
+            },
         })
     }
 }
 
 /// Optional transform tables bound to their coset domain.
 ///
-/// [`Tables`] defines the entry formulas and required lengths. Binding records
-/// the domain and checks lengths; imported contents need [`Self::validate`].
+/// Native preparation and checked binding establish the formulas in [`Tables`].
+/// [`Tables::bind_trusted`] instead relies on the caller for correct contents.
+/// The immutable borrow retains these properties for every plan execution.
 #[derive(Clone, Copy)]
 pub struct BoundTables<'a, M: PrimeModulus> {
     domain: CosetDomain<M>,
@@ -273,7 +288,28 @@ impl<M: PrimeModulus> core::fmt::Debug for BoundTables<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> BoundTables<'a, M> {
-    /// Checks all imported entries against the bound domain.
+    /// Reuses these tables on another coset of the same subgroup.
+    ///
+    /// Ordinary forward and inverse twiddles retain their borrows without
+    /// revalidation; any caller obligations from [`Tables::bind_trusted`] remain.
+    /// If the shift changes, inverse-finish and inverse-scaling tables are
+    /// omitted because their entries depend on that shift. An unchanged domain
+    /// retains every table. This takes constant work without scanning entries.
+    ///
+    /// Returns [`FftError::InvalidTables`] if the subgroup sizes differ.
+    pub fn for_coset(mut self, domain: CosetDomain<M>) -> Result<Self, FftError> {
+        if self.domain.size() != domain.size() {
+            return Err(FftError::InvalidTables);
+        }
+        if !self.domain.same_domain(domain) {
+            self.tables.inverse_finish = None;
+            self.tables.inverse_scales = None;
+        }
+        self.domain = domain;
+        Ok(self)
+    }
+
+    /// Rechecks every supplied entry against the bound domain.
     ///
     /// Content checks and errors follow [`Tables::validate`].
     pub fn validate(self) -> Result<Self, FftError> {
@@ -282,14 +318,14 @@ impl<'a, M: PrimeModulus> BoundTables<'a, M> {
     }
     /// Constructs the plan for this table set's domain without rebinding it.
     pub const fn plan(self) -> super::Plan<'a, M> {
-        super::Plan {
-            domain: self.domain,
-            tables: self.tables,
-        }
+        super::Plan::new(self)
     }
     /// Domain shared by the borrowed tables and their transform plan.
     pub const fn domain(self) -> CosetDomain<M> {
         self.domain
+    }
+    pub(super) const fn tables(self) -> Tables<'a, M> {
+        self.tables
     }
 }
 

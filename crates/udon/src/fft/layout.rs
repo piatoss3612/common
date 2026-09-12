@@ -1,4 +1,128 @@
-use super::{CosetDomain, FftError, PastaField, PrimeModulus, check_len, reverse};
+use super::{CosetDomain, FftError, InverseScale, PastaField, PrimeModulus, check_len, reverse};
+
+/// Coefficients in increasing degree order, with an explicit mathematical scale.
+///
+/// The [`PreparedExpansion`](super::PreparedExpansion) methods
+/// [`execute_with_workspace`](super::PreparedExpansion::execute_with_workspace)
+/// and [`execute_disposable`](super::PreparedExpansion::execute_disposable)
+/// return views of the retained coefficient buffer. For source base size `n`
+/// and polynomial coefficients `c[i]`, [`InverseScale::Normalized`] stores
+/// `c[i]` and [`InverseScale::Unscaled`] stores `n * c[i]`. Both use reduced
+/// Montgomery representations; this scale concerns the polynomial's values.
+/// Multiply an entry by [`Self::normalization_factor`] to recover `c[i]`.
+///
+/// [`Plan::forward_prefix`](super::Plan::forward_prefix) and
+/// [`Expansion::coefficients`](super::Expansion::coefficients), among other
+/// coefficient consumers, accept the view directly and apply its scale during
+/// output initialization. The factor uses the source base size even when the
+/// destination domain is larger. The view borrows only the retained buffer, so
+/// the expansion's output and scratch may be reused while the view is live.
+///
+/// Ordinary slices, arrays, and vectors can be borrowed through
+/// [`Self::normalized`] or [`From`]. These conversions assume normalized
+/// coefficients; passing an unscaled view's [`as_slice`](Self::as_slice) to a
+/// coefficient consumer loses its scale information. Pass the view itself to
+/// preserve it.
+///
+/// ```
+/// use zakura_udon::{field::Fp, fft::{
+///     Domain, ExecutionOptions, Expansion, ExpansionOrder, ExpansionStorage,
+///     ExpansionStrategy, InverseScale, Plan, SerialExecutor,
+/// }};
+///
+/// let base = Plan::without_tables(Domain::new(1)?.subgroup());
+/// let expansion = Expansion::new(base, base.domain(), None)?;
+/// let operation = expansion.configure(
+///     ExpansionOrder::Residues,
+///     ExpansionStorage::DisposableInput { scale: InverseScale::Unscaled },
+///     ExpansionStrategy::serial(),
+/// )?;
+/// // Evaluations of 1 + x at the two subgroup points.
+/// let mut input = [Fp::from_u64(2), Fp::ZERO];
+/// let mut expanded = [Fp::ZERO; 2];
+/// let retained = operation.execute_disposable(
+///     &mut input, &mut expanded, &SerialExecutor, &mut [],
+/// )?;
+/// let next = Plan::without_tables(Domain::new(2)?.subgroup());
+/// let mut output = [Fp::ZERO; 4];
+/// next.forward_prefix(
+///     retained, &mut output, ExecutionOptions::serial(), &SerialExecutor, &mut [],
+/// )?;
+/// for (row, value) in output.iter().enumerate() {
+///     let point = next.domain().domain().root().pow_u64(row as u64);
+///     assert_eq!(*value, Fp::ONE.add(&point));
+/// }
+/// assert_eq!(retained.as_slice(), &[Fp::from_u64(2); 2]);
+/// assert_eq!(retained.normalization_factor(), Fp::power_of_two_inverse(1));
+/// # Ok::<(), zakura_udon::fft::FftError>(())
+/// ```
+#[derive(Clone, Copy)]
+pub struct CoefficientView<'a, M: PrimeModulus> {
+    values: &'a [PastaField<M>],
+    scale: InverseScale,
+}
+
+impl<M: PrimeModulus> core::fmt::Debug for CoefficientView<'_, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CoefficientView")
+            .field("values", &self.values)
+            .field("scale", &self.scale)
+            .finish()
+    }
+}
+
+impl<'a, M: PrimeModulus> CoefficientView<'a, M> {
+    /// Borrows normalized coefficients, including an empty or short prefix.
+    ///
+    /// Entry `i` is the coefficient of degree `i`. This records the declared
+    /// scale without inspecting or modifying the values.
+    pub const fn normalized(values: &'a [PastaField<M>]) -> Self {
+        Self {
+            values,
+            scale: InverseScale::Normalized,
+        }
+    }
+
+    // Unscaled views must contain a complete inverse result of nonzero
+    // power-of-two length: normalization_factor derives the source size from it.
+    pub(super) fn new(values: &'a [PastaField<M>], scale: InverseScale) -> Self {
+        Self { values, scale }
+    }
+    /// Stored coefficients, without changing their scale.
+    pub const fn as_slice(self) -> &'a [PastaField<M>] {
+        self.values
+    }
+    /// Stored scale: normalized for ordinary slices, or the retained inverse scale.
+    pub const fn scale(self) -> InverseScale {
+        self.scale
+    }
+    /// Multiplier that recovers normalized coefficients from stored entries.
+    ///
+    /// Returns one for a normalized view, including an empty prefix, or the
+    /// inverse of the source expansion's base size for an unscaled view.
+    pub fn normalization_factor(self) -> PastaField<M> {
+        match self.scale {
+            InverseScale::Normalized => PastaField::ONE,
+            InverseScale::Unscaled => PastaField::power_of_two_inverse(self.values.len().ilog2()),
+        }
+    }
+}
+
+impl<'a, M: PrimeModulus, T: AsRef<[PastaField<M>]> + ?Sized> From<&'a T>
+    for CoefficientView<'a, M>
+{
+    fn from(values: &'a T) -> Self {
+        Self::normalized(values.as_ref())
+    }
+}
+
+impl<'a, M: PrimeModulus, T: AsRef<[PastaField<M>]> + ?Sized> From<&'a mut T>
+    for CoefficientView<'a, M>
+{
+    fn from(values: &'a mut T) -> Self {
+        Self::normalized(T::as_ref(values))
+    }
+}
 
 /// Storage order of a complete evaluation vector.
 ///

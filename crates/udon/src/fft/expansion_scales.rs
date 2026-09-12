@@ -17,11 +17,11 @@ pub enum ExpansionScaleNormalization {
 
 /// Residue-major powers bound to their extended coset and normalization.
 ///
-/// [`Self::bind`] checks dimensions and metadata; [`Self::validate`] checks
-/// imported contents. Preparation returns the same domain-bound handle.
+/// [`Self::bind`] checks dimensions and every imported entry against the
+/// declared domain and normalization.
+/// Preparation returns the same domain-bound handle without revalidation.
 /// [`ExpansionScaleNormalization`] defines each entry's formula and position.
-/// Incorrect entries can cause wrong results or panics under the module's
-/// [table validity contract](super).
+/// [`Self::bind_trusted`] relies on the caller for correct contents.
 #[derive(Clone, Copy)]
 pub struct ExpansionScales<'a, M: PrimeModulus> {
     pub(super) base_size: usize,
@@ -42,11 +42,27 @@ impl<M: PrimeModulus> core::fmt::Debug for ExpansionScales<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
-    /// Binds dimensions and declared semantics without inspecting entries.
+    /// Checks entries against the declared domain, base size, and normalization.
+    ///
+    /// Shape errors follow [`Self::bind_trusted`]. Incorrect or unreduced entries
+    /// return [`FftError::InvalidTables`]. Validation takes linear field work.
+    pub fn bind(
+        base_size: usize,
+        extended: CosetDomain<M>,
+        normalization: ExpansionScaleNormalization,
+        values: &'a [PastaField<M>],
+    ) -> Result<Self, FftError> {
+        Self::bind_trusted(base_size, extended, normalization, values)?.validate()
+    }
+
+    /// Binds caller-trusted entries after checking the base size and slice length.
     ///
     /// Errors follow [`Self::requirements`], with [`FftError::LengthMismatch`]
     /// if `values` does not have the extended domain size.
-    pub fn bind(
+    /// The caller must establish the reduced Montgomery entries described by
+    /// [`ExpansionScaleNormalization`]. Incorrect contents can cause wrong
+    /// results or panics, but not memory unsafety.
+    pub fn bind_trusted(
         base_size: usize,
         extended: CosetDomain<M>,
         normalization: ExpansionScaleNormalization,
@@ -82,9 +98,11 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
         Ok(extended_size)
     }
 
-    /// Fills caller storage after validating every dimension.
+    /// Generates residue powers into exactly sized caller storage.
     ///
-    /// Lengths and errors follow [`Self::bind`]. All checks precede writes.
+    /// Entries follow [`ExpansionScaleNormalization`] and use reduced Montgomery
+    /// representations. Lengths and errors follow [`Self::bind_trusted`]. All
+    /// checks precede writes; initial destination values are overwritten.
     pub fn prepare(
         base_size: usize,
         extended: CosetDomain<M>,
@@ -111,10 +129,15 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
             }
             step = step.mul(&extended.domain().root());
         }
-        Self::bind(base_size, extended, normalization, values)
+        Ok(Self {
+            base_size,
+            extended,
+            normalization,
+            values,
+        })
     }
 
-    /// Checks canonical Montgomery representations and every mathematical entry.
+    /// Checks every mathematical entry and its reduced Montgomery representation.
     ///
     /// Returns [`FftError::InvalidTables`] for any incorrect or unreduced entry.
     pub fn validate(self) -> Result<Self, FftError> {
@@ -196,7 +219,7 @@ impl ExpansionScaleArtifact {
     ///
     /// Returns [`FftError::InvalidTables`] for any metadata mismatch, or the size
     /// errors from [`ExpansionScales::requirements`]. Validate table entries
-    /// separately with [`ExpansionScales::validate`] after binding decoded storage.
+    /// separately with [`ExpansionScales::bind`] when binding decoded storage.
     pub fn validate<M: PrimeModulus>(
         self,
         base_size: usize,

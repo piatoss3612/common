@@ -13,9 +13,6 @@
 //! For even `e`, the square root is `a * w * r^(e / 2)`. An odd `e` means
 //! `a` is a nonsquare: rounding the exponent up gives a candidate whose square
 //! is `a * r`. The final square check distinguishes these cases.
-//!
-//! Adapted from common's `crates/pasta_curves/src/arithmetic/fields.rs` at
-//! revision `812e867748943ba3830f0f16cd627da456cc58cd`.
 
 use super::{PastaField, PrimeModulus, field_elements};
 

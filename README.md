@@ -1,6 +1,6 @@
 # (no name yet)
 
-This is an experimental stack of Rust crates for Zakura Common.
+This is an experimental stack of Rust crates for Zakura.
 
 * This repository is one virtual Cargo workspace; every crate lives under
   [`crates/`](crates/).

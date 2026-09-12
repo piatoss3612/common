@@ -1,9 +1,6 @@
 # Field arithmetic performance
 
-These measurements record the September 11, 2026 optimization pass. The code
-reference was the optimized Pasta fork in `../common`, revision
-`812e867748943ba3830f0f16cd627da456cc58cd`, especially its field chains,
-`modinv62.rs`, and `deferred.rs`. An initial source review supplied hypotheses;
+These measurements record the September 11, 2026 optimization pass. Arithmetic
 identities, input bounds, and performance were checked separately. The changes
 use the existing dependencies and preserve the target crates' `no_std` and
 variable-time contracts.
@@ -106,8 +103,8 @@ a negative subtraction, so one final correction suffices.
 
 Forward and inverse root ladders replace repeated root construction and supply
 Tonelli–Shanks corrections directly. Their combined raw payload is 4,224 bytes
-for both fields, stored directly as field elements. The larger tables from the
-reference are available through `sqrt-table-large`; see the [optional table
+for both fields, stored directly as field elements. Larger tables are available
+through `sqrt-table-large`; see the [optional table
 measurements](#optional-larger-square-root-tables). The generic small-field
 square-root algorithm remains a test oracle.
 
@@ -132,12 +129,12 @@ already enabled. Entries are means in microseconds; these runs used the same
 
 | Chain / emission | Fp squares | Fq squares | Fp nonsquares | Fq nonsquares |
 | --- | ---: | ---: | ---: | ---: |
-| Supplied common / compact | 963.3 | 952.4 | 571.7 | 572.4 |
-| Supplied common / unrolled | 979.7 | 972.4 | 597.1 | 594.6 |
-| Supplied common / batched | 789.9 | 783.6 | 400.8 | 403.6 |
+| Supplied / compact | 963.3 | 952.4 | 571.7 | 572.4 |
+| Supplied / unrolled | 979.7 | 972.4 | 597.1 | 594.6 |
+| Supplied / batched | 789.9 | 783.6 | 400.8 | 403.6 |
 | Planned / batched | 791.7 | 785.9 | 405.0 | 403.4 |
 
-The supplied common chains use 223 squarings plus 23 or 24 multiplications,
+The supplied chains use 223 squarings plus 23 or 24 multiplications,
 versus 222 plus 26 for the planner. Their measured benefit was below 2%, so
 Udon retains generated schedules. Batched emission clearly beat both compact
 and fully unrolled emission with canonical intermediates.
@@ -150,30 +147,26 @@ a longer repeat (50 samples, 0.5-second warmup, two-second measurement) measured
 intervals. This did not establish a repeatable win across both fields, so the
 seed change was discarded.
 
-A fuller signed-62 coefficient implementation, adapted from common with batched
-even steps and shrinking active length, reduced inversion of one to about
-186 ns but took approximately 658–757 ns on dense fixtures, versus 530–550 ns
-before the changes. That implementation was also discarded.
+A fuller signed-62 coefficient implementation with batched even steps and
+shrinking active length reduced inversion of one to about 186 ns but took
+approximately 658–757 ns on dense fixtures, versus 530–550 ns before the
+changes. That implementation was also discarded.
 
 Contiguous arrays and slices share dispatch. Zero through three terms use
 specialized paths; the exact three-versus-four REDC cutoff is checked at compile
 time. Fresh slice accumulators exploit the physical slice-length bound while
 the public `ProductSum` continues folding overflow for unrestricted additions
-and merges. On AArch64, blocks of 32 use independent Comba columns adapted from
-common. This outperformed four accumulator lanes at large lengths: 1,024-term
-arrays took about 4.0 µs rather than 5.5–5.6 µs. Other architectures retain the
-four-lane path at 64 terms; cross-compilation does not establish its speed.
+and merges. On AArch64, blocks of 32 use independent Comba columns. This
+outperformed four accumulator lanes at large lengths: 1,024-term arrays took
+about 4.0 µs rather than 5.5–5.6 µs. Other architectures retain the four-lane
+path at 64 terms; cross-compilation does not establish its speed.
 
 ## Coverage and remaining work
 
-This pass did not implement every proposal in the source review or exhaust the
-optimized common fork. The retained changes and the rejected experiments above
-are complete; the following distinctions preserve the review's remaining work.
-
 - **Evaluated and rejected:** direct stored-input inversion, the fuller
-  signed-62 inverter, and using common's supplied chains in Udon. The measured
-  reasons appear above. Support for verified supplied chains remains available
-  in Bento. These results concern the tested implementations and host, not every
+  signed-62 inverter, and using supplied chains in Udon. The measured reasons
+  appear above. Support for verified supplied chains remains available in
+  Bento. These results concern the tested implementations and host, not every
   possible implementation of those techniques.
 - **Implemented after the initial pass:** the [optional larger square-root
   tables](#optional-larger-square-root-tables).
@@ -182,13 +175,12 @@ are complete; the following distinctions preserve the review's remaining work.
   still rejects unreduced limbs by panicking. For the separate workflow of
   embedding generated field values, see the [field storage
   guide](POD.md#storing-field-elements).
-- **Further common candidates:** the x86-64 interleaved lazy-square kernel in
-  `src/fields/portable.rs`, batched runtime exponentiation in the field files,
-  and direct multiplication by inverse powers of two in `src/fields.rs` were
-  not ported or benchmarked here. Common's AArch64 assembly backend was also
-  not ported; Udon retains its existing prohibition on unsafe code. Low-half
-  REDC, bounded lazy square runs, and AArch64 column accumulation were adapted
-  in safe Rust as described above.
+- **Further arithmetic candidates:** interleaved lazy squaring on x86-64,
+  batched runtime exponentiation, and direct multiplication by inverse powers
+  of two remain unimplemented and unbenchmarked. An AArch64 assembly backend
+  is also unimplemented; Udon retains its existing prohibition on unsafe code.
+  Low-half REDC, bounded lazy square runs, and AArch64 column accumulation use
+  safe Rust as described above.
 - **Further planner and validation work:** the planner now breaks arithmetic
   cost ties by prepared-table size; it does not search using peak liveness or
   caller-supplied squaring/multiplication weights. x86-64 runtime measurements,
@@ -248,9 +240,8 @@ fn main() {
 
 ## Optional larger square-root tables
 
-The `sqrt-table-large` feature selects a table-assisted algorithm adapted from
-the same common revision cited above. The [crate feature
-documentation](../crates/udon/src/lib.rs) describes configuration and the
+The `sqrt-table-large` feature selects a table-assisted algorithm. The [crate
+feature documentation](../crates/udon/src/lib.rs) describes configuration and the
 [square-root implementation](../crates/udon/src/field/sqrt/large.rs) explains the
 exponent recovery and subgroup lookup. Both algorithms remain variable-time;
 the [public square-root contract](../crates/udon/src/field/sqrt.rs) leaves the

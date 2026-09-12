@@ -210,7 +210,7 @@ macro_rules! pasta_field_parameters {
 }
 
 // Batched emission and the planner's smaller odd-power table matched the
-// supplied common chains in local measurements; keep the generated schedules.
+// supplied chains in local measurements; keep the generated schedules.
 // Hash multipliers apply to reduced R = 2^256 Montgomery representatives.
 // Each larger table checks all 256 subgroup hashes during constant evaluation;
 // a representation change requires revalidating these multipliers.

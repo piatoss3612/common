@@ -2,7 +2,7 @@
 name = "zakura-bento"
 description = """
 Compile-time arithmetic, addition chains, and checked POD storage and embedding
-for Zakura Common
+for Zakura
 """
 version.workspace = true
 authors.workspace = true

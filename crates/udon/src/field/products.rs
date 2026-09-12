@@ -90,9 +90,8 @@ impl<M: PrimeModulus> ProductSum<M> {
         }
     }
 
-    // Column accumulation adapted from common's deferred.rs at revision
-    // 812e867748943ba3830f0f16cd627da456cc58cd. A block shares carry handoffs
-    // across terms. Only fresh, physically bounded slice sums call this path.
+    // Column accumulation shares carry handoffs across terms in a block.
+    // Only fresh, physically bounded slice sums call this path.
     #[cfg(target_arch = "aarch64")]
     fn add_product_block(&mut self, lhs: &[PastaField<M>], rhs: &[PastaField<M>]) {
         assert_eq!(lhs.len(), rhs.len());

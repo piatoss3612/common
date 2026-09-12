@@ -17,7 +17,6 @@ use zakura_udon::{
 
 struct Prepared<M: PrimeModulus> {
     mask: u8,
-    permutation: Vec<u32>,
     forward: Vec<PastaField<M>>,
     inverse: Vec<PastaField<M>>,
     finish: Vec<PastaField<M>>,
@@ -26,20 +25,19 @@ struct Prepared<M: PrimeModulus> {
 
 impl<M: PrimeModulus> Prepared<M> {
     fn new(domain: CosetDomain<M>) -> Self {
-        Self::selected(domain, 31)
+        Self::selected(domain, 15)
     }
 
     fn selected(domain: CosetDomain<M>, mask: u8) -> Self {
         let sizes = TableRequirements::for_domain(domain);
         let mut result = Self {
             mask,
-            permutation: vec![0; if mask & 1 != 0 { sizes.permutation } else { 0 }],
-            forward: vec![PastaField::ZERO; if mask & 2 != 0 { sizes.twiddles } else { 0 }],
-            inverse: vec![PastaField::ZERO; if mask & 4 != 0 { sizes.twiddles } else { 0 }],
-            finish: vec![PastaField::ZERO; if mask & 8 != 0 { sizes.twiddles } else { 0 }],
+            forward: vec![PastaField::ZERO; if mask & 1 != 0 { sizes.twiddles } else { 0 }],
+            inverse: vec![PastaField::ZERO; if mask & 2 != 0 { sizes.twiddles } else { 0 }],
+            finish: vec![PastaField::ZERO; if mask & 4 != 0 { sizes.twiddles } else { 0 }],
             scales: vec![
                 PastaField::ZERO;
-                if mask & 16 != 0 {
+                if mask & 8 != 0 {
                     sizes.inverse_scales
                 } else {
                     0
@@ -52,28 +50,25 @@ impl<M: PrimeModulus> Prepared<M> {
 
     fn prepare(&mut self, domain: CosetDomain<M>) {
         TablesMut {
-            bit_reversed: (self.mask & 1 != 0).then_some(&mut self.permutation),
-            forward: (self.mask & 2 != 0).then_some(&mut self.forward),
-            inverse: (self.mask & 4 != 0).then_some(&mut self.inverse),
-            inverse_finish: (self.mask & 8 != 0).then_some(&mut self.finish),
-            inverse_scales: (self.mask & 16 != 0).then_some(&mut self.scales),
+            forward: (self.mask & 1 != 0).then_some(&mut self.forward),
+            inverse: (self.mask & 2 != 0).then_some(&mut self.inverse),
+            inverse_finish: (self.mask & 4 != 0).then_some(&mut self.finish),
+            inverse_scales: (self.mask & 8 != 0).then_some(&mut self.scales),
         }
         .prepare(domain)
         .unwrap();
     }
 
     fn bytes(&self) -> usize {
-        self.permutation.len() * 4
-            + (self.forward.len() + self.inverse.len() + self.finish.len() + self.scales.len()) * 32
+        (self.forward.len() + self.inverse.len() + self.finish.len() + self.scales.len()) * 32
     }
 
     fn tables(&self) -> Tables<'_, M> {
         Tables {
-            bit_reversed: (self.mask & 1 != 0).then_some(&self.permutation),
-            forward: (self.mask & 2 != 0).then_some(&self.forward),
-            inverse: (self.mask & 4 != 0).then_some(&self.inverse),
-            inverse_finish: (self.mask & 8 != 0).then_some(&self.finish),
-            inverse_scales: (self.mask & 16 != 0).then_some(&self.scales),
+            forward: (self.mask & 1 != 0).then_some(&self.forward),
+            inverse: (self.mask & 2 != 0).then_some(&self.inverse),
+            inverse_finish: (self.mask & 4 != 0).then_some(&self.finish),
+            inverse_scales: (self.mask & 8 != 0).then_some(&self.scales),
         }
     }
 }
@@ -167,20 +162,11 @@ fn transforms<M: PrimeModulus>(
         let domain = Domain::new(log_size).unwrap().coset(shift).unwrap();
         let input = inputs::<M>(domain.size());
         for (direction, inverse, profiles) in [
-            (
-                "forward",
-                false,
-                &[("none", 0), ("twiddles", 2), ("permutation", 3)][..],
-            ),
+            ("forward", false, &[("none", 0), ("twiddles", 1)][..]),
             (
                 "inverse",
                 true,
-                &[
-                    ("none", 0),
-                    ("twiddles", 4),
-                    ("finish", 28),
-                    ("permutation", 29),
-                ][..],
+                &[("none", 0), ("twiddles", 2), ("finish", 14)][..],
             ),
         ] {
             let mut group = criterion.benchmark_group(format!(
@@ -359,7 +345,7 @@ fn expansions<M: PrimeModulus>(
     runners: &[Runner],
 ) {
     let base = Domain::new(11).unwrap().subgroup();
-    let tables = Prepared::selected(base, 30);
+    let tables = Prepared::selected(base, 15);
     let plan = Plan::new(base, tables.tables()).unwrap();
     let coefficient_plan = Plan::new(
         base,
@@ -388,7 +374,7 @@ fn expansions<M: PrimeModulus>(
         });
         setup.finish();
         expansion.prepare_scales(&mut scales).unwrap();
-        let dense_tables = Prepared::selected(extended, 2);
+        let dense_tables = Prepared::selected(extended, 1);
         let dense_plan = Plan::new(extended, dense_tables.tables()).unwrap();
         let factor_values = inputs::<M>(extended.size());
         let factor = ResidueView::new(&factor_values, expansion.layout()).unwrap();

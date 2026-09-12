@@ -79,25 +79,26 @@ under a zero-scratch budget and executes with arrays sized by the const query.
 `ResourceBudget` caps initialized temporary fields, retained table bytes, and
 total tasks. Requirements exclude input/output storage, fixed stack frames, and
 executor resources. Borrowed table slices are conservatively counted separately
-even if their storage aliases. `OperationRequirements` distinguishes shared
-scratch from blocked workers' partitions. Configuration and table binding fail
-before execution when their fixed strategy exceeds a ceiling.
+even if their storage aliases. `OperationRequirements` reports scratch in field
+elements, including the size and count of blocked column jobs' partitions.
+Configuration and table binding fail before execution when their fixed strategy
+exceeds a ceiling.
 
 | Backend | Scratch | Execution |
 | --- | --- | --- |
 | `InPlace` | Zero | Stage barriers and disjoint butterfly pairs; supports parallel work and radix-2/4/8 codelets |
 | `Blocked` | Queried rectangular partitions | Local transforms and column jobs in caller scratch |
-| `Stockham` | One full domain, except size one | Autosort using destination and scratch as ping-pong buffers; input copies and any final copy or permutation occur during execution |
 
 `Strategy::serial()` selects the stage backend with radix 2. `Strategy::budgeted`
 uses deterministic geometry and `Backend::Auto`, selecting blocked execution
 when its geometry, order, codelet, and scratch ceiling permit, otherwise the
-stage backend. `Auto` does not select Stockham or measure timings. Low-level
-geometry remains available through `ExecutionOptions`; larger codelets are
-explicit stage-backend choices. Separate-output initialization can scatter from
-the input, gather consecutive destination regions, or gather in bounded tiles.
-Generic coset scales use independent chunk seeds and power recurrences, or a
-borrowed `PowerTable` containing `shift^i`.
+stage backend. `Auto` does not measure timings. Low-level geometry remains
+available through `ExecutionOptions`; larger codelets are explicit stage-backend
+choices. Separate-output initialization can scatter from the input, gather
+consecutive destination regions, or gather in bounded tiles.
+Forward coset scaling computes a starting power for each region and advances by
+recurrence, or borrows a `PowerTable` containing `shift^i` for coefficient degree
+`i`.
 
 With the stage backend, natural coefficients to bit-reversed evaluations use
 decimation in frequency (DIF). A matching inverse using decimation in time (DIT)
@@ -135,18 +136,17 @@ rejects unreduced Montgomery entries. Incorrect table contents can cause wrong
 results or panics; all APIs remain memory safe. Prepared inverse-finish and
 scaling tables depend on the coset shift, even though ordinary twiddles do not.
 
-Prepared stage and Stockham operations additionally accept
+Prepared stage operations additionally accept
 [`TwiddleTable`](../crates/udon/src/fft/powers.rs) through `with_twiddles`.
 `TwiddleDescription::requirements` sizes each representation; `prepare`,
 `bind`, and `validate` generate entries, check dimensions, and check mathematical
-contents respectively. For table domain size `N > 1`, retained field counts are:
+contents respectively. For table domain size `N > 1`, retained field counts are
+listed below; size one needs no entries in either representation.
 
 | Storage | Fields | Access cost |
 | --- | --- | --- |
 | `Dense` | `N/2` | One lookup |
 | `StagePacked` | `N-1` | Stage-contiguous lookup; choose a smaller table size to retain only local stages |
-| `ChunkSeeds { chunk_len: B }` | `ceil((N/2)/B)` | Seed lookup and recurrence within each task |
-| `Factored { low_len: B }` | `min(B,N/2) + ceil((N/2)/B)` | Two lookups and one reconstruction multiplication |
 
 All table domains use the nested canonical Pasta roots. A larger table serves
 a smaller transform through the canonical root stride. A smaller table serves
@@ -159,8 +159,7 @@ selected blocked operation selects the stage backend instead.
 `PowerTable` describes entry `i` as `first * step^i`, including deliberate scaling.
 Forward coefficient tables use `first = 1`, `step = shift`, and exactly the
 transform size. `with_forward_scales` checks that metadata and length; use
-`validate` to check imported entries. None of these APIs automatically generates
-or retains a bit-reversal table.
+`validate` to check imported entries.
 
 Callers can prepare table arrays at runtime and lend their slices, or prepare
 them in a downstream build script and embed them through [Bento POD](POD.md).
@@ -181,7 +180,9 @@ Udon's `TwiddleArtifact` and `ExpansionScaleArtifact` describe mathematical
 semantics: version, field modulus, canonical root dimensions and orientation,
 Montgomery radix, and applicable shift, layout, and normalization. They are Rust
 descriptors, not a serialization format. The fixture's owner-defined header
-stores these alongside factored twiddles and pre-normalized residue scales.
+stores these alongside stage-packed twiddles and pre-normalized residue scales.
+Its schema version identifies the owner's record layout separately from Udon's
+semantic versions; the consumer checks both before binding the tables.
 Consumers check semantic compatibility and mathematical entries separately from
 Bento's target-layout checks and the owner's transport-integrity policy.
 Native build-time and runtime preparation produce identical borrowed handles;
@@ -376,9 +377,8 @@ The caller chooses which residues to retain for rotations or other dependencies.
 initialized evaluation buffer. It accepts natural or bit-reversed input order.
 `scatter` and `scatter_strided` write natural evaluation positions directly to
 the requested storage order, checking the requested natural positions before
-writing. A supplied bit-reversal table must satisfy `Tables`' content contract;
-an invalid entry can panic after partial writes. Unwritten entries retain their
-prior values; callers own completeness and accumulation.
+writing. Unwritten entries retain their prior values; callers own completeness
+and accumulation.
 
 `interpolate_classes` interpolates one output class and any number of lift
 classes no larger than the output. Classes may have different nonzero coset

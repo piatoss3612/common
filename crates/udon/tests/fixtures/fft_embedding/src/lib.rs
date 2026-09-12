@@ -28,13 +28,13 @@ pub fn exercise() {
         FP_TABLES.header,
         FP_TABLES.tables(),
         &FP_TABLES.residues,
-        &FP_TABLES.factored,
+        &FP_TABLES.packed,
     );
     exercise_field(
         FQ_TABLES.header,
         FQ_TABLES.tables(),
         &FQ_TABLES.residues,
-        &FQ_TABLES.factored,
+        &FQ_TABLES.packed,
     );
 }
 
@@ -42,7 +42,7 @@ fn exercise_field<M: PrimeModulus>(
     header: record::Header,
     tables: Tables<'_, M>,
     scales: &[PastaField<M>],
-    factored: &[PastaField<M>],
+    packed: &[PastaField<M>],
 ) {
     let domain = Domain::for_size(record::SIZE).unwrap().subgroup();
     let extended = Domain::for_size(record::EXTENDED_SIZE)
@@ -58,10 +58,10 @@ fn exercise_field<M: PrimeModulus>(
         .validate()
         .expect("embedded FFT tables must match the domain")
         .plan();
-    let twiddles = TwiddleTable::bind(record::TWIDDLES, factored)
+    let twiddles = TwiddleTable::bind(record::TWIDDLES, packed)
         .unwrap()
         .validate()
-        .expect("embedded factored twiddles must match the domain");
+        .expect("embedded packed twiddles must match the domain");
     const OPTIONS: ExecutionOptions = ExecutionOptions {
         tile_len: 4,
         columns_per_task: 2,

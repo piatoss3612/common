@@ -57,7 +57,7 @@ fn operations<M: PrimeModulus>() {
             let input = inputs(domain.size());
             let expected_forward = direct(&input, domain);
             let expected_inverse = inverse_direct(&input, domain, true);
-            for backend in [Backend::InPlace, Backend::Blocked, Backend::Stockham] {
+            for backend in [Backend::InPlace, Backend::Blocked] {
                 for direction in [Direction::Forward, Direction::Inverse] {
                     let expected = if direction == Direction::Forward {
                         &expected_forward
@@ -217,7 +217,7 @@ fn prefixes_and_products<M: PrimeModulus>() {
     let values = inputs(domain.size());
     let factors = direct(&values, domain);
     for len in [0, 1, 2, 3, 7, 16, 31, 32] {
-        for backend in [Backend::InPlace, Backend::Blocked, Backend::Stockham] {
+        for backend in [Backend::InPlace, Backend::Blocked] {
             for direction in [Direction::Forward, Direction::Inverse] {
                 for output_order in [InputOrder::Natural, InputOrder::BitReversed] {
                     for inverse_scale in [InverseScale::Normalized, InverseScale::Unscaled] {
@@ -301,21 +301,16 @@ fn inverse_prefix_scale_and_terminal_products_match_direct_sums() {
     prefixes_and_products::<PallasScalar>();
 }
 
-fn power_tables<M: PrimeModulus>() {
+fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
     let domain = Domain::<M>::new(6)
         .unwrap()
         .coset(PastaField::from_u64(7))
         .unwrap();
     let plan = Plan::without_tables(domain);
     let input = inputs(domain.size());
-    for size in [8, 64, 256] {
+    for size in [1, 8, 64, 256] {
         for inverse in [false, true] {
-            for storage in [
-                TwiddleStorage::Dense,
-                TwiddleStorage::StagePacked,
-                TwiddleStorage::ChunkSeeds { chunk_len: 4 },
-                TwiddleStorage::Factored { low_len: 8 },
-            ] {
+            for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
                 let description = TwiddleDescription {
                     size,
                     inverse,
@@ -326,35 +321,35 @@ fn power_tables<M: PrimeModulus>() {
                     .unwrap()
                     .validate()
                     .unwrap();
-                for backend in [Backend::InPlace, Backend::Stockham] {
-                    for direction in [Direction::Forward, Direction::Inverse] {
-                        let operation = plan
-                            .configure(TransformRequest::new(direction), strategy(backend))
-                            .unwrap()
-                            .with_twiddles(table)
-                            .unwrap();
-                        let mut output = input.clone();
-                        let mut scratch =
-                            vec![PastaField::ZERO; operation.requirements().scratch_fields];
-                        operation
-                            .execute(&mut output, &SerialExecutor, &mut scratch)
-                            .unwrap();
-                        let expected = if direction == Direction::Forward {
-                            direct(&input, domain)
-                        } else {
-                            inverse_direct(&input, domain, true)
-                        };
-                        assert_eq!(
-                            output, expected,
-                            "table={description:?}, backend={backend:?}, direction={direction:?}"
-                        );
-                    }
+                for direction in [Direction::Forward, Direction::Inverse] {
+                    let operation = plan
+                        .configure(TransformRequest::new(direction), strategy(Backend::InPlace))
+                        .unwrap()
+                        .with_twiddles(table)
+                        .unwrap();
+                    let mut output = input.clone();
+                    let mut scratch =
+                        vec![PastaField::ZERO; operation.requirements().scratch_fields];
+                    operation
+                        .execute(&mut output, executor, &mut scratch)
+                        .unwrap();
+                    let expected = if direction == Direction::Forward {
+                        direct(&input, domain)
+                    } else {
+                        inverse_direct(&input, domain, true)
+                    };
+                    assert_eq!(
+                        output, expected,
+                        "table={description:?}, direction={direction:?}"
+                    );
                 }
-                values[0] = PastaField::ZERO;
-                assert!(matches!(
-                    TwiddleTable::bind(description, &values).unwrap().validate(),
-                    Err(FftError::InvalidTables)
-                ));
+                if let Some(value) = values.first_mut() {
+                    *value = PastaField::ZERO;
+                    assert!(matches!(
+                        TwiddleTable::bind(description, &values).unwrap().validate(),
+                        Err(FftError::InvalidTables)
+                    ));
+                }
             }
         }
     }
@@ -377,8 +372,10 @@ fn power_tables<M: PrimeModulus>() {
 
 #[test]
 fn twiddle_shapes_strides_directions_and_coset_powers_are_compatible() {
-    power_tables::<PallasBase>();
-    power_tables::<PallasScalar>();
+    power_tables::<PallasBase, _>(&SerialExecutor);
+    power_tables::<PallasScalar, _>(&SerialExecutor);
+    power_tables::<PallasBase, _>(&Threads);
+    power_tables::<PallasScalar, _>(&Threads);
 }
 
 #[test]
@@ -406,7 +403,7 @@ fn prepared_validation_and_batch_resources_precede_mutation() {
     assert_eq!(operation.requirements(), REQUIRED);
     let polynomial = inputs(domain.size());
     let expected = direct(&polynomial, domain);
-    for backend in [Backend::InPlace, Backend::Blocked, Backend::Stockham] {
+    for backend in [Backend::InPlace, Backend::Blocked] {
         let operation = plan
             .configure(DESCRIPTION.request, strategy(backend))
             .unwrap();
@@ -459,11 +456,11 @@ fn prepared_validation_and_batch_resources_precede_mutation() {
             assert_eq!(batch, polynomial.repeat(count));
         }
     }
-    let stockham = plan
-        .configure(DESCRIPTION.request, strategy(Backend::Stockham))
+    let blocked = plan
+        .configure(DESCRIPTION.request, strategy(Backend::Blocked))
         .unwrap();
     assert!(matches!(
-        stockham.execute(&mut values, &SerialExecutor, &mut []),
+        blocked.execute(&mut values, &SerialExecutor, &mut []),
         Err(FftError::ScratchTooSmall { .. })
     ));
     assert_eq!(values, polynomial);
@@ -471,8 +468,8 @@ fn prepared_validation_and_batch_resources_precede_mutation() {
         plan.configure(
             DESCRIPTION.request,
             Strategy {
-                backend: Backend::Stockham,
-                ..DESCRIPTION.strategy
+                budget: DESCRIPTION.strategy.budget,
+                ..strategy(Backend::Blocked)
             }
         ),
         Err(FftError::ResourceLimit)
@@ -487,13 +484,136 @@ fn prepared_validation_and_batch_resources_precede_mutation() {
 }
 
 #[test]
+fn prepared_table_budgets_and_auto_selection_preserve_blocked_partitions() {
+    let domain = Domain::<PallasBase>::new(6)
+        .unwrap()
+        .coset(Fp::from_u64(7))
+        .unwrap();
+    let prepared = Prepared::new(domain);
+    let plan = Plan::new(domain, prepared.tables()).unwrap();
+    let request = TransformRequest::new(Direction::Forward);
+    let table_bytes = 4 * (domain.size() / 2) * core::mem::size_of::<Fp>();
+    let mut selection = strategy(Backend::Auto);
+    selection.budget.table_bytes = table_bytes;
+    selection.budget.scratch_fields = 96;
+    let operation = plan.configure(request, selection).unwrap();
+    let required = operation.requirements();
+    assert_eq!(required.backend, Backend::Blocked);
+    assert_eq!(required.retained_table_bytes, table_bytes);
+    assert_eq!(required.scratch_fields, 96);
+    assert_eq!(required.per_worker_scratch_fields, 48);
+    assert_eq!(required.scratch_partitions, 2);
+    assert_eq!(required.max_tasks, 3);
+
+    let input = inputs(domain.size());
+    let expected = direct(&input, domain);
+    let mut output = input.clone();
+    let mut scratch = vec![Fp::ONE; required.scratch_fields];
+    assert!(matches!(
+        operation.execute(&mut output, &Threads, &mut scratch[..95]),
+        Err(FftError::ScratchTooSmall {
+            required: 96,
+            provided: 95
+        })
+    ));
+    assert_eq!(output, input);
+    assert!(scratch.iter().all(|value| *value == Fp::ONE));
+    operation
+        .execute(&mut output, &Threads, &mut scratch)
+        .unwrap();
+    assert_eq!(output, expected);
+
+    selection.budget.scratch_fields = 95;
+    let fallback = plan.configure(request, selection).unwrap();
+    assert_eq!(fallback.requirements().backend, Backend::InPlace);
+    assert_eq!(fallback.requirements().scratch_fields, 0);
+    assert_eq!(fallback.requirements().per_worker_scratch_fields, 0);
+    assert_eq!(fallback.requirements().scratch_partitions, 0);
+    assert!(matches!(
+        plan.configure(
+            request,
+            Strategy {
+                backend: Backend::Blocked,
+                ..selection
+            }
+        ),
+        Err(FftError::ResourceLimit)
+    ));
+    selection.budget.table_bytes -= 1;
+    assert!(matches!(
+        plan.configure(request, selection),
+        Err(FftError::ResourceLimit)
+    ));
+
+    // The dense provider aliases a plan table; both borrows still count.
+    let dense = TwiddleTable::bind(
+        TwiddleDescription {
+            size: domain.size(),
+            inverse: false,
+            storage: TwiddleStorage::Dense,
+        },
+        &prepared.forward,
+    )
+    .unwrap()
+    .validate()
+    .unwrap();
+    let mut packed = [Fp::ZERO; 7];
+    let local = TwiddleTable::prepare(
+        TwiddleDescription {
+            size: 8,
+            inverse: false,
+            storage: TwiddleStorage::StagePacked,
+        },
+        &mut packed,
+    )
+    .unwrap();
+    let mut scales = vec![Fp::ZERO; domain.size()];
+    let scales = PowerTable::prepare(Fp::ONE, domain.shift(), &mut scales);
+    for table in [dense, local] {
+        assert!(matches!(
+            plan.configure(request, strategy(Backend::Blocked))
+                .unwrap()
+                .with_twiddles(table),
+            Err(FftError::InvalidExecution)
+        ));
+        let bytes = table_bytes
+            + core::mem::size_of_val(table.as_slice())
+            + core::mem::size_of_val(scales.as_slice());
+        let mut selection = strategy(Backend::Auto);
+        selection.budget.table_bytes = bytes;
+        let operation = plan
+            .configure(request, selection)
+            .unwrap()
+            .with_twiddles(table)
+            .unwrap()
+            .with_forward_scales(scales)
+            .unwrap();
+        assert_eq!(operation.requirements().backend, Backend::InPlace);
+        assert_eq!(operation.requirements().scratch_fields, 0);
+        assert_eq!(operation.requirements().retained_table_bytes, bytes);
+        let mut output = input.clone();
+        operation.execute(&mut output, &Threads, &mut []).unwrap();
+        assert_eq!(output, expected);
+        selection.budget.table_bytes -= 1;
+        assert!(matches!(
+            plan.configure(request, selection)
+                .unwrap()
+                .with_twiddles(table)
+                .unwrap()
+                .with_forward_scales(scales),
+            Err(FftError::ResourceLimit)
+        ));
+    }
+}
+
+#[test]
 fn prepared_parallel_panics_restore_all_field_buffers() {
     let domain = Domain::<PallasScalar>::new(8)
         .unwrap()
         .coset(PastaField::from_u64(7))
         .unwrap();
     let plan = Plan::without_tables(domain);
-    for backend in [Backend::InPlace, Backend::Stockham] {
+    for backend in [Backend::InPlace, Backend::Blocked] {
         for codelet in [Codelet::Radix2, Codelet::Radix4, Codelet::Radix8] {
             if backend != Backend::InPlace && codelet != Codelet::Radix2 {
                 continue;

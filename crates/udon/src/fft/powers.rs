@@ -15,20 +15,6 @@ pub enum TwiddleStorage {
     /// For each stage length `b = 2, 4, ..., n`, retain `w^(i*n/b)` for
     /// `0 <= i < b/2`. A smaller table retains only local stages of a transform.
     StagePacked,
-    /// Powers `w^(i*chunk_len)` for `0 <= i < ceil((n/2)/chunk_len)`.
-    ChunkSeeds {
-        /// Positive power-of-two distance between retained seeds.
-        chunk_len: usize,
-    },
-    /// Low powers followed by powers at multiples of `low_len`.
-    ///
-    /// Retain `w^i` for `0 <= i < min(low_len, n/2)`, then `w^(i*low_len)`
-    /// for `0 <= i < ceil((n/2)/low_len)`. A lookup reconstructs a power with
-    /// one multiplication.
-    Factored {
-        /// Positive power-of-two number of consecutive low powers.
-        low_len: usize,
-    },
 }
 
 /// Semantic description shared by const sizing, preparation, and imported data.
@@ -41,7 +27,7 @@ pub struct TwiddleDescription {
     pub size: usize,
     /// Whether generation uses the inverse canonical root.
     pub inverse: bool,
-    /// Arrangement and reconstruction policy.
+    /// Arrangement of retained powers.
     pub storage: TwiddleStorage,
 }
 
@@ -49,9 +35,7 @@ impl TwiddleDescription {
     /// Exact number of retained field elements, without preparing a domain.
     ///
     /// Size validity and address-space limits follow [`Domain::for_size`].
-    /// Returns [`FftError::InvalidExecution`] unless `chunk_len` or `low_len`,
-    /// when present, is a positive power of two. These lengths may exceed the
-    /// table size. Storage overflow returns [`FftError::SizeOverflow`].
+    /// Storage overflow returns [`FftError::SizeOverflow`].
     pub const fn requirements(self) -> Result<usize, FftError> {
         if let Err(error) = check_domain_size(self.size) {
             return Err(error);
@@ -60,22 +44,6 @@ impl TwiddleDescription {
         let count = match self.storage {
             TwiddleStorage::Dense => half,
             TwiddleStorage::StagePacked => self.size - 1,
-            TwiddleStorage::ChunkSeeds { chunk_len } => {
-                if !chunk_len.is_power_of_two() {
-                    return Err(FftError::InvalidExecution);
-                }
-                half.div_ceil(chunk_len)
-            }
-            TwiddleStorage::Factored { low_len } => {
-                if !low_len.is_power_of_two() {
-                    return Err(FftError::InvalidExecution);
-                }
-                if half == 0 {
-                    0
-                } else {
-                    super::min(low_len, half) + half.div_ceil(low_len)
-                }
-            }
         };
         check_field_count(count)
     }
@@ -86,15 +54,6 @@ impl TwiddleDescription {
             TwiddleStorage::StagePacked => {
                 let half = 1 << (index + 1).ilog2();
                 (index - (half - 1)) * (self.size / (2 * half))
-            }
-            TwiddleStorage::ChunkSeeds { chunk_len } => index * chunk_len,
-            TwiddleStorage::Factored { low_len } => {
-                let low = low_len.min(self.size / 2);
-                if index < low {
-                    index
-                } else {
-                    (index - low) * low_len
-                }
             }
         }
     }
@@ -154,8 +113,9 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
         } else {
             domain.root()
         };
-        // Each representation consists of short power progressions. Restart
-        // only at progression boundaries, including packed stage boundaries.
+        // Consecutive exponents share a step within each dense or packed stage
+        // sequence. Reuse that step to avoid exponentiating for every entry;
+        // restart the power when a packed stage returns to exponent zero.
         let mut previous = None;
         let mut power = PastaField::ONE;
         let mut previous_step = None;
@@ -206,35 +166,6 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
     /// Retained entries in the described order.
     pub const fn as_slice(self) -> &'a [PastaField<M>] {
         self.values
-    }
-
-    pub(super) fn power(self, block: usize, index: usize, inverse: bool) -> PastaField<M> {
-        debug_assert!(block <= self.description.size);
-        let half = block / 2;
-        if index == 0 {
-            return PastaField::ONE;
-        }
-        // For the order-block root w, w^(-i) = -w^(block/2-i) when
-        // 0 < i < block/2. Zero was handled above, so either table direction
-        // can supply the other without storing a second table.
-        let conjugate = inverse != self.description.inverse;
-        let index = if conjugate { half - index } else { index };
-        let exponent = index * (self.description.size / block);
-        let power = match self.description.storage {
-            TwiddleStorage::Dense => self.values[exponent],
-            TwiddleStorage::StagePacked => self.values[half - 1 + index],
-            TwiddleStorage::Factored { low_len } => self.values[exponent % low_len]
-                .mul(&self.values[low_len.min(self.description.size / 2) + exponent / low_len]),
-            TwiddleStorage::ChunkSeeds { chunk_len } => {
-                let root = if self.description.inverse {
-                    PastaField::root_of_unity_inverse(self.description.size.ilog2()).unwrap()
-                } else {
-                    PastaField::root_of_unity(self.description.size.ilog2()).unwrap()
-                };
-                self.values[exponent / chunk_len].mul(&root.pow_u64((exponent % chunk_len) as u64))
-            }
-        };
-        if conjugate { power.neg() } else { power }
     }
 }
 

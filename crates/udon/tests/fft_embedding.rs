@@ -52,10 +52,6 @@ udon = {{ package = "zakura-udon", path = {udon:?}, default-features = false }}
         for (damage, diagnostic) in [
             ("", None),
             (
-                "permutation",
-                Some("embedded FFT tables must match the domain: InvalidTables"),
-            ),
-            (
                 "field",
                 Some("embedded FFT tables must match the domain: InvalidTables"),
             ),
@@ -68,8 +64,16 @@ udon = {{ package = "zakura-udon", path = {udon:?}, default-features = false }}
                 Some("embedded metadata must match the domain: InvalidTables"),
             ),
             (
-                "factored",
-                Some("embedded factored twiddles must match the domain: InvalidTables"),
+                "schema",
+                Some("embedded metadata must match the domain: InvalidTables"),
+            ),
+            (
+                "kind",
+                Some("embedded metadata must match the domain: InvalidTables"),
+            ),
+            (
+                "packed",
+                Some("embedded packed twiddles must match the domain: InvalidTables"),
             ),
             (
                 "truncate",

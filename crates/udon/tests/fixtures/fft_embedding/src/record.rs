@@ -18,23 +18,24 @@ pub const EXTENDED_SIZE: usize = 64;
 pub const TWIDDLES: TwiddleDescription = TwiddleDescription {
     size: SIZE,
     inverse: false,
-    storage: TwiddleStorage::Factored { low_len: 4 },
+    storage: TwiddleStorage::StagePacked,
 };
-const FACTORED: usize = match TWIDDLES.requirements() {
+const PACKED: usize = match TWIDDLES.requirements() {
     Ok(fields) => fields,
-    Err(_) => panic!("unsupported factored table"),
+    Err(_) => panic!("unsupported packed table"),
 };
 const REQUIREMENTS: TableRequirements = match TableRequirements::for_size(SIZE) {
     Ok(required) => required,
     Err(_) => panic!("unsupported table size"),
 };
 
-/// Version one of this owner's schema; all flags and dimensions are explicit.
+/// Metadata for this owner's FFT table records.
 ///
-/// The owner assigns `twiddle_kind = 1` to factored tables, `inverse = 0` to
-/// forward roots, and `normalization = 1` to scales for unscaled inverse output.
-/// Other flag values are unsupported. `modulus` and the Montgomery-encoded
-/// `shift` store limbs least significant first.
+/// [`Self::schema_version`] must be 2 for this record layout; [`Self::version`]
+/// identifies Udon's semantic descriptors. The owner assigns `twiddle_kind = 2`
+/// to stage-packed tables, `inverse = 0` to forward roots, and `normalization = 1`
+/// to scales for unscaled inverse output. Other flag values are unsupported.
+/// `modulus` and the Montgomery-encoded `shift` store limbs least significant first.
 #[repr(C)]
 #[derive(Clone, Copy, bento::Pod)]
 pub struct Header {
@@ -46,7 +47,7 @@ pub struct Header {
     pub extended_size: u64,
     pub twiddle_size: u64,
     pub twiddle_kind: u64,
-    pub low_len: u64,
+    pub schema_version: u64,
     pub inverse: u64,
     pub normalization: u64,
 }
@@ -62,18 +63,23 @@ impl Header {
             base_size: SIZE as u64,
             extended_size: EXTENDED_SIZE as u64,
             twiddle_size: TWIDDLES.size as u64,
-            twiddle_kind: 1,
-            low_len: 4,
+            twiddle_kind: 2,
+            schema_version: 2,
             inverse: 0,
             normalization: 1,
         }
     }
 
+    /// Checks the owner's schema and Udon metadata against the intended domains.
+    ///
+    /// Returns [`FftError::InvalidTables`] for unsupported encodings or metadata
+    /// inconsistent with field `M`, [`TWIDDLES`], or the expansion from [`SIZE`]
+    /// to `extended`. Table entries require separate mathematical validation.
     pub fn validate<M: PrimeModulus>(self, extended: CosetDomain<M>) -> Result<(), FftError> {
         // Reject unknown encodings before converting the owner's integer flags
         // into Udon's semantic types. Integrity checks would be another layer.
-        if self.twiddle_kind != 1
-            || self.low_len != 4
+        if self.schema_version != 2
+            || self.twiddle_kind != 2
             || self.inverse != 0
             || self.normalization != 1
             || self.twiddle_size != SIZE as u64
@@ -111,32 +117,29 @@ macro_rules! record {
         #[derive(Clone, Copy, bento::Pod)]
         pub struct $name {
             pub header: Header,
-            pub permutation: [u32; REQUIREMENTS.permutation],
             pub forward: [$field; REQUIREMENTS.twiddles],
             pub inverse: [$field; REQUIREMENTS.twiddles],
             pub finish: [$field; REQUIREMENTS.twiddles],
             pub scales: [$field; REQUIREMENTS.inverse_scales],
             pub residues: [$field; EXTENDED_SIZE],
-            pub factored: [$field; FACTORED],
+            pub packed: [$field; PACKED],
         }
 
         impl $name {
             pub fn empty() -> Self {
                 Self {
                     header: Header::new::<$modulus>(),
-                    permutation: [0; REQUIREMENTS.permutation],
                     forward: [<$field>::ZERO; REQUIREMENTS.twiddles],
                     inverse: [<$field>::ZERO; REQUIREMENTS.twiddles],
                     finish: [<$field>::ZERO; REQUIREMENTS.twiddles],
                     scales: [<$field>::ZERO; REQUIREMENTS.inverse_scales],
                     residues: [<$field>::ZERO; EXTENDED_SIZE],
-                    factored: [<$field>::ZERO; FACTORED],
+                    packed: [<$field>::ZERO; PACKED],
                 }
             }
 
             pub fn destinations(&mut self) -> TablesMut<'_, $modulus> {
                 TablesMut {
-                    bit_reversed: Some(&mut self.permutation),
                     forward: Some(&mut self.forward),
                     inverse: Some(&mut self.inverse),
                     inverse_finish: Some(&mut self.finish),
@@ -146,7 +149,6 @@ macro_rules! record {
 
             pub fn tables(&self) -> Tables<'_, $modulus> {
                 Tables {
-                    bit_reversed: Some(&self.permutation),
                     forward: Some(&self.forward),
                     inverse: Some(&self.inverse),
                     inverse_finish: Some(&self.finish),

@@ -271,10 +271,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     }
 
     pub(super) fn reversed(self, index: usize) -> usize {
-        self.tables.bit_reversed.map_or_else(
-            || reverse(index, self.domain.domain().log_size()),
-            |table| table[index] as usize,
-        )
+        reverse(index, self.domain.domain().log_size())
     }
 
     pub(super) fn scale_coefficients(self, values: &mut [PastaField<M>], extra: PastaField<M>) {

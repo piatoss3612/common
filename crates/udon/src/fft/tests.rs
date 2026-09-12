@@ -11,7 +11,6 @@ mod operations;
 mod pipelines;
 
 struct Prepared<M: PrimeModulus> {
-    indices: Vec<u32>,
     forward: Vec<PastaField<M>>,
     inverse: Vec<PastaField<M>>,
     finish: Vec<PastaField<M>>,
@@ -23,14 +22,12 @@ impl<M: PrimeModulus> Prepared<M> {
         let requirements = TableRequirements::for_size(domain.size()).unwrap();
         assert_eq!(requirements, TableRequirements::for_domain(domain));
         let mut result = Self {
-            indices: vec![0; requirements.permutation],
             forward: vec![PastaField::ZERO; requirements.twiddles],
             inverse: vec![PastaField::ZERO; requirements.twiddles],
             finish: vec![PastaField::ZERO; requirements.twiddles],
             scales: vec![PastaField::ZERO; requirements.inverse_scales],
         };
         TablesMut {
-            bit_reversed: Some(&mut result.indices),
             forward: Some(&mut result.forward),
             inverse: Some(&mut result.inverse),
             inverse_finish: Some(&mut result.finish),
@@ -45,7 +42,6 @@ impl<M: PrimeModulus> Prepared<M> {
 
     fn tables(&self) -> Tables<'_, M> {
         Tables {
-            bit_reversed: Some(&self.indices),
             forward: Some(&self.forward),
             inverse: Some(&self.inverse),
             inverse_finish: Some(&self.finish),
@@ -190,13 +186,12 @@ fn small_transforms<M: PrimeModulus>() {
             let expected = direct(&coefficients, domain);
             // Every table is independently optional, including combinations
             // where final scales are prepared but ordinary twiddles are not.
-            for mask in 0..32 {
+            for mask in 0..16 {
                 let tables = Tables {
-                    bit_reversed: (mask & 1 != 0).then_some(prepared.indices.as_slice()),
-                    forward: (mask & 2 != 0).then_some(prepared.forward.as_slice()),
-                    inverse: (mask & 4 != 0).then_some(prepared.inverse.as_slice()),
-                    inverse_finish: (mask & 8 != 0).then_some(prepared.finish.as_slice()),
-                    inverse_scales: (mask & 16 != 0).then_some(prepared.scales.as_slice()),
+                    forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
+                    inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
+                    inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
+                    inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 };
                 let plan = Plan::new(domain, tables).unwrap();
                 for (index, options) in OPTIONS.into_iter().enumerate() {
@@ -741,13 +736,12 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
                 .unwrap()
                 .prepare_scales(&mut scales)
                 .unwrap();
-            for mask in 0..32 {
+            for mask in 0..16 {
                 let tables = Tables {
-                    bit_reversed: (mask & 1 != 0).then_some(prepared.indices.as_slice()),
-                    forward: (mask & 2 != 0).then_some(prepared.forward.as_slice()),
-                    inverse: (mask & 4 != 0).then_some(prepared.inverse.as_slice()),
-                    inverse_finish: (mask & 8 != 0).then_some(prepared.finish.as_slice()),
-                    inverse_scales: (mask & 16 != 0).then_some(prepared.scales.as_slice()),
+                    forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
+                    inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
+                    inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
+                    inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 };
                 let expansion = Expansion::new(
                     Plan::new(subgroup, tables).unwrap(),
@@ -1219,7 +1213,7 @@ fn size_queries_validate_without_constructing_domains() {
             Ok(required) => required,
             Err(_) => panic!("singleton rejected"),
         };
-        assert!(tables.permutation == 1 && tables.twiddles == 0 && tables.inverse_scales == 0);
+        assert!(tables.twiddles == 0 && tables.inverse_scales == 0);
         assert!(matches!(
             serial.requirements(1),
             Ok(ScratchRequirements { field_elements: 0 })
@@ -1629,22 +1623,22 @@ fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() 
         .unwrap()
         .coset(Fp::from_u64(7))
         .unwrap();
-    let mut indices = [17; 8];
+    let mut valid = [Fp::from_u64(17); 4];
     let mut wrong = [Fp::ONE; 3];
     assert!(
         TablesMut {
-            bit_reversed: Some(&mut indices),
+            inverse: Some(&mut valid),
             forward: Some(&mut wrong),
             ..TablesMut::default()
         }
         .prepare(domain)
         .is_err()
     );
-    assert_eq!(indices, [17; 8]);
+    assert_eq!(valid, [Fp::from_u64(17); 4]);
     assert_eq!(wrong, [Fp::ONE; 3]);
     assert!(matches!(
         TablesMut {
-            bit_reversed: Some(&mut indices),
+            forward: Some(&mut valid),
             inverse_scales: Some(&mut wrong),
             ..TablesMut::default()
         }
@@ -1655,10 +1649,10 @@ fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() 
             actual: 3
         })
     ));
-    assert_eq!(indices, [17; 8]);
+    assert_eq!(valid, [Fp::from_u64(17); 4]);
     assert_eq!(wrong, [Fp::ONE; 3]);
     let mut prepared = Prepared::new(domain);
-    prepared.indices[1] = 99;
+    prepared.inverse[1] = Fp::ZERO;
     assert!(Plan::new(domain, prepared.tables()).is_ok());
     assert_eq!(
         prepared.tables().validate(domain),

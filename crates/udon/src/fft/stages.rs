@@ -63,22 +63,6 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
         }
     }
 
-    pub fn stockham<E: Executor>(
-        &self,
-        values: &mut [PastaField<M>],
-        scratch: &mut [PastaField<M>],
-        tasks: usize,
-        executor: &E,
-    ) {
-        if !self.inverse {
-            Schedule::<_, 0>(self).stockham(values, scratch, tasks, executor);
-        } else if self.scale == InverseScale::Normalized {
-            Schedule::<_, 2>(self).stockham(values, scratch, tasks, executor);
-        } else {
-            Schedule::<_, 3>(self).stockham(values, scratch, tasks, executor);
-        }
-    }
-
     pub fn untwist<E: Executor>(&self, values: &mut [PastaField<M>], tasks: usize, executor: &E) {
         debug_assert!(self.inverse);
         if self.scale == InverseScale::Normalized {
@@ -90,39 +74,22 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
 }
 
 // Specialize the provider family at each stage, rather than dispatching among
-// dense/factored/recurrence strategies inside every butterfly.
+// table lookups and recurrence inside every butterfly.
 trait Powers<M: PrimeModulus>: Copy + Sync {
     fn at(self, index: usize) -> PastaField<M>;
     fn next(self, index: usize, previous: PastaField<M>) -> PastaField<M>;
 }
 
 #[derive(Clone, Copy)]
-struct Recurrence<'a, M: PrimeModulus> {
+struct Recurrence<M: PrimeModulus> {
     step: PastaField<M>,
-    seed: Option<Lookup<'a, M>>,
 }
-impl<M: PrimeModulus> Powers<M> for Recurrence<'_, M> {
+impl<M: PrimeModulus> Powers<M> for Recurrence<M> {
     fn at(self, index: usize) -> PastaField<M> {
-        self.seed
-            .map_or_else(|| self.step.pow_u64(index as u64), |seed| seed.at(index))
+        self.step.pow_u64(index as u64)
     }
     fn next(self, _: usize, previous: PastaField<M>) -> PastaField<M> {
         previous.mul(&self.step)
-    }
-}
-
-#[derive(Clone, Copy)]
-struct Lookup<'a, M: PrimeModulus> {
-    table: TwiddleTable<'a, M>,
-    block: usize,
-    inverse: bool,
-}
-impl<M: PrimeModulus> Powers<M> for Lookup<'_, M> {
-    fn at(self, index: usize) -> PastaField<M> {
-        self.table.power(self.block, index, self.inverse)
-    }
-    fn next(self, index: usize, _: PastaField<M>) -> PastaField<M> {
-        self.at(index)
     }
 }
 
@@ -139,6 +106,9 @@ impl<M: PrimeModulus> Powers<M> for DensePowers<'_, M> {
         if index == 0 {
             return PastaField::ONE;
         }
+        // For a stage root w of order 2 * half, w^half = -1. Thus
+        // w^(-i) = -w^(half-i) for 0 < i < half, so either table direction
+        // supplies the other. The identity at index zero was handled above.
         let index = if self.conjugate {
             self.half - index
         } else {
@@ -152,38 +122,8 @@ impl<M: PrimeModulus> Powers<M> for DensePowers<'_, M> {
     }
 }
 
-#[derive(Clone, Copy)]
-struct FactoredPowers<'a, M: PrimeModulus> {
-    dense: DensePowers<'a, M>,
-    low_len: usize,
-    low_count: usize,
-}
-impl<M: PrimeModulus> Powers<M> for FactoredPowers<'_, M> {
-    fn at(self, index: usize) -> PastaField<M> {
-        if index == 0 {
-            return PastaField::ONE;
-        }
-        let index = if self.dense.conjugate {
-            self.dense.half - index
-        } else {
-            index
-        };
-        let exponent = index * self.dense.stride;
-        let power = self.dense.values[exponent % self.low_len]
-            .mul(&self.dense.values[self.low_count + exponent / self.low_len]);
-        if self.dense.conjugate {
-            power.neg()
-        } else {
-            power
-        }
-    }
-    fn next(self, index: usize, _: PastaField<M>) -> PastaField<M> {
-        self.at(index)
-    }
-}
-
-// Dispatch table representation once per stage. Seed reconstruction happens
-// only at each task's first power; the inner recurrence has no table switch.
+// Dispatch table representation once per stage. Computed powers start each
+// task independently and advance by recurrence within its region.
 macro_rules! dispatch_powers {
     ($kernel:ident, $block:ident, $method:ident, $($argument:expr),+ $(,)?) => {{
         if let Some(table) = $kernel.table($block) {
@@ -193,11 +133,9 @@ macro_rules! dispatch_powers {
             match description.storage {
                 TwiddleStorage::Dense => $kernel.$method($($argument,)+ dense),
                 TwiddleStorage::StagePacked => $kernel.$method($($argument,)+ DensePowers { stride: 1, offset: $block / 2 - 1, ..dense }),
-                TwiddleStorage::Factored { low_len } => $kernel.$method($($argument,)+ FactoredPowers { dense, low_len, low_count: low_len.min(description.size / 2) }),
-                TwiddleStorage::ChunkSeeds { .. } => $kernel.$method($($argument,)+ Recurrence { step: $kernel.step($block), seed: Some(Lookup { table, block: $block, inverse: $kernel.inverse() }) }),
             }
         } else {
-            $kernel.$method($($argument,)+ Recurrence { step: $kernel.step($block), seed: None });
+            $kernel.$method($($argument,)+ Recurrence { step: $kernel.step($block) });
         }
     }};
 }
@@ -500,116 +438,6 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         }
         values[operation.left] = left;
         values[operation.right] = right;
-    }
-
-    pub fn stockham<E: Executor>(
-        &self,
-        values: &mut [PastaField<M>],
-        scratch: &mut [PastaField<M>],
-        tasks: usize,
-        executor: &E,
-    ) {
-        if values.len() == 1 {
-            self.finish_region(values, 0, false);
-            return;
-        }
-        let mut in_values = true;
-        let mut block = 2;
-        while block <= values.len() {
-            if in_values {
-                self.stockham_stage(values, scratch, block, tasks, executor);
-            } else {
-                self.stockham_stage(scratch, values, block, tasks, executor);
-            }
-            in_values = !in_values;
-            block *= 2;
-        }
-        if !in_values {
-            values.copy_from_slice(scratch);
-        }
-        if self.output_order == InputOrder::BitReversed {
-            self.plan.permute(values);
-        }
-    }
-    fn stockham_stage<E: Executor>(
-        &self,
-        input: &[PastaField<M>],
-        output: &mut [PastaField<M>],
-        block: usize,
-        tasks: usize,
-        executor: &E,
-    ) {
-        dispatch_powers!(
-            self,
-            block,
-            stockham_with,
-            input,
-            output,
-            block,
-            tasks,
-            executor
-        );
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn stockham_with<E: Executor, P: Powers<M>>(
-        &self,
-        input: &[PastaField<M>],
-        output: &mut [PastaField<M>],
-        block: usize,
-        tasks: usize,
-        executor: &E,
-        powers: P,
-    ) {
-        let half = block / 2;
-        let inner_tasks = (tasks / (input.len() / block).min(tasks)).max(1);
-        for_chunks(output, block, tasks, executor, &|chunk, output| {
-            let (left, right) = output.split_at_mut(half);
-            paired(
-                left,
-                right,
-                0,
-                inner_tasks,
-                executor,
-                &|start, left, right| {
-                    let mut power = powers.at(start);
-                    let terminal = block == input.len();
-                    let mut low_scale = if terminal {
-                        self.inverse_factor(chunk * block + start)
-                    } else {
-                        PastaField::ONE
-                    };
-                    let mut high_scale = if terminal {
-                        self.inverse_factor(chunk * block + start + half)
-                    } else {
-                        PastaField::ONE
-                    };
-                    for (offset, (left, right)) in left.iter_mut().zip(right).enumerate() {
-                        let index = start + offset;
-                        let source = chunk * half + index;
-                        let mut low = input[source];
-                        let mut high = input[source + input.len() / 2];
-                        butterfly(&mut low, &mut high, (index != 0).then_some(&power));
-                        if block == input.len() {
-                            *left = self.finish(low, chunk * block + index, low_scale, false);
-                            *right =
-                                self.finish(high, chunk * block + index + half, high_scale, false);
-                            if self.inverse() {
-                                low_scale = low_scale.mul(&self.plan.domain.inverse_shift());
-                                high_scale = high_scale.mul(&self.plan.domain.inverse_shift());
-                            }
-                        } else {
-                            // Every ping-pong store is canonical, so a panic leaves
-                            // both caller-visible buffers reduced without a guard.
-                            *left = normalize(low);
-                            *right = normalize(high);
-                        }
-                        if index + 1 < half {
-                            power = powers.next(index + 1, power);
-                        }
-                    }
-                },
-            );
-        });
     }
 }
 

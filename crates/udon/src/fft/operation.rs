@@ -97,8 +97,6 @@ pub enum Backend {
     InPlace,
     /// Local transforms and column jobs using the queried scratch partitions.
     Blocked,
-    /// Autosort using one full-domain scratch buffer, except at size one.
-    Stockham,
 }
 
 /// Initialization of a separate destination during execution.
@@ -108,7 +106,7 @@ pub enum Initialization {
     Scatter,
     /// Partition consecutive destination regions and gather from the input.
     Gather,
-    /// Gather within bounded destination tiles, using chunk-seeded scales.
+    /// Gather within bounded tiles, initializing scales independently per tile.
     Blocked,
 }
 
@@ -208,15 +206,16 @@ pub struct OperationRequirements {
     pub input_fields: usize,
     /// Output length (also the full in-place working length).
     pub output_fields: usize,
-    /// Retained immutable tables.
+    /// Total bytes in retained immutable table slices.
     pub retained_table_bytes: usize,
-    /// Total initialized mutable scratch.
+    /// Total number of initialized mutable scratch field elements.
     pub scratch_fields: usize,
-    /// Shared scratch, including Stockham ping-pong storage.
-    pub shared_scratch_fields: usize,
-    /// Scratch per concurrent blocked column job.
+    /// Field elements per concurrent blocked column job, or zero without scratch.
     pub per_worker_scratch_fields: usize,
-    /// Number of simultaneous scratch partitions.
+    /// Number of simultaneous blocked column jobs with scratch partitions.
+    ///
+    /// Zero when no scratch is needed. Multiplying this count by
+    /// [`Self::per_worker_scratch_fields`] gives [`Self::scratch_fields`].
     pub scratch_partitions: usize,
     /// Backend selected by the description and ceilings.
     pub backend: Backend,
@@ -339,7 +338,6 @@ impl OperationDescription {
         }
         let scratch_fields = match backend {
             Backend::Blocked => blocked,
-            Backend::Stockham if self.size > 1 => self.size,
             _ => 0,
         };
         if scratch_fields > self.strategy.budget.scratch_fields {
@@ -356,11 +354,6 @@ impl OperationDescription {
             output_fields: self.size,
             retained_table_bytes,
             scratch_fields,
-            shared_scratch_fields: if matches!(backend, Backend::Stockham) {
-                scratch_fields
-            } else {
-                0
-            },
             per_worker_scratch_fields: if partitions > 0 {
                 blocked / partitions
             } else {
@@ -527,9 +520,11 @@ pub(super) const fn stage_strategy(max_tasks: usize) -> Strategy {
     }
 }
 
-// Chunk seeds make scaling independent across destination regions. In reversed
-// order, advancing index i flips its trailing one bits: a small fixed array
-// stores the resulting ratios between consecutive powers of the coset shift.
+// Computed starting powers make scaling independent across regions. Incrementing
+// a storage index clears its trailing one bits and sets the next zero bit. In
+// bit-reversed order, this changes the coefficient degree by an amount determined
+// by that trailing-one count. The ratios array stores the corresponding powers
+// of the coset shift, so each region can advance without repeated exponentiation.
 struct CoefficientPowers<M: PrimeModulus> {
     shift: PastaField<M>,
     ratios: [PastaField<M>; 32],
@@ -640,7 +635,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         self.description
     }
 
-    /// Selects a twiddle provider for stage or Stockham execution.
+    /// Selects a twiddle provider for stage execution.
     ///
     /// [`TwiddleTable`] defines how its size and direction serve each transform.
     /// Contents require separate validation with [`TwiddleTable::validate`].
@@ -704,10 +699,9 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         .check(scratch)
     }
     fn working_order(self) -> InputOrder {
-        if self.required.backend == Backend::Stockham
-            || self.description.request.direction == Direction::Forward
-                && self.description.request.output_order == InputOrder::BitReversed
-                && self.required.backend == Backend::InPlace
+        if self.description.request.direction == Direction::Forward
+            && self.description.request.output_order == InputOrder::BitReversed
+            && self.required.backend == Backend::InPlace
         {
             InputOrder::Natural
         } else {
@@ -974,8 +968,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         let kernel = StageKernel {
             plan: self.plan,
             inverse: request.direction == Direction::Inverse,
-            dif: self.working_order() == InputOrder::Natural
-                && self.required.backend != Backend::Stockham,
+            dif: self.working_order() == InputOrder::Natural,
             scale: request.inverse_scale,
             codelet: self.description.strategy.codelet,
             twiddles: self.twiddles,
@@ -984,9 +977,6 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         };
         match self.required.backend {
             Backend::InPlace => kernel.run(values, first, self.required.max_tasks, executor),
-            Backend::Stockham => {
-                kernel.stockham(values, scratch, self.required.max_tasks, executor)
-            }
             Backend::Blocked => {
                 let fused_factor = factor.filter(|_| request.output_order == InputOrder::Natural);
                 let mut run = if request.direction == Direction::Forward {

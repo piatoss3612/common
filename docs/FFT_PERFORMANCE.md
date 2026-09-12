@@ -6,6 +6,10 @@ in the [prepared-strategy suite](../crates/udon/benches/fft_strategies.rs).
 They do not select runtime defaults. See the [FFT guide](FFT.md) for operation
 contracts and const resource queries.
 
+These estimates were collected before the removal of experimental backends and
+table representations. This report retains measurements for the remaining
+strategies; rerun the commands below to measure the current revision.
+
 ## Method
 
 Measurements ran sequentially on `aarch64-apple-darwin`, with Rust 1.91.0,
@@ -18,9 +22,9 @@ give Criterion's 95% confidence intervals.
 Inputs contain deterministic canonical field values. Single-transform cases
 preserve their input and reuse an allocated destination. Timing includes
 initialization, coset scaling, permutations required by the selected order,
-scratch writes, and any final Stockham copy. Allocation, domain construction,
-operation configuration, and table preparation are outside execution timing.
-Preparation is measured separately into allocated buffers.
+and scratch writes. Allocation, domain construction, operation configuration,
+and table preparation are outside execution timing. Preparation is measured
+separately into allocated buffers.
 
 Parallel cases use a persistent four-worker Rayon pool, entered outside the
 timed loop. Expansion, batch, and class inputs are restored outside timing.
@@ -36,7 +40,7 @@ cover selected cases, not every combination. Reproduce them with:
 
 ```console
 cargo bench --locked -p zakura-udon --bench fft_strategies -- 'Fp/(strategies/2048/generic_7/tasks_1|expansion_strategies/tasks_4|class_strategies/tasks_4|strategy_preparation)'
-cargo bench --locked -p zakura-udon --bench fft_strategies -- 'Fp/(strategies/1048576/generic_7/tasks_4/(InPlace|Blocked|Stockham|DIF)|batch_strategies/tasks_4)|Fq/strategies/2048/generic_7/tasks_1'
+cargo bench --locked -p zakura-udon --bench fft_strategies -- 'Fp/(strategies/1048576/generic_7/tasks_4/(InPlace|Blocked|DIF)|batch_strategies/tasks_4)|Fq/strategies/2048/generic_7/tasks_1'
 ```
 
 Criterion retains local samples under `target/criterion`. A downstream tuner
@@ -54,12 +58,9 @@ and no retained tables, times are in microseconds:
 | --- | ---: | ---: | ---: |
 | In-place stages | 0 | 312.04 [310.92, 314.02] | 312.87 [310.82, 315.10] |
 | Blocked | 2,048 | 325.20 [323.46, 327.19] | 316.42 [314.92, 317.84] |
-| Stockham | 65,536 | 338.00 [336.26, 340.66] | 340.38 [338.04, 342.78] |
 
 These are separate-input operations even for the in-place stage backend: the
-backend name describes its working transform. Stockham preserves the input by
-using both the destination and its reported full-size scratch as ping-pong
-buffers. It does not obtain that buffer from the immutable input.
+backend name describes its working transform.
 
 Scatter, gather, and blocked initialization took 312.51, 316.34, and 319.30 µs
 respectively for the same forward stage transform. These are complete transform
@@ -74,11 +75,9 @@ no tables, times are in milliseconds. Each input or output occupies 32 MiB.
 | --- | ---: | ---: | ---: |
 | In-place stages | 0 | 181.60 [180.83, 182.38] | 188.02 [179.85, 196.00] |
 | Blocked | 4,194,304 | 194.02 [184.97, 204.15] | 168.18 [159.52, 177.20] |
-| Stockham | 33,554,432 | 200.66 [191.80, 209.66] | 204.27 [195.34, 213.14] |
 
 Large-transform intervals are wider than the small serial controls. This run
-does not establish one winner for both directions. In particular, the large
-Stockham buffer did not produce a general advantage. The blocked candidate
+does not establish one winner for both directions. The blocked candidate
 includes its microtiled column gathers; these measurements do not isolate the
 effect of that gather change from the rest of the backend.
 
@@ -95,14 +94,12 @@ powers by the root identity; they do not retain a separate inverse table.
 | Dense half-table | 32,768 | 202.40 | 225.44 |
 | Packed stages through size 256 | 8,160 | 234.15 | 252.36 |
 | All packed stages | 65,504 | 202.07 | 229.18 |
-| Seeds every 64 powers | 512 | 322.68 | 316.81 |
-| Factored, low dimension 512 | 16,448 | 365.13 | 363.60 |
 | Strided dense table of size 4,096 | 65,536 | 204.15 | 235.24 |
 
 Dense and fully packed forward intervals overlap: [200.64, 204.49] and
 [199.77, 205.09] µs. Full packing did not establish a benefit over the smaller
-dense half-table here. The local packed table offers a different compromise;
-seed and factored tables did not improve this small transform's execution time.
+dense half-table here. Local packing retains fewer bytes and speeds up these
+cases relative to recurrence, with less improvement than full packing.
 The strided case charges the complete retained larger table, even though the
 operation only reads a subset.
 
@@ -116,13 +113,9 @@ Preparation of a forward table for size 1,048,576 gave:
 | --- | ---: | ---: |
 | Dense | 16,777,216 | 6.093 ms |
 | All packed stages | 33,554,400 | 12.059 ms |
-| Seeds every 64 powers | 262,144 | 97.645 µs |
-| Factored, low dimension 512 | 49,152 | 17.909 µs |
 
-The factored table's 48 KiB footprint is useful when retention dominates, but
-its reconstructed powers require an extra multiplication. These preparation
-times exclude artifact serialization, validation of imported contents, and
-compiler work. No permutation table is prepared automatically.
+These preparation times exclude artifact serialization, validation of imported
+contents, and compiler work.
 
 ## Expansion storage, normalization, and order
 
@@ -174,13 +167,11 @@ each polynomial occupies 65,536 bytes. Inputs are restored outside timing.
 | --- | ---: | ---: | ---: | ---: |
 | In-place stages | 166.79 | 704.74 | 1,495.3 | 0 / 0 / 0 |
 | Blocked | 317.38 | 607.12 | 1,408.8 | 8,192 / 8,192 / 8,192 |
-| Stockham | 212.28 | 815.35 | 1,685.1 | 65,536 / 262,144 / 262,144 |
 
 The batch scheduler spends concurrency on separate polynomials before inner
-transforms. Stockham needs one full scratch buffer per active polynomial;
-its scratch stops growing after four workers. Batching exposes that scheduling
-choice, but does not guarantee lower time per polynomial. The blocked samples
-were noisy: the four-polynomial interval was [588.48, 646.93] µs.
+transforms. Batching exposes that scheduling choice, but does not guarantee
+lower time per polynomial. The blocked samples were noisy: the four-polynomial
+interval was [588.48, 646.93] µs.
 
 Four equal-domain size-2,048 Fp classes, one output plus three lifts, gave the
 following four-worker results. All cases retained no tables and required
@@ -208,8 +199,8 @@ transform has a different permutation contract and is not an equivalent timing
 control for this table. Radix choices remain explicit.
 
 The corresponding small Fq times were 299.25, 285.57, and 271.41 µs.
-Small natural-order Fq forward/inverse pairs took 318.31/318.25 µs for stages,
-336.52/329.67 µs for blocked execution, and 352.16/357.84 µs for Stockham.
+Small natural-order Fq forward/inverse pairs took 318.31/318.25 µs for stages
+and 336.52/329.67 µs for blocked execution.
 Later Fq table measurements showed substantial variation during this run;
 they are not used to rank table strategies across fields.
 

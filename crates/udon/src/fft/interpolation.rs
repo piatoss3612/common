@@ -115,12 +115,14 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
 
     /// Writes natural positions `start + i*stride`, mapping directly to storage.
     ///
+    /// Here `i` indexes `values`; [`Self::order`] determines the storage position.
+    /// Repeated writes overwrite values. Empty writes accept `start <= size`,
+    /// where `size` is the class's domain size, with nonzero stride.
+    ///
     /// Returns [`FftError::InvalidLayout`] for zero stride or an out-of-range
-    /// position, or [`FftError::SizeOverflow`] for index arithmetic overflow,
-    /// before writing. Empty writes accept `start <= size` with nonzero stride.
-    /// Repeated writes overwrite values. A bit-reversal table, if present, must
-    /// satisfy [`Tables`](super::Tables)' content contract.
-    /// Returns [`FftError::InvalidClassState`] if interpolation already began.
+    /// position, [`FftError::SizeOverflow`] for index arithmetic overflow, or
+    /// [`FftError::InvalidClassState`] if interpolation already began. All checks
+    /// precede writes.
     pub fn scatter_strided(
         &mut self,
         start: usize,

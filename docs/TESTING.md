@@ -127,7 +127,7 @@ measurements are separate from the correctness suite.
 The [FFT Criterion suite](../crates/udon/benches/fft.rs) measures both fields at
 2,048, 16,384, and 1,048,576 elements on subgroups and cosets with shifts `zeta`
 and 7. Transform cases compare the reference, computed powers, direction-specific
-twiddle tables, inverse finish tables, and the additional bit-reversal table.
+twiddle tables, and inverse finish tables.
 `into` and `copy_in_place` both include output initialization. Prefix cases cover
 zero, one, five, and one-eighth of the domain's coefficients.
 
@@ -149,11 +149,10 @@ cargo bench --locked -p zakura-udon --bench fft -- --test
 ```
 
 The [prepared-strategy suite](../crates/udon/benches/fft_strategies.rs) compares
-in-place, blocked, and Stockham backends; scatter, gather, and blocked
-initialization; radix-2/4/8 codelets producing bit-reversed output; dense,
-local stage-packed, full packed, chunk-seed, factored, and strided tables; and
-forward coset powers. It also compares expansion storage and normalization
-policies in both output orders,
+in-place and blocked backends; scatter, gather, and blocked initialization;
+radix-2/4/8 codelets producing bit-reversed output; dense, local stage-packed,
+full packed, and strided tables; and forward coset powers. It also compares
+expansion storage and normalization policies in both output orders,
 polynomial-major batches, and sequential, parallel, or destructive class sums.
 Both fields run with one task and a persistent four-worker Rayon pool.
 Preparation of twiddles and scale tables is timed separately.
@@ -217,7 +216,7 @@ writes them through Bento POD, then runs transforms directly from the embedded
 records in a `no_std` library with stack-owned buffers. The harness runs with
 no Udon features and with `alloc,sqrt-table-large`.
 It also injects damage after generation: a truncated record must fail in
-`embed_struct!` during compilation, while corrupted permutation entries,
-unreduced field entries, incorrect residue scales, wrong normalization metadata,
-and corrupted factored powers must reach the embedded consumer and fail its
-explicit validation before operations use the damaged data.
+`embed_struct!` during compilation, while unreduced field entries, incorrect
+residue scales, unsupported schema or twiddle-kind metadata, wrong normalization
+metadata, and corrupted packed powers must reach the embedded consumer and fail
+its explicit validation before operations use the damaged data.

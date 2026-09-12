@@ -34,7 +34,7 @@ fn main() {
                 .validate()
                 .unwrap();
             record.tables().bind(domain).unwrap().validate().unwrap();
-            TwiddleTable::prepare(record::TWIDDLES, &mut record.factored)
+            TwiddleTable::prepare(record::TWIDDLES, &mut record.packed)
                 .unwrap()
                 .validate()
                 .unwrap();
@@ -50,11 +50,12 @@ fn main() {
             // consumer must detect damage to an otherwise valid artifact.
             if $name == "fp-fft" {
                 match damage.as_str() {
-                    "permutation" => record.permutation[1] = u32::MAX,
                     "field" => record.forward[0] = *bento::AlignedBytes([0xff; 32]).as_value(),
                     "scales" => record.residues[1] = <$field>::ZERO,
                     "metadata" => record.header.normalization = 0,
-                    "factored" => record.factored[1] = <$field>::ZERO,
+                    "schema" => record.header.schema_version = 1,
+                    "kind" => record.header.twiddle_kind = 1,
+                    "packed" => record.packed[1] = <$field>::ZERO,
                     "" | "truncate" => {}
                     _ => panic!("unknown artifact damage"),
                 }

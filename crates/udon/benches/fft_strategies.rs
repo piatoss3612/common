@@ -109,7 +109,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                     })
                 });
             };
-            for backend in [Backend::InPlace, Backend::Blocked, Backend::Stockham] {
+            for backend in [Backend::InPlace, Backend::Blocked] {
                 for direction in [Direction::Forward, Direction::Inverse] {
                     bench(
                         &format!("{backend:?}/{direction:?}"),
@@ -161,8 +161,6 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                 ("dense", size, TwiddleStorage::Dense),
                 ("local_packed", 256, TwiddleStorage::StagePacked),
                 ("packed", size, TwiddleStorage::StagePacked),
-                ("seeds", size, TwiddleStorage::ChunkSeeds { chunk_len: 64 }),
-                ("factored", size, TwiddleStorage::Factored { low_len: 512 }),
                 ("strided", size * 2, TwiddleStorage::Dense),
             ] {
                 let description = TwiddleDescription {
@@ -300,7 +298,7 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
 
     let mut group =
         criterion.benchmark_group(format!("{field}/batch_strategies/tasks_{}", runner.tasks));
-    for backend in [Backend::InPlace, Backend::Blocked, Backend::Stockham] {
+    for backend in [Backend::InPlace, Backend::Blocked] {
         let operation = base
             .configure(
                 TransformRequest::new(Direction::Forward),
@@ -407,12 +405,7 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
 
 fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     let mut group = criterion.benchmark_group(format!("{field}/strategy_preparation"));
-    for storage in [
-        TwiddleStorage::Dense,
-        TwiddleStorage::StagePacked,
-        TwiddleStorage::ChunkSeeds { chunk_len: 64 },
-        TwiddleStorage::Factored { low_len: 512 },
-    ] {
+    for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
         let description = TwiddleDescription {
             size: 1 << 20,
             inverse: false,

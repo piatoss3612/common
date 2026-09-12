@@ -13,9 +13,6 @@ do not allocate. An executor's resource use belongs to the caller. Arithmetic
 is variable-time, with no constant-time guarantee for secret inputs; see the
 [field contract](../crates/udon/src/field/mod.rs).
 
-For a worked application migration from the sibling Bento workspace, see the
-[Sensei FFT upgrade guide](FFT_UPGRADE.md).
-
 ## Domains and transform order
 
 [`Domain`](../crates/udon/src/fft/domain.rs) constructs a subgroup with the
@@ -213,7 +210,7 @@ but do not execute them.
 
 ## Scratch and execution
 
-[`ExecutionOptions`](../crates/udon/src/fft/executor.rs) selects a power-of-two
+[`ExecutionOptions`](../crates/udon/src/fft/execution.rs) selects a power-of-two
 local tile length, columns per cross-tile task, and a task budget. Its const
 `requirements(size)` query sizes arrays before a domain or plan exists;
 `plan.scratch_requirements(options)` returns the same requirement. Scratch is
@@ -239,19 +236,18 @@ depend on the shift and strategy. The [benchmarks](TESTING.md#fft-benchmarks)
 include scaling when comparing subgroup transforms, the order-three shift
 `zeta`, and the generic shift 7.
 
-[`Executor`](../crates/udon/src/fft/executor.rs) supplies a scoped `join` of two
-borrowed `FnOnce + Send` jobs. Joins nest as transforms subdivide work, including
-inside concurrent residue jobs. A bounded pool that queues child jobs and
-blocks its workers waiting for them can deadlock under saturation. The executor
-must make progress even when every worker is inside a nested join.
+FFTs use [`exec::Executor`](../crates/udon/src/exec.rs) for scoped joins. Its trait
+documentation defines completion, panic handling, and progress during nested
+calls. `SerialExecutor` can also exercise tiled transforms with the queried
+scratch requirement.
 
-An adapter that delegates to
-[`rayon::join`](https://docs.rs/rayon/latest/rayon/fn.join.html) provides suitable
-cooperative execution: workers execute available work while waiting for stolen
-jobs. `SerialExecutor` also supports nested calls. See the trait's documentation
-for the full completion, nesting, and panic contracts. `max_tasks` limits work
-partitions without reserving idle workers; a serial executor can still exercise
-tiled transforms with the same scratch requirement.
+For concurrency across polynomials or separately owned tiles, use
+`exec::for_each_mut`; use `exec::for_each_chunk_mut` for contiguous chunks. Each
+callback receives a `TaskBudget` for its nested work. Pass that budget's `.get()`
+to the FFT task limit, and give concurrent transforms disjoint scratch. The
+[execution module's example](../crates/udon/src/exec.rs) demonstrates this with
+separate tiles. Divide budgets between simultaneous application operations;
+copying a budget does not reserve or limit threads.
 
 ## Residue expansion and layouts
 
@@ -354,6 +350,16 @@ Scheduling and scratch requirements are the same as `coefficients`.
 If the product will be interpolated, choose an extended domain larger than its
 degree to recover all coefficients.
 
+One use is a polynomial `p` of degree less than `n` whose base-subgroup
+evaluations vanish outside `t` selected rows, where `0 < t <= n`. Let `H` be the
+monic degree-`t` polynomial vanishing on those selected points. Then
+`S(X) = (X^n - 1) / H(X)` vanishes on every other base point, and `p = q * S`
+for a polynomial `q` of degree less than `t`. Precompute the extended-domain
+evaluations of `S` and pass the short coefficients of `q` to `short_product`.
+This uses coefficient support; `inverse_prefix` instead describes evaluation
+positions and does not recover `q`. Consumers of `p`'s coefficients still need
+the full product.
+
 [`Expansion::configure`](../crates/udon/src/fft/expansion_operation.rs) adds
 explicit liveness and persistent ordering. `ExpansionDescription::requirements`
 and the configured operation report transform scratch and coefficient workspace
@@ -411,6 +417,9 @@ For bounded-memory consumers, `Expansion::residue(s, order)` borrows a descripto
 that evaluates a coefficient prefix into one reusable base-sized output. Its
 `domain` identifies the selected coset; `order` applies only inside that residue.
 The caller chooses which residues to retain for rotations or other dependencies.
+It can also fill separately owned residue buffers, scheduled through
+`exec::for_each_mut` with shared coefficients. Whole-expansion operations use
+contiguous output, so choose storage according to the consumer's access pattern.
 
 ## Fused class interpolation
 
@@ -420,6 +429,14 @@ initialized evaluation buffer. It accepts natural or bit-reversed input order.
 the requested storage order, checking the requested natural positions before
 writing. Unwritten entries retain their prior values; callers own completeness
 and accumulation.
+
+For nested domains with the same shift, derive scatter positions in natural row
+order. Suppose an extended domain has `r` residues of `n` rows each. A window
+in residue `s` starting at inner offset `k` starts at natural row `s + r*k`
+and advances with stride `r`. A subdomain smaller by a factor `d` contains only
+extended rows divisible by `d`. When `d` divides both `r` and `s`, scatter that
+window into the smaller class with start `s/d + (r/d)*k` and stride `r/d`.
+`Class` then maps those positions into its declared storage order.
 
 `interpolate_classes` interpolates one output class and any number of lift
 classes no larger than the output. Classes may have different nonzero coset

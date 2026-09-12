@@ -53,14 +53,13 @@ constant-time behavior.
 
 ## Measured upgrade refinements
 
-Reviewing the [Sensei migration guide](FFT_UPGRADE.md) and its sibling
-implementation identified two execution costs in the rewrite: prepared stages
-revalidated ordinary `Plan` twiddles on every stage, and bit-reversed expansion
-always ran full DIF transforms even for a ten-coefficient prefix. These
-September 12, 2026 comparisons use `d0c00ac` as the implementation baseline,
-with the same added benchmark cases compiled against both implementations.
-The platform and timing boundaries follow the method above. Values in this
-section are sample means in microseconds.
+Two changes reduce repeated work: prepared stages reuse validated `Plan`
+twiddles, and bit-reversed expansion prunes stages for short coefficient
+prefixes. In baseline revision `d0c00ac`, prepared stages revalidated twiddles
+on every stage, and bit-reversed expansion always ran full DIF transforms.
+These September 12, 2026 comparisons compile the same benchmark cases against
+both implementations. The platform and timing boundaries follow the method
+above. Values in this section are sample means in microseconds.
 
 Prepared stages now adapt already-bound twiddle slices without rescanning
 their entries. Imported contents are still checked by `Tables::bind`; trusted
@@ -124,9 +123,9 @@ cargo bench --locked -p zakura-udon --bench fft_strategies -- \
   --save-baseline fft_upgrade_before
 ```
 
-These are kernel and expansion measurements. Sensei's complete quotient fold,
-allocation behavior, and proof-generation latency still require downstream
-measurements with its actual ownership and rotation access patterns.
+These kernel and expansion measurements exclude the cost of a consuming
+application. Measure complete pipelines with their buffer ownership, allocation,
+and row access patterns before choosing a strategy.
 
 ## Transform backends and initialization
 

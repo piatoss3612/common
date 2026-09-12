@@ -7,10 +7,10 @@ use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use zakura_udon::{
+    exec::{Executor, SerialExecutor},
     fft::{
-        Class, CosetDomain, Domain, ExecutionOptions, Executor, Expansion, ExpansionOptions,
-        InputOrder, Plan, SerialExecutor, TableRequirements, Tables, TablesMut,
-        interpolate_classes, reference,
+        Class, CosetDomain, Domain, ExecutionOptions, Expansion, ExpansionOptions, InputOrder,
+        Plan, TableRequirements, Tables, TablesMut, interpolate_classes, reference,
     },
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -92,11 +92,17 @@ impl Runner {
 }
 
 impl Executor for Runner {
-    fn join<L: FnOnce() + Send, R: FnOnce() + Send>(&self, left: L, right: R) {
+    fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)
+    where
+        L: FnOnce() -> A + Send,
+        R: FnOnce() -> B + Send,
+        A: Send,
+        B: Send,
+    {
         if self.pool.is_some() {
-            rayon::join(left, right);
+            rayon::join(left, right)
         } else {
-            SerialExecutor.join(left, right);
+            SerialExecutor.join(left, right)
         }
     }
 }

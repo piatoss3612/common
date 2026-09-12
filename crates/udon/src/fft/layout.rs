@@ -25,9 +25,9 @@ use super::{CosetDomain, FftError, InverseScale, PastaField, PrimeModulus, check
 /// preserve it.
 ///
 /// ```
-/// use zakura_udon::{field::Fp, fft::{
+/// use zakura_udon::{exec::SerialExecutor, field::Fp, fft::{
 ///     Domain, ExecutionOptions, Expansion, ExpansionOrder, ExpansionStorage,
-///     ExpansionStrategy, InverseScale, Plan, SerialExecutor,
+///     ExpansionStrategy, InverseScale, Plan,
 /// }};
 ///
 /// let base = Plan::without_tables(Domain::new(1)?.subgroup());

@@ -270,10 +270,11 @@ pub const fn interpolation_scratch<M: PrimeModulus>(
 ///
 /// ```
 /// use zakura_udon::{
+///     exec::SerialExecutor,
 ///     field::Fp,
 ///     fft::{
 ///         Class, Domain, ExecutionOptions, Expansion, ExpansionOptions, InputOrder, Plan,
-///         SerialExecutor, interpolate_classes,
+///         interpolate_classes,
 ///     },
 /// };
 ///

@@ -6,6 +6,7 @@ use super::{
     InverseScale, PastaField, PrimeModulus, ResourceBudget, ScratchRequirements, check_domain_size,
     check_field_count, check_len, check_prefix, min,
 };
+use crate::exec::TaskBudget;
 
 /// Persistent order of a complete expansion result.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -121,19 +122,19 @@ impl ExpansionDescription {
         if self.base_size > self.extended_size {
             return Err(FftError::InvalidLayout);
         }
-        let budget = self.strategy.budget.max_tasks;
-        if budget == 0 {
-            return Err(FftError::InvalidExecution);
-        }
+        let budget = match TaskBudget::new(self.strategy.budget.max_tasks) {
+            Some(budget) => budget,
+            None => return Err(FftError::InvalidExecution),
+        };
         let mut residues = self.extended_size / self.base_size;
         if matches!(self.storage, ExpansionStorage::ReuseOutput) && residues > 1 {
             residues -= 1;
         }
-        let jobs = min(residues, budget);
+        let (jobs, inner) = budget.partition(residues).unwrap();
         let mut inverse = self.strategy.transform;
-        inverse.max_tasks = min(inverse.max_tasks, budget);
+        inverse.max_tasks = min(inverse.max_tasks, budget.get());
         let mut transform = inverse;
-        transform.max_tasks = min(transform.max_tasks, budget / jobs);
+        transform.max_tasks = min(transform.max_tasks, inner.get());
         Ok((
             ExpansionOptions {
                 max_residue_tasks: jobs,

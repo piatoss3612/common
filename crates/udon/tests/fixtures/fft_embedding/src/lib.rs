@@ -4,10 +4,11 @@
 #![deny(warnings)]
 
 use udon::{
+    exec::SerialExecutor,
     fft::{
         Direction, Domain, ExecutionOptions, Expansion, ExpansionOptions,
-        ExpansionScaleNormalization, ExpansionScales, ResidueView, SerialExecutor, Strategy,
-        Tables, TransformRequest, TwiddleTable,
+        ExpansionScaleNormalization, ExpansionScales, ResidueView, Strategy, Tables,
+        TransformRequest, TwiddleTable,
     },
     field::{PastaField, PrimeModulus},
 };

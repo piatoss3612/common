@@ -311,11 +311,22 @@ fn zero_suffix_skips_rounds_across_tile_boundaries() {
 
 struct Threads;
 impl Executor for Threads {
-    fn join<L: FnOnce() + Send, R: FnOnce() + Send>(&self, left: L, right: R) {
+    fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)
+    where
+        L: FnOnce() -> A + Send,
+        R: FnOnce() -> B + Send,
+        A: Send,
+        B: Send,
+    {
         std::thread::scope(|scope| {
-            scope.spawn(left);
-            right();
-        });
+            let left = scope.spawn(left);
+            let right = right();
+            (
+                left.join()
+                    .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+                right,
+            )
+        })
     }
 }
 
@@ -605,9 +616,15 @@ fn original_two_and_eight_residue_expansions_match_zero_padded_fft() {
 struct CountJoins(AtomicUsize);
 
 impl Executor for CountJoins {
-    fn join<L: FnOnce() + Send, R: FnOnce() + Send>(&self, left: L, right: R) {
+    fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)
+    where
+        L: FnOnce() -> A + Send,
+        R: FnOnce() -> B + Send,
+        A: Send,
+        B: Send,
+    {
         self.0.fetch_add(1, Ordering::SeqCst);
-        SerialExecutor.join(left, right);
+        SerialExecutor.join(left, right)
     }
 }
 
@@ -623,12 +640,19 @@ struct FailAt {
 }
 
 impl Executor for FailAt {
-    fn join<L: FnOnce() + Send, R: FnOnce() + Send>(&self, left: L, right: R) {
+    fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)
+    where
+        L: FnOnce() -> A + Send,
+        R: FnOnce() -> B + Send,
+        A: Send,
+        B: Send,
+    {
         let fail = self.calls.fetch_add(1, Ordering::SeqCst) == self.index;
-        SerialExecutor.join(left, right);
+        let results = SerialExecutor.join(left, right);
         if fail {
             panic!("interrupt transform");
         }
+        results
     }
 }
 
@@ -1726,7 +1750,13 @@ fn loose_regions_normalize_on_unwind_and_serial_join_completes_both_jobs() {
 fn executor_panics_leave_public_buffers_canonical() {
     struct Panics;
     impl Executor for Panics {
-        fn join<L: FnOnce() + Send, R: FnOnce() + Send>(&self, left: L, right: R) {
+        fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)
+        where
+            L: FnOnce() -> A + Send,
+            R: FnOnce() -> B + Send,
+            A: Send,
+            B: Send,
+        {
             SerialExecutor.join(left, right);
             panic!("executor failure");
         }

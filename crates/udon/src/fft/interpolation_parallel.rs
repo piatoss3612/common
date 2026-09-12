@@ -3,6 +3,7 @@ use super::{
     Class, ClassState, ExecutionOptions, Executor, FftError, InputOrder, PastaField, PrimeModulus,
     ScratchRequirements, check_field_count, interpolation_scratch, min,
 };
+use crate::exec::TaskBudget;
 
 /// Optional concurrency across interpolation classes with caller-owned scratch.
 ///
@@ -34,12 +35,16 @@ pub struct InterpolationRequirements {
 
 impl InterpolationOptions {
     const fn geometry(self, count: usize) -> Result<(ExecutionOptions, usize), FftError> {
-        if self.max_class_tasks == 0 || self.max_tasks == 0 {
-            return Err(FftError::InvalidExecution);
-        }
-        let jobs = min(count, min(self.max_class_tasks, self.max_tasks));
+        let budget = match TaskBudget::new(self.max_tasks) {
+            Some(budget) => budget,
+            None => return Err(FftError::InvalidExecution),
+        };
+        let (jobs, inner) = match budget.partition(min(count, self.max_class_tasks)) {
+            Some(partition) => partition,
+            None => return Err(FftError::InvalidExecution),
+        };
         let mut options = self.transform;
-        options.max_tasks = min(options.max_tasks, self.max_tasks / jobs);
+        options.max_tasks = min(options.max_tasks, inner.get());
         Ok((options, jobs))
     }
 

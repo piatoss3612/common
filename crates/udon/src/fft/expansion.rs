@@ -129,8 +129,9 @@ impl Default for ExpansionOptions {
 ///
 /// ```
 /// use zakura_udon::{
+///     exec::SerialExecutor,
 ///     field::Fp,
-///     fft::{Domain, Expansion, ExpansionOptions, Plan, ResidueView, SerialExecutor},
+///     fft::{Domain, Expansion, ExpansionOptions, Plan, ResidueView},
 /// };
 ///
 /// let base = Plan::without_tables(Domain::new(1).unwrap().subgroup());

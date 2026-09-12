@@ -1,8 +1,9 @@
-use super::executor::{Geometry, for_chunks};
+use super::execution::Geometry;
 use super::{
     BoundTables, CoefficientView, CosetDomain, ExecutionOptions, Executor, FftError, PastaField,
     PrimeModulus, ScratchRequirements, Tables, check_len, check_prefix, reverse,
 };
+use crate::exec::{TaskBudget, for_each_chunk_mut};
 use crate::field::fft::{
     Guard, butterfly, divide_by_power_of_two, normalize, scale as scale_loose,
 };
@@ -426,14 +427,11 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
             run,
             finish,
         };
+        let budget = TaskBudget::new(options.max_tasks).unwrap();
         if kernel.run.first <= geometry.tile_len {
-            for_chunks(
-                values,
-                geometry.tile_len,
-                options.max_tasks,
-                executor,
-                &|_, tile| kernel.local(tile),
-            );
+            for_each_chunk_mut(values, geometry.tile_len, budget, executor, |_, tile, _| {
+                kernel.local(tile)
+            });
         }
         if geometry.tiles == 1 {
             return;
@@ -446,7 +444,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
             let work = &mut scratch[..jobs * job_len];
             // All readers finish before any scatter writer is scheduled. Each
             // scratch job stores contiguous lanes in column-major order.
-            for_chunks(work, job_len, options.max_tasks, executor, &|job, work| {
+            for_each_chunk_mut(work, job_len, budget, executor, |job, work, _| {
                 let column = first_column + job * geometry.columns;
                 let columns = geometry.columns.min(geometry.tile_len - column);
                 let work = &mut work[..columns * geometry.tiles];
@@ -464,12 +462,12 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
                 }
                 kernel.cross(work, column, &geometry);
             });
-            for_chunks(
+            for_each_chunk_mut(
                 values,
                 geometry.tile_len,
-                options.max_tasks,
+                budget,
                 executor,
-                &|tile, output| {
+                |tile, output, _| {
                     for offset in 0..count {
                         let job = offset / geometry.columns;
                         let column = offset % geometry.columns;

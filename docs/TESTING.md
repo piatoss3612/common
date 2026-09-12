@@ -47,6 +47,12 @@ from 0 through 32, using canonical and loose inputs around modulus and limb
 boundaries, including carries into a fifth numerator limb. Panic checks cover
 partially normalized regions and every join boundary in tiled inverse execution.
 
+Test executor adapters from inside their worker pool, including a pool with one
+worker, to expose nested joins that depend on an idle worker. The
+[execution tests](../crates/udon/src/exec/tests.rs) also exercise borrowed results
+and cleanup after a branch panics. Nested helper tests track the combined task
+allowances of active callbacks, independently of how many threads run them.
+
 ## Test roles
 
 - Unit tests check algorithms, parsers, and local contracts beside their code.
@@ -74,14 +80,14 @@ Miri over storage unit tests and the public Bento and Udon storage integration
 tests, including field arrays and nested records; nested Cargo tests stay in
 the native suite. The portability test builds `no_std` libraries for a 32-bit
 little-endian target and separately checks that big-endian storage fails while
-addition chains, constant arithmetic, and runtime Pasta field and FFT operations
-compile with either square-root configuration. The arithmetic fixture also
-asserts computed values during constant evaluation; cross-target runtime field
-and FFT operations are built but not executed. The test is ignored in
-ordinary runs because target libraries must be installed, and explicitly
-executed in CI. These checks do not establish correctness on every target or
-constant-time behavior; extend validation when new code introduces new
-assumptions.
+addition chains, constant arithmetic, shared execution helpers, and runtime
+Pasta field and FFT operations compile with either square-root configuration.
+The fixture also asserts computed values during constant evaluation; runtime
+field and FFT operations and execution helpers are built but not executed on
+those targets. The test is ignored in ordinary runs because target libraries
+must be installed, and explicitly executed in CI. These checks do not establish
+correctness on every target or constant-time behavior; extend validation when
+new code introduces new assumptions.
 
 ## Field benchmarks
 
@@ -186,8 +192,9 @@ scheduling costs. Persistent Rayon pools with one, two, and four workers measure
 parallel scaling; pool creation and entry are outside the timed loop. Expansion
 compares execution across residues, within residues, and both, with the product
 of the two task budgets bounded by the worker count. The tiled serial control
-uses a budget of four. Interpolation remains a serial comparison. Rayon is only
-a benchmark dependency; callers still supply Udon's executor.
+uses a budget of four. Interpolation remains a serial comparison. Rayon is a
+development dependency for benchmarks and execution tests; callers still supply
+Udon's executor.
 
 ## Fixtures and nested builds
 

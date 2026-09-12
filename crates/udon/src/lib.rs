@@ -5,6 +5,8 @@
 //! fixed exponentiation schedules use this workspace's `bento` support.
 //! [`fft`] provides power-of-two transforms, cosets, residue expansion, and fused
 //! interpolation with caller-owned tables, buffers, scratch, and execution.
+//! [`exec`] provides scoped fork/join, task budgets, and borrowed work helpers
+//! shared by arithmetic and downstream workloads.
 //! Field elements implement [`bento::Pod`] for direct embedded storage; see
 //! [`field::PastaField`] for its invariants and [`stored_form!`] for naming
 //! artifacts by representation.
@@ -43,6 +45,7 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+pub mod exec;
 pub mod fft;
 pub mod field;
 mod stored_form;

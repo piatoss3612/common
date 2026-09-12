@@ -3,9 +3,10 @@
 #![forbid(unsafe_code)]
 
 use bento::const_arithmetic::{U256, U320, m255, u256};
+use udon::exec::{Executor, SerialExecutor, TaskBudget, for_each_chunk_mut, for_each_mut};
 use udon::fft::{
     Class, Domain, ExecutionOptions, Expansion, ExpansionOptions, FftError, InputOrder, Plan,
-    SerialExecutor, TableRequirements, TablesMut, interpolate_classes,
+    TableRequirements, TablesMut, interpolate_classes,
 };
 use udon::field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum};
 
@@ -62,6 +63,36 @@ pub fn fp_operations(wide: &[u8; 64], bytes: [u8; 32], log_size: u32) -> Option<
 
 pub fn fq_operations(wide: &[u8; 64], bytes: [u8; 32], log_size: u32) -> Option<[u8; 32]> {
     field_operations::<PallasScalar>(wide, bytes, log_size)
+}
+
+const _: () = {
+    assert!(TaskBudget::new(0).is_none());
+    let budget = TaskBudget::new(usize::MAX).unwrap();
+    let (left, right) = budget.split_at(usize::MAX - 1).unwrap();
+    assert!(left.get() == usize::MAX - 1 && right.get() == 1);
+    let (jobs, inner) = budget.partition(2).unwrap();
+    assert!(jobs == 2 && inner.get() == usize::MAX / 2);
+};
+
+// A concrete caller checks target code generation without std or an allocator;
+// unused generic helpers would not exercise that boundary.
+pub fn execution_operations(values: &mut [usize; 8], tasks: usize) -> Option<usize> {
+    let budget = TaskBudget::new(tasks)?;
+    let (left, right) = values.split_at_mut(3);
+    let (left, right_len) = SerialExecutor.join(|| left, || right.len());
+    let mut tiles = [left, right];
+    for_each_mut(&mut tiles, budget, &SerialExecutor, |index, tile, inner| {
+        for_each_chunk_mut(tile, 2, inner, &SerialExecutor, |chunk, values, _| {
+            for value in values {
+                *value = value.wrapping_add(index + chunk);
+            }
+        });
+    });
+    Some(
+        values
+            .iter()
+            .fold(right_len, |sum, value| sum.wrapping_add(*value)),
+    )
 }
 
 const FFT_SIZE: usize = 16;

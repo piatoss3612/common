@@ -8,6 +8,7 @@ use std::{hint::black_box, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use zakura_udon::{
+    exec::{Executor, SerialExecutor},
     fft::*,
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -18,11 +19,17 @@ struct Runner {
 }
 
 impl Executor for Runner {
-    fn join<L: FnOnce() + Send, R: FnOnce() + Send>(&self, left: L, right: R) {
+    fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)
+    where
+        L: FnOnce() -> A + Send,
+        R: FnOnce() -> B + Send,
+        A: Send,
+        B: Send,
+    {
         if self.pool.is_some() {
-            rayon::join(left, right);
+            rayon::join(left, right)
         } else {
-            SerialExecutor.join(left, right);
+            SerialExecutor.join(left, right)
         }
     }
 }

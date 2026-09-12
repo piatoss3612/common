@@ -1,4 +1,3 @@
-use super::executor::for_chunks;
 use super::stages::StageKernel;
 use super::transform::Run;
 use super::{
@@ -6,6 +5,7 @@ use super::{
     PowerTable, PrimeModulus, ScratchRequirements, SerialExecutor, TwiddleTable, check_domain_size,
     check_field_count, check_len, min, reverse,
 };
+use crate::exec::{TaskBudget, for_each_chunk_mut};
 
 /// Whether an inverse divides by the domain size.
 ///
@@ -229,9 +229,10 @@ pub struct OperationRequirements {
 ///
 /// ```
 /// use zakura_udon::{
+///     exec::SerialExecutor,
 ///     field::Fp,
 ///     fft::{Direction, Domain, OperationDescription, Plan, ResourceBudget,
-///         SerialExecutor, Strategy, TransformRequest},
+///         Strategy, TransformRequest},
 /// };
 ///
 /// const DESCRIPTION: OperationDescription = OperationDescription {
@@ -920,12 +921,12 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         scales: S,
     ) {
         let chunk = values.len().div_ceil(self.required.max_tasks);
-        for_chunks(
+        for_each_chunk_mut(
             values,
             chunk,
-            self.required.max_tasks,
+            TaskBudget::new(self.required.max_tasks).unwrap(),
             executor,
-            &|job, values| {
+            |job, values, _| {
                 let start = job * chunk;
                 let mut seed = scales.seed(start);
                 let count = values.len();
@@ -1040,12 +1041,12 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
             } else {
                 size.div_ceil(self.required.max_tasks)
             };
-            for_chunks(
+            for_each_chunk_mut(
                 output,
                 chunk,
-                self.required.max_tasks,
+                TaskBudget::new(self.required.max_tasks).unwrap(),
                 executor,
-                &|job, output| {
+                |job, output, _| {
                     let start = job * chunk;
                     let mut seed = scales.seed(start);
                     let count = output.len();
@@ -1159,12 +1160,13 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         {
             return Err(FftError::InvalidExecution);
         }
-        let jobs = min(count, self.required.max_tasks);
-        if jobs == 0 {
-            return Ok((self, 0));
-        }
+        let budget = TaskBudget::new(self.required.max_tasks).unwrap();
+        let (jobs, inner) = match budget.partition(count) {
+            Some(partition) => partition,
+            None => return Ok((self, 0)),
+        };
         self.description.strategy.backend = self.required.backend;
-        self.description.strategy.execution.max_tasks = self.required.max_tasks / jobs;
+        self.description.strategy.execution.max_tasks = inner.get();
         self.required = match self
             .description
             .requirements(self.required.retained_table_bytes)

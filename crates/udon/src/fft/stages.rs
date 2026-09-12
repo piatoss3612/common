@@ -4,11 +4,11 @@
 //! never receive a field slice or callback that can observe a partially reduced
 //! region.
 
-use super::executor::for_chunks;
 use super::{
     Codelet, Executor, InputOrder, InverseScale, PastaField, Plan, PrimeModulus,
     TwiddleDescription, TwiddleStorage, TwiddleTable, reverse,
 };
+use crate::exec::{TaskBudget, for_each_chunk_mut};
 use crate::field::fft::{
     Guard, butterfly, butterfly_dif, divide_by_power_of_two, normalize, scale,
 };
@@ -251,22 +251,19 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         executor: &E,
         powers: P,
     ) {
-        let chunks = values.len() / block;
-        let inner_tasks = (tasks / chunks.min(tasks)).max(1);
         let terminal = if Self::DIF {
             block == 2
         } else {
             block == values.len()
         };
-        for_chunks(values, block, tasks, executor, &|chunk, values| {
-            let (left, right) = values.split_at_mut(block / 2);
-            paired(
-                left,
-                right,
-                0,
-                inner_tasks,
-                executor,
-                &|start, left, right| {
+        for_each_chunk_mut(
+            values,
+            block,
+            TaskBudget::new(tasks).unwrap(),
+            executor,
+            |chunk, values, inner| {
+                let (left, right) = values.split_at_mut(block / 2);
+                paired(left, right, 0, inner, executor, &|start, left, right| {
                     let mut power = powers.at(start);
                     let mut low_scale = if terminal {
                         self.inverse_factor(chunk * block + start)
@@ -303,9 +300,9 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
                             power = powers.next(index + 1, power);
                         }
                     }
-                },
-            );
-        });
+                });
+            },
+        );
     }
 
     fn inverse_factor(&self, index: usize) -> PastaField<M> {
@@ -360,9 +357,13 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
 
     pub fn untwist<E: Executor>(&self, values: &mut [PastaField<M>], tasks: usize, executor: &E) {
         let chunk = values.len().div_ceil(tasks);
-        for_chunks(values, chunk, tasks, executor, &|job, values| {
-            self.finish_region(values, job * chunk, false)
-        });
+        for_each_chunk_mut(
+            values,
+            chunk,
+            TaskBudget::new(tasks).unwrap(),
+            executor,
+            |job, values, _| self.finish_region(values, job * chunk, false),
+        );
     }
 
     fn codelets<E: Executor>(
@@ -393,29 +394,35 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
             PastaField::ONE
         };
         let powers = [fourth, eighth, eighth.mul(&fourth)];
-        for_chunks(values, RADIX, tasks, executor, &|chunk, values| {
-            let mut local = [PastaField::ZERO; 8];
-            local[..RADIX].copy_from_slice(values);
-            let schedule = if RADIX == 4 { &RADIX4[..] } else { &RADIX8[..] };
-            // Emit constant-index operations from the schedule the tests
-            // interpret. Constant indices allow specialization; register
-            // allocation depends on the target compiler.
-            macro_rules! emit {
-                ($($index:literal),+ $(,)?) => { $( {
-                    let index = if Self::DIF { schedule.len() - 1 - $index } else { $index };
-                    self.codelet_step(&mut local, schedule[index], powers);
-                } )+ };
-            }
-            if RADIX == 4 {
-                emit!(0, 1, 2, 3);
-            } else {
-                emit!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
-            }
-            values.copy_from_slice(&local[..RADIX]);
-            if terminal {
-                self.finish_region(values, chunk * RADIX, Self::DIF);
-            }
-        });
+        for_each_chunk_mut(
+            values,
+            RADIX,
+            TaskBudget::new(tasks).unwrap(),
+            executor,
+            |chunk, values, _| {
+                let mut local = [PastaField::ZERO; 8];
+                local[..RADIX].copy_from_slice(values);
+                let schedule = if RADIX == 4 { &RADIX4[..] } else { &RADIX8[..] };
+                // Emit constant-index operations from the schedule the tests
+                // interpret. Constant indices allow specialization; register
+                // allocation depends on the target compiler.
+                macro_rules! emit {
+                    ($($index:literal),+ $(,)?) => { $( {
+                        let index = if Self::DIF { schedule.len() - 1 - $index } else { $index };
+                        self.codelet_step(&mut local, schedule[index], powers);
+                    } )+ };
+                }
+                if RADIX == 4 {
+                    emit!(0, 1, 2, 3);
+                } else {
+                    emit!(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11);
+                }
+                values.copy_from_slice(&local[..RADIX]);
+                if terminal {
+                    self.finish_region(values, chunk * RADIX, Self::DIF);
+                }
+            },
+        );
     }
     #[inline(always)]
     fn codelet_step(
@@ -451,19 +458,20 @@ fn paired<
     left: &mut [PastaField<M>],
     right: &mut [PastaField<M>],
     offset: usize,
-    tasks: usize,
+    budget: TaskBudget,
     executor: &E,
     work: &F,
 ) {
-    if tasks <= 1 || left.len() <= 32 {
+    if budget == TaskBudget::SERIAL || left.len() <= 32 {
         work(offset, left, right);
     } else {
         let mid = left.len() / 2;
         let (ll, lr) = left.split_at_mut(mid);
         let (rl, rr) = right.split_at_mut(mid);
+        let (left_budget, right_budget) = budget.split_at(budget.get() / 2).unwrap();
         executor.join(
-            || paired(ll, rl, offset, tasks / 2, executor, work),
-            || paired(lr, rr, offset + mid, tasks - tasks / 2, executor, work),
+            || paired(ll, rl, offset, left_budget, executor, work),
+            || paired(lr, rr, offset + mid, right_budget, executor, work),
         );
     }
 }

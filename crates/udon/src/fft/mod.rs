@@ -66,8 +66,9 @@
 //!
 //! ```
 //! use zakura_udon::{
+//!     exec::SerialExecutor,
 //!     field::Fq,
-//!     fft::{Domain, ExecutionOptions, Plan, SerialExecutor, TableRequirements, TablesMut},
+//!     fft::{Domain, ExecutionOptions, Plan, TableRequirements, TablesMut},
 //! };
 //!
 //! const SIZE: usize = 8;
@@ -107,8 +108,9 @@
 //! ```
 //! use zakura_udon::{
 //!     field::Fp,
+//!     exec::SerialExecutor,
 //!     fft::{Direction, Domain, Expansion, ExpansionOrder, ExpansionStorage,
-//!         ExpansionStrategy, InputOrder, Plan, SerialExecutor, Strategy, TransformRequest},
+//!         ExpansionStrategy, InputOrder, Plan, Strategy, TransformRequest},
 //! };
 //!
 //! let base = Plan::without_tables(Domain::new(2).unwrap().subgroup());
@@ -138,10 +140,11 @@
 //! assert!(product[3..].iter().all(|value| *value == Fp::ZERO));
 //! ```
 
+use crate::exec::{Executor, SerialExecutor};
 use crate::field::{PastaField, PrimeModulus};
 
 mod domain;
-mod executor;
+mod execution;
 mod expansion;
 mod expansion_operation;
 mod expansion_scales;
@@ -156,7 +159,7 @@ mod tables;
 mod transform;
 
 pub use domain::{CosetDomain, Domain};
-pub use executor::{ExecutionOptions, Executor, ScratchRequirements, SerialExecutor};
+pub use execution::{ExecutionOptions, ScratchRequirements};
 pub use expansion::{Expansion, ExpansionOptions};
 pub use expansion_operation::{
     ExpansionDescription, ExpansionOrder, ExpansionRequirements, ExpansionStorage,

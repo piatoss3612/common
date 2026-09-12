@@ -120,6 +120,13 @@ impl<M: PrimeModulus> core::fmt::Debug for CosetDomain<M> {
 }
 
 impl<M: PrimeModulus> CosetDomain<M> {
+    /// Whether both descriptors identify the same ordered evaluation points.
+    pub fn same_domain(self, other: Self) -> bool {
+        self.size() == other.size()
+            && self.domain.root() == other.domain.root()
+            && self.shift == other.shift
+    }
+
     pub(super) fn with_inverse(
         domain: Domain<M>,
         shift: PastaField<M>,

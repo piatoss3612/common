@@ -7,6 +7,9 @@ use std::{
     vec::Vec,
 };
 
+mod operations;
+mod pipelines;
+
 struct Prepared<M: PrimeModulus> {
     indices: Vec<u32>,
     forward: Vec<PastaField<M>>,
@@ -414,7 +417,7 @@ fn expansions<M: PrimeModulus>() {
         let coefficients = inputs(base_domain.size());
         let evaluations = direct(&coefficients, base_domain.subgroup());
         for extra in [0, 1, 2, 3] {
-            for shift in [PastaField::zeta(), PastaField::from_u64(7)] {
+            for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
                 let domain = Domain::new(log + extra).unwrap().coset(shift).unwrap();
                 let expansion = Expansion::new(base, domain, None).unwrap();
                 let mut scales = vec![PastaField::ZERO; expansion.scale_count()];
@@ -619,6 +622,21 @@ impl CountJoins {
     }
 }
 
+struct FailAt {
+    calls: AtomicUsize,
+    index: usize,
+}
+
+impl Executor for FailAt {
+    fn join<L: FnOnce() + Send, R: FnOnce() + Send>(&self, left: L, right: R) {
+        let fail = self.calls.fetch_add(1, Ordering::SeqCst) == self.index;
+        SerialExecutor.join(left, right);
+        if fail {
+            panic!("interrupt transform");
+        }
+    }
+}
+
 #[test]
 fn every_expansion_transform_uses_the_callers_executor_and_options() {
     let base = Plan::without_tables(Domain::<PallasBase>::new(6).unwrap().subgroup());
@@ -679,7 +697,13 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
                 &mut scratch,
             )
             .unwrap();
-        assert_eq!(executor.take(), residues * forward_joins);
+        let pruned_joins = executor.take();
+        assert!(pruned_joins > 0 && pruned_joins < residues * forward_joins);
+        let expected_short = direct(&coefficients[..5], domain);
+        let view = ResidueView::new(&output, expansion.layout()).unwrap();
+        for (row, expected) in expected_short.iter().enumerate() {
+            assert_eq!(view.get(row), Some(expected));
+        }
 
         // Whole transforms still allow callers to parallelize only residues
         // without reserving scratch for tiled transforms.
@@ -700,6 +724,173 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
         assert_eq!(executor.take(), residues.min(3) - 1);
         assert_eq!(output, expected);
     }
+}
+
+fn prepared_evaluation_expansions<M: PrimeModulus>() {
+    let subgroup = Domain::<M>::new(6).unwrap().subgroup();
+    let prepared = Prepared::new(subgroup);
+    let coefficients = inputs::<M>(subgroup.size());
+    let evaluations = direct(&coefficients, subgroup);
+    let saved = evaluations.clone();
+    for extra in [0, 1, 3] {
+        for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
+            let extended = Domain::new(6 + extra).unwrap().coset(shift).unwrap();
+            let expected = reference_coset(&coefficients, extended);
+            let mut scales = vec![PastaField::ZERO; extended.size()];
+            Expansion::new(Plan::without_tables(subgroup), extended, None)
+                .unwrap()
+                .prepare_scales(&mut scales)
+                .unwrap();
+            for mask in 0..32 {
+                let tables = Tables {
+                    bit_reversed: (mask & 1 != 0).then_some(prepared.indices.as_slice()),
+                    forward: (mask & 2 != 0).then_some(prepared.forward.as_slice()),
+                    inverse: (mask & 4 != 0).then_some(prepared.inverse.as_slice()),
+                    inverse_finish: (mask & 8 != 0).then_some(prepared.finish.as_slice()),
+                    inverse_scales: (mask & 16 != 0).then_some(prepared.scales.as_slice()),
+                };
+                let expansion = Expansion::new(
+                    Plan::new(subgroup, tables).unwrap(),
+                    extended,
+                    Some(&scales),
+                )
+                .unwrap();
+                for transform in [
+                    ExecutionOptions::serial(),
+                    ExecutionOptions {
+                        tile_len: 8,
+                        columns_per_task: 3,
+                        max_tasks: 3,
+                    },
+                ] {
+                    let options = ExpansionOptions {
+                        max_residue_tasks: 3,
+                        transform,
+                    };
+                    let count = expansion
+                        .evaluation_scratch(options)
+                        .unwrap()
+                        .field_elements;
+                    let mut scratch = vec![PastaField::ONE; count + 1];
+                    let mut output = vec![PastaField::ZERO; extended.size()];
+                    expansion
+                        .evaluations(
+                            &evaluations,
+                            &mut output,
+                            options,
+                            &SerialExecutor,
+                            &mut scratch,
+                        )
+                        .unwrap();
+                    let view = ResidueView::new(&output, expansion.layout()).unwrap();
+                    for (row, expected) in expected.iter().enumerate() {
+                        assert_eq!(view.get(row), Some(expected));
+                    }
+                    assert_eq!(evaluations, saved);
+                    assert_eq!(scratch[count], PastaField::ONE);
+                    assert_canonical(&output);
+                    assert_canonical(&scratch);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn prepared_evaluation_expansion_supports_every_base_table_subset() {
+    prepared_evaluation_expansions::<PallasBase>();
+    prepared_evaluation_expansions::<PallasScalar>();
+}
+
+fn constant_prefixes<M: PrimeModulus>() {
+    let base = Plan::without_tables(Domain::<M>::new(6).unwrap().subgroup());
+    let transform = ExecutionOptions {
+        tile_len: 8,
+        columns_per_task: 3,
+        max_tasks: 4,
+    };
+    let options = ExpansionOptions {
+        max_residue_tasks: 3,
+        transform,
+    };
+    let executor = CountJoins::default();
+    let constant = [PastaField::from_u64(19)];
+    for extra in [0, 1, 3] {
+        for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
+            let domain = Domain::new(6 + extra).unwrap().coset(shift).unwrap();
+            let plan = Plan::without_tables(domain);
+            let expansion = Expansion::new(base, domain, None).unwrap();
+            let required = expansion
+                .coefficient_scratch(options)
+                .unwrap()
+                .field_elements
+                .max(plan.scratch_requirements(transform).unwrap().field_elements);
+            let mut scratch = vec![PastaField::ONE; required + 1];
+            let mut output = vec![PastaField::ZERO; domain.size()];
+            for coefficients in [&constant[..0], &constant[..]] {
+                let expected = coefficients.first().copied().unwrap_or(PastaField::ZERO);
+                for expanded in [false, true] {
+                    if expanded {
+                        expansion
+                            .coefficients(
+                                coefficients,
+                                &mut output,
+                                options,
+                                &executor,
+                                &mut scratch,
+                            )
+                            .unwrap();
+                    } else {
+                        plan.forward_prefix(
+                            coefficients,
+                            &mut output,
+                            transform,
+                            &executor,
+                            &mut scratch,
+                        )
+                        .unwrap();
+                    }
+                    assert_eq!(executor.take(), 0);
+                    assert!(output.iter().all(|&value| value == expected));
+                    assert!(scratch.iter().all(|&value| value == PastaField::ONE));
+                }
+            }
+            let factor = inputs::<M>(domain.size());
+            expansion
+                .short_product(
+                    &constant,
+                    ResidueView::new(&factor, expansion.layout()).unwrap(),
+                    &mut output,
+                    options,
+                    &executor,
+                    &mut scratch,
+                )
+                .unwrap();
+            assert_eq!(
+                executor.take(),
+                expansion.layout().residues().min(options.max_residue_tasks) - 1
+            );
+            for (actual, factor) in output.iter().zip(&factor) {
+                assert_eq!(*actual, constant[0].mul(factor));
+            }
+            assert!(scratch.iter().all(|&value| value == PastaField::ONE));
+            if extra == 0 && shift == PastaField::ONE {
+                let input = inputs::<M>(base.domain().size());
+                expansion
+                    .evaluations(&input, &mut output, options, &executor, &mut scratch)
+                    .unwrap();
+                assert_eq!(output, input);
+                assert_eq!(executor.take(), 0);
+                assert!(scratch.iter().all(|&value| value == PastaField::ONE));
+            }
+        }
+    }
+}
+
+#[test]
+fn constant_prefixes_and_subgroup_copies_skip_transform_scheduling() {
+    constant_prefixes::<PallasBase>();
+    constant_prefixes::<PallasScalar>();
 }
 
 #[test]
@@ -1135,7 +1326,7 @@ fn size_queries_validate_without_constructing_domains() {
             Err(FftError::InvalidLayout)
         ));
         assert!(matches!(
-            serial.interpolation_requirements(8, &[8]),
+            serial.interpolation_requirements(8, &[16]),
             Err(FftError::InvalidClass)
         ));
         assert!(matches!(
@@ -1240,6 +1431,18 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     ));
     assert_eq!(output, original);
     assert!(matches!(
+        plan.forward_into(
+            &original,
+            &mut output,
+            options,
+            &SerialExecutor,
+            &mut scratch
+        ),
+        Err(FftError::ScratchTooSmall { .. })
+    ));
+    assert_eq!(output, original);
+    assert_eq!(scratch, vec![Fp::ONE; required - 1]);
+    assert!(matches!(
         plan.inverse_into(
             &original,
             &mut output,
@@ -1254,6 +1457,16 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     for (input_len, output_len) in [(63, 64), (65, 64), (64, 63), (64, 65)] {
         let input = vec![Fp::ONE; input_len];
         let mut output = vec![Fp::ZERO; output_len];
+        let forward_error = plan
+            .forward_into(
+                &input,
+                &mut output,
+                ExecutionOptions::serial(),
+                &SerialExecutor,
+                &mut [],
+            )
+            .unwrap_err();
+        assert_eq!(output, vec![Fp::ZERO; output_len]);
         let error = plan
             .inverse_into(
                 &input,
@@ -1263,6 +1476,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
                 &mut [],
             )
             .unwrap_err();
+        assert_eq!(forward_error, error);
         let (buffer, actual) = if input_len != 64 {
             ("input", input_len)
         } else {
@@ -1332,14 +1546,15 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     );
     class.scatter(64, &[]).unwrap();
     assert_eq!(class.values(), original);
-    let mut lift_values = original.clone();
-    let mut lifts = [Class::new(plan, &mut lift_values, InputOrder::Natural).unwrap()];
+    let mut lift_values = original.repeat(2);
+    let lift_plan = Plan::without_tables(Domain::new(7).unwrap().subgroup());
+    let mut lifts = [Class::new(lift_plan, &mut lift_values, InputOrder::Natural).unwrap()];
     assert_eq!(
         interpolate_classes(&mut class, &mut lifts, options, &SerialExecutor, &mut []),
         Err(FftError::InvalidClass)
     );
     assert_eq!(class.values(), original);
-    assert_eq!(lifts[0].values(), original);
+    assert_eq!(lifts[0].values(), original.repeat(2));
     let expansion = Expansion::new(plan, Domain::new(7).unwrap().subgroup(), None).unwrap();
     let options = ExpansionOptions {
         max_residue_tasks: 2,
@@ -1381,7 +1596,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     assert_eq!(output, original);
     assert_eq!(
         std::format!("{too_long}"),
-        "coefficient prefix must contain 0..=64 elements, received 65"
+        "input prefix must contain 0..=64 elements, received 65"
     );
     let factor_values = [Fp::ONE; 128];
     let factor = ResidueView::new(&factor_values, expansion.layout()).unwrap();
@@ -1489,9 +1704,7 @@ fn loose_regions_normalize_on_unwind_and_serial_join_completes_both_jobs() {
     let mut values = [a, b];
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
-            let guard = crate::field::fft::Guard {
-                values: &mut values,
-            };
+            let guard = crate::field::fft::Guard::new(&mut values);
             let (left, right) = guard.values.split_at_mut(1);
             crate::field::fft::butterfly(&mut left[0], &mut right[0], None);
             panic!("interrupt loose region");
@@ -1570,20 +1783,62 @@ fn executor_panics_leave_public_buffers_canonical() {
 }
 
 #[test]
-fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
-    struct FailAt {
-        calls: AtomicUsize,
-        index: usize,
-    }
-    impl Executor for FailAt {
-        fn join<L: FnOnce() + Send, R: FnOnce() + Send>(&self, left: L, right: R) {
-            let fail = self.calls.fetch_add(1, Ordering::SeqCst) == self.index;
-            SerialExecutor.join(left, right);
-            if fail {
-                panic!("interrupt residue transform");
+fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
+    fn check<M: PrimeModulus>() {
+        let options = ExecutionOptions {
+            tile_len: 16,
+            columns_per_task: 3,
+            max_tasks: 3,
+        };
+        let subgroup = Domain::<M>::new(7).unwrap();
+        let input = inputs(subgroup.size());
+        for shift in [
+            PastaField::ONE,
+            PastaField::zeta(),
+            PastaField::zeta_inverse(),
+            PastaField::from_u64(7),
+        ] {
+            let domain = subgroup.coset(shift).unwrap();
+            let prepared = Prepared::new(domain);
+            for tables in [Tables::default(), prepared.tables()] {
+                let plan = Plan::new(domain, tables).unwrap();
+                let count = plan.scratch_requirements(options).unwrap().field_elements;
+                let mut scratch = vec![PastaField::ONE; count + 2];
+                let joins = CountJoins::default();
+                plan.inverse(&mut input.clone(), options, &joins, &mut scratch)
+                    .unwrap();
+                // Interrupt each scheduling boundary, including after terminal
+                // kernels have disarmed scratch guards and after only some
+                // columns have been copied back to the caller's output.
+                for index in 0..joins.take() {
+                    let mut values = input.clone();
+                    scratch.fill(PastaField::ONE);
+                    let executor = FailAt {
+                        calls: AtomicUsize::new(0),
+                        index,
+                    };
+                    assert!(
+                        catch_unwind(AssertUnwindSafe(|| plan.inverse(
+                            &mut values,
+                            options,
+                            &executor,
+                            &mut scratch,
+                        )))
+                        .is_err()
+                    );
+                    assert_canonical(&values);
+                    assert_canonical(&scratch);
+                    assert_eq!(&scratch[count..], &[PastaField::ONE; 2]);
+                }
             }
         }
     }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
+#[test]
+fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
     let base = Plan::without_tables(Domain::<PallasBase>::new(6).unwrap().subgroup());
     let expansion = Expansion::new(base, Domain::new(9).unwrap().subgroup(), None).unwrap();
     let options = ExpansionOptions {

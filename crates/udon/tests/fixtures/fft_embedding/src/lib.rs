@@ -5,8 +5,9 @@
 
 use udon::{
     fft::{
-        Domain, ExecutionOptions, Expansion, ExpansionOptions, Plan, ResidueView, SerialExecutor,
-        Tables,
+        Direction, Domain, ExecutionOptions, Expansion, ExpansionOptions,
+        ExpansionScaleNormalization, ExpansionScales, ResidueView, SerialExecutor, Strategy,
+        Tables, TransformRequest, TwiddleTable,
     },
     field::{PastaField, PrimeModulus},
 };
@@ -23,16 +24,44 @@ bento::embed_struct! {
 }
 
 pub fn exercise() {
-    exercise_field(FP_TABLES.tables(), &FP_TABLES.residues);
-    exercise_field(FQ_TABLES.tables(), &FQ_TABLES.residues);
+    exercise_field(
+        FP_TABLES.header,
+        FP_TABLES.tables(),
+        &FP_TABLES.residues,
+        &FP_TABLES.factored,
+    );
+    exercise_field(
+        FQ_TABLES.header,
+        FQ_TABLES.tables(),
+        &FQ_TABLES.residues,
+        &FQ_TABLES.factored,
+    );
 }
 
-fn exercise_field<M: PrimeModulus>(tables: Tables<'_, M>, scales: &[PastaField<M>]) {
+fn exercise_field<M: PrimeModulus>(
+    header: record::Header,
+    tables: Tables<'_, M>,
+    scales: &[PastaField<M>],
+    factored: &[PastaField<M>],
+) {
     let domain = Domain::for_size(record::SIZE).unwrap().subgroup();
-    tables
-        .validate(domain)
-        .expect("embedded FFT tables must match the domain");
-    let plan = Plan::new(domain, tables).unwrap();
+    let extended = Domain::for_size(record::EXTENDED_SIZE)
+        .unwrap()
+        .coset(PastaField::zeta())
+        .unwrap();
+    header
+        .validate(extended)
+        .expect("embedded metadata must match the domain");
+    let plan = tables
+        .bind(domain)
+        .unwrap()
+        .validate()
+        .expect("embedded FFT tables must match the domain")
+        .plan();
+    let twiddles = TwiddleTable::bind(record::TWIDDLES, factored)
+        .unwrap()
+        .validate()
+        .expect("embedded factored twiddles must match the domain");
     const OPTIONS: ExecutionOptions = ExecutionOptions {
         tile_len: 4,
         columns_per_task: 2,
@@ -68,11 +97,27 @@ fn exercise_field<M: PrimeModulus>(tables: Tables<'_, M>, scales: &[PastaField<M
     )
     .unwrap();
     assert_eq!(recovered, coefficients);
-    let extended = Domain::for_size(record::EXTENDED_SIZE)
+    plan.configure(
+        TransformRequest::new(Direction::Forward),
+        Strategy::serial(),
+    )
+    .unwrap()
+    .with_twiddles(twiddles)
+    .unwrap()
+    .execute_into(&coefficients, &mut recovered, &SerialExecutor, &mut [])
+    .unwrap();
+    assert_eq!(recovered, evaluations);
+    let scales = ExpansionScales::bind(
+        record::SIZE,
+        extended,
+        ExpansionScaleNormalization::UnscaledInverse,
+        scales,
+    )
+    .unwrap();
+    let expansion = Expansion::new(plan, extended, None)
         .unwrap()
-        .coset(PastaField::zeta())
+        .with_scales(scales)
         .unwrap();
-    let expansion = Expansion::new(plan, extended, Some(scales)).unwrap();
     expansion
         .validate_scales()
         .expect("embedded residue scales must match the domain");

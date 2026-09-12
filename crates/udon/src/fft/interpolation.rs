@@ -4,31 +4,49 @@ use super::{
     check_len,
 };
 
-/// Storage order of a class's evaluation input.
+/// Storage order of logical input or output positions.
 ///
-/// Here `shift` and `root` come from the class's plan, and `0 <= j < size`.
+/// For coefficients, logical position `j` is degree `j`. For evaluations it is
+/// the point `shift * root^j` from the plan, with `0 <= j < size`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InputOrder {
-    /// Evaluation at `shift * root^j` is at index `j`.
+    /// Logical position `j` is at index `j`.
     Natural,
-    /// Evaluation at `shift * root^j` is at the reversal of the low
-    /// `log2(size)` bits of `j`.
+    /// Logical position `j` is at the reversal of its low `log2(size)` bits.
     BitReversed,
+}
+
+/// Meaning of an interpolation class's current working storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ClassState {
+    /// Initialized evaluations in the class's declared order.
+    Evaluations,
+    /// Natural-order polynomial coefficients from a completed inverse.
+    Coefficients,
+    /// Storage consumed by sum-only interpolation or an interrupted transform.
+    ///
+    /// No individual polynomial is promised. Reduced representations follow
+    /// the module's [working-storage rules](super).
+    Consumed,
 }
 
 /// A borrowed interpolation domain and its initialized working buffer.
 ///
 /// Scatter overwrites selected evaluations; unwritten entries retain their
 /// existing values. The caller is responsible for filling the intended complete
-/// evaluation vector. Interpolation replaces it with natural-order coefficients.
+/// evaluation vector. [`interpolate_classes`] and
+/// [`super::interpolate_classes_parallel`] replace each lift with its own
+/// natural-order coefficients; [`super::interpolate_sum`] consumes lift storage
+/// without promising its polynomial contents. The output class contains the
+/// coefficient sum on success. [`Self::state`] identifies the buffer's meaning.
 /// Once interpolation begins, further scatter or interpolation calls return
 /// [`FftError::InvalidClassState`], including after an execution panic. To reuse
 /// storage, release the class, refill its buffer, and bind a new class.
 pub struct Class<'a, M: PrimeModulus> {
     pub(super) plan: Plan<'a, M>,
     pub(super) values: &'a mut [PastaField<M>],
-    order: InputOrder,
-    is_evaluations: bool,
+    pub(super) order: InputOrder,
+    pub(super) state: ClassState,
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for Class<'_, M> {
@@ -37,7 +55,7 @@ impl<M: PrimeModulus> core::fmt::Debug for Class<'_, M> {
             .field("plan", &self.plan)
             .field("values", &self.values)
             .field("order", &self.order)
-            .field("is_evaluations", &self.is_evaluations)
+            .field("state", &self.state)
             .finish()
     }
 }
@@ -58,20 +76,28 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
             plan,
             values,
             order,
-            is_evaluations: true,
+            state: ClassState::Evaluations,
         })
     }
-    /// Borrows the current values. After interpolation these are coefficients.
+    /// Borrows the current values; [`Self::state`] identifies their meaning.
     pub fn values(&self) -> &[PastaField<M>] {
         self.values
     }
-    /// The current storage order; interpolation resets it to natural order.
+    /// Storage order for the current evaluation or coefficient phase.
+    ///
+    /// Completed coefficients use [`InputOrder::Natural`]. The value has no
+    /// result-order meaning in [`ClassState::Consumed`].
     pub const fn order(&self) -> InputOrder {
         self.order
     }
 
-    const fn check_evaluations(&self) -> Result<(), FftError> {
-        if self.is_evaluations {
+    /// Evaluation, coefficient, or consumed phase of this working buffer.
+    pub const fn state(&self) -> ClassState {
+        self.state
+    }
+
+    pub(super) const fn check_evaluations(&self) -> Result<(), FftError> {
+        if matches!(self.state, ClassState::Evaluations) {
             Ok(())
         } else {
             Err(FftError::InvalidClassState)
@@ -135,7 +161,7 @@ impl ExecutionOptions {
     /// Classes reuse scratch in sequence, so the result is the maximum of the
     /// individual transform requirements. An empty lift slice is accepted.
     ///
-    /// Returns [`FftError::InvalidClass`] if a lift exceeds half the output size.
+    /// Returns [`FftError::InvalidClass`] if a lift exceeds the output size.
     /// Other size limits and errors are those of [`Self::requirements`].
     pub const fn interpolation_requirements(
         self,
@@ -164,7 +190,7 @@ const fn include_lift(
     output_size: usize,
     lift_size: usize,
 ) -> Result<ScratchRequirements, FftError> {
-    if lift_size > output_size / 2 {
+    if lift_size > output_size {
         return Err(FftError::InvalidClass);
     }
     match options.requirements(lift_size) {
@@ -176,7 +202,7 @@ const fn include_lift(
 
 /// Scratch needed to interpolate `output` and add the interpolated `lifts`.
 ///
-/// Each lift must be at most half the output size. Coset shifts may differ:
+/// Each lift must be at most the output size. Coset shifts may differ:
 /// each class describes its own polynomial. Classes reuse the same scratch in
 /// sequence, with parallel work within each transform, so the requirement is
 /// the maximum of their individual requirements, independent of class count.
@@ -218,14 +244,14 @@ pub const fn interpolation_scratch<M: PrimeModulus>(
     Ok(required)
 }
 
-/// Interpolates every class, adding the smaller coefficient vectors to `output`.
+/// Interpolates every class, adding the lift coefficient vectors to `output`.
 ///
 /// If `output` initially evaluates a polynomial `p` and each lift evaluates
 /// `q_i`, the output becomes the coefficients of `p + sum(q_i)`. Each lift
 /// retains its own interpolated coefficients. Smaller coefficient vectors are
 /// implicitly zero-padded, with no degree shift or other multiplication.
 ///
-/// Every lift must fit in half the output domain. Their coset shifts may
+/// Every lift must fit in the output domain. Their coset shifts may
 /// differ, and an empty lift slice is accepted. All buffers finish in increasing
 /// degree order, and their [`Class::order`] becomes [`InputOrder::Natural`].
 /// Interpolation consumes each class's evaluation phase: another interpolation
@@ -288,7 +314,7 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
 ) -> Result<(), FftError> {
     interpolation_scratch(output, lifts, options)?.check(scratch.len())?;
     for lift in lifts.iter_mut() {
-        lift.is_evaluations = false;
+        lift.state = ClassState::Consumed;
         if lift.order == InputOrder::Natural {
             lift.plan.permute(lift.values);
         }
@@ -301,8 +327,9 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
             Run::inverse(&[]),
         );
         lift.order = InputOrder::Natural;
+        lift.state = ClassState::Coefficients;
     }
-    output.is_evaluations = false;
+    output.state = ClassState::Consumed;
     if output.order == InputOrder::Natural {
         output.plan.permute(output.values);
     }
@@ -315,5 +342,6 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
         Run::inverse(lifts),
     );
     output.order = InputOrder::Natural;
+    output.state = ClassState::Coefficients;
     Ok(())
 }

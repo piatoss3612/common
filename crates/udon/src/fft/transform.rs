@@ -3,21 +3,27 @@ use super::{
     CosetDomain, ExecutionOptions, Executor, FftError, PastaField, PrimeModulus,
     ScratchRequirements, Tables, check_len, check_prefix, reverse,
 };
-use crate::field::fft::{Guard, butterfly, normalize};
+use crate::field::fft::{
+    Guard, butterfly, divide_by_power_of_two, normalize, scale as scale_loose,
+};
 
 /// Reusable transform metadata borrowing caller-prepared tables.
 ///
 /// For size `n`, root `w`, and shift `s` from [`Self::domain`], the forward
 /// transform maps coefficients `c[i]` to `sum(c[i] * (s * w^j)^i, i = 0..n)`
 /// at evaluation index `j`. The inverse recovers the coefficients, including
-/// division by `n` and removal of the shift. Coefficients are ordered by
-/// increasing degree; evaluations use increasing `j` unless a method specifies
-/// bit-reversed input. A singleton transform preserves its sole value.
+/// division by `n` and removal of the shift, unless an explicit
+/// [`super::InverseScale`] selects an unscaled inverse. Natural order means
+/// increasing degree for coefficients and increasing `j` for evaluations;
+/// methods accepting other orders document them. A singleton transform preserves
+/// its sole value.
 ///
 /// Plans can be shared across executions with independent mutable buffers.
-/// Every full input and output slice must contain exactly `n` fields; only
-/// [`Self::forward_prefix`] accepts fewer coefficients. Scratch must meet
-/// [`Self::scratch_requirements`]. Incorrect buffer lengths return
+/// Every full input and output slice must contain exactly `n` fields.
+/// [`Self::forward_prefix`] and [`Self::inverse_prefix`] accept shorter inputs.
+/// Scratch for direct transforms must meet [`Self::scratch_requirements`];
+/// [`Self::configure`] provides separate requirements for prepared operations.
+/// Incorrect buffer lengths return
 /// [`FftError::LengthMismatch`]; insufficient scratch returns
 /// [`FftError::ScratchTooSmall`]. Invalid execution options or storage overflow
 /// return the errors described by [`Self::scratch_requirements`].
@@ -174,9 +180,16 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         check_len("input", input.len(), self.domain.size())?;
-        self.check("output", output.len(), options, scratch.len())?;
-        output.copy_from_slice(input);
-        self.forward(output, options, executor, scratch)
+        let required = self.check("output", output.len(), options, scratch.len())?;
+        let first = self.fill_prefix(input, output, self.domain.shift(), None, PastaField::ONE);
+        self.run(
+            output,
+            options,
+            executor,
+            &mut scratch[..required],
+            Run::forward(first),
+        );
+        Ok(())
     }
 
     /// Preserves the evaluations and writes their interpolation into `output`.
@@ -192,9 +205,16 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         check_len("input", input.len(), self.domain.size())?;
-        self.check("output", output.len(), options, scratch.len())?;
-        output.copy_from_slice(input);
-        self.inverse(output, options, executor, scratch)
+        let required = self.check("output", output.len(), options, scratch.len())?;
+        self.scatter(input, output);
+        self.run(
+            output,
+            options,
+            executor,
+            &mut scratch[..required],
+            Run::inverse(&[]),
+        );
+        Ok(())
     }
 
     /// Evaluates a coefficient prefix, treating the remaining coefficients as zero.
@@ -235,6 +255,12 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         Ok(())
     }
 
+    pub(super) fn scatter(self, input: &[PastaField<M>], output: &mut [PastaField<M>]) {
+        for (index, &value) in input.iter().enumerate() {
+            output[self.reversed(index)] = value;
+        }
+    }
+
     pub(super) fn permute(self, values: &mut [PastaField<M>]) {
         for index in 0..values.len() {
             let destination = self.reversed(index);
@@ -265,9 +291,12 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
             }
         } else {
             let mut scale = extra;
-            for value in values {
+            let len = values.len();
+            for (index, value) in values.iter_mut().enumerate() {
                 *value = value.mul(&scale);
-                scale = scale.mul(&shift);
+                if index + 1 < len {
+                    scale = scale.mul(&shift);
+                }
             }
         }
     }
@@ -294,22 +323,47 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         // coefficients in degree order also permits a scaling progression.
         let mut scale = extra;
         let normalized = extra != PastaField::ONE;
-        for index in 0..width {
-            let value = coefficients.get(index).map_or(PastaField::ZERO, |value| {
-                let scale = scales.map_or(scale, |table| {
-                    if normalized {
-                        table[index].mul(&extra)
-                    } else {
-                        table[index]
-                    }
-                });
+        let identity = shift == PastaField::ONE;
+        let cycle = if scales.is_none() && !identity && coefficients.len() > 1 {
+            let squared = shift.square();
+            (squared.mul(&shift) == PastaField::ONE)
+                .then(|| [extra, extra.mul(&shift), extra.mul(&squared)])
+        } else {
+            None
+        };
+        for (index, value) in coefficients.iter().enumerate() {
+            let value = if let Some(table) = scales {
+                let scale = if normalized {
+                    table[index].mul(&extra)
+                } else {
+                    table[index]
+                };
                 value.mul(&scale)
-            });
+            } else if identity {
+                if normalized {
+                    value.mul(&extra)
+                } else {
+                    *value
+                }
+            } else if let Some(cycle) = cycle {
+                if index % 3 == 0 && !normalized {
+                    *value
+                } else {
+                    value.mul(&cycle[index % 3])
+                }
+            } else {
+                let value = value.mul(&scale);
+                if index + 1 < coefficients.len() {
+                    scale = scale.mul(&shift);
+                }
+                value
+            };
             let destination = self.reversed(index);
             output[destination..destination + chunk_len].fill(value);
-            if scales.is_none() {
-                scale = scale.mul(&shift);
-            }
+        }
+        for index in coefficients.len()..width {
+            let destination = self.reversed(index);
+            output[destination..destination + chunk_len].fill(PastaField::ZERO);
         }
         chunk_len * 2
     }
@@ -322,18 +376,54 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         scratch: &mut [PastaField<M>],
         run: Run<'_, '_, M>,
     ) {
-        if values.len() == 1 {
+        if values.len() == 1 || run.first > values.len() {
+            for (index, value) in values.iter_mut().enumerate() {
+                if run.normalized {
+                    *value = value.mul(&self.domain.inverse_scale(index));
+                    for lift in run.lifts {
+                        if let Some(coefficient) = lift.values.get(index) {
+                            *value = value.add(coefficient);
+                        }
+                    }
+                }
+                if let Some(factor) = run.factor {
+                    *value = value.mul(&factor[index]);
+                }
+            }
             return;
         }
         let geometry = options.geometry(values.len());
-        let kernel = Kernel { plan: self, run };
-        for_chunks(
-            values,
-            geometry.tile_len,
-            options.max_tasks,
-            executor,
-            &|_, tile| kernel.local(tile),
-        );
+        // Division removes the subgroup's general scaling products. For a
+        // cubic shift, pair it with periodic untwisting unless a retained
+        // combined finish table supplies the input factors directly.
+        let finish = if run.normalized && self.domain.shift() == PastaField::ONE {
+            InverseFinish::Subgroup
+        } else if run.normalized
+            && self.domain.inverse_scale_cycle.is_some()
+            && self.tables.inverse_finish.is_none()
+        {
+            InverseFinish::Periodic([
+                PastaField::ONE,
+                self.domain.inverse_shift(),
+                self.domain.inverse_shift().square(),
+            ])
+        } else {
+            InverseFinish::ScaledInputs
+        };
+        let kernel = Kernel {
+            plan: self,
+            run,
+            finish,
+        };
+        if kernel.run.first <= geometry.tile_len {
+            for_chunks(
+                values,
+                geometry.tile_len,
+                options.max_tasks,
+                executor,
+                &|_, tile| kernel.local(tile),
+            );
+        }
         if geometry.tiles == 1 {
             return;
         }
@@ -349,9 +439,16 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
                 let column = first_column + job * geometry.columns;
                 let columns = geometry.columns.min(geometry.tile_len - column);
                 let work = &mut work[..columns * geometry.tiles];
-                for (offset, lane) in work.chunks_exact_mut(geometry.tiles).enumerate() {
-                    for (tile, value) in lane.iter_mut().enumerate() {
-                        *value = values[tile * geometry.tile_len + column + offset];
+                // Bounded rectangles reuse adjacent source columns and short
+                // destination spans instead of streaming a full strided lane.
+                for tile_start in (0..geometry.tiles).step_by(8) {
+                    for column_start in (0..columns).step_by(8) {
+                        for tile in tile_start..(tile_start + 8).min(geometry.tiles) {
+                            for offset in column_start..(column_start + 8).min(columns) {
+                                work[offset * geometry.tiles + tile] =
+                                    values[tile * geometry.tile_len + column + offset];
+                            }
+                        }
                     }
                 }
                 kernel.cross(work, column, &geometry);
@@ -380,15 +477,20 @@ pub(super) struct Run<'a, 'b, M: PrimeModulus> {
     normalized: bool,
     first: usize,
     lifts: &'a [super::Class<'b, M>],
+    factor: Option<&'a [PastaField<M>]>,
 }
 
 impl<'a, 'b, M: PrimeModulus> Run<'a, 'b, M> {
+    pub(super) fn set_first(&mut self, first: usize) {
+        self.first = first;
+    }
     pub(super) fn forward(first: usize) -> Self {
         Self {
             inverse: false,
             normalized: false,
             first,
             lifts: &[],
+            factor: None,
         }
     }
     pub(super) fn inverse(lifts: &'a [super::Class<'b, M>]) -> Self {
@@ -397,6 +499,7 @@ impl<'a, 'b, M: PrimeModulus> Run<'a, 'b, M> {
             normalized: true,
             first: 2,
             lifts,
+            factor: None,
         }
     }
     pub(super) fn inverse_unscaled() -> Self {
@@ -405,6 +508,13 @@ impl<'a, 'b, M: PrimeModulus> Run<'a, 'b, M> {
             normalized: false,
             first: 2,
             lifts: &[],
+            factor: None,
+        }
+    }
+    pub(super) fn forward_product(first: usize, factor: &'a [PastaField<M>]) -> Self {
+        Self {
+            factor: Some(factor),
+            ..Self::forward(first)
         }
     }
 }
@@ -412,6 +522,14 @@ impl<'a, 'b, M: PrimeModulus> Run<'a, 'b, M> {
 struct Kernel<'a, 'b, 'c, M: PrimeModulus> {
     plan: Plan<'a, M>,
     run: Run<'b, 'c, M>,
+    finish: InverseFinish<M>,
+}
+
+#[derive(Clone, Copy)]
+enum InverseFinish<M: PrimeModulus> {
+    Subgroup,
+    Periodic([PastaField<M>; 3]),
+    ScaledInputs,
 }
 
 impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
@@ -420,6 +538,16 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
             self.plan.domain.domain().inverse_root()
         } else {
             self.plan.domain.domain().root()
+        }
+    }
+
+    // Canonical roots are nested: the root of order 2^k is the full
+    // domain root raised to size / 2^k. The field already stores this ladder.
+    fn stage_root(&self, log_size: u32) -> PastaField<M> {
+        if self.run.inverse {
+            PastaField::root_of_unity_inverse(log_size).unwrap()
+        } else {
+            PastaField::root_of_unity(log_size).unwrap()
         }
     }
 
@@ -433,14 +561,16 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
 
     fn needs_scale_progression(&self) -> bool {
         self.run.normalized
+            && matches!(self.finish, InverseFinish::ScaledInputs)
             && self.plan.tables.inverse_scales.is_none()
             && self.plan.domain.inverse_scale_cycle.is_none()
     }
 
     fn needs_finish_twiddles(&self) -> bool {
         self.run.normalized
-            && self.plan.tables.inverse_finish.is_none()
             && self.plan.tables.inverse.is_none()
+            && (!matches!(self.finish, InverseFinish::ScaledInputs)
+                || self.plan.tables.inverse_finish.is_none())
     }
 
     // The guard spans all local rounds. Normalizing only at the boundary keeps
@@ -448,19 +578,20 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
     #[inline(never)]
     fn local(&self, values: &mut [PastaField<M>]) {
         let whole_inverse = self.run.normalized && values.len() == self.plan.domain.size();
+        let whole_forward = !self.run.inverse && values.len() == self.plan.domain.size();
         let last = if whole_inverse {
             values.len() / 2
         } else {
             values.len()
         };
-        let guard = Guard { values };
+        let guard = Guard::new(values);
         let mut block = self.run.first;
         while block <= last {
             let stride = self.plan.domain.size() / block;
             let step = if self.twiddles().is_some() {
                 PastaField::ONE
             } else {
-                self.root().pow_u64(stride as u64)
+                self.stage_root(block.trailing_zeros())
             };
             for chunk in guard.values.chunks_exact_mut(block) {
                 let (left, right) = chunk.split_at_mut(block / 2);
@@ -469,11 +600,15 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
                     if index == 0 {
                         butterfly(left, right, None);
                     } else {
+                        if self.twiddles().is_none() {
+                            power = power.mul(&step);
+                        }
                         let twiddle = self.twiddles().map_or(power, |table| table[index * stride]);
                         butterfly(left, right, Some(&twiddle));
                     }
-                    if self.twiddles().is_none() {
-                        power = power.mul(&step);
+                    if whole_forward && block == self.plan.domain.size() {
+                        *left = self.forward_store(*left, index);
+                        *right = self.forward_store(*right, index + block / 2);
                     }
                 }
             }
@@ -483,17 +618,27 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
             let (left, right) = guard.values.split_at_mut(self.plan.domain.size() / 2);
             let mut scale = self.plan.domain.domain().size_inverse();
             let mut twiddle = PastaField::ONE;
-            let right_scale = self.plan.domain.inverse_shift().pow_u64(left.len() as u64);
+            let right_scale = self.right_scale();
             for (index, (left, right)) in left.iter_mut().zip(right).enumerate() {
                 self.finish(left, right, index, scale, twiddle, right_scale);
-                if self.needs_scale_progression() {
+                if index + 1 < self.plan.domain.size() / 2 && self.needs_scale_progression() {
                     scale = scale.mul(&self.plan.domain.inverse_shift());
                 }
-                if self.needs_finish_twiddles() {
+                if index + 1 < self.plan.domain.size() / 2 && self.needs_finish_twiddles() {
                     twiddle = twiddle.mul(&self.root());
                 }
             }
+            guard.disarm();
+        } else if whole_forward {
+            guard.disarm();
         }
+    }
+
+    fn forward_store(&self, value: PastaField<M>, index: usize) -> PastaField<M> {
+        self.run.factor.map_or_else(
+            || normalize(value),
+            |factor| scale_loose(value, &factor[index]),
+        )
     }
 
     fn finish(
@@ -505,10 +650,54 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
         twiddle: PastaField<M>,
         right_scale: PastaField<M>,
     ) {
-        // For the final inverse butterfly at coefficient i, scale the low
-        // input by n^-1 * shift^-i and the high input by that times root^-i.
-        // The upper output also needs shift^(-n/2). Every lift fits in the
-        // lower half, so its normalized coefficients can be added only there.
+        if matches!(self.finish, InverseFinish::ScaledInputs) {
+            self.finish_scaled(left, right, index, scale, twiddle, right_scale);
+        } else {
+            let twiddle = self
+                .plan
+                .tables
+                .inverse
+                .map_or(twiddle, |table| table[index]);
+            butterfly(left, right, (index != 0).then_some(&twiddle));
+            let log_size = self.plan.domain.domain().log_size();
+            *left = divide_by_power_of_two(*left, log_size);
+            *right = divide_by_power_of_two(*right, log_size);
+            if let InverseFinish::Periodic(cycle) = self.finish {
+                for (value, degree) in [
+                    (&mut *left, index),
+                    (&mut *right, index + self.plan.domain.size() / 2),
+                ] {
+                    if degree % 3 != 0 {
+                        *value = value.mul(&cycle[degree % 3]);
+                    }
+                }
+            }
+        }
+        // Add canonical coefficients only after normalization and untwisting.
+        // Equal-size lifts also contribute to the upper terminal store.
+        for lift in self.run.lifts {
+            if let Some(coefficient) = lift.values.get(index) {
+                *left = left.add(coefficient);
+            }
+            if let Some(coefficient) = lift.values.get(index + self.plan.domain.size() / 2) {
+                *right = right.add(coefficient);
+            }
+        }
+    }
+
+    fn finish_scaled(
+        &self,
+        left: &mut PastaField<M>,
+        right: &mut PastaField<M>,
+        index: usize,
+        scale: PastaField<M>,
+        twiddle: PastaField<M>,
+        right_scale: PastaField<M>,
+    ) {
+        // At coefficient i, scale the low input by n^-1 * shift^-i and
+        // the high input by that times root^-i. The upper output also needs
+        // shift^(-n/2). Loose-input multiplication avoids reducing each input
+        // solely to meet the ordinary field multiplication contract.
         let scale = self.plan.tables.inverse_scales.map_or_else(
             || {
                 if self.plan.domain.inverse_scale_cycle.is_some() {
@@ -529,8 +718,8 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
             },
             |table| table[index],
         );
-        let low = normalize(*left).mul(&scale);
-        let high = normalize(*right).mul(&high_scale);
+        let low = scale_loose(*left, &scale);
+        let high = scale_loose(*right, &high_scale);
         *left = low.add(&high);
         let difference = low.sub(&high);
         *right = if right_scale == PastaField::ONE {
@@ -538,15 +727,21 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
         } else {
             difference.mul(&right_scale)
         };
-        for lift in self.run.lifts {
-            if let Some(coefficient) = lift.values.get(index) {
-                *left = left.add(coefficient);
-            }
+    }
+
+    fn right_scale(&self) -> PastaField<M> {
+        if self.run.normalized && matches!(self.finish, InverseFinish::ScaledInputs) {
+            self.plan
+                .domain
+                .inverse_shift()
+                .pow_u64((self.plan.domain.size() / 2) as u64)
+        } else {
+            PastaField::ONE
         }
     }
 
     fn cross(&self, values: &mut [PastaField<M>], first_column: usize, geometry: &Geometry) {
-        let guard = Guard { values };
+        let guard = Guard::new(values);
         let scale_progression = self.needs_scale_progression();
         let finish_twiddles = self.needs_finish_twiddles();
         let mut column_scale = if scale_progression {
@@ -568,18 +763,34 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
             PastaField::ONE
         };
         let tile_twiddle = if finish_twiddles {
-            self.root().pow_u64(geometry.tile_len as u64)
+            self.stage_root(geometry.tiles.trailing_zeros())
         } else {
             PastaField::ONE
         };
-        let right_scale = if self.run.normalized {
-            self.plan
-                .domain
-                .inverse_shift()
-                .pow_u64((self.plan.domain.size() / 2) as u64)
-        } else {
-            PastaField::ONE
-        };
+        let right_scale = self.right_scale();
+        // One seed per active stage and column block, then a recurrence
+        // across columns. Pasta domains have at most 32 radix-2 stages.
+        // Each tuple holds the column seed, column step, and tile step.
+        let mut stages = [(PastaField::ONE, PastaField::ONE, PastaField::ONE); 32];
+        if self.twiddles().is_none() {
+            for (stage, state) in stages[..geometry.tiles.trailing_zeros() as usize]
+                .iter_mut()
+                .enumerate()
+            {
+                let block = (2 << stage) * geometry.tile_len;
+                if block >= self.run.first
+                    && !(self.run.normalized && block == self.plan.domain.size())
+                {
+                    let column_step = self.stage_root(block.trailing_zeros());
+                    *state = (
+                        column_step.pow_u64(first_column as u64),
+                        column_step,
+                        self.stage_root(stage as u32 + 1),
+                    );
+                }
+            }
+        }
+        let columns = guard.values.len() / geometry.tiles;
         for (offset, lane) in guard.values.chunks_exact_mut(geometry.tiles).enumerate() {
             let column = first_column + offset;
             let mut distance = 1;
@@ -599,22 +810,15 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
                                 twiddle,
                                 right_scale,
                             );
-                            if scale_progression {
+                            if tile + 1 < distance && scale_progression {
                                 scale = scale.mul(&tile_scale);
                             }
-                            if finish_twiddles {
+                            if tile + 1 < distance && finish_twiddles {
                                 twiddle = twiddle.mul(&tile_twiddle);
                             }
                         }
                     } else {
-                        let (first, step) = if self.twiddles().is_none() {
-                            (
-                                self.root().pow_u64((column * stride) as u64),
-                                self.root().pow_u64((geometry.tile_len * stride) as u64),
-                            )
-                        } else {
-                            (PastaField::ONE, PastaField::ONE)
-                        };
+                        let (first, column_step, step) = stages[distance.trailing_zeros() as usize];
                         for group in lane.chunks_exact_mut(distance * 2) {
                             let (left, right) = group.split_at_mut(distance);
                             let mut power = first;
@@ -627,21 +831,33 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
                                         self.twiddles().map_or(power, |table| table[index]);
                                     butterfly(left, right, Some(&twiddle));
                                 }
-                                if self.twiddles().is_none() {
+                                if !self.run.inverse && distance == geometry.tiles / 2 {
+                                    let index = tile * geometry.tile_len + column;
+                                    *left = self.forward_store(*left, index);
+                                    *right = self
+                                        .forward_store(*right, index + self.plan.domain.size() / 2);
+                                }
+                                if self.twiddles().is_none() && tile + 1 < distance {
                                     power = power.mul(&step);
                                 }
                             }
+                        }
+                        if self.twiddles().is_none() && offset + 1 < columns {
+                            stages[distance.trailing_zeros() as usize].0 = first.mul(&column_step);
                         }
                     }
                 }
                 distance *= 2;
             }
-            if scale_progression {
+            if offset + 1 < columns && scale_progression {
                 column_scale = column_scale.mul(&self.plan.domain.inverse_shift());
             }
-            if finish_twiddles {
+            if offset + 1 < columns && finish_twiddles {
                 column_twiddle = column_twiddle.mul(&self.root());
             }
+        }
+        if self.run.normalized || !self.run.inverse {
+            guard.disarm();
         }
     }
 }

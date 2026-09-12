@@ -49,7 +49,9 @@ jobs:
           cargo bench --locked -p zakura-udon --bench field -- --test
           cargo bench --locked -p zakura-udon --bench field --features sqrt-table-large -- --test
       - name: Exercise FFT benchmarks
-        run: cargo bench --locked -p zakura-udon --bench fft -- --test
+        run: |
+          cargo bench --locked -p zakura-udon --bench fft -- --test
+          cargo bench --locked -p zakura-udon --bench fft_strategies -- --test
 
   miri:
     name: Unsafe storage checks

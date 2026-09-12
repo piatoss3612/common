@@ -5,7 +5,7 @@
 use std::{env, fs, path::PathBuf};
 use udon::{
     StoredForm,
-    fft::{Domain, Expansion, Plan},
+    fft::{Domain, ExpansionScaleNormalization, ExpansionScales, TwiddleTable},
     field::{Fp, Fq},
 };
 
@@ -27,12 +27,25 @@ fn main() {
                 .coset(<$field>::zeta())
                 .unwrap();
             let mut record = <$record>::empty();
-            record.destinations().prepare(domain).unwrap();
-            record.tables().validate(domain).unwrap();
-            Expansion::new(Plan::without_tables(domain), extended, None)
+            record
+                .destinations()
+                .prepare_bound(domain)
                 .unwrap()
-                .prepare_scales(&mut record.residues)
+                .validate()
                 .unwrap();
+            record.tables().bind(domain).unwrap().validate().unwrap();
+            TwiddleTable::prepare(record::TWIDDLES, &mut record.factored)
+                .unwrap()
+                .validate()
+                .unwrap();
+            ExpansionScales::prepare(
+                record::SIZE,
+                extended,
+                ExpansionScaleNormalization::UnscaledInverse,
+                &mut record.residues,
+            )
+            .unwrap();
+            record.header.validate(extended).unwrap();
             // Fault injection happens after generation and validation so the
             // consumer must detect damage to an otherwise valid artifact.
             if $name == "fp-fft" {
@@ -40,6 +53,8 @@ fn main() {
                     "permutation" => record.permutation[1] = u32::MAX,
                     "field" => record.forward[0] = *bento::AlignedBytes([0xff; 32]).as_value(),
                     "scales" => record.residues[1] = <$field>::ZERO,
+                    "metadata" => record.header.normalization = 0,
+                    "factored" => record.factored[1] = <$field>::ZERO,
                     "" | "truncate" => {}
                     _ => panic!("unknown artifact damage"),
                 }

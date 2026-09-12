@@ -12,6 +12,9 @@ use super::{
     word::{adc, mac, subtract_limbs},
 };
 
+#[cfg(test)]
+mod experiments;
+
 /// Reduces a borrowed working region when its kernel finishes or unwinds.
 ///
 /// Entries must remain below `2p` throughout the borrow so one subtraction
@@ -19,12 +22,38 @@ use super::{
 /// pass this guard or its working slice to user callbacks.
 pub(crate) struct Guard<'a, M: PrimeModulus> {
     pub(crate) values: &'a mut [PastaField<M>],
+    armed: bool,
+}
+
+impl<'a, M: PrimeModulus> Guard<'a, M> {
+    pub(crate) fn new(values: &'a mut [PastaField<M>]) -> Self {
+        Self {
+            values,
+            armed: true,
+        }
+    }
+
+    /// Ends the borrow without reducing again after a canonical terminal store.
+    ///
+    /// Every entry must already be below `p`. Call only after the entire region
+    /// finishes successfully, so a panic during a partial finish still reduces
+    /// the mixture of canonical and loose values.
+    pub(crate) fn disarm(mut self) {
+        debug_assert!(
+            self.values
+                .iter()
+                .all(|value| { super::word::compare_limbs(&value.limbs, &M::MODULUS).is_lt() })
+        );
+        self.armed = false;
+    }
 }
 
 impl<M: PrimeModulus> Drop for Guard<'_, M> {
     fn drop(&mut self) {
-        for value in self.values.iter_mut() {
-            *value = normalize(*value);
+        if self.armed {
+            for value in self.values.iter_mut() {
+                *value = normalize(*value);
+            }
         }
     }
 }
@@ -33,6 +62,55 @@ impl<M: PrimeModulus> Drop for Guard<'_, M> {
 #[inline]
 pub(crate) fn normalize<M: PrimeModulus>(value: PastaField<M>) -> PastaField<M> {
     PastaField::from_montgomery(reduce_once::<M>(value.limbs))
+}
+
+/// Divides a loose Montgomery value by `2^log_size`, returning a reduced value.
+///
+/// Requires `log_size <= 32` and input limbs `x < 2p`. Both Pasta primes have
+/// `p = 1 mod 2^32`, so `q = -x mod 2^log_size` makes `x + q*p` divisible by
+/// `2^log_size`. This preserves Montgomery scale. For a canonical input the
+/// quotient is below `p`; for a loose input and `log_size >= 1`, it is below
+/// `(1 + 2^-log_size)*p < 2p`, so one subtraction suffices. At zero, reduce the
+/// input directly instead of shifting a limb by 64.
+#[inline]
+pub(crate) fn divide_by_power_of_two<M: PrimeModulus>(
+    value: PastaField<M>,
+    log_size: u32,
+) -> PastaField<M> {
+    debug_assert!(log_size <= 32);
+    debug_assert!(super::word::compare_limbs(&value.limbs, &double_modulus::<M>()).is_lt());
+    if log_size == 0 {
+        return normalize(value);
+    }
+    let [x0, x1, x2, x3] = value.limbs;
+    let mask = (1u64 << log_size) - 1;
+    let q = x0.wrapping_neg() & mask;
+    let (r0, carry) = mac(x0, q, M::MODULUS[0], 0);
+    let (r1, carry) = mac(x1, q, M::MODULUS[1], carry);
+    let (r2, carry) = adc(x2, 0, carry);
+    let (r3, carry) = adc(x3, q << 62, carry);
+    // The numerator may exceed four limbs. Its high limb is below 2^log_size
+    // because the quotient is below 2p < 2^256; preserve it in the final shift.
+    let r4 = (q >> 2) + carry;
+    debug_assert_eq!(r0 & mask, 0);
+    debug_assert!(r4 <= mask);
+    PastaField::from_montgomery(reduce_once::<M>([
+        (r0 >> log_size) | (r1 << (64 - log_size)),
+        (r1 >> log_size) | (r2 << (64 - log_size)),
+        (r2 >> log_size) | (r3 << (64 - log_size)),
+        (r3 >> log_size) | (r4 << (64 - log_size)),
+    ]))
+}
+
+/// Multiplies a loose value by a reduced scale and returns a reduced value.
+#[inline]
+pub(crate) fn scale<M: PrimeModulus>(
+    value: PastaField<M>,
+    factor: &PastaField<M>,
+) -> PastaField<M> {
+    debug_assert!(super::word::compare_limbs(&value.limbs, &double_modulus::<M>()).is_lt());
+    debug_assert!(super::word::compare_limbs(&factor.limbs, &M::MODULUS).is_lt());
+    PastaField::from_montgomery(reduce_once::<M>(multiply::<M>(&value.limbs, &factor.limbs)))
 }
 
 #[inline(always)]
@@ -111,6 +189,22 @@ pub(crate) fn butterfly<M: PrimeModulus>(
     right.limbs = difference;
 }
 
+/// Decimation-in-frequency butterfly.
+///
+/// Adds and subtracts before multiplying the difference. The same loose range
+/// bound holds as for [`butterfly`].
+#[inline]
+pub(crate) fn butterfly_dif<M: PrimeModulus>(
+    left: &mut PastaField<M>,
+    right: &mut PastaField<M>,
+    twiddle: Option<&PastaField<M>>,
+) {
+    butterfly(left, right, None);
+    if let Some(twiddle) = twiddle {
+        right.limbs = multiply::<M>(&right.limbs, &twiddle.limbs);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -161,6 +255,10 @@ mod tests {
                         || right % &p,
                         |twiddle| (right * integer(twiddle.montgomery_limbs()) * &inverse_r) % &p,
                     );
+                    if let Some(twiddle) = twiddle {
+                        let scaled = scale(field::<M>(right), &twiddle);
+                        assert_eq!(integer(scaled.limbs), product);
+                    }
                     let mut low = field::<M>(left);
                     let mut high = field::<M>(right);
                     butterfly(&mut low, &mut high, twiddle.as_ref());
@@ -171,6 +269,18 @@ mod tests {
                         integer(normalize(high).limbs),
                         (left + &twice - &product) % &p
                     );
+                    let mut low = field::<M>(left);
+                    let mut high = field::<M>(right);
+                    butterfly_dif(&mut low, &mut high, twiddle.as_ref());
+                    assert!(integer(low.limbs) < twice);
+                    assert!(integer(high.limbs) < twice);
+                    assert_eq!(integer(normalize(low).limbs), (left + right) % &p);
+                    let difference = (left + &twice - right) % &p;
+                    let expected = twiddle.map_or_else(
+                        || difference.clone(),
+                        |twiddle| (&difference * integer(twiddle.limbs) * &inverse_r) % &p,
+                    );
+                    assert_eq!(integer(normalize(high).limbs), expected);
                 }
             }
         }
@@ -180,5 +290,96 @@ mod tests {
     fn loose_butterflies_match_integer_arithmetic_at_modulus_boundaries() {
         boundaries::<PallasBase>();
         boundaries::<PallasScalar>();
+    }
+
+    fn division<M: PrimeModulus>() {
+        let p = integer(M::MODULUS);
+        let twice = &p * 2u32;
+        let mut values = std::vec![
+            BigUint::from(0u32),
+            BigUint::from(1u32),
+            &p - 1u32,
+            p.clone(),
+            &p + 1u32,
+            &twice - 1u32,
+        ];
+        // Exercise correction bits, carries into each limb, and the fifth
+        // numerator limb, with both canonical and loose representatives.
+        for bit in [
+            1usize, 2, 31, 32, 33, 63, 64, 65, 127, 128, 129, 191, 192, 193, 253, 254, 255,
+        ] {
+            let power = BigUint::from(1u32) << bit;
+            for value in [&power - 1u32, power.clone(), &power + 1u32] {
+                values.push(value.clone());
+                if value < p {
+                    values.extend([&p - &value, &p + &value, &twice - &value]);
+                }
+            }
+        }
+        let mut seed = 0x243f_6a88_85a3_08d3u64;
+        for _ in 0..128 {
+            let mut limbs = core::array::from_fn(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                seed
+            });
+            limbs[3] &= (1 << 63) - 1;
+            values.push(integer(limbs));
+        }
+        for log_size in 0..=32 {
+            let inverse = (BigUint::from(1u32) << log_size as usize).modpow(&(&p - 2u32), &p);
+            for value in &values {
+                assert!(value < &twice);
+                let result = divide_by_power_of_two(field::<M>(value), log_size);
+                // Compare raw Montgomery integers: the operation must divide
+                // without changing the representation's Montgomery scale.
+                assert_eq!(
+                    integer(result.limbs),
+                    (value * &inverse) % &p,
+                    "k={log_size}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn inverse_power_scaling_matches_integers_for_canonical_and_loose_inputs() {
+        division::<PallasBase>();
+        division::<PallasScalar>();
+    }
+
+    fn partial_finish<M: PrimeModulus>() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let p = integer(M::MODULUS);
+        let original: [PastaField<M>; 4] = core::array::from_fn(|i| field(&(&p + i as u32)));
+        for completed in 0..=original.len() {
+            let mut values = original;
+            assert!(
+                catch_unwind(AssertUnwindSafe(|| {
+                    let guard = Guard::new(&mut values);
+                    for value in &mut guard.values[..completed] {
+                        *value = divide_by_power_of_two(*value, 1);
+                    }
+                    panic!("interrupt terminal normalization");
+                }))
+                .is_err()
+            );
+            for (i, value) in values.iter().enumerate() {
+                let expected = if i < completed {
+                    (BigUint::from(i as u32) * (&p + 1u32) / 2u32) % &p
+                } else {
+                    BigUint::from(i as u32)
+                };
+                assert_eq!(integer(value.limbs), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn partial_terminal_normalization_keeps_the_guard_armed_on_unwind() {
+        partial_finish::<PallasBase>();
+        partial_finish::<PallasScalar>();
     }
 }

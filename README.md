@@ -56,7 +56,7 @@ The optional `sqrt-table-large` feature selects larger square-root tables; see
 the [performance report](docs/FIELD_PERFORMANCE.md#optional-larger-square-root-tables)
 for latency, build-time, and storage tradeoffs.
 
-The [`fft` module](crates/udon/src/fft/mod.rs) provides radix-2 transforms,
+The [`fft` module](crates/udon/src/fft/mod.rs) provides power-of-two transforms,
 cosets, residue expansion, and fused class interpolation for both fields.
 Callers own all tables, buffers, scratch, and parallel execution; Udon's FFT
 setup and execution do not allocate or require a feature flag. See the

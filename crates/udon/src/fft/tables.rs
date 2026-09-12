@@ -97,7 +97,37 @@ impl<M: PrimeModulus> Default for Tables<'_, M> {
     }
 }
 
-impl<M: PrimeModulus> Tables<'_, M> {
+impl<'a, M: PrimeModulus> Tables<'a, M> {
+    /// Binds the table set to its coset after checking supplied lengths.
+    ///
+    /// Lengths follow [`TableRequirements::for_domain`]; a mismatch returns
+    /// [`FftError::LengthMismatch`]. Shift-dependent finish tables remain
+    /// attached to the declared domain. Use [`BoundTables::validate`] to check
+    /// imported entries.
+    pub fn bind(self, domain: CosetDomain<M>) -> Result<BoundTables<'a, M>, FftError> {
+        self.check_shape(domain)?;
+        Ok(BoundTables {
+            domain,
+            tables: self,
+        })
+    }
+    pub(super) fn retained_bytes(self) -> Result<usize, FftError> {
+        let mut bytes = self.bit_reversed.map_or(0, core::mem::size_of_val);
+        for table in [
+            self.forward,
+            self.inverse,
+            self.inverse_finish,
+            self.inverse_scales,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            bytes = bytes
+                .checked_add(core::mem::size_of_val(table))
+                .ok_or(FftError::SizeOverflow)?;
+        }
+        Ok(bytes)
+    }
     pub(super) fn check_shape(self, domain: CosetDomain<M>) -> Result<(), FftError> {
         let requirements = TableRequirements::for_domain(domain);
         if let Some(table) = self.bit_reversed {
@@ -144,11 +174,13 @@ impl<M: PrimeModulus> Tables<'_, M> {
         ] {
             if let Some(table) = table {
                 let mut expected = first;
-                for entry in table {
+                for (index, entry) in table.iter().enumerate() {
                     if entry.montgomery_limbs() != expected.montgomery_limbs() {
                         return Err(FftError::InvalidTables);
                     }
-                    expected = expected.mul(&step);
+                    if index + 1 < table.len() {
+                        expected = expected.mul(&step);
+                    }
                 }
             }
         }
@@ -198,6 +230,12 @@ impl<M: PrimeModulus> Default for TablesMut<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> TablesMut<'a, M> {
+    /// Prepares tables and returns a handle bound to their coset.
+    ///
+    /// Entries, optional destinations, and errors follow [`Self::prepare`].
+    pub fn prepare_bound(self, domain: CosetDomain<M>) -> Result<BoundTables<'a, M>, FftError> {
+        self.prepare(domain)?.bind(domain)
+    }
     /// Fills the supplied tables and returns immutable borrows of their storage.
     ///
     /// Entries follow the formulas in [`Tables`]. Returns
@@ -225,9 +263,12 @@ impl<'a, M: PrimeModulus> TablesMut<'a, M> {
         ) -> Option<&[PastaField<M>]> {
             table.map(|table| {
                 let mut value = first;
-                for entry in table.iter_mut() {
+                let len = table.len();
+                for (index, entry) in table.iter_mut().enumerate() {
                     *entry = value;
-                    value = value.mul(&step);
+                    if index + 1 < len {
+                        value = value.mul(&step);
+                    }
                 }
                 &*table
             })
@@ -240,6 +281,46 @@ impl<'a, M: PrimeModulus> TablesMut<'a, M> {
             inverse_finish: fill(self.inverse_finish, generators.inverse_finish),
             inverse_scales: fill(self.inverse_scales, generators.inverse_scales),
         })
+    }
+}
+
+/// Optional transform tables bound to their coset domain.
+///
+/// [`Tables`] defines the entry formulas and required lengths. Binding records
+/// the domain and checks lengths; imported contents need [`Self::validate`].
+#[derive(Clone, Copy)]
+pub struct BoundTables<'a, M: PrimeModulus> {
+    domain: CosetDomain<M>,
+    tables: Tables<'a, M>,
+}
+
+impl<M: PrimeModulus> core::fmt::Debug for BoundTables<'_, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("BoundTables")
+            .field("domain", &self.domain)
+            .field("tables", &self.tables)
+            .finish()
+    }
+}
+
+impl<'a, M: PrimeModulus> BoundTables<'a, M> {
+    /// Checks all imported entries against the bound domain.
+    ///
+    /// Content checks and errors follow [`Tables::validate`].
+    pub fn validate(self) -> Result<Self, FftError> {
+        self.tables.validate(self.domain)?;
+        Ok(self)
+    }
+    /// Constructs the plan for this table set's domain without rebinding it.
+    pub const fn plan(self) -> super::Plan<'a, M> {
+        super::Plan {
+            domain: self.domain,
+            tables: self.tables,
+        }
+    }
+    /// Domain shared by the borrowed tables and their transform plan.
+    pub const fn domain(self) -> CosetDomain<M> {
+        self.domain
     }
 }
 

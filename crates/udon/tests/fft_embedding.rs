@@ -64,6 +64,14 @@ udon = {{ package = "zakura-udon", path = {udon:?}, default-features = false }}
                 Some("embedded residue scales must match the domain: InvalidTables"),
             ),
             (
+                "metadata",
+                Some("embedded metadata must match the domain: InvalidTables"),
+            ),
+            (
+                "factored",
+                Some("embedded factored twiddles must match the domain: InvalidTables"),
+            ),
+            (
                 "truncate",
                 Some("embedded byte length must equal the requested type's size"),
             ),

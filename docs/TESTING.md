@@ -36,12 +36,16 @@ trip in each field. Algebraic checks cover all 32 nontrivial root orders. They
 also cover scoped parallel execution, scratch reuse and rejection before
 mutation, and normalization on unwind. Expansion checks cover caller execution
 within every residue, combined concurrency across and within residues, and
-partitioned scratch with one, two, and eight residues. Const sizing queries cover valid
-configurations, invalid sizes and options, and target storage limits. The
+partitioned scratch with one, two, and eight residues. Const sizing queries cover
+valid configurations, invalid sizes and options, and target storage limits. The
 portability and embedding consumers use these queries for table and scratch
 array lengths. Private butterflies that retain unreduced Montgomery residues
 are checked against integer arithmetic around `p` and `2p`, where `p` is the
 field modulus, with reduced twiddles near zero and `p`.
+Inverse-size division is checked against integer arithmetic for every exponent
+from 0 through 32, using canonical and loose inputs around modulus and limb
+boundaries, including carries into a fifth numerator limb. Panic checks cover
+partially normalized regions and every join boundary in tiled inverse execution.
 
 ## Test roles
 
@@ -121,32 +125,67 @@ measurements are separate from the correctness suite.
 ## FFT benchmarks
 
 The [FFT Criterion suite](../crates/udon/benches/fft.rs) measures both fields at
-2,048, 16,384, and 1,048,576 elements, comparing the reference transform, computed
-powers, prepared tables, and tiled execution with and without tables. Tiled
-cases use 1,024-element tiles at the smallest size and 2,048-element tiles at
-the larger sizes. Every coset comparison includes both the order-three shift
-`zeta` and the generic shift 7. Separate cases measure `forward_prefix` with
-five coefficients and one-eighth of a domain, table preparation, two- and
-eight-residue expansion from coefficients and evaluations, short products, and
-fused versus separate class interpolation.
+2,048, 16,384, and 1,048,576 elements on subgroups and cosets with shifts `zeta`
+and 7. Transform cases compare the reference, computed powers, direction-specific
+twiddle tables, inverse finish tables, and the additional bit-reversal table.
+`into` and `copy_in_place` both include output initialization. Prefix cases cover
+zero, one, five, and one-eighth of the domain's coefficients.
+
+Expansion uses a 2,048-element base with one, two, or eight residues. The
+`compare` cases give dense zero-padding, `forward_prefix`, and residue expansion
+the same coefficient prefixes and, for products, equivalent factor values.
+`native` leaves each algorithm's output in its own layout. Dense and prefix
+outputs are already natural order; compare them with `residues/natural` when a
+consumer needs natural output, including that case's timed layout conversion.
+Short-product comparisons include pointwise multiplication in every method.
+Other cases measure expansion from evaluations with and without residue scales,
+and fused versus separate class interpolation.
 
 ```console
 cargo bench --locked -p zakura-udon --bench fft
 cargo bench --locked -p zakura-udon --bench fft -- Fp/fft/16384
-cargo bench --locked -p zakura-udon --bench fft -- Fp/fft/1048576/generic_7
+cargo bench --locked -p zakura-udon --bench fft -- Fp/expansion/16384/generic_7
 cargo bench --locked -p zakura-udon --bench fft -- --test
 ```
 
-Allocation, table setup, and input cloning occur outside transform timings.
-Preparation cases reuse already allocated destinations. Expansion cases reuse
-their output, and the zero-padded comparison includes filling its output.
-That comparison leaves output in natural order; expansion returns residue order,
-and neither timing includes conversion between the layouts.
-The executor is serial in every benchmark, including the tiled cases, so these
-measure kernel and scheduling overhead without thread creation or pool effects.
-The suite reports scratch bytes separately; its 16,384-element tiled setting
-uses 4,096 fields (128 KiB), and the whole-transform setting needs none.
-Parallel throughput depends on the caller's executor and is not measured here.
+The [prepared-strategy suite](../crates/udon/benches/fft_strategies.rs) compares
+in-place, blocked, and Stockham backends; scatter, gather, and blocked
+initialization; radix-2/4/8 codelets producing bit-reversed output; dense,
+local stage-packed, full packed, chunk-seed, factored, and strided tables; and
+forward coset powers. It also compares expansion storage and normalization
+policies in both output orders,
+polynomial-major batches, and sequential, parallel, or destructive class sums.
+Both fields run with one task and a persistent four-worker Rayon pool.
+Preparation of twiddles and scale tables is timed separately.
+
+```console
+cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/strategies/2048/generic_7/tasks_1
+cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/expansion_strategies/tasks_4
+cargo bench --locked -p zakura-udon --bench fft_strategies -- --test
+cargo test --release --locked -p zakura-udon compare_fft_butterfly_candidates -- --ignored --nocapture
+```
+
+The ignored kernel experiment compares branching and masked range corrections
+and interleaving two independent products, over zero, boundary, and random
+loose inputs. Its ordinary boundary test always runs. Candidates retain four
+limbs in `[0,2p)`, where `p` is the field modulus, and do not change runtime
+defaults. See the [performance report](FFT_PERFORMANCE.md) for measurement
+conditions and limits.
+
+Both suites prepare tables separately into allocated destinations. In-place
+kernel cases clone inputs outside timing; output cases reuse buffers and include
+all initialization. Reported table and scratch bytes exclude input/output
+buffers and executor resources. In the `fft` suite, whole-transform execution
+needs no scratch. Its tiled cases use 1,024-element tiles at size 2,048
+and 2,048-element tiles at larger sizes, with up to 128 columns per task.
+
+That suite's serial whole-transform and tiled controls measure kernel and
+scheduling costs. Persistent Rayon pools with one, two, and four workers measure
+parallel scaling; pool creation and entry are outside the timed loop. Expansion
+compares execution across residues, within residues, and both, with the product
+of the two task budgets bounded by the worker count. The tiled serial control
+uses a budget of four. Interpolation remains a serial comparison. Rayon is only
+a benchmark dependency; callers still supply Udon's executor.
 
 ## Fixtures and nested builds
 
@@ -179,5 +218,6 @@ records in a `no_std` library with stack-owned buffers. The harness runs with
 no Udon features and with `alloc,sqrt-table-large`.
 It also injects damage after generation: a truncated record must fail in
 `embed_struct!` during compilation, while corrupted permutation entries,
-unreduced field entries, and incorrect residue scales must reach the embedded
-consumer and fail its explicit content validation before any transform.
+unreduced field entries, incorrect residue scales, wrong normalization metadata,
+and corrupted factored powers must reach the embedded consumer and fail its
+explicit validation before operations use the damaged data.

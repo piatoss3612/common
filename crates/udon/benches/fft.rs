@@ -1,21 +1,22 @@
 //! Measures table preparation separately from execution that reuses buffers.
 //!
-//! Every case uses a serial executor, including tiled transforms. Comparisons
-//! therefore measure arithmetic and scheduling overhead without pool effects.
+//! Serial controls and persistent Rayon pools separate scheduling overhead from
+//! parallel scaling. Layout conversion is included only in natural-output cases.
 
 use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use zakura_udon::{
     fft::{
-        Class, CosetDomain, Domain, ExecutionOptions, Expansion, ExpansionOptions, InputOrder,
-        Plan, ResidueView, SerialExecutor, TableRequirements, Tables, TablesMut,
+        Class, CosetDomain, Domain, ExecutionOptions, Executor, Expansion, ExpansionOptions,
+        InputOrder, Plan, ResidueView, SerialExecutor, TableRequirements, Tables, TablesMut,
         interpolate_classes, reference,
     },
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
 
 struct Prepared<M: PrimeModulus> {
+    mask: u8,
     permutation: Vec<u32>,
     forward: Vec<PastaField<M>>,
     inverse: Vec<PastaField<M>>,
@@ -25,13 +26,25 @@ struct Prepared<M: PrimeModulus> {
 
 impl<M: PrimeModulus> Prepared<M> {
     fn new(domain: CosetDomain<M>) -> Self {
+        Self::selected(domain, 31)
+    }
+
+    fn selected(domain: CosetDomain<M>, mask: u8) -> Self {
         let sizes = TableRequirements::for_domain(domain);
         let mut result = Self {
-            permutation: vec![0; sizes.permutation],
-            forward: vec![PastaField::ZERO; sizes.twiddles],
-            inverse: vec![PastaField::ZERO; sizes.twiddles],
-            finish: vec![PastaField::ZERO; sizes.twiddles],
-            scales: vec![PastaField::ZERO; sizes.inverse_scales],
+            mask,
+            permutation: vec![0; if mask & 1 != 0 { sizes.permutation } else { 0 }],
+            forward: vec![PastaField::ZERO; if mask & 2 != 0 { sizes.twiddles } else { 0 }],
+            inverse: vec![PastaField::ZERO; if mask & 4 != 0 { sizes.twiddles } else { 0 }],
+            finish: vec![PastaField::ZERO; if mask & 8 != 0 { sizes.twiddles } else { 0 }],
+            scales: vec![
+                PastaField::ZERO;
+                if mask & 16 != 0 {
+                    sizes.inverse_scales
+                } else {
+                    0
+                }
+            ],
         };
         result.prepare(domain);
         result
@@ -39,23 +52,56 @@ impl<M: PrimeModulus> Prepared<M> {
 
     fn prepare(&mut self, domain: CosetDomain<M>) {
         TablesMut {
-            bit_reversed: Some(&mut self.permutation),
-            forward: Some(&mut self.forward),
-            inverse: Some(&mut self.inverse),
-            inverse_finish: Some(&mut self.finish),
-            inverse_scales: Some(&mut self.scales),
+            bit_reversed: (self.mask & 1 != 0).then_some(&mut self.permutation),
+            forward: (self.mask & 2 != 0).then_some(&mut self.forward),
+            inverse: (self.mask & 4 != 0).then_some(&mut self.inverse),
+            inverse_finish: (self.mask & 8 != 0).then_some(&mut self.finish),
+            inverse_scales: (self.mask & 16 != 0).then_some(&mut self.scales),
         }
         .prepare(domain)
         .unwrap();
     }
 
+    fn bytes(&self) -> usize {
+        self.permutation.len() * 4
+            + (self.forward.len() + self.inverse.len() + self.finish.len() + self.scales.len()) * 32
+    }
+
     fn tables(&self) -> Tables<'_, M> {
         Tables {
-            bit_reversed: Some(&self.permutation),
-            forward: Some(&self.forward),
-            inverse: Some(&self.inverse),
-            inverse_finish: Some(&self.finish),
-            inverse_scales: Some(&self.scales),
+            bit_reversed: (self.mask & 1 != 0).then_some(&self.permutation),
+            forward: (self.mask & 2 != 0).then_some(&self.forward),
+            inverse: (self.mask & 4 != 0).then_some(&self.inverse),
+            inverse_finish: (self.mask & 8 != 0).then_some(&self.finish),
+            inverse_scales: (self.mask & 16 != 0).then_some(&self.scales),
+        }
+    }
+}
+
+// Pools are constructed once for the entire suite. The timed loop runs on a
+// worker, so pool entry and worker creation are outside each measurement.
+struct Runner {
+    name: &'static str,
+    pool: Option<rayon::ThreadPool>,
+    tasks: usize,
+}
+
+impl Runner {
+    fn install(&self, f: impl FnOnce() + Send) {
+        if let Some(pool) = &self.pool {
+            pool.install(f);
+        } else {
+            f();
+        }
+    }
+}
+
+impl Executor for Runner {
+    fn join<L: FnOnce() + Send, R: FnOnce() + Send>(&self, left: L, right: R) {
+        if self.pool.is_some() {
+            rayon::join(left, right);
+        } else {
+            SerialExecutor.join(left, right);
         }
     }
 }
@@ -115,106 +161,193 @@ fn transforms<M: PrimeModulus>(
     field: &str,
     shift_name: &str,
     shift: PastaField<M>,
+    runners: &[Runner],
 ) {
     for log_size in [11, 14, 20] {
         let domain = Domain::new(log_size).unwrap().coset(shift).unwrap();
-        let mut tables = Prepared::new(domain);
         let input = inputs::<M>(domain.size());
-        let mut setup = criterion.benchmark_group(format!("{field}/fft_setup/{shift_name}"));
-        setup.throughput(Throughput::Elements(domain.size() as u64));
-        setup.bench_function(BenchmarkId::new("tables", domain.size()), |b| {
-            b.iter(|| {
-                black_box(&mut tables).prepare(black_box(domain));
-                black_box(tables.tables());
-            });
-        });
-        setup.finish();
-        let tiled = tiled(domain.size());
-        let prepared = Plan::new(domain, tables.tables()).unwrap();
-        let unprepared = Plan::without_tables(domain);
-        let mut scratch =
-            vec![PastaField::ZERO; prepared.scratch_requirements(tiled).unwrap().field_elements];
-        eprintln!(
-            "{field}/fft/{}/{shift_name}: serial scratch 0 bytes; tiled scratch {} bytes",
-            domain.size(),
-            core::mem::size_of_val(scratch.as_slice())
-        );
-        let mut group =
-            criterion.benchmark_group(format!("{field}/fft/{}/{shift_name}", domain.size()));
-        group.throughput(Throughput::Elements(domain.size() as u64));
-        for inverse in [false, true] {
-            let direction = if inverse { "inverse" } else { "forward" };
-            group.bench_function(format!("reference_{direction}"), |b| {
+        for (direction, inverse, profiles) in [
+            (
+                "forward",
+                false,
+                &[("none", 0), ("twiddles", 2), ("permutation", 3)][..],
+            ),
+            (
+                "inverse",
+                true,
+                &[
+                    ("none", 0),
+                    ("twiddles", 4),
+                    ("finish", 28),
+                    ("permutation", 29),
+                ][..],
+            ),
+        ] {
+            let mut group = criterion.benchmark_group(format!(
+                "{field}/fft/{}/{shift_name}/{direction}",
+                domain.size()
+            ));
+            group.throughput(Throughput::Elements(domain.size() as u64));
+            group.bench_function("reference", |b| {
                 b.iter_batched_ref(
                     || input.clone(),
                     |values| {
-                        reference_coset(black_box(values), black_box(domain), inverse);
+                        reference_coset(black_box(values), domain, inverse);
                         black_box(values);
                     },
                     BatchSize::PerIteration,
                 );
             });
-            for (name, plan, options) in [
-                ("unprepared", unprepared, ExecutionOptions::serial()),
-                ("prepared", prepared, ExecutionOptions::serial()),
-                ("tiled_unprepared", unprepared, tiled),
-                ("tiled_prepared", prepared, tiled),
-            ] {
-                group.bench_function(format!("{name}_{direction}"), |b| {
-                    b.iter_batched_ref(
-                        || input.clone(),
-                        |values| {
-                            if inverse {
-                                black_box(plan)
-                                    .inverse(
-                                        black_box(values),
-                                        options,
-                                        &SerialExecutor,
-                                        &mut scratch,
-                                    )
-                                    .unwrap();
-                            } else {
-                                black_box(plan)
-                                    .forward(
-                                        black_box(values),
-                                        options,
-                                        &SerialExecutor,
-                                        &mut scratch,
-                                    )
-                                    .unwrap();
-                            }
-                            black_box(values);
-                        },
-                        BatchSize::PerIteration,
-                    );
-                });
-            }
-        }
-        let mut output = vec![PastaField::ZERO; domain.size()];
-        for prefix_len in [5, domain.size() / 8] {
-            for (name, plan, options) in [
-                ("unprepared", unprepared, ExecutionOptions::serial()),
-                ("prepared", prepared, ExecutionOptions::serial()),
-                ("tiled_unprepared", unprepared, tiled),
-                ("tiled_prepared", prepared, tiled),
-            ] {
-                group.bench_function(format!("forward_prefix_{prefix_len}/{name}"), |b| {
-                    b.iter(|| {
-                        black_box(plan)
-                            .forward_prefix(
-                                black_box(&input[..prefix_len]),
-                                black_box(&mut output),
-                                options,
-                                &SerialExecutor,
-                                &mut scratch,
-                            )
-                            .unwrap();
-                        black_box(&output);
+            group.finish();
+            for &(profile, mask) in profiles {
+                let mut tables = Prepared::selected(domain, mask);
+                if mask != 0 {
+                    let mut setup = criterion.benchmark_group(format!(
+                        "{field}/fft_setup/{}/{shift_name}/{direction}",
+                        domain.size()
+                    ));
+                    setup.bench_function(profile, |b| {
+                        b.iter(|| black_box(&mut tables).prepare(black_box(domain)))
                     });
-                });
+                    setup.finish();
+                }
+                let plan = Plan::new(domain, tables.tables()).unwrap();
+                let mut group = criterion.benchmark_group(format!(
+                    "{field}/fft/{}/{shift_name}/{direction}/{profile}",
+                    domain.size()
+                ));
+                for runner in runners {
+                    let options = if runner.name == "serial" {
+                        ExecutionOptions::serial()
+                    } else {
+                        ExecutionOptions {
+                            max_tasks: runner.tasks,
+                            ..tiled(domain.size())
+                        }
+                    };
+                    let mut scratch =
+                        vec![
+                            PastaField::ZERO;
+                            plan.scratch_requirements(options).unwrap().field_elements
+                        ];
+                    eprintln!(
+                        "{field}/fft/{}/{shift_name}/{direction}/{profile}/{}: tables {} bytes; scratch {} bytes",
+                        domain.size(),
+                        runner.name,
+                        tables.bytes(),
+                        scratch.len() * 32
+                    );
+                    group.bench_function(runner.name, |b| {
+                        runner.install(|| {
+                            b.iter_batched_ref(
+                                || input.clone(),
+                                |values| {
+                                    if inverse {
+                                        plan.inverse(
+                                            black_box(values),
+                                            options,
+                                            runner,
+                                            &mut scratch,
+                                        )
+                                        .unwrap();
+                                    } else {
+                                        plan.forward(
+                                            black_box(values),
+                                            options,
+                                            runner,
+                                            &mut scratch,
+                                        )
+                                        .unwrap();
+                                    }
+                                    black_box(values);
+                                },
+                                BatchSize::PerIteration,
+                            );
+                        })
+                    });
+                    // Direct-output comparisons include initialization in both cases.
+                    // Keep this matrix to serial controls; pool scaling is above.
+                    if runner.name == "serial" || runner.name == "tiled_serial" {
+                        let mut output = vec![PastaField::ZERO; domain.size()];
+                        for into in [false, true] {
+                            group.bench_function(
+                                format!(
+                                    "{}/{}",
+                                    runner.name,
+                                    if into { "into" } else { "copy_in_place" }
+                                ),
+                                |b| {
+                                    b.iter(|| {
+                                        if into {
+                                            if inverse {
+                                                plan.inverse_into(
+                                                    black_box(&input),
+                                                    &mut output,
+                                                    options,
+                                                    runner,
+                                                    &mut scratch,
+                                                )
+                                                .unwrap();
+                                            } else {
+                                                plan.forward_into(
+                                                    black_box(&input),
+                                                    &mut output,
+                                                    options,
+                                                    runner,
+                                                    &mut scratch,
+                                                )
+                                                .unwrap();
+                                            }
+                                        } else {
+                                            output.copy_from_slice(black_box(&input));
+                                            if inverse {
+                                                plan.inverse(
+                                                    &mut output,
+                                                    options,
+                                                    runner,
+                                                    &mut scratch,
+                                                )
+                                                .unwrap();
+                                            } else {
+                                                plan.forward(
+                                                    &mut output,
+                                                    options,
+                                                    runner,
+                                                    &mut scratch,
+                                                )
+                                                .unwrap();
+                                            }
+                                        }
+                                        black_box(&output);
+                                    })
+                                },
+                            );
+                        }
+                        if !inverse {
+                            for prefix_len in [0, 1, 5, domain.size() / 8] {
+                                group.bench_function(
+                                    format!("{}/prefix_{prefix_len}", runner.name),
+                                    |b| {
+                                        b.iter(|| {
+                                            plan.forward_prefix(
+                                                black_box(&input[..prefix_len]),
+                                                &mut output,
+                                                options,
+                                                runner,
+                                                &mut scratch,
+                                            )
+                                            .unwrap();
+                                            black_box(&output);
+                                        })
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+                group.finish();
             }
         }
-        group.finish();
     }
 }
 
@@ -223,10 +356,19 @@ fn expansions<M: PrimeModulus>(
     field: &str,
     shift_name: &str,
     shift: PastaField<M>,
+    runners: &[Runner],
 ) {
     let base = Domain::new(11).unwrap().subgroup();
-    let tables = Prepared::new(base);
+    let tables = Prepared::selected(base, 30);
     let plan = Plan::new(base, tables.tables()).unwrap();
+    let coefficient_plan = Plan::new(
+        base,
+        Tables {
+            forward: Some(&tables.forward),
+            ..Tables::default()
+        },
+    )
+    .unwrap();
     let coefficients = inputs::<M>(base.size());
     let mut evaluations = coefficients.clone();
     plan.forward(
@@ -236,7 +378,7 @@ fn expansions<M: PrimeModulus>(
         &mut [],
     )
     .unwrap();
-    for log_size in [12, 14] {
+    for log_size in [11, 12, 14] {
         let extended = Domain::new(log_size).unwrap().coset(shift).unwrap();
         let expansion = Expansion::new(plan, extended, None).unwrap();
         let mut scales = vec![PastaField::ZERO; expansion.scale_count()];
@@ -246,88 +388,213 @@ fn expansions<M: PrimeModulus>(
         });
         setup.finish();
         expansion.prepare_scales(&mut scales).unwrap();
-        let expansion = Expansion::new(plan, extended, Some(&scales)).unwrap();
+        let dense_tables = Prepared::selected(extended, 2);
+        let dense_plan = Plan::new(extended, dense_tables.tables()).unwrap();
         let factor_values = inputs::<M>(extended.size());
         let factor = ResidueView::new(&factor_values, expansion.layout()).unwrap();
+        let mut natural_factor = vec![PastaField::ZERO; extended.size()];
+        expansion
+            .layout()
+            .copy_to_natural(&factor_values, &mut natural_factor)
+            .unwrap();
         let mut output = vec![PastaField::ZERO; extended.size()];
-        let options = ExpansionOptions {
-            max_residue_tasks: 4,
-            transform: tiled(base.size()),
-        };
-        let mut scratch = vec![
-            PastaField::ZERO;
-            expansion
-                .coefficient_scratch(options)
-                .unwrap()
-                .field_elements
-        ];
+        let mut natural = output.clone();
         let mut group = criterion.benchmark_group(format!(
             "{field}/expansion/{}/{shift_name}",
             extended.size()
         ));
         group.throughput(Throughput::Elements(extended.size() as u64));
-        group.bench_function("coefficients", |b| {
-            b.iter(|| {
-                expansion
-                    .coefficients(
-                        black_box(&coefficients),
-                        black_box(&mut output),
-                        options,
-                        &SerialExecutor,
-                        &mut scratch,
-                    )
-                    .unwrap();
-                black_box(&output);
-            })
-        });
-        group.bench_function("evaluations", |b| {
-            b.iter(|| {
-                expansion
-                    .evaluations(
-                        black_box(&evaluations),
-                        black_box(&mut output),
-                        options,
-                        &SerialExecutor,
-                        &mut scratch,
-                    )
-                    .unwrap();
-                black_box(&output);
-            })
-        });
-        group.bench_function("short_product_5", |b| {
-            b.iter(|| {
-                expansion
-                    .short_product(
-                        black_box(&coefficients[..5]),
-                        black_box(factor),
-                        black_box(&mut output),
-                        options,
-                        &SerialExecutor,
-                        &mut scratch,
-                    )
-                    .unwrap();
-                black_box(&output);
-            })
-        });
-        let dense_tables = Prepared::new(extended);
-        let dense_plan = Plan::new(extended, dense_tables.tables()).unwrap();
-        // The dense baseline includes zero padding but keeps its natural-order
-        // output; conversion to the expansion's residue layout is not timed.
-        group.bench_function("zero_padded_fft", |b| {
-            b.iter(|| {
-                output[..base.size()].copy_from_slice(black_box(&coefficients));
-                output[base.size()..].fill(PastaField::ZERO);
-                dense_plan
-                    .forward(
-                        black_box(&mut output),
-                        ExecutionOptions::serial(),
-                        &SerialExecutor,
-                        &mut [],
-                    )
-                    .unwrap();
-                black_box(&output);
-            })
-        });
+        // Equal polynomial inputs, table families, serial execution, and consumers.
+        // Native cases expose kernel costs; natural cases include residue conversion.
+        for prefix in [0, 1, 5, base.size()] {
+            for product in [false, true] {
+                if product && prefix != 1 && prefix != 5 {
+                    continue;
+                }
+                for method in ["dense", "prefix", "residues"] {
+                    for natural_output in [false, true] {
+                        if natural_output && method != "residues" {
+                            continue;
+                        }
+                        let name = format!(
+                            "compare/{prefix}/{}/{method}/{}",
+                            if product { "product" } else { "evaluate" },
+                            if natural_output { "natural" } else { "native" }
+                        );
+                        let expansion =
+                            Expansion::new(coefficient_plan, extended, Some(&scales)).unwrap();
+                        group.bench_function(name, |b| {
+                            b.iter(|| {
+                                let input = black_box(&coefficients[..prefix]);
+                                match method {
+                                    "dense" => {
+                                        output[..prefix].copy_from_slice(input);
+                                        output[prefix..].fill(PastaField::ZERO);
+                                        dense_plan
+                                            .forward(
+                                                &mut output,
+                                                ExecutionOptions::serial(),
+                                                &SerialExecutor,
+                                                &mut [],
+                                            )
+                                            .unwrap();
+                                    }
+                                    "prefix" => dense_plan
+                                        .forward_prefix(
+                                            input,
+                                            &mut output,
+                                            ExecutionOptions::serial(),
+                                            &SerialExecutor,
+                                            &mut [],
+                                        )
+                                        .unwrap(),
+                                    _ if product => expansion
+                                        .short_product(
+                                            input,
+                                            factor,
+                                            &mut output,
+                                            ExpansionOptions::serial(),
+                                            &SerialExecutor,
+                                            &mut [],
+                                        )
+                                        .unwrap(),
+                                    _ => expansion
+                                        .coefficients(
+                                            input,
+                                            &mut output,
+                                            ExpansionOptions::serial(),
+                                            &SerialExecutor,
+                                            &mut [],
+                                        )
+                                        .unwrap(),
+                                }
+                                if product && method != "residues" {
+                                    for (value, factor) in output.iter_mut().zip(&natural_factor) {
+                                        *value = value.mul(factor);
+                                    }
+                                }
+                                if natural_output {
+                                    expansion
+                                        .layout()
+                                        .copy_to_natural(&output, &mut natural)
+                                        .unwrap();
+                                    black_box(&natural);
+                                } else {
+                                    black_box(&output);
+                                }
+                            })
+                        });
+                    }
+                }
+            }
+        }
+        for prepared in [false, true] {
+            let scales = prepared.then_some(scales.as_slice());
+            for runner in runners {
+                for scheduling in ["across", "within", "mixed"] {
+                    // Across * within never exceeds the common task budget.
+                    let across = match scheduling {
+                        "across" => runner.tasks,
+                        "mixed" => {
+                            if runner.tasks >= 4 {
+                                2
+                            } else {
+                                1
+                            }
+                        }
+                        _ => 1,
+                    };
+                    let within = runner.tasks / across;
+                    let options = ExpansionOptions {
+                        max_residue_tasks: across,
+                        transform: if scheduling == "across" || runner.name == "serial" {
+                            ExecutionOptions::serial()
+                        } else {
+                            ExecutionOptions {
+                                max_tasks: within,
+                                ..tiled(base.size())
+                            }
+                        },
+                    };
+                    let profile = if prepared { "scales" } else { "no_scales" };
+                    for from_evaluations in [false, true] {
+                        let expansion = Expansion::new(
+                            if from_evaluations {
+                                plan
+                            } else {
+                                coefficient_plan
+                            },
+                            extended,
+                            scales,
+                        )
+                        .unwrap();
+                        let required = if from_evaluations {
+                            expansion.evaluation_scratch(options)
+                        } else {
+                            expansion.coefficient_scratch(options)
+                        }
+                        .unwrap();
+                        let mut scratch = vec![PastaField::ZERO; required.field_elements];
+                        let table_bytes = if from_evaluations {
+                            tables.bytes()
+                        } else {
+                            tables.forward.len() * 32
+                        } + scales.map_or(0, |scales| scales.len() * 32);
+                        eprintln!(
+                            "{field}/expansion/{}/{shift_name}/{profile}/{}/{scheduling}/{}: tables {table_bytes} bytes; scratch {} bytes; dense tables {} bytes",
+                            extended.size(),
+                            runner.name,
+                            if from_evaluations {
+                                "evaluations"
+                            } else {
+                                "coefficients"
+                            },
+                            scratch.len() * 32,
+                            dense_tables.bytes()
+                        );
+                        group.bench_function(
+                            format!(
+                                "{profile}/{}/{scheduling}/{}",
+                                runner.name,
+                                if from_evaluations {
+                                    "evaluations"
+                                } else {
+                                    "coefficients"
+                                }
+                            ),
+                            |b| {
+                                runner.install(|| {
+                                    b.iter(|| {
+                                        if from_evaluations {
+                                            expansion
+                                                .evaluations(
+                                                    black_box(&evaluations),
+                                                    &mut output,
+                                                    options,
+                                                    runner,
+                                                    &mut scratch,
+                                                )
+                                                .unwrap();
+                                        } else {
+                                            expansion
+                                                .coefficients(
+                                                    black_box(&coefficients),
+                                                    &mut output,
+                                                    options,
+                                                    runner,
+                                                    &mut scratch,
+                                                )
+                                                .unwrap();
+                                        }
+                                        black_box(&output);
+                                    })
+                                })
+                            },
+                        );
+                    }
+                }
+            }
+        }
         group.finish();
     }
 }
@@ -392,20 +659,40 @@ fn interpolation<M: PrimeModulus>(
     group.finish();
 }
 
-fn field_benchmarks<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
+fn field_benchmarks<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runners: &[Runner]) {
     for (name, shift) in [
+        ("subgroup", PastaField::ONE),
         ("zeta", PastaField::zeta()),
         ("generic_7", PastaField::from_u64(7)),
     ] {
-        transforms::<M>(criterion, field, name, shift);
-        expansions::<M>(criterion, field, name, shift);
+        transforms::<M>(criterion, field, name, shift, runners);
+        expansions::<M>(criterion, field, name, shift, runners);
         interpolation::<M>(criterion, field, name, shift);
     }
 }
 
 fn benchmarks(criterion: &mut Criterion) {
-    field_benchmarks::<PallasBase>(criterion, "Fp");
-    field_benchmarks::<PallasScalar>(criterion, "Fq");
+    let runners: Vec<_> = [
+        ("serial", 1, false),
+        ("tiled_serial", 4, false),
+        ("rayon_1", 1, true),
+        ("rayon_2", 2, true),
+        ("rayon_4", 4, true),
+    ]
+    .into_iter()
+    .map(|(name, tasks, threaded)| Runner {
+        name,
+        tasks,
+        pool: threaded.then(|| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(tasks)
+                .build()
+                .unwrap()
+        }),
+    })
+    .collect();
+    field_benchmarks::<PallasBase>(criterion, "Fp", &runners);
+    field_benchmarks::<PallasScalar>(criterion, "Fq", &runners);
 }
 
 criterion_group!(benches, benchmarks);

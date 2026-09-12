@@ -1,4 +1,137 @@
-use super::{FftError, PastaField, PrimeModulus, check_len};
+use super::{CosetDomain, FftError, PastaField, PrimeModulus, check_len, reverse};
+
+/// Storage order of a complete evaluation vector.
+///
+/// For domain size `size`, natural row `j` evaluates the point `shift * root^j`
+/// from the [`CosetDomain`], with `0 <= j < size`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvaluationLayout {
+    /// Natural row `j` is stored at index `j`.
+    Natural,
+    /// Natural row `j` is stored at its `log2(size)`-bit reversal.
+    BitReversed,
+    /// Naturally numbered residue blocks, each with natural inner order.
+    Residues(ResidueLayout),
+}
+
+impl EvaluationLayout {
+    pub(super) fn check(self, size: usize) -> Result<(), FftError> {
+        if let Self::Residues(layout) = self
+            && layout.size() != size
+        {
+            return Err(FftError::InvalidLayout);
+        }
+        Ok(())
+    }
+
+    /// Maps a natural row to its storage index.
+    ///
+    /// Returns `None` unless `size` is a positive power of two, `row < size`,
+    /// and any contained [`ResidueLayout`] has that same size.
+    pub fn index(self, row: usize, size: usize) -> Option<usize> {
+        if !size.is_power_of_two() || row >= size || self.check(size).is_err() {
+            return None;
+        }
+        Some(match self {
+            Self::Natural => row,
+            Self::BitReversed => reverse(row, size.ilog2()),
+            Self::Residues(layout) => layout.index(row)?,
+        })
+    }
+}
+
+/// Evaluations bound to their field, canonical root, shift, and storage order.
+///
+/// Binding is a structural check, not proof that the values evaluate a
+/// particular polynomial. Mathematical consumers can compare domains before
+/// modifying storage, without relying on equal slice lengths alone.
+#[derive(Clone, Copy)]
+pub struct EvaluationView<'a, M: PrimeModulus> {
+    values: &'a [PastaField<M>],
+    domain: CosetDomain<M>,
+    layout: EvaluationLayout,
+}
+
+impl<M: PrimeModulus> core::fmt::Debug for EvaluationView<'_, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EvaluationView")
+            .field("values", &self.values)
+            .field("domain", &self.domain)
+            .field("layout", &self.layout)
+            .finish()
+    }
+}
+
+impl<'a, M: PrimeModulus> EvaluationView<'a, M> {
+    /// Checks the slice and layout dimensions, without checking field contents.
+    ///
+    /// Returns [`FftError::LengthMismatch`] unless `values` has the domain size,
+    /// or [`FftError::InvalidLayout`] if a residue layout has a different size.
+    pub fn bind(
+        values: &'a [PastaField<M>],
+        domain: CosetDomain<M>,
+        layout: EvaluationLayout,
+    ) -> Result<Self, FftError> {
+        check_len("values", values.len(), domain.size())?;
+        layout.check(domain.size())?;
+        Ok(Self {
+            values,
+            domain,
+            layout,
+        })
+    }
+
+    /// The ordered mathematical domain, independent of storage layout.
+    pub const fn domain(self) -> CosetDomain<M> {
+        self.domain
+    }
+    /// The storage mapping.
+    pub const fn layout(self) -> EvaluationLayout {
+        self.layout
+    }
+    /// The borrowed values in storage order.
+    pub const fn as_slice(self) -> &'a [PastaField<M>] {
+        self.values
+    }
+    /// Looks up a natural domain row, returning `None` when it is out of range.
+    pub fn get(self, row: usize) -> Option<&'a PastaField<M>> {
+        self.values.get(self.layout.index(row, self.domain.size())?)
+    }
+    /// Looks up a natural row of a domain with the same shift and nested root.
+    ///
+    /// The supplied domain must be at least this view's size and have the same
+    /// shift. Returns `None` if either condition fails, if `row` is out of range,
+    /// or if it is not a multiple of the supplied size divided by the view's size.
+    pub fn get_extended_row(self, row: usize, domain: CosetDomain<M>) -> Option<&'a PastaField<M>> {
+        if domain.size() < self.domain.size()
+            || row >= domain.size()
+            || domain.shift() != self.domain.shift()
+        {
+            return None;
+        }
+        let stride = domain.size() / self.domain.size();
+        if !row.is_multiple_of(stride) {
+            return None;
+        }
+        self.get(row / stride)
+    }
+    /// Writes the pointwise product in the views' shared layout.
+    ///
+    /// Returns [`FftError::LengthMismatch`] unless `output` has the domain size,
+    /// or [`FftError::InvalidLayout`] if the input domains or layouts differ.
+    /// Validation precedes mutation. Field inputs follow the module's
+    /// [representation contract](super).
+    pub fn multiply_into(self, other: Self, output: &mut [PastaField<M>]) -> Result<(), FftError> {
+        check_len("output", output.len(), self.domain.size())?;
+        if !self.domain.same_domain(other.domain) || self.layout != other.layout {
+            return Err(FftError::InvalidLayout);
+        }
+        for ((out, left), right) in output.iter_mut().zip(self.values).zip(other.values) {
+            *out = left.mul(right);
+        }
+        Ok(())
+    }
+}
 
 /// Groups evaluations by the remainder of their natural row index.
 ///

@@ -191,6 +191,10 @@ macro_rules! pasta_field_parameters {
                 modulus[2] == 0 && modulus[3] == 1 << 62,
                 "Montgomery kernels require p = 2^254 plus a 128-bit integer"
             );
+            assert!(
+                modulus[0] as u32 == 1,
+                "FFT division requires p = 1 mod 2^32"
+            );
             // Each orientation arm must pair zeta with its actual inverse.
             let product = m255::mul!(
                 &<$marker as PrimeModulus>::MODULUS,

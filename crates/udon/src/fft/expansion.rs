@@ -1,8 +1,9 @@
 use super::transform::Run;
 use super::{
-    CosetDomain, ExecutionOptions, Executor, FftError, PastaField, Plan, PrimeModulus,
+    Codelet, CosetDomain, ExecutionOptions, Executor, ExpansionOrder, ExpansionScaleNormalization,
+    ExpansionScales, FftError, InputOrder, InverseScale, PastaField, Plan, PrimeModulus,
     ResidueLayout, ResidueView, ScratchRequirements, check_domain_size, check_field_count,
-    check_len, check_prefix, min,
+    check_len, check_prefix, min, reverse,
 };
 
 /// Caller-selected concurrency across residues and within each base transform.
@@ -113,10 +114,11 @@ impl Default for ExpansionOptions {
 /// Evaluates a base polynomial on a coset of equal or larger size.
 ///
 /// For base size `n` and extended size `r*n`, residue `s` contains the extended
-/// domain's natural rows `s + r*k`, for `0 <= s < r` and `0 <= k < n`. Output
-/// stores each residue contiguously, as described by [`Self::layout`]; use
-/// [`ResidueView`] for lookup by natural row. The ratio `r` can be any supported
-/// power of two, including one.
+/// domain's natural rows `s + r*k`, for `0 <= s < r` and `0 <= k < n`. Direct
+/// methods store each residue contiguously, as described by [`Self::layout`];
+/// use [`ResidueView`] for lookup by natural row. [`Self::configure`] also
+/// supports bit-reversed output. The ratio `r` can be any supported power of
+/// two, including one.
 ///
 /// Residues use their output as working storage, avoiding a full zero-padded
 /// FFT. [`ExpansionOptions`] controls execution across and within residues;
@@ -150,10 +152,11 @@ impl Default for ExpansionOptions {
 /// ```
 #[derive(Clone, Copy)]
 pub struct Expansion<'a, M: PrimeModulus> {
-    base: Plan<'a, M>,
-    extended: CosetDomain<M>,
-    scales: Option<&'a [PastaField<M>]>,
-    layout: ResidueLayout,
+    pub(super) base: Plan<'a, M>,
+    pub(super) extended: CosetDomain<M>,
+    pub(super) scales: Option<&'a [PastaField<M>]>,
+    pub(super) normalization: ExpansionScaleNormalization,
+    pub(super) layout: ResidueLayout,
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for Expansion<'_, M> {
@@ -193,11 +196,33 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             base,
             extended,
             scales,
+            normalization: ExpansionScaleNormalization::Coefficients,
             layout: ResidueLayout::new(extended.size(), extended.size() / base.domain().size())?,
         })
     }
 
-    /// Layout of every output and supplied factor evaluation vector.
+    /// Replaces the scaling table after checking its domain and base size.
+    ///
+    /// A domain or base-size mismatch returns [`FftError::InvalidTables`].
+    /// Coefficient expansion uses ordinary powers and ignores tables declared
+    /// for an unscaled inverse. Evaluation expansion accepts either
+    /// [`ExpansionScaleNormalization`]. Call [`ExpansionScales::validate`] to
+    /// check imported entries.
+    pub fn with_scales(mut self, scales: ExpansionScales<'a, M>) -> Result<Self, FftError> {
+        if scales.base_size != self.base.domain().size()
+            || !scales.extended.same_domain(self.extended)
+        {
+            return Err(FftError::InvalidTables);
+        }
+        self.scales = Some(scales.values);
+        self.normalization = scales.normalization;
+        Ok(self)
+    }
+
+    /// Layout used by direct expansion methods and their factor inputs.
+    ///
+    /// [`Self::configure`] can select a different order, reported by
+    /// [`super::PreparedExpansion::layout`].
     pub const fn layout(self) -> ResidueLayout {
         self.layout
     }
@@ -208,41 +233,46 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Prepares residue scales into caller storage after checking its exact length.
     ///
-    /// Entries follow [`Self::new`]'s formula, whether or not this expansion
-    /// already borrows scales. Returns [`FftError::LengthMismatch`] without
-    /// writing if `output.len()` differs from [`Self::scale_count`].
+    /// Entries follow [`Self::new`]'s ordinary coefficient formula, regardless
+    /// of any already borrowed scales. Use [`ExpansionScales::prepare`] to
+    /// select another normalization. Returns [`FftError::LengthMismatch`]
+    /// without writing if `output.len()` differs from [`Self::scale_count`].
     pub fn prepare_scales(self, output: &mut [PastaField<M>]) -> Result<(), FftError> {
         check_len("output", output.len(), self.scale_count())?;
         let mut step = self.extended.shift();
-        for residue in output.chunks_exact_mut(self.base.domain().size()) {
+        for (index, residue) in output
+            .chunks_exact_mut(self.base.domain().size())
+            .enumerate()
+        {
             let mut power = PastaField::ONE;
-            for value in residue {
+            for (column, value) in residue.iter_mut().enumerate() {
                 *value = power;
-                power = power.mul(&step);
+                if column + 1 < self.base.domain().size() {
+                    power = power.mul(&step);
+                }
             }
-            step = step.mul(&self.extended.domain().root());
+            if index + 1 < self.layout.residues() {
+                step = step.mul(&self.extended.domain().root());
+            }
         }
         Ok(())
     }
 
     /// Checks every supplied residue scale without allocating or mutating it.
     ///
-    /// Returns [`FftError::InvalidTables`] for an incorrect or unreduced entry.
+    /// Checks the declared [`ExpansionScaleNormalization`], returning
+    /// [`FftError::InvalidTables`] for an incorrect or unreduced entry.
     /// Succeeds immediately if scales were omitted. This does not validate the
     /// base plan's tables; those are checked with [`super::Tables::validate`].
     pub fn validate_scales(self) -> Result<(), FftError> {
         if let Some(scales) = self.scales {
-            let mut step = self.extended.shift();
-            for residue in scales.chunks_exact(self.base.domain().size()) {
-                let mut power = PastaField::ONE;
-                for value in residue {
-                    if value.montgomery_limbs() != power.montgomery_limbs() {
-                        return Err(FftError::InvalidTables);
-                    }
-                    power = power.mul(&step);
-                }
-                step = step.mul(&self.extended.domain().root());
-            }
+            ExpansionScales::bind(
+                self.base.domain().size(),
+                self.extended,
+                self.normalization,
+                scales,
+            )?
+            .validate()?;
         }
         Ok(())
     }
@@ -289,10 +319,16 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         self.check(coefficients.len(), 0, output.len())?;
         let required = self.coefficient_scratch(options)?;
         required.check(scratch.len())?;
+        if coefficients.len() <= 1 {
+            output.fill(coefficients.first().copied().unwrap_or(PastaField::ZERO));
+            return Ok(());
+        }
         ResidueJobs {
             expansion: self,
             coefficients,
             factor: None,
+            normalized_coefficients: true,
+            order: ExpansionOrder::Residues,
             extra: PastaField::ONE,
             options: options.transform,
             executor,
@@ -328,7 +364,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// `options.transform` controls the inverse base transform and every
     /// residue transform. After the inverse, at most `options.max_residue_tasks`
     /// of the remaining residues run concurrently. The first residue holds
-    /// their coefficient input and is transformed after they finish reading it.
+    /// their coefficient input and is completed after they finish reading it.
     pub fn evaluations<E: Executor>(
         self,
         evaluations: &[PastaField<M>],
@@ -341,30 +377,35 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         check_len("output", output.len(), self.extended.size())?;
         let required = self.evaluation_scratch(options)?;
         required.check(scratch.len())?;
+        if self.extended.shift() == PastaField::ONE && output.len() == evaluations.len() {
+            output.copy_from_slice(evaluations);
+            return Ok(());
+        }
         let scratch = &mut scratch[..required.field_elements];
         let transform_scratch = self
             .base
             .scratch_requirements(options.transform)?
             .field_elements;
-        // Reuse the first residue as a coefficient buffer. Leaving the inverse
-        // unnormalized lets the remaining residues fuse division by the base
-        // size into their coefficient scales. They must finish reading before
-        // the first residue can be scaled and transformed in place.
+        // Reuse the first residue as a coefficient buffer. Ordinary tables need
+        // a normalized inverse; pre-normalized tables already include division
+        // by the base size. Without tables, absorb division into the coefficient
+        // progression. Readers finish before reuse below.
         let (first, rest) = output.split_at_mut(evaluations.len());
-        first.copy_from_slice(evaluations);
-        self.base.permute(first);
+        self.base.scatter(evaluations, first);
+        let (inverse, extra) = self.inverse_policy();
         self.base.run(
             first,
             options.transform,
             executor,
             &mut scratch[..transform_scratch],
-            Run::inverse_unscaled(),
+            inverse,
         );
-        let extra = self.base.domain().domain().size_inverse();
         ResidueJobs {
             expansion: self,
             coefficients: first,
             factor: None,
+            normalized_coefficients: false,
+            order: ExpansionOrder::Residues,
             extra,
             options: options.transform,
             executor,
@@ -375,6 +416,10 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             options.max_residue_tasks.min(self.layout.residues() - 1),
             scratch,
         );
+        if self.extended.shift() == PastaField::ONE {
+            first.copy_from_slice(evaluations);
+            return Ok(());
+        }
         let first_plan = Plan {
             domain: CosetDomain::with_inverse(
                 self.base.domain().domain(),
@@ -385,7 +430,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         };
         if let Some(scales) = self.scales {
             for (value, scale) in first.iter_mut().zip(scales) {
-                *value = value.mul(&scale.mul(&extra));
+                *value = value.mul(scale);
             }
         } else {
             first_plan.scale_coefficients(first, extra);
@@ -399,6 +444,21 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             Run::forward(2),
         );
         Ok(())
+    }
+
+    pub(super) fn inverse_policy(self) -> (Run<'a, 'a, M>, PastaField<M>) {
+        if self.scales.is_some() {
+            if self.normalization == ExpansionScaleNormalization::Coefficients {
+                (Run::inverse(&[]), PastaField::ONE)
+            } else {
+                (Run::inverse_unscaled(), PastaField::ONE)
+            }
+        } else {
+            (
+                Run::inverse_unscaled(),
+                self.base.domain().domain().size_inverse(),
+            )
+        }
     }
 
     /// Evaluates a short polynomial times a supplied factor.
@@ -433,7 +493,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         ResidueJobs {
             expansion: self,
             coefficients: short,
-            factor: Some(factor),
+            factor: Some(factor.as_slice()),
+            normalized_coefficients: true,
+            order: ExpansionOrder::Residues,
             extra: PastaField::ONE,
             options: options.transform,
             executor,
@@ -448,17 +510,19 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     }
 }
 
-struct ResidueJobs<'a, 'b, M: PrimeModulus, E> {
-    expansion: Expansion<'a, M>,
-    coefficients: &'b [PastaField<M>],
-    factor: Option<ResidueView<'b, M>>,
-    extra: PastaField<M>,
-    options: ExecutionOptions,
-    executor: &'b E,
+pub(super) struct ResidueJobs<'a, 'b, M: PrimeModulus, E> {
+    pub expansion: Expansion<'a, M>,
+    pub coefficients: &'b [PastaField<M>],
+    pub factor: Option<&'b [PastaField<M>]>,
+    pub normalized_coefficients: bool,
+    pub order: ExpansionOrder,
+    pub extra: PastaField<M>,
+    pub options: ExecutionOptions,
+    pub executor: &'b E,
 }
 
 impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
-    fn run(
+    pub fn run(
         &self,
         output: &mut [PastaField<M>],
         first: usize,
@@ -468,7 +532,13 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
         let size = self.expansion.base.domain().size();
         if tasks <= 1 {
             for (residue, output) in output.chunks_exact_mut(size).enumerate() {
-                self.residue(output, first + residue, scratch);
+                let block = first + residue;
+                let residue = if self.order == ExpansionOrder::BitReversed {
+                    reverse(block, self.expansion.layout.residues().ilog2())
+                } else {
+                    block
+                };
+                self.residue(output, residue, block, scratch);
             }
         } else {
             // Split scratch ownership with the residue budget. Each leaf owns
@@ -493,7 +563,13 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
         }
     }
 
-    fn residue(&self, output: &mut [PastaField<M>], residue: usize, scratch: &mut [PastaField<M>]) {
+    pub fn residue(
+        &self,
+        output: &mut [PastaField<M>],
+        residue: usize,
+        block: usize,
+        scratch: &mut [PastaField<M>],
+    ) {
         // The extended root raised to the residue count is the base root.
         // Thus a base FFT with coefficients scaled by (shift * root^s)^j
         // evaluates exactly the extended rows s + r*k of residue s.
@@ -501,11 +577,42 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
         let size = expansion.base.domain().size();
         let scales = expansion
             .scales
+            .filter(|_| {
+                !self.normalized_coefficients
+                    || expansion.normalization == ExpansionScaleNormalization::Coefficients
+            })
             .map(|scales| &scales[residue * size..(residue + 1) * size]);
         let shift = expansion
             .extended
             .shift()
             .mul(&expansion.extended.domain().root().pow_u64(residue as u64));
+        let factor = self
+            .factor
+            .map(|factor| &factor[block * size..(block + 1) * size]);
+        if self.order == ExpansionOrder::BitReversed {
+            let mut power = self.extra;
+            for (index, output) in output.iter_mut().enumerate() {
+                *output = self
+                    .coefficients
+                    .get(index)
+                    .map_or(PastaField::ZERO, |value| {
+                        value.mul(&scales.map_or(power, |scales| scales[index].mul(&self.extra)))
+                    });
+                power = power.mul(&shift);
+            }
+            super::stages::StageKernel {
+                plan: expansion.base,
+                inverse: false,
+                dif: true,
+                scale: InverseScale::Normalized,
+                codelet: Codelet::Radix2,
+                twiddles: None,
+                output_order: InputOrder::BitReversed,
+                factor,
+            }
+            .run(output, 2, self.options.max_tasks, self.executor);
+            return;
+        }
         let first =
             expansion
                 .base
@@ -515,13 +622,10 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
             self.options,
             self.executor,
             scratch,
-            Run::forward(first),
+            factor.map_or_else(
+                || Run::forward(first),
+                |factor| Run::forward_product(first, factor),
+            ),
         );
-        // Finish the product while the residue job still owns its output.
-        if let Some(factor) = self.factor {
-            for (value, factor) in output.iter_mut().zip(factor.residue(residue).unwrap()) {
-                *value = value.mul(factor);
-            }
-        }
     }
 }

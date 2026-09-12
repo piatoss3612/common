@@ -1,4 +1,4 @@
-//! Radix-2 field transforms with caller-owned tables, buffers, and execution.
+//! Power-of-two field transforms with caller-owned tables, buffers, and execution.
 //!
 //! [`Plan`] transforms coefficients and evaluations in place. [`Expansion`]
 //! evaluates a base polynomial on a larger coset without constructing a full
@@ -11,6 +11,9 @@
 //! settings need no scratch. The scoped [`Executor`] lets callers supply parallel
 //! execution without requiring a particular runtime or an allocator in Udon.
 //! An executor's own allocations are outside Udon's storage requirements.
+//! [`Plan::configure`] fixes order, normalization, backend, and total resource
+//! budgets for repeated transforms. [`Expansion::configure`] additionally fixes
+//! coefficient storage and residue ordering. Both have const sizing descriptions.
 //!
 //! Field arithmetic is variable-time, with no constant-time guarantee for
 //! secret inputs. Field buffers and table contents must satisfy
@@ -22,10 +25,11 @@
 //! The checked APIs validate sizes, execution settings, and scratch lengths
 //! before modifying buffers; a returned [`FftError`] leaves them unchanged.
 //! Length mismatches identify the buffer parameter or table field, along with
-//! its expected and actual lengths. Invalid coefficient prefixes report the
+//! its expected and actual lengths. Invalid input prefixes report the
 //! supported length range separately from unsupported domain sizes.
-//! Table contents are checked only by [`Tables::validate`] and
-//! [`Expansion::validate_scales`]. Invalid contents can cause incorrect results
+//! Binding table slices checks structure; each table handle's `validate` method
+//! checks mathematical contents. Native preparation writes valid tables and
+//! returns the same borrowed interface. Invalid contents can cause incorrect results
 //! or panics. The generic [`mod@reference`] transforms have their own contracts.
 //!
 //! Scratch consists of initialized field elements. Its initial values do not
@@ -40,16 +44,15 @@
 //! ```
 //! use zakura_udon::{
 //!     field::Fp,
-//!     fft::{Domain, ExecutionOptions, Plan, SerialExecutor},
+//!     fft::{Domain, Plan},
 //! };
 //!
 //! let domain = Domain::new(2).unwrap().subgroup();
 //! let plan = Plan::without_tables(domain);
-//! let options = ExecutionOptions::serial();
 //! let original = [Fp::ONE, Fp::from_u64(2), Fp::ZERO, Fp::ZERO];
 //! let mut values = original;
-//! plan.forward(&mut values, options, &SerialExecutor, &mut []).unwrap();
-//! plan.inverse(&mut values, options, &SerialExecutor, &mut []).unwrap();
+//! plan.forward_serial(&mut values).unwrap();
+//! plan.inverse_serial(&mut values).unwrap();
 //! assert_eq!(values, original);
 //! ```
 //!
@@ -92,24 +95,83 @@
 //! plan.inverse(&mut values, OPTIONS, &SerialExecutor, &mut scratch).unwrap();
 //! assert_eq!(values, coefficients);
 //! ```
+//!
+//! Keep bit-reversed evaluations through a product and feed them directly into
+//! interpolation. Expansion reverses both residue blocks and their inner rows:
+//!
+//! ```
+//! use zakura_udon::{
+//!     field::Fp,
+//!     fft::{Direction, Domain, Expansion, ExpansionOrder, ExpansionStorage,
+//!         ExpansionStrategy, InputOrder, Plan, SerialExecutor, Strategy, TransformRequest},
+//! };
+//!
+//! let base = Plan::without_tables(Domain::new(2).unwrap().subgroup());
+//! let extended = Domain::new(3).unwrap().coset(Fp::from_u64(7)).unwrap();
+//! let expansion = Expansion::new(base, extended, None).unwrap().configure(
+//!     ExpansionOrder::BitReversed,
+//!     ExpansionStorage::Coefficients,
+//!     ExpansionStrategy::serial(),
+//! ).unwrap();
+//! let coefficients = [Fp::ONE, Fp::from_u64(2)];
+//! let mut factor = [Fp::ZERO; 8];
+//! expansion.execute_into(&coefficients, &mut factor, &SerialExecutor, &mut []).unwrap();
+//! let mut product = [Fp::ZERO; 8];
+//! expansion.execute_product_into(
+//!     &coefficients, expansion.view(&factor).unwrap(), &mut product,
+//!     &SerialExecutor, &mut [],
+//! ).unwrap();
+//! let inverse = Plan::without_tables(extended).configure(
+//!     TransformRequest {
+//!         input_order: InputOrder::BitReversed,
+//!         ..TransformRequest::new(Direction::Inverse)
+//!     },
+//!     Strategy::serial(),
+//! ).unwrap();
+//! inverse.execute(&mut product, &SerialExecutor, &mut []).unwrap();
+//! assert_eq!(&product[..3], &[Fp::ONE, Fp::from_u64(4), Fp::from_u64(4)]);
+//! assert!(product[3..].iter().all(|value| *value == Fp::ZERO));
+//! ```
 
 use crate::field::{PastaField, PrimeModulus};
 
 mod domain;
 mod executor;
 mod expansion;
+mod expansion_operation;
+mod expansion_scales;
 mod interpolation;
+mod interpolation_parallel;
 mod layout;
+mod operation;
+mod powers;
 pub mod reference;
+mod stages;
 mod tables;
 mod transform;
 
 pub use domain::{CosetDomain, Domain};
 pub use executor::{ExecutionOptions, Executor, ScratchRequirements, SerialExecutor};
 pub use expansion::{Expansion, ExpansionOptions};
-pub use interpolation::{Class, InputOrder, interpolate_classes, interpolation_scratch};
-pub use layout::{CoefficientTiles, ResidueLayout, ResidueView};
-pub use tables::{TableRequirements, Tables, TablesMut};
+pub use expansion_operation::{
+    ExpansionDescription, ExpansionOrder, ExpansionRequirements, ExpansionStorage,
+    ExpansionStrategy, PreparedExpansion, Residue,
+};
+pub use expansion_scales::{ExpansionScaleArtifact, ExpansionScaleNormalization, ExpansionScales};
+pub use interpolation::{
+    Class, ClassState, InputOrder, interpolate_classes, interpolation_scratch,
+};
+pub use interpolation_parallel::{
+    InterpolationOptions, InterpolationRequirements, interpolate_classes_parallel, interpolate_sum,
+};
+pub use layout::{CoefficientTiles, EvaluationLayout, EvaluationView, ResidueLayout, ResidueView};
+pub use operation::{
+    Backend, Codelet, Direction, Initialization, InputPolicy, InputSupport, InverseScale,
+    OperationDescription, OperationRequirements, PreparedOperation, ResourceBudget, Strategy,
+    TransformRequest,
+};
+pub use powers::{PowerTable, TwiddleArtifact, TwiddleDescription, TwiddleStorage, TwiddleTable};
+pub use tables::{BoundTables, TableRequirements, Tables, TablesMut};
 pub use transform::Plan;
 
 /// An invalid FFT description or insufficient caller storage.
@@ -117,21 +179,23 @@ pub use transform::Plan;
 pub enum FftError {
     /// A domain size is unsupported.
     InvalidSize,
-    /// A coefficient-prefix length is outside the supported range.
+    /// A declared input-prefix length is outside the supported range.
     InvalidPrefix {
-        /// Minimum supported length, in coefficients.
+        /// Minimum supported length, in field elements.
         min: usize,
-        /// Maximum supported length, in coefficients.
+        /// Maximum supported length, in field elements.
         max: usize,
-        /// Supplied length, in coefficients.
+        /// Supplied length, in field elements.
         actual: usize,
     },
     /// An element count, index calculation, or byte size overflowed.
     SizeOverflow,
     /// A coset shift is zero.
     ZeroShift,
-    /// An execution setting is zero or its tile length is not a power of two.
+    /// An execution setting or combination of request options is invalid.
     InvalidExecution,
+    /// The requested storage exceeds an explicit resource ceiling.
+    ResourceLimit,
     /// A buffer has the wrong length.
     LengthMismatch {
         /// Name of the buffer parameter or table field with the wrong length.
@@ -152,7 +216,7 @@ pub enum FftError {
     InvalidTables,
     /// A layout, range, or domain relationship is invalid.
     InvalidLayout,
-    /// A class is larger than half of the output domain.
+    /// A class is larger than the output domain.
     InvalidClass,
     /// Interpolation has already begun on a class, consuming its evaluations.
     InvalidClassState,
@@ -164,11 +228,12 @@ impl core::fmt::Display for FftError {
             Self::InvalidSize => f.write_str("unsupported FFT domain size"),
             Self::InvalidPrefix { min, max, actual } => write!(
                 f,
-                "coefficient prefix must contain {min}..={max} elements, received {actual}"
+                "input prefix must contain {min}..={max} elements, received {actual}"
             ),
             Self::SizeOverflow => f.write_str("FFT storage or index size overflow"),
             Self::ZeroShift => f.write_str("coset shift must be nonzero"),
             Self::InvalidExecution => f.write_str("invalid FFT execution settings"),
+            Self::ResourceLimit => f.write_str("FFT resource ceiling exceeded"),
             Self::LengthMismatch {
                 buffer,
                 expected,
@@ -187,7 +252,7 @@ impl core::fmt::Display for FftError {
             }
             Self::InvalidTables => f.write_str("FFT table contents do not match the domain"),
             Self::InvalidLayout => f.write_str("invalid FFT layout or range"),
-            Self::InvalidClass => f.write_str("interpolation class exceeds half the output domain"),
+            Self::InvalidClass => f.write_str("interpolation class exceeds the output domain"),
             Self::InvalidClassState => f.write_str("class no longer contains evaluations"),
         }
     }

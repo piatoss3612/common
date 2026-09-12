@@ -147,27 +147,52 @@ measurements are separate from the correctness suite.
 
 ## Curve benchmarks
 
-The [curve Criterion suite](../crates/udon/benches/curve.rs) measures Pallas and
-Vesta addition, mixed addition, doubling, normalization, decoding, ordinary
-scalar multiplication, and batch normalization. Fixed-base cases report
-preparation, checked binding, and repeated multiplication separately for
-window widths 4 and 8. See the [curve guide](CURVES.md#fixed-base-multiplication)
-for table and scratch storage costs.
+The [curve Criterion suite](../crates/udon/benches/curve.rs) measures meaningful
+runtime operations for both Pallas and Vesta:
+
+- Projective addition, mixed addition, subtraction, negation, doubling,
+  normalization, and equality, including identity, equal points at different
+  Jacobian scales, and inverse pairs. `point` cases measure affine-result
+  arithmetic, including its normalization cost.
+- Curve-equation evaluation and checked coordinate construction, with valid,
+  off-curve, unreduced, and identity inputs. Compressed encoding and decoding
+  cover both point types, both signs, identity, and malformed encodings that
+  fail canonical-coordinate or square-root checks.
+- Ordinary scalar multiplication from all three point representations, with
+  zero, one, small, sparse high-bit, dense low-limb, dense full-limb, and
+  minus-one scalars, plus identity bases. A 32-scalar corpus compares affine,
+  projective, and fixed-base multiplication on the same base. A separate
+  32-point corpus varies encoding and decoding inputs.
+- Batch normalization at 1, 2, 3, 8, 64, and 1,024 points, including mixed and
+  all-identity batches. `individual` controls normalize the same inputs one at
+  a time into the same output layout. Throughput counts all input positions,
+  including identities.
+- Fixed-base preparation, checked binding, trusted binding, explicit validation,
+  and multiplication, separately for every supported window width (`2..=8`).
+  Scalar cases include final signed-digit carries at widths 3 and 5. See the
+  [curve guide](CURVES.md#fixed-base-multiplication) for table and scratch costs.
+
+Constant accessors, plain representation copies, derived affine equality, and
+debug formatting are omitted.
 
 ```console
 cargo bench --locked -p zakura-udon --bench curve
 cargo bench --locked -p zakura-udon --bench curve -- Pallas/fixed_base
+cargo bench --locked -p zakura-udon --bench curve -- Pallas/encoding
+cargo bench --locked -p zakura-udon --bench curve -- Pallas/batch_normalize
 cargo bench --locked -p zakura-udon --bench curve -- --test
 cargo bench --locked -p zakura-udon --bench curve --features sqrt-table-large -- --test
 ```
 
-Inputs are deterministic, with a dense scalar spanning all four limbs and
-nontrivial projective coordinates. Setup and allocation occur outside timed
-execution; preparation measures filling existing buffers, and checked binding
-measures validation of existing entries. Batch normalization covers 1, 8, and
-64 points and reports points per second. Inputs and results pass through
-optimization barriers. These measurements describe the chosen inputs, not a
-constant-time guarantee.
+Inputs are deterministic and fixture checks run before timing. Setup and
+allocation occur outside timed execution; preparation measures filling existing
+buffers, and binding borrows existing entries. Batch and corpus cases report
+points or scalar multiplications per second. Inputs and results pass through
+optimization barriers. Original `operations`, dense batch, and width-4/8
+fixed-base benchmark names are preserved for existing Criterion baselines.
+Use name filters for focused timing runs or `--test` to exercise every case
+once; CI runs test mode with both square-root configurations. These measurements
+describe the chosen inputs, not a constant-time guarantee.
 
 ## FFT benchmarks
 

@@ -5,14 +5,15 @@
 
 use udon::{
     curve::{
-        AffinePoint, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve, Point,
-        ProjectivePoint, Vesta,
+        AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve,
+        Point, ProjectivePoint, Vesta,
         msm::{
             Bases, ExecutionOptions, ExecutionPlan, Input, JobStorage, PreparedScalars,
             Requirements, ScalarStorage, Scratch, Selection, WorkerStorage,
         },
     },
     exec::{SerialExecutor, TaskBudget},
+    fft::reference,
     field::{CanonicalUint, PastaField},
 };
 
@@ -25,6 +26,14 @@ bento::embed_struct! {
 bento::embed_struct! {
     static VESTA: record::Record<Vesta> =
         concat!(env!("OUT_DIR"), "/vesta-fixed-base-", udon::stored_form!(), ".bin");
+}
+bento::embed_struct! {
+    static PALLAS_SRS: record::SrsRecord<Pallas> =
+        concat!(env!("OUT_DIR"), "/pallas-srs-", udon::stored_form!(), ".bin");
+}
+bento::embed_struct! {
+    static VESTA_SRS: record::SrsRecord<Vesta> =
+        concat!(env!("OUT_DIR"), "/vesta-srs-", udon::stored_form!(), ".bin");
 }
 
 fn exercise_curve<C: PastaCurve>(record: &record::Record<C>) {
@@ -139,7 +148,83 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
     }
 }
 
+fn exercise_srs<C: PastaCurve>(record: &record::SrsRecord<C>) {
+    let domain = record.domain();
+    for entry in record.coefficient.iter().chain(&record.lagrange) {
+        let affine = entry.to_affine();
+        let (x, y) = affine.coordinates();
+        assert!(AffinePoint::<C>::from_xy(*x, *y).is_some() && entry.valid_cache());
+    }
+    // A direct DFT checks each embedded Lagrange basis and natural row order
+    // independently of the generator's in-place butterfly schedule.
+    let mut step = PastaField::ONE;
+    for lagrange in &record.lagrange {
+        let mut power = domain.size_inverse();
+        let mut expected = ProjectivePoint::IDENTITY;
+        for coefficient in &record.coefficient {
+            expected = expected.add(&coefficient.to_affine().mul_projective(&power));
+            power = power.mul(&step);
+        }
+        assert_eq!(
+            lagrange.to_affine().to_point(),
+            expected.to_point(),
+            "embedded SRS must match natural Lagrange order"
+        );
+        step = step.mul(&domain.inverse_root());
+    }
+    const R: Requirements =
+        match Input::<Pallas>::requirements_for_len(record::SRS_SIZE, ExecutionOptions::SERIAL) {
+            Ok(r) => r,
+            Err(_) => panic!("unsupported SRS size"),
+        };
+    assert_eq!(
+        Input::<C>::requirements_for_len(record::SRS_SIZE, ExecutionOptions::SERIAL).unwrap(),
+        R
+    );
+    let mut scalars = [ScalarStorage::ZERO; R.scalars()];
+    let mut digits = [0; R.digits()];
+    let mut affine = [AffinePoint::GENERATOR; R.affine()];
+    let mut projective = [ProjectivePoint::IDENTITY; R.projective()];
+    let mut field = [PastaField::ZERO; R.field()];
+    let mut indices = [0; R.indices()];
+    let mut scratch = Scratch::new(
+        &mut scalars,
+        &mut digits,
+        &mut affine,
+        &mut projective,
+        &mut field,
+        &mut indices,
+    );
+    let coefficient = core::array::from_fn::<_, { record::SRS_SIZE }, _>(|i| {
+        PastaField::from_u64(i as u64 + 3).invert().unwrap()
+    });
+    let mut evaluations = coefficient;
+    reference::transform(&mut evaluations, &domain.root());
+    let coefficient_input = Input::new(Bases::Prepared(&record.coefficient), &coefficient).unwrap();
+    let lagrange_input = Input::new(Bases::Prepared(&record.lagrange), &evaluations).unwrap();
+    let left = coefficient_input
+        .execute(
+            ExecutionOptions::SERIAL,
+            &SerialExecutor,
+            scratch.reborrow(),
+        )
+        .unwrap();
+    let right = lagrange_input
+        .execute(
+            ExecutionOptions::SERIAL,
+            &SerialExecutor,
+            scratch.reborrow(),
+        )
+        .unwrap();
+    assert_eq!(
+        left, right,
+        "coefficient and Lagrange commitments must agree"
+    );
+}
+
 pub fn exercise() {
     exercise_curve(PALLAS);
     exercise_curve(VESTA);
+    exercise_srs(PALLAS_SRS);
+    exercise_srs(VESTA_SRS);
 }

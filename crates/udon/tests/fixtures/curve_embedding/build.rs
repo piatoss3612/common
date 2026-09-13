@@ -1,4 +1,4 @@
-//! Generates both curves' compact and expanded tables through public APIs.
+//! Generates fixed-base tables and commitment bases through public APIs.
 #![forbid(unsafe_code)]
 #![deny(warnings)]
 
@@ -6,9 +6,10 @@ use std::{env, fs, path::PathBuf};
 use udon::{
     StoredForm,
     curve::{
-        EisensteinTable, FixedBaseTable, Pallas, PastaCurve, PreparedAffinePoint, ProjectivePoint,
-        Vesta,
+        EisensteinTable, FixedBaseTable, Pallas, PastaCurve, Point, PreparedAffinePoint,
+        ProjectivePoint, Vesta, batch_normalize,
     },
+    fft::reference,
     field::PastaField,
 };
 
@@ -93,11 +94,57 @@ fn generate<C: PastaCurve>(name: &str, damage: &str) {
     .unwrap();
 }
 
+fn generate_srs<C: PastaCurve>(name: &str, damage: &str) {
+    let mut record = record::SrsRecord::<C>::empty();
+    let domain = record.domain();
+    // Known generator multiples make this fixture reproducible. The scalar 7
+    // provides no setup secrecy and is used solely for test data.
+    let mut power = PastaField::ONE;
+    let mut projective = core::array::from_fn::<_, { record::SRS_SIZE }, _>(|_| {
+        let point = ProjectivePoint::<C>::GENERATOR.mul(&power);
+        power = power.mul(&PastaField::from_u64(7));
+        point
+    });
+    let mut points = [Point::IDENTITY; record::SRS_SIZE];
+    let mut scratch = [PastaField::ZERO; record::SRS_SIZE];
+    batch_normalize(&projective, &mut points, &mut scratch).unwrap();
+    record.coefficient =
+        points.map(|point| PreparedAffinePoint::from_affine(point.as_affine().unwrap()));
+    reference::inverse_transform(
+        &mut projective,
+        &domain.inverse_root(),
+        &domain.size_inverse(),
+    );
+    batch_normalize(&projective, &mut points, &mut scratch).unwrap();
+    record.lagrange =
+        points.map(|point| PreparedAffinePoint::from_affine(point.as_affine().unwrap()));
+    match damage {
+        "srs-root" => record.root = record.root.neg(),
+        "srs-order" => record.lagrange.swap(0, 1),
+        "" => {}
+        _ => panic!("unknown SRS artifact damage"),
+    }
+    let directory = PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let form = StoredForm::for_target(&env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap());
+    fs::write(
+        directory.join(format!("{name}-srs-{}.bin", form.descriptor())),
+        bento::bytes_of(&record),
+    )
+    .unwrap();
+}
+
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     println!("cargo::rerun-if-changed=src/record.rs");
     println!("cargo::rerun-if-env-changed=CURVE_ARTIFACT_DAMAGE");
     let damage = env::var("CURVE_ARTIFACT_DAMAGE").unwrap_or_default();
-    generate::<Pallas>("pallas", &damage);
+    let (table_damage, srs_damage) = if damage.starts_with("srs-") {
+        ("", damage.as_str())
+    } else {
+        (damage.as_str(), "")
+    };
+    generate::<Pallas>("pallas", table_damage);
     generate::<Vesta>("vesta", "");
+    generate_srs::<Pallas>("pallas", srs_damage);
+    generate_srs::<Vesta>("vesta", "");
 }

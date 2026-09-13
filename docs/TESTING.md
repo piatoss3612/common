@@ -94,6 +94,9 @@ allowances of active callbacks, independently of how many threads run them.
 - Public API tests check observable behavior and interactions between components.
   Token snapshots establish expansion structure, not successful compilation or
   runtime semantics.
+  The [workspace tests](../crates/udon/tests/workspaces/main.rs) compose MSMs and FFTs
+  to check buffer reuse, divided task budgets, and recovery after incomplete or
+  panicking work.
 - Compiler tests establish type, diagnostic, constant-evaluation, and dependency
   contracts in separate consumers. Use full builds for assertions deferred to
   code generation; `cargo check` can miss them. Check the relevant diagnostic and
@@ -464,9 +467,16 @@ expanded tables with affine and cached entries through Udon, writes them through
 Bento POD, and checks multiplication from borrowed embedded records against
 ordinary multiplication. It also reuses prepared scalar digits, borrows compact
 table batches, and executes indexed MSMs directly from affine and cached
-embedded entries with const-sized stack scratch and capped passes. Both feature
-configurations run the consumer and damage cases. Truncation must fail during
-compilation; obsolete schema, incorrect curve, table-kind, entry-layout, or
-window metadata, unreduced or off-curve entries, reordered multiples, wrong
-bases, inconsistent caches, and incorrect final carry entries must fail
-validation before multiplication.
+embedded entries with const-sized stack scratch and capped passes. It also
+generates a small structured reference string (SRS) for each curve, embedding
+coefficient and natural-order Lagrange bases as cached points. The consumer
+checks the basis conversion against a direct group DFT and verifies that both
+bases give the same commitment for a polynomial and its evaluations.
+
+Both feature configurations run the consumer and damage cases. Truncation must
+fail during compilation; obsolete schema, incorrect curve, table-kind,
+entry-layout, or window metadata, unreduced or off-curve entries, reordered
+multiples, wrong bases, inconsistent caches, and incorrect final carry entries
+must fail validation before multiplication. The `srs-root` and `srs-order` cases
+must fail the SRS domain metadata and basis order checks, respectively, before
+commitment evaluation.

@@ -7,6 +7,7 @@ pub(super) use num_bigint::{BigInt, BigUint};
 pub(super) use std::{vec, vec::Vec};
 
 mod arithmetic;
+mod batch;
 mod constants;
 mod encoding;
 mod kernels;

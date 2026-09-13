@@ -5,7 +5,8 @@ use udon::{
         AffinePoint, CurveError, CurveTableRequirements, EisensteinTable, FixedBaseDescription,
         FixedBaseTable, PastaCurve, PreparedAffinePoint,
     },
-    field::PrimeModulus,
+    fft::Domain,
+    field::{PastaField, PrimeModulus},
 };
 
 pub const DESCRIPTION: FixedBaseDescription = FixedBaseDescription { window_bits: 4 };
@@ -83,3 +84,54 @@ pub type Tables<'a, C> = (
     EisensteinTable<'a, C>,
     EisensteinTable<'a, C, PreparedAffinePoint<C>>,
 );
+
+pub const SRS_SIZE: usize = 8;
+
+/// A structured reference string with coefficient and natural-order Lagrange bases.
+///
+/// POD layout checks do not certify the root, basis order, or curve contents.
+#[repr(C)]
+#[derive(Clone, Copy, bento::Pod)]
+pub struct SrsRecord<C: PastaCurve> {
+    pub schema: u64,
+    pub base_modulus: [u64; 4],
+    pub scalar_modulus: [u64; 4],
+    pub root: PastaField<C::Scalar>,
+    pub coefficient: [PreparedAffinePoint<C>; SRS_SIZE],
+    pub lagrange: [PreparedAffinePoint<C>; SRS_SIZE],
+}
+
+impl<C: PastaCurve> SrsRecord<C> {
+    const SCHEMA: u64 = 1;
+
+    fn expected_domain() -> Domain<C::Scalar> {
+        Domain::for_size(SRS_SIZE).unwrap()
+    }
+
+    /// Creates matching metadata with placeholder bases for the generator.
+    pub fn empty() -> Self {
+        Self {
+            schema: Self::SCHEMA,
+            base_modulus: C::Base::MODULUS,
+            scalar_modulus: C::Scalar::MODULUS,
+            root: Self::expected_domain().root(),
+            coefficient: [PreparedAffinePoint::from_affine(&AffinePoint::GENERATOR); SRS_SIZE],
+            lagrange: [PreparedAffinePoint::from_affine(&AffinePoint::GENERATOR); SRS_SIZE],
+        }
+    }
+
+    /// Returns the domain, panicking on incompatible curve or domain metadata.
+    ///
+    /// Point contents and basis order still require validation by the consumer.
+    pub fn domain(&self) -> Domain<C::Scalar> {
+        let domain = Self::expected_domain();
+        assert!(
+            self.schema == Self::SCHEMA
+                && self.base_modulus == C::Base::MODULUS
+                && self.scalar_modulus == C::Scalar::MODULUS
+                && self.root == domain.root(),
+            "embedded SRS metadata must match the curve and domain"
+        );
+        domain
+    }
+}

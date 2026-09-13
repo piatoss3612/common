@@ -78,6 +78,9 @@ representations, caller-owned preparation buffers, and table validation, and the
 
 Additional traits and utilities needed downstream for Tachyon remain planned.
 
+The [workspace guide](docs/WORKSPACES.md) explains how callers can own reusable
+arithmetic buffers and compose operations on a selected worker pool.
+
 ## Testing
 
 See the [testing guide](docs/TESTING.md) for test roles, fixture organization,

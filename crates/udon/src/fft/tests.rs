@@ -10,6 +10,7 @@ use std::{
 
 mod composition;
 mod contracts;
+mod group;
 mod operations;
 mod pipelines;
 

@@ -5,8 +5,17 @@
 //! caller-provided arithmetic and cloning depend on those implementations.
 //! Callers supply roots and inverse lengths. The optimized Pasta API is
 //! [`super::Plan`].
+//!
+//! [`PastaField`] values transform over their own field. [`ProjectivePoint`]
+//! values transform over their curve's scalar field, supporting coefficient
+//! and Lagrange basis conversion in artifact generators. Group arithmetic is
+//! variable-time and needs no allocation; callers can batch-normalize outputs
+//! with [`crate::curve::batch_normalize`].
 
-use crate::field::{PastaField, PrimeModulus};
+use crate::{
+    curve::{PastaCurve, ProjectivePoint},
+    field::{PastaField, PrimeModulus},
+};
 
 /// The scalar domain containing a transform's roots of unity.
 ///
@@ -54,6 +63,18 @@ impl<M: PrimeModulus> Twiddle for PastaField<M> {
 
 impl<M: PrimeModulus> Butterfly<Self> for PastaField<M> {
     fn scaled(&self, twiddle: &Self) -> Self {
+        self.mul(twiddle)
+    }
+    fn add(&self, rhs: &Self) -> Self {
+        self.add(rhs)
+    }
+    fn negated(&self) -> Self {
+        self.neg()
+    }
+}
+
+impl<C: PastaCurve> Butterfly<PastaField<C::Scalar>> for ProjectivePoint<C> {
+    fn scaled(&self, twiddle: &PastaField<C::Scalar>) -> Self {
         self.mul(twiddle)
     }
     fn add(&self, rhs: &Self) -> Self {

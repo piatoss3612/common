@@ -1,7 +1,7 @@
 //! Shared inversion helpers and batch normalization.
 
 use super::{CurveError, PastaCurve, Point, ProjectivePoint, check_length, check_scratch};
-use crate::field::{PastaField, PrimeModulus};
+use crate::field::{InversionLanes, PastaField, PrimeModulus};
 
 /// Inverts nonzero values in place, using at least `values.len()` prefix elements.
 ///
@@ -18,28 +18,26 @@ pub(super) fn invert_nonzero<M: PrimeModulus>(
         values[0] = values[0].invert().expect("nonzero denominators");
         return;
     }
-    // Two product lanes shorten multiplication dependencies while sharing one
-    // inversion of their combined product.
     // Seed each lane with its first value. The reverse pass leaves those two
     // inverses directly, avoiding multiplication by one and unused updates.
     // Including the lane merge, n = values.len() needs 3*(n-1) multiplications
     // outside the inversion.
-    let mut products = [values[0], values[1]];
-    for (i, value) in values.iter().enumerate().skip(2) {
-        prefix[i] = products[i & 1];
-        products[i & 1] = products[i & 1].mul(value);
+    let prefix = &mut prefix[..values.len()];
+    let mut products = InversionLanes([values[0], values[1]]);
+    for (i, (value, prefix)) in values.iter().zip(prefix.iter_mut()).enumerate().skip(2) {
+        *prefix = products.push(i, value);
     }
-    let inverse = products[0]
-        .mul(&products[1])
-        .invert()
-        .expect("nonzero denominators");
-    let mut inverses = [inverse.mul(&products[1]), inverse.mul(&products[0])];
-    for (i, value) in values.iter_mut().enumerate().skip(2).rev() {
-        let result = inverses[i & 1].mul(&prefix[i]);
-        inverses[i & 1] = inverses[i & 1].mul(value);
-        *value = result;
+    let mut inverses = products.invert();
+    for (i, (value, prefix)) in values
+        .iter_mut()
+        .zip(prefix.iter())
+        .enumerate()
+        .skip(2)
+        .rev()
+    {
+        *value = inverses.pop(i, value, prefix);
     }
-    values[..2].copy_from_slice(&inverses);
+    values[..2].copy_from_slice(&inverses.0);
 }
 
 /// Normalizes points in order, preserving identity positions.
@@ -86,17 +84,14 @@ pub(super) fn normalize<C: PastaCurve>(
     scratch: &mut [PastaField<C::Base>],
     mut write: impl FnMut(usize, Point<C>),
 ) {
-    // Separate even and odd prefix products shorten the multiplication
-    // dependency chain. scratch[i] is the product of earlier nonzero z values
-    // in i's lane. Skipping identities keeps both products invertible.
-    let mut products = [PastaField::ONE; 2];
+    // Skipping identities keeps both products invertible; their scratch slots
+    // need no prefix because the reverse pass also skips them.
+    let mut products = InversionLanes([PastaField::ONE; 2]);
     let mut any_nonidentity = false;
-    for (index, point) in points.iter().enumerate() {
-        let lane = index & 1;
-        scratch[index] = products[lane];
+    for (index, (point, prefix)) in points.iter().zip(scratch.iter_mut()).enumerate() {
         if !point.is_identity() {
             any_nonidentity = true;
-            products[lane] = products[lane].mul(&point.z);
+            *prefix = products.push(index, &point.z);
         }
     }
     if !any_nonidentity {
@@ -105,26 +100,13 @@ pub(super) fn normalize<C: PastaCurve>(
         }
         return;
     }
-    // For lane products a and b, (a*b)^-1 gives a^-1 after multiplying by b,
-    // and b^-1 after multiplying by a, sharing one field inversion.
-    let combined_inverse = products[0]
-        .mul(&products[1])
-        .invert()
-        .expect("a product of nonzero field elements is nonzero");
-    let mut inverses = [
-        combined_inverse.mul(&products[1]),
-        combined_inverse.mul(&products[0]),
-    ];
-    for (index, point) in points.iter().enumerate().rev() {
+    let mut inverses = products.invert();
+    for (index, (point, prefix)) in points.iter().zip(scratch.iter()).enumerate().rev() {
         if point.is_identity() {
             write(index, Point::IDENTITY);
             continue;
         }
-        let lane = index & 1;
-        // The lane inverse still includes this z; its prefix cancels every
-        // earlier factor. Multiplying by z then removes it for the next step.
-        let inverse = inverses[lane].mul(&scratch[index]);
-        inverses[lane] = inverses[lane].mul(&point.z);
+        let inverse = inverses.pop(index, &point.z, prefix);
         write(index, point.normalize_with_inverse(&inverse).to_point());
     }
 }

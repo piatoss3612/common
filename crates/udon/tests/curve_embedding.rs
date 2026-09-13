@@ -13,6 +13,14 @@ fn generated_curve_tables_embed_in_a_downstream_consumer() {
         for (damage, diagnostic) in [
             ("", None),
             (
+                "srs-root",
+                Some("embedded SRS metadata must match the curve and domain"),
+            ),
+            (
+                "srs-order",
+                Some("embedded SRS must match natural Lagrange order"),
+            ),
+            (
                 "coordinate",
                 Some("embedded table must match its base: InvalidTable"),
             ),

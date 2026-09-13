@@ -17,6 +17,7 @@
 use core::{fmt, marker::PhantomData};
 
 mod algorithms;
+mod batch;
 mod encoding;
 pub(crate) mod fft;
 mod inversion;
@@ -28,6 +29,8 @@ mod sqrt;
 mod uint;
 pub(crate) mod word;
 
+pub(crate) use batch::InversionLanes;
+pub use batch::{BatchInversionError, batch_invert, batch_invert_groups};
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub use products::ProductSum;
 pub use uint::CanonicalUint;

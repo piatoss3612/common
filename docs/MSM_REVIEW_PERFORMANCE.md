@@ -1,23 +1,23 @@
 # MSM review remediation: September 13, 2026
 
-This report covers MSM storage, preparation, scheduling, and measurements.
+This report covers MSM storage, preparation, scheduling, and measurements,
+including the original remediation and subsequent policy follow-ups.
 The runtime remains allocation-free and retains caller-owned initialized typed
 scratch and scoped execution. The unpublished
 MSM API changes deliberately; see [migration](#migration).
 
 The results support smaller affine pair staging, resource-aware planning, and
-several workload-specific choices. They do **not** establish that Udon is the
-fastest Pasta implementation. Historical arithmetic measurements from September
-12 are preserved [separately](MSM_ARITHMETIC_PERFORMANCE.md);
+several workload-specific choices. Historical arithmetic measurements from
+September 12 are preserved [separately](MSM_ARITHMETIC_PERFORMANCE.md);
 they describe `70c00ed`, not this rewrite.
 
 ## Method and provenance
 
 Measurements used an Apple M4 Max, `aarch64-apple-darwin`, Rust 1.91.0, and LLVM
-21.1.2. Udon started at `70c00ed`; the candidate was a working-tree change.
-A temporary development harness used an isolated Cargo package. The harness
-and its raw result artifacts are no longer retained in this repository; the
-tables below preserve the summarized measurements.
+21.1.2. The original remediation started at `70c00ed`; the candidate was a
+working-tree change. A temporary development harness used an isolated Cargo
+package. The harness and its raw result artifacts are no longer retained in
+this repository; the tables below preserve the summarized measurements.
 
 Both curves use deterministic pseudorandom 254-bit coefficients and bases with
 separately generated known generator multiples. These coefficients exercise
@@ -37,9 +37,23 @@ names that lifecycle. Builds and tests were kept separate from timing runs.
 Unchanged controls moved by several percent, occasionally around 10%; small
 rankings are not portable crossover guarantees.
 
+The later reducer, parallel-width, and digit-extraction results below used
+working-tree candidates based on `57b76e7` on the same host and toolchain.
+Those tables report the median of three session medians. Reducer sessions used
+seven samples of at least 30 ms, rotating candidate order between sessions and
+including point and length resets. Width and extraction sessions used seven
+samples of at least 10 ms, rotating policy order between samples and sessions.
+They executed indexed MSMs over cached `PreparedAffinePoint` bases, cycling
+eight scalar rows with preallocated scratch inside persistent Rayon pools of
+1, 4, or 16 workers. Scalar preparation, recoding when applicable, and execution
+were timed; base preparation, binding, allocation, pool entry, and independent
+integer-inner-product/binary-ladder checks were outside timing. These follow-ups
+are separate from the original measurements, not fresh timings of every current
+default. Their coverage limits are stated alongside each policy.
+
 ## Full-width MSM measurements
 
-Times are microseconds for Udon's complete MSM execution.
+Times are microseconds for the original remediation's complete MSM execution.
 
 | Terms | Workers | Pallas | Vesta |
 | ---: | ---: | ---: | ---: |
@@ -63,25 +77,67 @@ window. Central curve-specific GLV bounds establish that the final carry is
 zero. The writer overwrites all digit bytes and the reader visits contiguous
 rows once per intersecting chunk. Wider supported windows use two-byte digits.
 
-The affine reducer retains denominator and inversion prefix only. Pair `j`
-reads positions `2j` and `2j+1` before writing at most position `j`; cancellation
-only moves the destination earlier. The second pass runs even when every pair
-cancels. On this 64-bit target, pair workspace falls from 200 to 64 bytes, a
-68% reduction. This is a pair-workspace claim, not a whole-MSM memory reduction.
+### Affine reduction
 
-The retained original reducer, replacement, and fused-expression candidate run
-in the same native test binary. At 128 points with occupancy 17, Pallas medians
-were 10.576, 10.621, and 10.710 us; the repeated original was 10.579 us. At 8,192
-points with occupancy 17, Vesta medians were 536.7, 540.3, and 542.0 us, with
-532.7 us for the repeated original. The two-pass reducer is retained for its
-storage reduction without a timing improvement claim. Fused expressions did
-not win consistently and are confined to the test experiment. Existing tiny
-inversion and two-lane endpoint optimizations were already present in `70c00ed`.
+Production [`reduce`](../crates/udon/src/curve/msm/buckets.rs) uses fused inverse
+recovery: it retains denominators and suffix products in two independent lanes,
+shares one inversion across the level, and recovers each inverse while adding
+and compacting its point pair. It first tries chord denominators for every pair.
+A zero product detects doubling or cancellation and retries the level through
+the complete two-pass `reduce_level::<C, false>` before changing any points or
+lengths. That fallback uses denominator and inversion-prefix storage; its
+compaction pass runs even when every pair cancels, preserving odd survivors and
+updating lengths. In either path, pair `j` reads positions `2j` and `2j+1` before
+writing at most position `j`. Pair workspace remains two field elements: 64
+bytes on this target versus the original 200 bytes, a 68% reduction. This is a
+pair-workspace claim, not a whole-MSM memory reduction.
+
+The original native comparison measured the six-field reducer, the then-current
+two-pass replacement, and a `mul_sub` expression candidate in one binary. At
+128 points with occupancy 17, Pallas medians were 10.576, 10.621, and 10.710 us;
+the repeated original was 10.579 us. At 8,192 points with occupancy 17, Vesta
+medians were 536.7, 540.3, and 542.0 us, with 532.7 us for the repeated original.
+Those results supported the two-field storage reduction without a timing claim.
+Here `mul_sub` means combining multiplication and subtraction for the output
+y-coordinate; it does not mean fusing inverse recovery. That expression did not
+win consistently and remains a test-only control through `reduce_with`.
+
+The later reducer comparison held the two-field workspace fixed and measured
+prefix inversion, complete fused recovery, and fused recovery with the chord
+attempt and complete fallback now used in production. At occupancy 17, the
+Pallas/Vesta pairs were:
+
+| Points | Prefix (us) | Complete fused (us) | Chord attempt with fallback (us) |
+| ---: | ---: | ---: | ---: |
+| 128 | 10.813 / 10.810 | 10.694 / 10.699 | 10.322 / 10.357 |
+| 1,024 | 69.403 / 69.133 | 68.255 / 67.970 | 65.936 / 65.658 |
+| 8,192 | 550.489 / 578.325 | 536.986 / 533.446 | 507.259 / 520.251 |
+
+These ordinary-pair measurements support the production recovery schedule; they
+do not measure the cost of repeatedly taking its exception fallback. The
+six-field original and `mul_sub` variant remain native test controls; the
+two-pass complete reducer remains production fallback code.
+
+### Width selection
 
 Full-width complete chunks below 128 terms retain the joint ladder. Larger
-chunks select widths 6 below 192 terms, 7 below 512, 8 below 4,096, 10 below
-32,768, and 11 thereafter. These are replaceable internal defaults. The serial
-width sweep measured the following Pallas/Vesta pairs:
+chunks use the following defaults in
+[`Geometry::for_len`](../crates/udon/src/curve/msm/recode.rs):
+
+| Effective chunk terms | Task budget 1–3 | Task budget at least 4 |
+| --- | ---: | ---: |
+| 128–191 | 6 | 6 |
+| 192–511 | 7 | 7 |
+| 512–4,095 | 8 | 8 |
+| 4,096–32,767 | 10 | 11 |
+| At least 32,768 | 11 | 11 |
+
+Explicit widths and forced joint tables override this rule; scalar shape can
+select short arithmetic. The selected width follows the effective chunk size,
+including retained scalar input, and the task budget supplied to that geometry
+decision. A budget is a concurrency allowance, not a guarantee of active workers.
+These are replaceable internal defaults. The original serial width sweep
+measured the following Pallas/Vesta pairs:
 
 | Terms | Chosen width | Chosen time (us) | Width-eight control (us) |
 | --- | ---: | ---: | ---: |
@@ -93,10 +149,31 @@ width sweep measured the following Pallas/Vesta pairs:
 | 32,768 | 11 | 79,604 / 80,609 | 101,179 / 102,462 |
 
 At 2,048 terms width ten was only about 2% faster; width eight retains fewer
-bytes. At 8,192 and 16,384, width eleven's small gain over ten did not justify
-its bucket floor. Widths 4 through 12 and all three accumulation backends remain
-forceable for application-specific measurements. The selected width follows
-the effective chunk size, including retained scalar input.
+bytes. In that serial sweep, width eleven's small gain at 8,192 and 16,384 did
+not justify its bucket floor. The budget-dependent rule now uses eleven
+throughout 4,096–32,767 terms when the task budget is at least four.
+
+The later parallel-width sweep, using fused recovery and packed digit recoding,
+measured the following Pallas/Vesta pairs at 4,096 terms:
+
+| Workers | Width ten (us) | Width eleven (us) |
+| ---: | ---: | ---: |
+| 1 | 11,085 / 11,071 | 11,631 / 11,653 |
+| 4 | 3,542 / 3,541 | 3,091 / 3,084 |
+| 16 | 1,560 / 1,560 | 1,269 / 1,260 |
+
+Width eleven uses twelve window tasks instead of thirteen, at a cost of 1,024
+buckets per workspace instead of 512. The scheduling rationale is that twelve
+tasks divide evenly across four workers, while fewer windows reduce input
+passes and can reduce scheduling overhead at larger budgets. These benefits can
+outweigh the larger bucket floor; the sweep does not isolate their individual
+contributions. The follow-up sampled budgets 1, 4, and 16 and lengths 4,096 and
+32,768, without a new sweep at 8,192 or 16,384. The intervening range and other
+budgets are policy extrapolations, not individually measured crossovers. Widths
+4 through 12 and all three accumulation backends remain forceable for
+application-specific measurements.
+
+### Accumulation and storage
 
 Projective buckets win for tiny effective passes: unlike an affine tree, they
 retain bucket sums across passes without repeatedly inverting sparse levels.
@@ -159,6 +236,47 @@ recheck measured 3.83 / 6.56 / 17.63 ms serially and 3.59 / 4.68 / 6.89 ms with
 three workers. These are separate runs; the large changes exceed the observed
 control drift. At 128 terms the dense 128-bit short kernel still wins serially,
 so the default retains it. Forced Booth can improve parallel execution there.
+
+### Digit extraction and parallel recoding
+
+For a complete nonstreaming chunk without compatible cached digits,
+[`prefer_direct`](../crates/udon/src/curve/msm/recode.rs) extracts Booth digits
+inside each window when the chunk has at least 512 and fewer than 4,096 terms,
+its geometry is `Booth(8)`, and its task budget is at least 16. A compatible
+retained digit cache takes precedence. Direct extraction avoids the separate
+recoding joins and digit writes, but rereads the larger scalar records in the
+window kernels. Sizing still reserves digit space, so this policy makes no
+scratch-reduction claim. Streaming continues to use packed digits.
+
+The later width-eight extraction comparison measured complete execution in
+separate packed-recoding and direct-extraction builds, both using fused inverse
+recovery. Packed recoding used the parallel writer where eligible:
+
+| Terms | Workers | Packed (Pallas / Vesta us) | Direct (Pallas / Vesta us) |
+| ---: | ---: | ---: | ---: |
+| 1,024 | 4 | 930 / 925 | 940 / 936 |
+| 1,024 | 16 | 653 / 655 | 609 / 610 |
+| 4,096 | 16 | 1,573 / 1,537 | 1,551 / 1,602 |
+
+The 1,024-term result supports direct extraction with sixteen workers; four
+workers favored packed recoding. At 4,096, the ranking differed between curves
+and direct Pallas session medians ranged from 1,550 to 1,727 us, so the default
+keeps packed digits there. The 512-term lower bound was not sampled, nor were
+budgets between 4 and 16 or above 16. Those bounds are internal defaults inferred
+from the sampled workloads, not measured crossover points.
+
+When execution needs to write digits, `write_parallel` uses the caller's
+executor for at least 1,024 records with a nonserial budget and nonzero digit
+stride. It splits at 256-record packed-chunk boundaries, preserving the serial
+layout and completing writes before window execution. Smaller inputs avoid
+another round of executor joins; short geometry writes no digits. This writer
+was enabled in the packed follow-up measurements, but they did not isolate
+serial versus parallel recoding or sweep the 1,024-record boundary. That cutoff
+is an unmeasured scheduling default intended to amortize joins, not an
+established speedup threshold. Compatible cached digits and direct extraction
+bypass this writer during complete-chunk execution.
+
+### Retained preparation and grouped scheduling
 
 `Selection` retains checked index mapping independently of a scalar borrow.
 Rebinding a field scalar row checks only its length; canonical integer binding
@@ -255,7 +373,7 @@ binding continues to preserve the supplied terms without implicit sorting.
 The isolated width-eight Pallas run at 1,024 terms measured canonicalization at
 5.07 us and GLV rounding from canonical values at 10.86 us. Counting window zero
 took 1.06 us, scatter 12.03 us, weighted collapse 31.44 us, and final recombination
-10.95 us. All sixteen production window kernels together took 3,531 us. These
+10.95 us. All sixteen window kernels in that original run took 3,531 us. These
 are separate experiments, not additive subdivisions of one measured execution.
 
 That first window scanned 2,048 half-term digits, deposited 2,039 points, and
@@ -270,10 +388,11 @@ outside timed loops.
 | Review concern | Disposition |
 | --- | --- |
 | Dead carry and duplicated geometry | Central GLV bounds and one geometry for sizing, cache, recoding, and execution; sixteen width-eight windows |
-| Excess affine staging | Two-pass reducer; original and fused controls retained only in ignored tests |
+| Excess affine staging | Two-field fused inverse recovery in production, complete two-pass exception fallback; six-field original and `mul_sub` controls in tests |
 | Repeated scalar classification | One conversion/preparation per chunk; retained shape; signed/unsigned/canonical bindings with checked bounds |
 | Full-input scratch multiplied by concurrency | Explicit ceiling, bounded complete chunks, optional retained window buckets, checked byte counts |
-| Mandatory width-eight affine path | Forced widths 4–12 and affine/projective/hybrid backends; measured defaults |
+| Mandatory width-eight affine path | Forced widths 4–12 and affine/projective/hybrid backends; budget-dependent widths with sampled measurements and extrapolation limits |
+| Digit preparation overhead | Direct extraction for medium width-eight chunks with large budgets; parallel packed recoding; measured cases and unmeasured boundaries distinguished above |
 | Coupled preparation lifetimes | Rebindable selection, reusable records and optional recoding, compact basis binding, reusable plans |
 | Heterogeneous scheduling and serial tail | Weighted ranges, per-worker maxima, independent folds, retained offsets |
 | Missing optimization invariants | Direct BigUint reducer/collapse oracle, production layouts and bounds, forced modes, planner partitions, cache and input contracts |
@@ -292,7 +411,8 @@ Reusable plans and preparation recover after an injected scoped executor panic.
 The real no-allocator embedding and cross-target consumers exercise bounded
 execution and retained table/selection reuse.
 
-Validation passed with the pinned toolchain:
+The original remediation passed the following validation with the pinned
+toolchain; these counts do not describe a rerun of the later policy changes:
 
 - The release workspace suite with all features, including doctests, and Udon's
   default-feature release suite.

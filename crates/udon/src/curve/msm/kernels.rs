@@ -157,7 +157,10 @@ fn execute<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
     match task.geometry {
         Geometry::Short(bits) => short(view, records, bits, work),
         Geometry::Joint => joint(view, records, digits, task.pass, work),
-        Geometry::Booth(_) => window(view, records.len(), digits, task, work),
+        Geometry::Booth(_) if digits.is_empty() => {
+            window::<C, B, INDEXED, true>(view, records, digits, task, work)
+        }
+        Geometry::Booth(_) => window::<C, B, INDEXED, false>(view, records, digits, task, work),
     }
 }
 fn short<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
@@ -267,20 +270,21 @@ pub(super) fn collapse_projective<C: PastaCurve>(
     }
     sum
 }
-fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
+fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
     view: View<'_, B, INDEXED>,
-    terms: usize,
+    records: &[ScalarStorage<C>],
     digits: &[u8],
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
+    let terms = records.len();
     let buckets = task.geometry.buckets();
     if task.accumulation == Accumulation::Projective {
         let sums = &mut work.projective[..buckets];
         sums.fill(ProjectivePoint::IDENTITY);
-        recode::rows(
+        recode::window_rows::<C, DIRECT>(
+            records,
             digits,
-            terms,
             0..terms,
             task.geometry,
             task.window,
@@ -315,9 +319,9 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
                     survivors[i].to_projective()
                 };
             }
-            recode::rows(
+            recode::window_rows::<C, DIRECT>(
+                records,
                 digits,
-                terms,
                 first..end,
                 task.geometry,
                 task.window,
@@ -335,9 +339,9 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
             return collapse_projective(sums);
         }
         cursors.copy_from_slice(lens);
-        recode::rows(
+        recode::window_rows::<C, DIRECT>(
+            records,
             digits,
-            terms,
             first..end,
             task.geometry,
             task.window,
@@ -362,9 +366,9 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
             lens[i] = cursors[i];
             cursors[i] = cursor;
         }
-        recode::rows(
+        recode::window_rows::<C, DIRECT>(
+            records,
             digits,
-            terms,
             first..end,
             task.geometry,
             task.window,

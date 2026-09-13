@@ -1,18 +1,24 @@
 //! Variable-time multiscalar multiplication with caller-owned storage.
 //!
 //! [`Input::execute`] is the convenience entry point. [`Selection`] retains
-//! validated base mappings across scalar rows; [`PreparedScalars`] retains
-//! classification and GLV data across base sets and execution policies.
+//! validated base mappings across scalar rows. For prepared MSM, cache each base
+//! with [`PreparedAffinePoint::from_affine`] and select [`Bases::Prepared`].
+//! [`PreparedScalars`] retains classification and GLV data for one scalar row
+//! across base sets and execution policies.
 //! [`Bases::Compact`] consumes ordinary embedded or prepared compact tables.
-//! [`ExecutionPlan`] retains scheduling metadata for repeated execution.
+//! [`ExecutionPlan`] retains scheduling metadata for repeated execution of the
+//! same immutable inputs, including their scalar rows.
 //!
 //! All runtime operations are allocation-free and variable-time, with no
 //! constant-time guarantee for secret bases, scalars, or indices. Resource
 //! limits are explicit; see [`ExecutionOptions::with_memory_limit`].
 //!
+//! Reuse cached bases, validated indices, and scratch across two signed scalar
+//! rows. Each row below sums to three copies of the generator:
+//!
 //! ```
 //! use zakura_udon::{
-//!     curve::{AffinePoint, Pallas, ProjectivePoint, msm::*},
+//!     curve::{AffinePoint, Pallas, PreparedAffinePoint, ProjectivePoint, msm::*},
 //!     exec::SerialExecutor,
 //!     field::PastaField,
 //! };
@@ -22,8 +28,9 @@
 //!     Err(_) => panic!("unsupported size"),
 //! };
 //! let bases = [AffinePoint::<Pallas>::GENERATOR; 2];
+//! let prepared = bases.map(|base| PreparedAffinePoint::from_affine(&base));
 //! let indices = [0, 1, 0];
-//! let selection = Selection::indexed(Bases::Affine(&bases), &indices)?;
+//! let selection = Selection::indexed(Bases::Prepared(&prepared), &indices)?;
 //! let mut records = [ScalarStorage::ZERO; R.scalars()];
 //! let mut digits = [0; R.digits()];
 //! let mut affine = [AffinePoint::GENERATOR; R.affine()];
@@ -73,6 +80,10 @@ pub enum Bases<'a, C: PastaCurve> {
     /// Nonidentity affine points.
     Affine(&'a [AffinePoint<C>]),
     /// Affine points with cached endomorphism coordinates.
+    ///
+    /// Prepare entries with [`PreparedAffinePoint::from_affine`], or embed
+    /// POD entries that satisfy [`PreparedAffinePoint`]'s mathematical invariants.
+    /// A [`Selection`] reuses them across scalar rows.
     Prepared(&'a [PreparedAffinePoint<C>]),
     /// Points that may contain identities.
     Points(&'a [Point<C>]),
@@ -99,6 +110,9 @@ impl<C: PastaCurve> Bases<'_, C> {
 }
 
 /// Validated base mapping with a lifetime independent of scalar rows.
+///
+/// Use [`Bases::Prepared`] for a prepared MSM over cached bases. The mapping
+/// and base preparation remain reusable after each scalar row is dropped.
 ///
 /// Cloning copies references. Immutable base and index borrows preserve index
 /// validation across scalar rows. Every binding requires exactly [`Self::len`]

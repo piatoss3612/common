@@ -529,11 +529,15 @@ fn execute_job<C: PastaCurve, X: Executor>(
         } else {
             None
         };
-        let digits = if let Some(cached) = cached {
+        let digits: &[u8] = if let Some(cached) = cached {
             cached.digits
+        } else if recode::prefer_direct(n, geometry, options.task_budget) {
+            // An empty Booth slice tells the window kernel to extract directly.
+            // Sizing still reserves digit space, so this needs no new layout.
+            &[]
         } else {
             let digits = &mut scratch.digits[..geometry.storage_len(n).unwrap()];
-            recode::write(records, geometry, digits);
+            recode::write_parallel(records, geometry, digits, options.task_budget, executor);
             digits
         };
         let windows = geometry.windows();
@@ -600,7 +604,7 @@ fn execute_stream<C: PastaCurve, X: Executor>(
             }
         };
         let digits = &mut scratch.digits[..job.geometry.storage_len(n).unwrap()];
-        recode::write(records, job.geometry, digits);
+        recode::write_parallel(records, job.geometry, digits, options.task_budget, executor);
         for (window, buckets) in buckets.chunks_exact_mut(job.geometry.buckets()).enumerate() {
             kernels::stream(
                 input,
@@ -708,6 +712,10 @@ fn visit<C: PastaCurve, X: Executor>(
 }
 
 /// Borrowed reusable plan over immutable inputs and caller-owned metadata.
+///
+/// The plan borrows both bases and scalar rows through its inputs. To execute
+/// changing scalar rows over retained bases, rebind a [`super::Selection`] and
+/// use [`super::Input::execute`] or [`super::execute_batch`].
 ///
 /// Different output buffers and previously used scratch may be supplied on every
 /// execution, including concurrent calls with separate buffers. The

@@ -314,12 +314,13 @@ cargo test --release --locked -p zakura-udon --lib curve::msm::experiments::phas
 ```
 
 Run timing commands sequentially without concurrent builds or tests.
-The ignored native controls retain the six-field reducer as an ablation and
-compare two-field and fused expressions. Level and window histograms are
-collected outside timing. The separate phase test measures canonicalization,
-GLV rounding, dense first-pass counting and scatter, individual reduction levels
-(including buffer resets), complete window kernels, weighted collapse, and final
-recombination. Phase storage figures describe the isolated
+The ignored native controls compare the six-field reducer, production fused
+inverse recovery, and the two-pass reducer with a `mul_sub` y-coordinate
+expression. The `mul_sub` control does not fuse inverse recovery. Level and
+window histograms are collected outside timing. The separate phase test measures
+canonicalization, GLV rounding, dense first-pass counting and scatter, individual
+reduction levels (including buffer resets), complete window kernels, weighted
+collapse, and final recombination. Phase storage figures describe the isolated
 workspace, not an additive peak. See the [MSM report](MSM_REVIEW_PERFORMANCE.md)
 for measured choices and limitations.
 

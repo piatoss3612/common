@@ -119,7 +119,7 @@ fn differentials<C: PastaCurve>() {
         .map(|i| PastaField::from_u64((i * 137) as u64))
         .collect();
     for n in [
-        0, 1, 7, 8, 15, 31, 32, 33, 127, 128, 129, 255, 256, 257, 513, 1030,
+        0, 1, 7, 8, 15, 16, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 513, 1030,
     ] {
         for scalars in [&full[..n], &short[..n]] {
             let mut storage =
@@ -736,6 +736,17 @@ fn affine_reducer_and_weighted_collapse_match_biguint() {
             let mut control = points.clone();
             let mut control_lens = lens.clone();
             let pairs = points.len() / 2;
+            let mut fused = points.clone();
+            let mut fused_lens = lens.clone();
+            let mut fields = vec![PastaField::ONE; pairs * 2 + 3];
+            while fused_lens.iter().any(|&n| n > 1) {
+                buckets::reduce_fused::<C, false>(
+                    &mut fused,
+                    &starts,
+                    &mut fused_lens,
+                    &mut fields[..pairs * 2],
+                );
+            }
             buckets::reduce_original(
                 &mut control,
                 &starts,
@@ -750,6 +761,8 @@ fn affine_reducer_and_weighted_collapse_match_biguint() {
                 &mut vec![PastaField::ONE; pairs * 2],
             );
             assert_eq!(lens, control_lens);
+            assert_eq!(lens, fused_lens);
+            assert!(fields[pairs * 2..].iter().all(|x| *x == PastaField::ONE));
             let mut survivors = vec![g; starts.len()];
             let mut weighted = Reference::identity();
             for i in 0..starts.len() {
@@ -758,6 +771,7 @@ fn affine_reducer_and_weighted_collapse_match_biguint() {
                 } else {
                     survivors[i] = points[starts[i]];
                     assert_eq!(points[starts[i]], control[starts[i]]);
+                    assert_eq!(points[starts[i]], fused[starts[i]]);
                     points[starts[i]].to_point()
                 };
                 expected[i].assert_point(&result);
@@ -1062,8 +1076,10 @@ fn compact_tables_and_selection_rebind_across_scalar_rows() {
             .map(PreparedAffinePoint::from_affine)
             .collect();
         let cached_tables = EisensteinTableBatch::bind(&cached_entries).unwrap();
+        let cached_bases: Vec<_> = bases.iter().map(PreparedAffinePoint::from_affine).collect();
         let indices: Vec<_> = (0..259).map(|i| (i % 7) as u32).collect();
         for basis in [
+            Bases::Prepared(&cached_bases),
             Bases::Compact(tables),
             Bases::CompactPrepared(cached_tables),
         ] {
@@ -1098,7 +1114,7 @@ fn production_booth_bounds_and_partial_row_visits() {
     fn check<C: PastaCurve>() {
         use crate::curve::parameters::GlvParameters;
         use num_bigint::BigInt;
-        let mut records = vec![ScalarStorage::<C>::ZERO; 769];
+        let mut records = vec![ScalarStorage::<C>::ZERO; 2049];
         for (i, record) in records.iter_mut().enumerate() {
             for (half, bound) in GlvParameters::<C>::BOUNDS.into_iter().enumerate() {
                 let magnitude = match i % 6 {
@@ -1119,46 +1135,64 @@ fn production_booth_bounds_and_partial_row_visits() {
         for width in 4..=12 {
             let geometry = recode::Geometry::Booth(width);
             let mut digits = vec![73; geometry.storage_len(records.len()).unwrap() + 1];
-            recode::write(
+            recode::write_parallel(
                 &records,
                 geometry,
                 &mut digits[..geometry.storage_len(records.len()).unwrap()],
+                TaskBudget::new(7).unwrap(),
+                &Pool,
             );
             assert_eq!(*digits.last().unwrap(), 73);
-            for range in [0..769, 1..255, 255..257, 256..513, 511..769, 769..769] {
-                let mut values = vec![[BigInt::from(0), BigInt::from(0)]; records.len()];
-                let mut visits = vec![0; records.len()];
-                for window in (0..geometry.windows()).rev() {
-                    recode::rows(
-                        &digits,
-                        records.len(),
-                        range.clone(),
-                        geometry,
-                        window,
-                        |i, a, b| {
+            for range in [0..2049, 1..255, 255..257, 256..513, 511..2049, 2049..2049] {
+                // The midpoint conventions can yield different digit sequences;
+                // reconstruct integers to compare their mathematical meaning.
+                for direct in [false, true] {
+                    let mut values = vec![[BigInt::from(0), BigInt::from(0)]; records.len()];
+                    let mut visits = vec![0; records.len()];
+                    for window in (0..geometry.windows()).rev() {
+                        let visit = |i: usize, a: i16, b: i16| {
                             visits[i] += 1;
                             values[i][0] = (&values[i][0] << width) + a;
                             values[i][1] = (&values[i][1] << width) + b;
-                        },
-                    );
-                }
-                for (i, record) in records.iter().enumerate() {
-                    assert_eq!(
-                        visits[i],
-                        if range.contains(&i) {
-                            geometry.windows()
+                        };
+                        if direct {
+                            recode::window_rows::<C, true>(
+                                &records,
+                                &[],
+                                range.clone(),
+                                geometry,
+                                window,
+                                visit,
+                            );
                         } else {
-                            0
+                            recode::rows(
+                                &digits,
+                                records.len(),
+                                range.clone(),
+                                geometry,
+                                window,
+                                visit,
+                            );
                         }
-                    );
-                    assert_eq!(
-                        values[i],
-                        if range.contains(&i) {
-                            record.halves.map(BigInt::from)
-                        } else {
-                            [BigInt::from(0), BigInt::from(0)]
-                        }
-                    );
+                    }
+                    for (i, record) in records.iter().enumerate() {
+                        assert_eq!(
+                            visits[i],
+                            if range.contains(&i) {
+                                geometry.windows()
+                            } else {
+                                0
+                            }
+                        );
+                        assert_eq!(
+                            values[i],
+                            if range.contains(&i) {
+                                record.halves.map(BigInt::from)
+                            } else {
+                                [BigInt::from(0), BigInt::from(0)]
+                            }
+                        );
+                    }
                 }
             }
         }

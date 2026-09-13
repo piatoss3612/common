@@ -1,11 +1,14 @@
 //! Opaque recoding geometry shared by sizing, cached preparation, and kernels.
 //!
-//! Joint digits retain their actual length. Booth storage uses chunked rows of
-//! up to 256 terms; widths through eight use one byte and wider widths use two.
-//! Every Booth byte is overwritten, including partial final chunks.
+//! Joint digits retain their actual length. Cached Booth digits use chunked rows
+//! of up to 256 terms; widths through eight use one byte and wider widths use
+//! two. Writing a cache overwrites its entire required prefix, including partial
+//! final chunks. [`window_rows`] can instead extract a window from GLV components
+//! without storing digits; its signed midpoint convention differs from the cache.
 
 use super::{CurveError, ExecutionOptions, PastaCurve, ScalarStorage, checked_count};
 use crate::curve::{eisenstein, parameters::GlvParameters, scalar::centered_digit};
+use crate::exec::{Executor, TaskBudget, for_each_chunk_mut};
 
 pub(super) const CHUNK: usize = 256;
 pub(super) const JOINT_STRIDE: usize = eisenstein::MAX_DIGITS + 1;
@@ -26,8 +29,9 @@ impl Geometry {
         } else if n < super::BOOTH_MIN {
             Self::Joint
         } else {
-            // Native comparisons and controls are recorded in
-            // docs/MSM_REVIEW_PERFORMANCE.md. Ties prefer fewer bytes.
+            // Larger windows reduce the number of window tasks but enlarge each
+            // bucket workspace. Serial execution favors smaller buckets, while
+            // larger task budgets can benefit from fewer window tasks.
             Self::Booth(if n < 192 {
                 6
             } else if n < 512 {
@@ -35,7 +39,11 @@ impl Geometry {
             } else if n < 4096 {
                 8
             } else if n < 32768 {
-                10
+                if options.task_budget.get() < 4 {
+                    10
+                } else {
+                    11
+                }
             } else {
                 11
             })
@@ -59,11 +67,11 @@ impl Geometry {
         }
         // Dense bounded rows eventually favor Booth buckets too. Keep sparse
         // rows on the short kernel; their high bit alone does not imply work.
-        if n >= 512 && bits >= 32 && weight > 8 * n {
+        // Dense 128-bit rows share the full-width crossover at 8--32 terms.
+        if (n >= 512 && bits >= 32 && weight > 8 * n)
+            || (n >= 8 && n <= 32 && bits > 120 && weight > 32 * n)
+        {
             Self::for_len(n, options)
-        // Preserve the measured dense 128-bit crossover at 8--32 terms.
-        } else if n >= 8 && n <= 32 && bits > 120 && weight > 32 * n {
-            Self::Joint
         } else {
             Self::Short(bits)
         }
@@ -122,6 +130,91 @@ impl Shape {
 pub(super) struct Cache<'a> {
     pub geometry: Geometry,
     pub digits: &'a [u8],
+}
+
+/// Selects when uncached Booth execution should extract digits in its windows.
+pub(super) fn prefer_direct(terms: usize, geometry: Geometry, budget: TaskBudget) -> bool {
+    // Avoid a separate recoding join for medium rows with many workers. Larger
+    // rows benefit from the compact cache's lower read traffic.
+    (512..4096).contains(&terms) && geometry == Geometry::Booth(8) && budget.get() >= 16
+}
+
+/// Visits both signed GLV digits for each term in `range` at one Booth window.
+///
+/// Requires a Booth width in `4..=12`, `window < geometry.windows()`, and a range
+/// within `records`. Components must satisfy [`GlvParameters::BOUNDS`] so no
+/// extra carry window is needed. With `DIRECT`, ignore `digits` and extract
+/// overlapping Booth digits. Otherwise `digits` must contain the matching
+/// [`write`] output for all records, even when visiting only a subrange.
+#[inline(always)]
+pub(super) fn window_rows<C: PastaCurve, const DIRECT: bool>(
+    records: &[ScalarStorage<C>],
+    digits: &[u8],
+    range: core::ops::Range<usize>,
+    geometry: Geometry,
+    window: usize,
+    mut visit: impl FnMut(usize, i16, i16),
+) {
+    if !DIRECT {
+        return rows(digits, records.len(), range, geometry, window, visit);
+    }
+    let width = geometry.width();
+    let shift = window * width;
+    let radix = 1_i16 << width;
+    for term in range {
+        let digits = records[term].halves.map(|component| {
+            let magnitude = component.unsigned_abs();
+            let value = ((magnitude >> shift) as i16) & (radix - 1);
+            let overlap = if shift == 0 {
+                0
+            } else {
+                ((magnitude >> (shift - 1)) & 1) as i16
+            };
+            // Subtracting radix contributes -1 to the next window; that window's
+            // overlapping bit restores it. Applying the component sign can give
+            // +128 at width eight. Keep i16 digits here: the carry-propagating
+            // cache uses a different midpoint convention to fit signed bytes.
+            let digit = value + overlap - if value >= radix / 2 { radix } else { 0 };
+            if component < 0 { -digit } else { digit }
+        });
+        visit(term, digits[0], digits[1]);
+    }
+}
+
+/// Writes the same digit layout as [`write`] using the caller's task budget.
+///
+/// `digits` must be exactly `geometry.storage_len(records.len())` bytes, so the
+/// final chunk corresponds to the remaining records. Records must contain valid
+/// GLV components. The executor completes all writes before this returns.
+pub(super) fn write_parallel<C: PastaCurve, X: Executor>(
+    records: &[ScalarStorage<C>],
+    geometry: Geometry,
+    digits: &mut [u8],
+    budget: TaskBudget,
+    executor: &X,
+) {
+    // Small rows avoid another round of executor joins. Short geometry stores no
+    // digits, so it must also bypass for_each_chunk_mut's nonzero chunk length.
+    if records.len() < 1024 || budget == TaskBudget::SERIAL || geometry.stride() == 0 {
+        return write(records, geometry, digits);
+    }
+    // Split only at packed-chunk boundaries; splitting inside a Booth chunk
+    // would change the row offsets consumed by rows(). Each callback is serial
+    // and needs no further share of the executor budget.
+    for_each_chunk_mut(
+        digits,
+        CHUNK * geometry.stride(),
+        budget,
+        executor,
+        |chunk, digits, _| {
+            let start = chunk * CHUNK;
+            write(
+                &records[start..records.len().min(start + CHUNK)],
+                geometry,
+                digits,
+            );
+        },
+    );
 }
 
 pub(super) fn write<C: PastaCurve>(

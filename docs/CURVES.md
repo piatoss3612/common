@@ -294,7 +294,14 @@ including tables embedded with Bento. The compact ladder consumes those tables
 directly. Construction checks lengths and index bounds without gathering bases;
 the producer must establish the mathematical invariants documented on each type.
 
-Retain `Selection::indexed(bases, indices)` when several scalar rows use the
+For prepared MSM over a retained base array, cache each nonidentity base with
+`PreparedAffinePoint::from_affine` and borrow the result through
+`Bases::Prepared`. Each entry stores the affine coordinates and one cached
+endomorphism coordinate (96 bytes per base). The cached array can replace the
+original affine array; keeping both uses 160 bytes per base.
+
+Retain `Selection::new(bases)` when every row uses the whole base array, or
+`Selection::indexed(bases, indices)` when several scalar rows use the
 same mapping. `selection.with_scalars(row)` checks only the length, preserving
 index validation independently of the scalar borrow. `with_unsigned(&[u128])`
 and `with_signed(&[i128])` avoid Montgomery conversion; signed inputs include
@@ -359,7 +366,8 @@ the generator, and other entries with zero or identity. Buffers can be reused
 without clearing through `scratch.reborrow()`. Execution overwrites every value
 it uses and leaves tails beyond the required prefixes untouched. The
 [module example](../crates/udon/src/curve/msm/mod.rs)
-executes two signed scalar rows using static arrays and one validated selection.
+executes two signed scalar rows using static arrays, cached bases, and one
+validated selection. Base preparation and scratch survive both scalar borrows.
 
 ### Grouped jobs and other work
 
@@ -379,7 +387,9 @@ accounting may lead it to choose a different layout from `batch_requirements`.
 Its `temporary_bytes()` includes reserved metadata prefixes. `execute` reuses the
 retained schedule with new output buffers or dirty scratch. Ordinary
 `Input::execute` needs no metadata buffer. Selection rebinding and scalar
-preparation remain optional independent capabilities.
+preparation remain optional independent capabilities. A plan borrows its scalar
+rows too; use selection rebinding and `Input::execute` or `execute_batch` when
+those rows change.
 
 Compose fixed-base products or other work with
 [`Executor::join`](../crates/udon/src/exec.rs), splitting the outer

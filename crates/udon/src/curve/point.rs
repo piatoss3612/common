@@ -71,6 +71,11 @@ impl<C: PastaCurve> Point<C> {
         ProjectivePoint::from_point(self)
     }
 
+    /// Applies [`AffinePoint::endomorphism`], preserving identity.
+    pub fn endomorphism(&self) -> Self {
+        Self(self.0.map(|point| point.endomorphism()))
+    }
+
     /// Returns the additive inverse, preserving identity.
     pub fn neg(&self) -> Self {
         Self(self.0.map(|point| point.neg()))
@@ -98,7 +103,8 @@ impl<C: PastaCurve> Point<C> {
     /// Multiplies by a scalar using variable-time doubling and mixed addition.
     ///
     /// Uses [`AffinePoint::mul_projective`] for a nonidentity base, with the
-    /// same scalar requirements. Multiplying identity returns identity.
+    /// same scalar requirements, internal stack storage, and preparation costs.
+    /// Multiplying identity returns identity without preparation.
     pub fn mul_projective(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
         match self.as_affine() {
             Some(point) => point.mul_projective(scalar),

@@ -3,7 +3,8 @@
 
 use arithmetic::{
     curve::{
-        PallasAffine, PallasPoint, PallasProjective, VestaAffine, VestaPoint, VestaProjective,
+        EisensteinTable, Pallas, PallasAffine, PallasPoint, PallasProjective, PreparedAffinePoint,
+        Vesta, VestaAffine, VestaPoint, VestaProjective, glv_decompose,
     },
     field::{Fp, Fq},
 };
@@ -37,6 +38,33 @@ fn main() {
     );
     assert_eq!(PALLAS.mul_projective(&Fq::ONE), PALLAS_PROJECTIVE);
     assert_eq!(VESTA.mul_projective(&Fp::ONE), VESTA_PROJECTIVE);
+
+    assert_eq!(glv_decompose::<Pallas>(&Fq::ONE.neg()), (-1, 0));
+    assert_eq!(glv_decompose::<Vesta>(&Fp::ONE.neg()), (-1, 0));
+    assert_eq!(
+        PALLAS.endomorphism(),
+        PALLAS
+            .mul_projective(&Fq::zeta())
+            .to_point()
+            .as_affine()
+            .copied()
+            .unwrap()
+    );
+    assert_eq!(
+        VESTA.endomorphism(),
+        VESTA
+            .mul_projective(&Fp::zeta())
+            .to_point()
+            .as_affine()
+            .copied()
+            .unwrap()
+    );
+    let mut entries = [PreparedAffinePoint::from_affine(&PALLAS); 8];
+    let mut projective = [PallasProjective::IDENTITY; 8];
+    let mut field = [Fp::ZERO; 8];
+    let table =
+        EisensteinTable::prepare(&PALLAS, &mut entries, &mut projective, &mut field).unwrap();
+    assert_eq!(table.mul(&Fq::ONE.neg()), PALLAS_PROJECTIVE.neg());
 
     #[cfg(feature = "invalid-pallas")]
     let _ = literals::pallas!(Fp::ZERO, Fp::ZERO);

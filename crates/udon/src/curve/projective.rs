@@ -117,6 +117,17 @@ impl<C: PastaCurve> ProjectivePoint<C> {
         }
     }
 
+    /// Applies [`AffinePoint::endomorphism`] in projective coordinates.
+    ///
+    /// Multiplies `x` by the coordinate field's [`PastaField::zeta`] value,
+    /// leaving `y` and `z` unchanged. Preserves identity and projective scaling.
+    pub fn endomorphism(&self) -> Self {
+        Self {
+            x: self.x.mul(&PastaField::zeta()),
+            ..*self
+        }
+    }
+
     /// Returns the additive inverse `(x, -y, z)`.
     pub fn neg(&self) -> Self {
         Self {
@@ -231,9 +242,30 @@ impl<C: PastaCurve> ProjectivePoint<C> {
     /// Multiplies by a scalar using variable-time doubling and addition.
     ///
     /// Processes the full canonical scalar; zero returns identity. The scalar
-    /// must satisfy [`PastaField`]'s reduced-residue invariant. Requires no
-    /// table, allocation, or scratch.
+    /// must satisfy [`PastaField`]'s reduced-residue invariant. Uses bounded
+    /// internal stack storage, with no caller table, scratch, or allocation.
+    ///
+    /// The current implementation uses an inversion-free binary ladder for
+    /// scalars below `2^64`. Larger scalars with a nonidentity base prepare eight
+    /// cached affine entries on the stack, using one field inversion per call,
+    /// then run a GLV/Eisenstein ladder. Identity skips preparation. The strategy
+    /// is selected internally; stack frame sizes depend on the compiler and target.
+    /// Use [`EisensteinTable`](super::EisensteinTable) or
+    /// [`FixedBaseTable`](super::FixedBaseTable) to retain preparation for repeated
+    /// multiplication of the same base.
     pub fn mul(&self, scalar: &PastaField<C::Scalar>) -> Self {
-        super::scalar::multiply(scalar, |point| point.add(self))
+        if self.is_identity() || scalar.is_zero() {
+            return Self::IDENTITY;
+        }
+        // Short scalars use the binary ladder without paying for table setup.
+        if scalar
+            .to_canonical_uint()
+            .highest_set_bit()
+            .is_some_and(|high| high < 64)
+        {
+            super::scalar::multiply(scalar, |point| point.add(self))
+        } else {
+            super::eisenstein::multiply_once(self, scalar)
+        }
     }
 }

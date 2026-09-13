@@ -1,4 +1,4 @@
-//! Ordinary scalar multiplication shared by affine and projective bases.
+//! Binary ladder for short scalars and independent multiplication tests.
 
 use super::{PastaCurve, ProjectivePoint};
 use crate::field::PastaField;

@@ -40,8 +40,8 @@ pub fn batch_normalize<C: PastaCurve>(
     Ok(())
 }
 
-// Callers check lengths before any mutation. A sink lets fixed-base preparation
-// write nonidentity points directly into its affine table without a Point buffer.
+// Callers check lengths before any mutation. A sink lets table preparation
+// write directly into the selected entry representation without a Point buffer.
 pub(super) fn normalize<C: PastaCurve>(
     points: &[ProjectivePoint<C>],
     scratch: &mut [PastaField<C::Base>],

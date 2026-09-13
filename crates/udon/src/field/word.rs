@@ -1,4 +1,4 @@
-//! Limb arithmetic for runtime field kernels and their compile-time bound checks.
+//! Limb arithmetic shared by field kernels, GLV, and compile-time bound checks.
 
 /// Adds two limbs and a carry, returning the low limb and high carry.
 #[inline(always)]
@@ -17,7 +17,7 @@ pub(super) const fn sbb(lhs: u64, rhs: u64, borrow: u64) -> (u64, u64) {
 
 /// Accumulates one limb product plus an accumulator limb and a carry limb.
 #[inline(always)]
-pub(super) const fn mac(accumulator: u64, lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
+pub(crate) const fn mac(accumulator: u64, lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {
     let value = lhs as u128 * rhs as u128 + accumulator as u128 + carry as u128;
     (value as u64, (value >> 64) as u64)
 }
@@ -54,7 +54,7 @@ pub(super) const fn add_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> ([u64; 4], u64)
 /// Subtracts two unsigned 256-bit integers, returning the wrapped difference
 /// and borrow bit.
 #[inline]
-pub(super) const fn subtract_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> ([u64; 4], u64) {
+pub(crate) const fn subtract_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> ([u64; 4], u64) {
     let mut result = [0; 4];
     let mut borrow = 0;
     let mut index = 0;

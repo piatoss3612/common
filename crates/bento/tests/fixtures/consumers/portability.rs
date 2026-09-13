@@ -4,8 +4,9 @@
 
 use bento::const_arithmetic::{U256, U320, m255, u256};
 use udon::curve::{
-    AffinePoint, CurveError, FixedBaseDescription, FixedBaseRequirements, FixedBaseTable, Pallas,
-    PallasAffine, PastaCurve, Point, ProjectivePoint, Vesta, VestaAffine, batch_normalize,
+    AffinePoint, CurveError, CurveTableRequirements, EisensteinTable, FixedBaseDescription,
+    FixedBaseTable, Pallas, PallasAffine, PastaCurve, Point, PreparedAffinePoint, ProjectivePoint,
+    Vesta, VestaAffine, batch_normalize, glv_decompose,
 };
 use udon::exec::{Executor, SerialExecutor, TaskBudget, for_each_chunk_mut, for_each_mut};
 use udon::fft::{
@@ -89,11 +90,11 @@ fn curve_operations<C: PastaCurve>(
     let mut normalization_scratch = [PastaField::ZERO; 2];
     batch_normalize(&points, &mut output, &mut normalization_scratch)?;
     const DESCRIPTION: FixedBaseDescription = FixedBaseDescription { window_bits: 4 };
-    const REQUIREMENTS: FixedBaseRequirements = match DESCRIPTION.requirements() {
+    const REQUIREMENTS: CurveTableRequirements = match DESCRIPTION.requirements() {
         Ok(required) => required,
         Err(_) => panic!("unsupported fixed-base description"),
     };
-    let mut entries = [AffinePoint::GENERATOR; REQUIREMENTS.affine_points];
+    let mut entries = [AffinePoint::GENERATOR; REQUIREMENTS.table_entries];
     let mut projective = [ProjectivePoint::IDENTITY; REQUIREMENTS.projective_scratch];
     let mut field = [PastaField::ZERO; REQUIREMENTS.field_scratch];
     let table = FixedBaseTable::prepare(
@@ -106,6 +107,28 @@ fn curve_operations<C: PastaCurve>(
     let bound = FixedBaseTable::bind(DESCRIPTION, &base, table.as_slice())?;
     let product = bound.mul(scalar);
     assert_eq!(product, base.to_projective().mul(scalar));
+    let mut cached = [PreparedAffinePoint::from_affine(&base); REQUIREMENTS.table_entries];
+    let cached =
+        FixedBaseTable::prepare(DESCRIPTION, &base, &mut cached, &mut projective, &mut field)?;
+    assert_eq!(cached.mul(scalar), product);
+    let mut compact_entries = [PreparedAffinePoint::from_affine(&base); 8];
+    let compact =
+        EisensteinTable::prepare(&base, &mut compact_entries, &mut projective, &mut field)?;
+    EisensteinTable::bind(&base, compact.as_slice())?.validate()?;
+    assert_eq!(compact.mul(scalar), product);
+    let (a, b) = glv_decompose::<C>(scalar);
+    assert!(a != i128::MIN && b != i128::MIN);
+    assert_eq!(
+        base.endomorphism().to_projective(),
+        base.to_point().endomorphism().to_projective()
+    );
+    assert_eq!(
+        base.to_projective()
+            .endomorphism()
+            .endomorphism()
+            .endomorphism(),
+        base.to_projective()
+    );
     assert_eq!(point, output[0].to_projective());
     assert!(output[1].is_identity());
     Ok(product.to_point().to_bytes())
@@ -287,6 +310,7 @@ pub struct FieldRecord {
 pub struct CurveRecord {
     pub pallas: PallasAffine,
     pub vesta: VestaAffine,
+    pub cached: PreparedAffinePoint<Pallas>,
 }
 
 #[repr(transparent)]
@@ -341,7 +365,14 @@ pub static STORED_PALLAS: &PallasAffine = bento::AlignedBytes([0; 64]).as_value(
 pub static STORED_VESTA: &VestaAffine = bento::AlignedBytes([0; 64]).as_value();
 
 #[cfg(feature = "curve-record")]
-pub static STORED_CURVES: &CurveRecord = bento::AlignedBytes([0; 128]).as_value();
+pub static STORED_CURVES: &CurveRecord = bento::AlignedBytes([0; 224]).as_value();
 
 #[cfg(feature = "zero-array")]
 pub static ZERO_ARRAY: &[Value; 0] = bento::AlignedBytes([]).as_array();
+
+#[cfg(feature = "curve")]
+pub static STORED_CACHED_PALLAS: &PreparedAffinePoint<Pallas> =
+    bento::AlignedBytes([0; 96]).as_value();
+#[cfg(feature = "curve")]
+pub static STORED_CACHED_VESTA: &PreparedAffinePoint<Vesta> =
+    bento::AlignedBytes([0; 96]).as_value();

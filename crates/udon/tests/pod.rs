@@ -7,7 +7,10 @@ use std::sync::OnceLock;
 use bento::{AlignedBytes, bytes_of, bytes_of_slice};
 use zakura_udon::{
     STORED_FORM, StoredForm,
-    curve::{AffinePoint, Pallas, PallasAffine, PastaCurve, Vesta, VestaAffine},
+    curve::{
+        AffinePoint, EisensteinTable, Pallas, PallasAffine, PastaCurve, PreparedAffinePoint, Vesta,
+        VestaAffine,
+    },
     field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus},
     stored_form,
 };
@@ -158,4 +161,55 @@ fn descriptors_agree_across_supported_pointer_widths() {
     for width in ["32", "64"] {
         assert_eq!(StoredForm::for_target(width), StoredForm::ACTIVE);
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, bento::Pod)]
+struct CachedCurveRecord {
+    pallas: [PreparedAffinePoint<Pallas>; 2],
+    vesta: [PreparedAffinePoint<Vesta>; 2],
+}
+
+#[test]
+fn cached_point_arrays_borrow_bytes_and_validate_mathematical_invariants() {
+    fn check<C: PastaCurve>() {
+        assert_eq!(size_of::<PreparedAffinePoint<C>>(), 96);
+        assert_eq!(align_of::<PreparedAffinePoint<C>>(), 8);
+        let base = AffinePoint::<C>::GENERATOR;
+        let cached = PreparedAffinePoint::from_affine(&base);
+        assert_eq!(cached.to_affine(), base);
+        let (x, y) = base.coordinates();
+        let mut expected = Vec::from(bytes_of(x));
+        expected.extend_from_slice(bytes_of(&x.mul(&PastaField::zeta())));
+        expected.extend_from_slice(bytes_of(y));
+        assert_eq!(bytes_of(&cached), expected);
+        assert!(bytes_of_slice::<PreparedAffinePoint<C>>(&[]).is_empty());
+        static INVALID: AlignedBytes<768> = AlignedBytes([0xff; 768]);
+        let entries: &[PreparedAffinePoint<C>; 8] = INVALID.as_array();
+        assert_eq!(bytes_of_slice(entries).as_ptr(), INVALID.0.as_ptr());
+        assert!(EisensteinTable::bind(&base, entries).is_err());
+        static ZERO: AlignedBytes<768> = AlignedBytes([0; 768]);
+        let entries: &[PreparedAffinePoint<C>; 8] = ZERO.as_array();
+        assert!(EisensteinTable::bind(&base, entries).is_err());
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+    let pallas = PallasAffine::GENERATOR;
+    let vesta = VestaAffine::GENERATOR;
+    let record = CachedCurveRecord {
+        pallas: [
+            PreparedAffinePoint::from_affine(&pallas),
+            PreparedAffinePoint::from_affine(&pallas.neg()),
+        ],
+        vesta: [
+            PreparedAffinePoint::from_affine(&vesta),
+            PreparedAffinePoint::from_affine(&vesta.neg()),
+        ],
+    };
+    assert_eq!(size_of::<CachedCurveRecord>(), 384);
+    static RECORD: OnceLock<AlignedBytes<384>> = OnceLock::new();
+    let bytes = RECORD.get_or_init(|| AlignedBytes(bytes_of(&record).try_into().unwrap()));
+    let stored: &CachedCurveRecord = bytes.as_value();
+    assert_eq!(*stored, record);
+    assert_eq!(bytes_of(stored).as_ptr(), bytes.0.as_ptr());
 }

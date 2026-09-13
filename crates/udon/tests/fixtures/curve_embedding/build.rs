@@ -1,11 +1,14 @@
-//! Generates both curves' expanded tables using the public runtime APIs.
+//! Generates both curves' compact and expanded tables through public APIs.
 #![forbid(unsafe_code)]
 #![deny(warnings)]
 
 use std::{env, fs, path::PathBuf};
 use udon::{
     StoredForm,
-    curve::{FixedBaseTable, Pallas, PastaCurve, ProjectivePoint, Vesta},
+    curve::{
+        EisensteinTable, FixedBaseTable, Pallas, PastaCurve, PreparedAffinePoint, ProjectivePoint,
+        Vesta,
+    },
     field::PastaField,
 };
 
@@ -24,15 +27,54 @@ fn generate<C: PastaCurve>(name: &str, damage: &str) {
         &mut field,
     )
     .unwrap();
+    FixedBaseTable::prepare(
+        record::DESCRIPTION,
+        &record.base,
+        &mut record.cached,
+        &mut projective,
+        &mut field,
+    )
+    .unwrap();
+    EisensteinTable::prepare(
+        &record.base,
+        &mut record.compact,
+        &mut projective,
+        &mut field,
+    )
+    .unwrap();
+    EisensteinTable::prepare(
+        &record.base,
+        &mut record.compact_cached,
+        &mut projective,
+        &mut field,
+    )
+    .unwrap();
     // Damage is introduced after preparation, so rejection must come from
     // the consumer's layout and mathematical checks.
     match damage {
         "coordinate" => record.entries[1] = *bento::AlignedBytes([0xff; 64]).as_value(),
         "point" => record.entries[1] = *bento::AlignedBytes([0; 64]).as_value(),
         "order" => record.entries.swap(0, 1),
-        "carry" => record.entries[record::REQUIREMENTS.affine_points - 1] = record.base,
+        "carry" => record.entries[record::REQUIREMENTS.table_entries - 1] = record.base,
         "base" => record.base = record.base.neg(),
-        "schema" => record.schema = 2,
+        "schema" => record.schema = 1,
+        "table-kind" => record.table_kinds[0] = 2,
+        "entry-layout" => record.entry_bytes[0] = 96,
+        "compact-order" => record.compact.swap(0, 1),
+        "compact-cached-order" => record.compact_cached.swap(0, 1),
+        "cache" | "compact-cache" => {
+            let mut bytes = bento::bytes_of(&record.cached[0]).to_vec();
+            bytes[32..64].fill(0xff);
+            let raw = Box::leak(Box::new(bento::AlignedBytes::<96>(
+                bytes.try_into().unwrap(),
+            )));
+            let damaged: PreparedAffinePoint<C> = *raw.as_value();
+            if damage == "cache" {
+                record.cached[0] = damaged;
+            } else {
+                record.compact_cached[0] = damaged;
+            }
+        }
         "curve" => record.base_modulus = record.scalar_modulus,
         "window" => record.window_bits = 8,
         "" | "truncate" => {}

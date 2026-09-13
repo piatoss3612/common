@@ -4,9 +4,11 @@
 //! order. [`Pallas`] uses [`crate::field::Fp`] coordinates and
 //! [`crate::field::Fq`] scalars; [`Vesta`] reverses that pairing.
 //! [`AffinePoint`] stores a nonidentity point, [`Point`] also represents
-//! identity, and [`ProjectivePoint`] avoids inversions during group arithmetic.
+//! identity, and [`ProjectivePoint`] avoids inversions during addition and doubling.
 //! Use [`batch_normalize`] to share an inversion across projective results and
-//! [`FixedBaseTable`] to prepare a base for repeated scalar multiplication.
+//! [`EisensteinTable`] or [`FixedBaseTable`] to prepare a base for repeated
+//! scalar multiplication. [`glv_decompose`] and point endomorphisms are also
+//! available to callers implementing their own scalar algorithms.
 //!
 //! Coordinates and scalars must satisfy [`PastaField`]'s reduced-residue
 //! invariant. Stored affine points must also satisfy [`AffinePoint`]'s curve
@@ -30,16 +32,22 @@ use crate::field::{PastaField, PrimeModulus};
 
 mod affine;
 mod batch;
+mod eisenstein;
 mod encoding;
 mod fixed_base;
+mod glv;
 mod parameters;
 mod point;
 mod projective;
 mod scalar;
+mod table_entry;
 
 pub use batch::batch_normalize;
-pub use fixed_base::{FixedBaseDescription, FixedBaseRequirements, FixedBaseTable};
+pub use eisenstein::EisensteinTable;
+pub use fixed_base::{FixedBaseDescription, FixedBaseTable};
+pub use glv::glv_decompose;
 pub use parameters::{Pallas, PastaCurve, Vesta};
+pub use table_entry::{CurveTableEntry, CurveTableRequirements, PreparedAffinePoint};
 
 #[cfg(test)]
 mod tests;
@@ -113,9 +121,9 @@ pub type VestaPoint = Point<Vesta>;
 /// A Jacobian Vesta point.
 pub type VestaProjective = ProjectivePoint<Vesta>;
 /// A borrowed table for repeated multiplication of one Pallas base.
-pub type PallasFixedBase<'a> = FixedBaseTable<'a, Pallas>;
+pub type PallasFixedBase<'a, E = PallasAffine> = FixedBaseTable<'a, Pallas, E>;
 /// A borrowed table for repeated multiplication of one Vesta base.
-pub type VestaFixedBase<'a> = FixedBaseTable<'a, Vesta>;
+pub type VestaFixedBase<'a, E = VestaAffine> = FixedBaseTable<'a, Vesta, E>;
 
 /// Returns `x³ + 5`, the right-hand side of both Pasta curve equations.
 ///
@@ -133,7 +141,7 @@ fn is_reduced<M: PrimeModulus>(value: &PastaField<M>) -> bool {
         .is_lt()
 }
 
-/// A rejected curve operation or fixed-base table description.
+/// A rejected curve operation or multiplication table description.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CurveError {
     /// The fixed-base window width is outside `2..=8`.
@@ -169,8 +177,8 @@ impl fmt::Display for CurveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidWindowBits { bits } => write!(f, "window width {bits} is outside 2..=8"),
-            Self::InvalidBase => f.write_str("invalid fixed base"),
-            Self::InvalidTable => f.write_str("invalid fixed-base table entry"),
+            Self::InvalidBase => f.write_str("invalid curve base"),
+            Self::InvalidTable => f.write_str("invalid curve table entry"),
             Self::LengthMismatch {
                 buffer,
                 expected,

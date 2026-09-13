@@ -5,7 +5,9 @@ use std::{vec, vec::Vec};
 
 mod arithmetic;
 mod contracts;
+mod eisenstein;
 mod fixed_base;
+mod glv;
 mod reference;
 
 fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {

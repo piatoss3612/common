@@ -31,11 +31,17 @@ Curve tests compare both Pasta groups against an independent affine reference
 using `num-bigint`, including full-width scalars, identity and inverse cases,
 different Jacobian scalings, and canonical encoding rejection. The group-order
 check walks the raw integer order instead of reducing it to a zero scalar.
-Fixed-base checks cover every supported window width and compare every table
-entry with the independent reference, including the final carry. Batch and
-preparation tests cover scratch reuse, untouched tails, and rejection before
-mutation. Full compiler builds check both constant point macros through an
-aliased dependency and re-exports, and reject invalid coordinates, runtime
+[GLV](CURVES.md#glv-decomposition-and-the-endomorphism) checks compare lattice
+relations, fixed-point rounding, signed bounds, and reconstruction against
+integer arithmetic, including coefficient-rounding boundaries. Digit checks
+reconstruct all 48 signed rotations and extreme halves; expanded-window checks
+include partial windows and synthetic final carries.
+Fixed-base checks cover both entry layouts and every supported window width,
+comparing every table entry with the independent reference. Compact tables
+also check all eight representatives. Batch and preparation tests cover
+scratch reuse, untouched tails, and rejection before mutation. Full compiler
+builds check both constant point macros through an aliased dependency and
+re-exports, and reject invalid coordinates, runtime
 arguments, wrong fields, wrong curves, and wrong scalar types.
 
 FFT tests cover both fields against direct polynomial evaluation and an
@@ -94,10 +100,11 @@ beside their tests.
 
 Safety and portability need targeted evidence as well as native tests. CI runs
 Miri over storage unit tests and the public Bento and Udon storage integration
-tests, including field arrays, affine points, and nested records; nested Cargo
-tests stay in the native suite. The portability test builds `no_std` libraries
-for a 32-bit little-endian target and separately checks that big-endian storage
-fails while addition chains, constant arithmetic, shared execution helpers, and
+tests, including field arrays, affine and cached points, and nested records;
+nested Cargo tests stay in the native suite. The portability test builds
+`no_std` libraries for a 32-bit little-endian target and separately checks that
+big-endian storage fails while addition chains, constant arithmetic, shared
+execution helpers, and
 runtime Pasta field, curve, and FFT operations compile with either square-root
 configuration. The fixture also asserts computed values during constant
 evaluation; runtime field, curve, and FFT operations and execution helpers are
@@ -160,24 +167,50 @@ runtime operations for both Pallas and Vesta:
   fail canonical-coordinate or square-root checks.
 - Ordinary scalar multiplication from all three point representations, with
   zero, one, small, sparse high-bit, dense low-limb, dense full-limb, and
-  minus-one scalars, plus identity bases. A 32-scalar corpus compares affine,
-  projective, and fixed-base multiplication on the same base. A separate
-  32-point corpus varies encoding and decoding inputs.
+  minus-one scalars, plus identity bases. Sparse and dense 64- and 65-bit inputs
+  straddle the ordinary multiplication dispatch threshold. Scalars `lambda`,
+  `-lambda`, and `1 +/- lambda`, where `lambda` is the scalar field's cube root
+  of unity, exercise short GLV decompositions despite full-width encodings.
+  A 32-scalar corpus compares all three point representations and retained
+  tables on the same base. A separate 32-point corpus varies encoding and
+  decoding inputs.
+- Standalone GLV decomposition uses the same scalar shapes and corpus, with
+  reconstruction and magnitude checks outside timing. The inputs cover all
+  four sign combinations of nonzero halves. Endomorphisms cover all three
+  point representations, including identity and nontrivial projective scaling;
+  cached affine entry construction measures the cost of preparing its extra
+  coordinate. Public table-entry rotations cover both representations and both
+  nonzero rotations. Cache checks cover valid, inconsistent, and unreduced
+  cached coordinates with valid affine coordinates.
 - Batch normalization at 1, 2, 3, 8, 64, and 1,024 points, including mixed and
   all-identity batches. `individual` controls normalize the same inputs one at
   a time into the same output layout. Throughput counts all input positions,
   including identities.
-- Fixed-base preparation, checked binding, trusted binding, explicit validation,
-  and multiplication, separately for every supported window width (`2..=8`).
-  Scalar cases include final signed-digit carries at widths 3 and 5. See the
+- Table preparation, checked binding, trusted binding, explicit validation,
+  and multiplication with both affine and cached entries. `fixed_base` and
+  `fixed_base_cached` cover every supported window width (`2..=8`);
+  `eisenstein` and `eisenstein_cached` cover the eight-entry compact tables.
+  The same scalar corpus supports comparisons at equal width and similar
+  storage, such as affine width 4 versus cached width 3. Checked binding and
+  validation also cover wrong multiples, unreduced entries, and inconsistent
+  caches at the first and last entries, exposing early rejection and full scans.
+  The last expanded entry checks carry-slot validation. Width-2 multiplication
+  also covers final carries with positive and negative second GLV halves. See the
   [curve guide](CURVES.md#fixed-base-multiplication) for table and scratch costs.
 
-Constant accessors, plain representation copies, derived affine equality, and
-debug formatting are omitted.
+Constant accessors and storage sizing, plain representation copies, derived
+affine equality, the constant cache check for uncached entries, and debug
+formatting are omitted. Table multiplication includes internal recoding, which
+has no separate benchmark. Rejection of invalid descriptions and buffer lengths
+remains in the correctness suite.
 
 ```console
 cargo bench --locked -p zakura-udon --bench curve
 cargo bench --locked -p zakura-udon --bench curve -- Pallas/fixed_base
+cargo bench --locked -p zakura-udon --bench curve -- Pallas/glv_decompose
+cargo bench --locked -p zakura-udon --bench curve -- Pallas/endomorphism
+cargo bench --locked -p zakura-udon --bench curve -- Pallas/prepared_affine
+cargo bench --locked -p zakura-udon --bench curve -- Pallas/table_entry
 cargo bench --locked -p zakura-udon --bench curve -- Pallas/encoding
 cargo bench --locked -p zakura-udon --bench curve -- Pallas/batch_normalize
 cargo bench --locked -p zakura-udon --bench curve -- --test
@@ -187,9 +220,10 @@ cargo bench --locked -p zakura-udon --bench curve --features sqrt-table-large --
 Inputs are deterministic and fixture checks run before timing. Setup and
 allocation occur outside timed execution; preparation measures filling existing
 buffers, and binding borrows existing entries. Batch and corpus cases report
-points or scalar multiplications per second. Inputs and results pass through
-optimization barriers. Original `operations`, dense batch, and width-4/8
-fixed-base benchmark names are preserved for existing Criterion baselines.
+points, scalar decompositions, or scalar multiplications per second. Inputs and
+results pass through optimization barriers. Original `operations`, dense batch,
+and width-4/8 fixed-base benchmark names are preserved for existing Criterion
+baselines.
 Use name filters for focused timing runs or `--test` to exercise every case
 once; CI runs test mode with both square-root configurations. These measurements
 describe the chosen inputs, not a constant-time guarantee.
@@ -328,10 +362,12 @@ metadata, and corrupted packed powers must reach the embedded consumer and fail
 its explicit validation before operations use the damaged data.
 
 The [curve embedding consumer](../crates/udon/tests/fixtures/curve_embedding)
-also owns its record schema and generator. It prepares both curves' fixed-base
-tables through Udon, writes them through Bento POD, and checks multiplication
-from borrowed embedded records against ordinary multiplication. Both feature
-configurations run the consumer and damage cases. Truncation must fail during
-compilation; unsupported schema, curve, or window metadata, unreduced or
-off-curve entries, reordered multiples, wrong bases, and incorrect final carry
-entries must fail validation before multiplication.
+also owns its record schema and generator. It prepares both curves' compact and
+expanded tables with affine and cached entries through Udon, writes them through
+Bento POD, and checks multiplication from borrowed embedded records against
+ordinary multiplication. Both feature configurations run the consumer and
+damage cases. Truncation must fail during compilation; obsolete schema,
+incorrect curve, table-kind, entry-layout, or
+window metadata, unreduced or off-curve entries, reordered multiples, wrong
+bases, inconsistent caches, and incorrect final carry entries must fail
+validation before multiplication.

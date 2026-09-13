@@ -1,4 +1,4 @@
-//! An artifact owner prepares and embeds expanded tables for both curves.
+//! An owner embeds both table kinds and entry layouts for both curves.
 
 #[path = "support/consumer.rs"]
 mod consumer;
@@ -42,6 +42,30 @@ fn generated_curve_tables_embed_in_a_downstream_consumer() {
             ),
             (
                 "window",
+                Some("embedded metadata must match the curve and layout"),
+            ),
+            (
+                "cache",
+                Some("embedded table must match its base: InvalidTable"),
+            ),
+            (
+                "compact-cache",
+                Some("embedded table must match its base: InvalidTable"),
+            ),
+            (
+                "compact-order",
+                Some("embedded table must match its base: InvalidTable"),
+            ),
+            (
+                "compact-cached-order",
+                Some("embedded table must match its base: InvalidTable"),
+            ),
+            (
+                "table-kind",
+                Some("embedded metadata must match the curve and layout"),
+            ),
+            (
+                "entry-layout",
                 Some("embedded metadata must match the curve and layout"),
             ),
             (

@@ -3,16 +3,18 @@
 //! [`field::Fp`] and [`field::Fq`] provide field arithmetic, canonical encodings,
 //! inversion, square roots, and product sums without allocation. Constants and
 //! fixed exponentiation schedules use this workspace's `bento` support.
-//! [`curve`] provides Pallas and Vesta points, canonical encodings, scalar
-//! multiplication, batch normalization, and borrowed fixed-base tables.
+//! [`curve`] provides Pallas and Vesta points, canonical encodings,
+//! GLV scalar multiplication, batch normalization, and borrowed compact and
+//! expanded fixed-base tables.
 //! [`fft`] provides power-of-two transforms, cosets, residue expansion, and fused
 //! interpolation with caller-owned tables, buffers, scratch, and execution.
 //! [`exec`] provides scoped fork/join, task budgets, and borrowed work helpers
 //! shared by arithmetic and downstream workloads.
-//! Field elements and nonidentity [`curve::AffinePoint`] values implement
-//! [`bento::Pod`] for direct embedded storage. Their type docs distinguish
-//! mathematical invariants from memory validity. [`stored_form!`] names the
-//! field representation; artifact owners identify the curve and record schema.
+//! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
+//! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
+//! embedded storage. Their type docs distinguish mathematical invariants from
+//! memory validity. [`stored_form!`] names the field representation; artifact
+//! owners identify the curve and record schema.
 //!
 //! Arithmetic is variable-time and provides no constant-time guarantee for
 //! secret inputs.

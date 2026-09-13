@@ -26,7 +26,7 @@ mod products;
 mod safegcd;
 mod sqrt;
 mod uint;
-mod word;
+pub(crate) mod word;
 
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub use products::ProductSum;

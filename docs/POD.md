@@ -152,9 +152,11 @@ cargo test --release --locked -p zakura-udon --test embedding -- --ignored
 
 ## Storing affine points and fixed-base tables
 
-Udon's [`AffinePoint`](../crates/udon/src/curve/mod.rs) implements `Pod` for both
-Pallas and Vesta. Its type docs define the coordinate layout and mathematical
-invariants. The 32-byte compressed protocol encoding is a different
+Udon's [`AffinePoint`](../crates/udon/src/curve/mod.rs) and
+[`PreparedAffinePoint`](../crates/udon/src/curve/table_entry.rs) implement `Pod`
+for both Pallas and Vesta. Their type docs define the coordinate layouts and
+mathematical invariants, including the cached endomorphism coordinate in
+`PreparedAffinePoint`. The 32-byte compressed protocol encoding is a different
 representation. Identity-capable `Point` and Jacobian `ProjectivePoint` do not
 implement `Pod`.
 
@@ -164,23 +166,31 @@ individual points by passing the values from `coordinates()` to
 `AffinePoint::from_xy` before use when their producer has not established these
 properties. POD layout checks do not validate mathematical contents.
 
-For repeated multiplication, prepare `FixedBaseTable` entries into caller-owned
-affine storage and write the resulting slice or an enclosing record through
-Bento POD. Embed the same types in the consumer and use `FixedBaseTable::bind`
-to check their mathematical contents. `bind_trusted` is available when the
-owner has already established the specified multiples; it only checks the
-description, base, and length. The
-[table API docs](../crates/udon/src/curve/fixed_base.rs) define the required
-multiples and entry order; the [curve guide](CURVES.md#fixed-base-multiplication)
-shows preparation and storage costs.
+For repeated multiplication, prepare `FixedBaseTable<C, E>` or
+`EisensteinTable<C, E>` entries into caller-owned storage and write the resulting
+slice or an enclosing record through Bento POD. Both accept `AffinePoint<C>`
+(the default) or `PreparedAffinePoint<C>` entries. Embed the same types in the
+consumer and use the table's `bind` method to check its mathematical contents,
+including cached coordinates. `bind_trusted` is available when the owner has
+already established the specified multiples and caches; it checks only the
+base, length, and expanded table description when present. The
+[expanded](../crates/udon/src/curve/fixed_base.rs) and
+[compact](../crates/udon/src/curve/eisenstein.rs) API docs define entry order;
+the [curve guide](CURVES.md#fixed-base-multiplication) shows preparation and
+storage costs.
 
 `STORED_FORM` identifies the field representation, unchanged by curve support.
-The owner must separately identify the curve, base, window width, and record
-schema. The [curve embedding fixture](../crates/udon/tests/fixtures/curve_embedding)
-shares its record definition between its generator and `no_std` consumer,
-prepares both curves' tables, writes them through Bento POD, and multiplies
-directly from embedded storage. Its harness checks rejection of damaged
-artifacts as described in the [testing guide](TESTING.md#generated-artifacts):
+The owner must separately identify the curve, base, compact or expanded table
+kind, affine or cached entry representation, window width when present, and
+record schema. Follow the [migration guide](CURVES.md#migrating-expanded-tables)
+when replacing older expanded tables.
+
+The [curve embedding fixture](../crates/udon/tests/fixtures/curve_embedding)
+shares its record definition between generator and `no_std` consumer. It
+demonstrates both table kinds and entry types, writing them through Bento POD
+and multiplying directly from embedded storage. The
+[testing guide](TESTING.md#generated-artifacts) describes its feature coverage
+and damaged-artifact checks. Run it with:
 
 ```console
 cargo test --release --locked -p zakura-udon --test curve_embedding -- --ignored

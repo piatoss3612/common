@@ -1,20 +1,24 @@
 //! Expanded signed-window tables, borrowed from caller-owned storage.
 
 use super::{
-    AffinePoint, CurveError, PastaCurve, ProjectivePoint, batch, check_length, check_scratch,
-    is_reduced,
+    AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, PastaCurve, ProjectivePoint,
+    batch, check_length, check_scratch, glv_decompose, table_entry::check_entry,
 };
 use crate::field::PastaField;
 
 /// The layout of an expanded fixed-base multiplication table.
 ///
 /// [`Default`] selects width 4. For width `w` in `2..=8`, let
-/// `n = ceil(255 / w)` and `h = 2^(w - 1)`, where `ceil` rounds up. Write
+/// `n = ceil(128 / w)` and `h = 2^(w - 1)`, where `ceil` rounds up. Write
 /// `[k] base` for integer multiplication of a nonidentity point `base` by `k`.
 /// Entry `window * h + (m - 1)` holds `[m * 2^(w * window)] base` for
 /// `window` in `0..n` and `m` in `1..=h`. The final entry at `n * h` is
 /// `[2^(w * n)] base`, used for the last signed-digit carry.
+/// Pasta's GLV bounds allow this carry only at width 2; widths 3 through 8
+/// retain and validate the final entry for a uniform layout.
 ///
+/// The two halves from [`glv_decompose`] share this table; the second applies
+/// [`AffinePoint::endomorphism`].
 /// Multiplication uses signed digits in `[-h, h - 1]` and zero-pads the last
 /// partial window. Storing each window's shifted multiples avoids doublings
 /// during multiplication. Larger windows use more storage for fewer additions.
@@ -30,36 +34,22 @@ impl Default for FixedBaseDescription {
     }
 }
 
-/// Exact table length and minimum scratch lengths for fixed-base preparation.
-///
-/// All lengths count elements, not bytes. Multiplication and binding need no
-/// scratch. Scratch tails beyond these lengths are left untouched by preparation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct FixedBaseRequirements {
-    /// Number of nonidentity affine entries in the expanded table.
-    pub affine_points: usize,
-    /// Minimum number of projective scratch elements.
-    pub projective_scratch: usize,
-    /// Minimum number of base-field scratch elements.
-    pub field_scratch: usize,
-}
-
 impl FixedBaseDescription {
     /// Computes storage requirements for this table layout.
     ///
     /// Returns [`CurveError::InvalidWindowBits`] for widths outside `2..=8`.
-    /// Width 4 needs 513 affine entries and 8 elements of each scratch type;
-    /// width 8 needs 4097 entries and 128 elements of each scratch type.
-    pub const fn requirements(self) -> Result<FixedBaseRequirements, CurveError> {
+    /// Width 4 needs 257 entries and 8 elements of each scratch type;
+    /// width 8 needs 2049 entries and 128 elements of each scratch type.
+    pub const fn requirements(self) -> Result<CurveTableRequirements, CurveError> {
         if self.window_bits < 2 || self.window_bits > 8 {
             return Err(CurveError::InvalidWindowBits {
                 bits: self.window_bits,
             });
         }
         let h = 1 << (self.window_bits - 1);
-        let n = 255_usize.div_ceil(self.window_bits as usize);
-        Ok(FixedBaseRequirements {
-            affine_points: n * h + 1,
+        let n = 128_usize.div_ceil(self.window_bits as usize);
+        Ok(CurveTableRequirements {
+            table_entries: n * h + 1,
             projective_scratch: h,
             field_scratch: h,
         })
@@ -68,21 +58,25 @@ impl FixedBaseDescription {
 
 /// A borrowed expanded table for repeated multiplication of one nonidentity base.
 ///
+/// The default entry type is [`AffinePoint`]. Select
+/// [`PreparedAffinePoint`](super::PreparedAffinePoint) to cache endomorphism
+/// coordinates, using 96 bytes per entry instead of 64.
+///
 /// [`prepare`](Self::prepare) fills caller buffers. [`bind`](Self::bind) checks
 /// stored entries; [`bind_trusted`](Self::bind_trusted) skips entry validation
 /// when the caller has already established their mathematical validity.
 /// All constructors check the base, description, and exact table length.
-/// Multiplication is variable-time, performs no doublings, and uses no scratch
-/// or allocation. Table preparation, validation, and multiplication provide no
-/// constant-time guarantee for secret inputs.
+/// Multiplication is variable-time, performs no doublings, and uses no caller
+/// scratch or allocation. Table preparation, validation, and multiplication
+/// provide no constant-time guarantee for secret inputs.
 #[derive(Clone, Copy)]
-pub struct FixedBaseTable<'a, C: PastaCurve> {
+pub struct FixedBaseTable<'a, C: PastaCurve, E: CurveTableEntry<C> = AffinePoint<C>> {
     description: FixedBaseDescription,
     base: AffinePoint<C>,
-    entries: &'a [AffinePoint<C>],
+    entries: &'a [E],
 }
 
-impl<C: PastaCurve> core::fmt::Debug for FixedBaseTable<'_, C> {
+impl<C: PastaCurve, E: CurveTableEntry<C>> core::fmt::Debug for FixedBaseTable<'_, C, E> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("FixedBaseTable")
             .field("description", &self.description)
@@ -92,10 +86,10 @@ impl<C: PastaCurve> core::fmt::Debug for FixedBaseTable<'_, C> {
     }
 }
 
-impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
+impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
     /// Fills an expanded table and returns a borrowed view of it.
     ///
-    /// `entries` must have exactly [`FixedBaseRequirements::affine_points`]
+    /// `entries` must have exactly [`CurveTableRequirements::table_entries`]
     /// elements, as reported by [`FixedBaseDescription::requirements`]. Scratch
     /// slices must meet the reported minimum lengths. Initial buffer contents
     /// do not matter, and scratch tails beyond those lengths are untouched.
@@ -111,18 +105,18 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
     /// ```
     /// use zakura_udon::{
     ///     curve::{
-    ///         FixedBaseDescription, FixedBaseRequirements, PallasAffine,
+    ///         FixedBaseDescription, CurveTableRequirements, PallasAffine,
     ///         PallasFixedBase, PallasProjective,
     ///     },
     ///     field::{Fp, Fq},
     /// };
     /// const DESCRIPTION: FixedBaseDescription = FixedBaseDescription { window_bits: 4 };
-    /// const REQUIRED: FixedBaseRequirements = match DESCRIPTION.requirements() {
+    /// const REQUIRED: CurveTableRequirements = match DESCRIPTION.requirements() {
     ///     Ok(required) => required,
     ///     Err(_) => panic!("invalid table description"),
     /// };
     /// let base = PallasAffine::GENERATOR;
-    /// let mut entries = [base; REQUIRED.affine_points];
+    /// let mut entries = [base; REQUIRED.table_entries];
     /// let mut projective = [PallasProjective::IDENTITY; REQUIRED.projective_scratch];
     /// let mut field = [Fp::ZERO; REQUIRED.field_scratch];
     /// let table = PallasFixedBase::prepare(
@@ -134,7 +128,7 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
     pub fn prepare(
         description: FixedBaseDescription,
         base: &AffinePoint<C>,
-        entries: &'a mut [AffinePoint<C>],
+        entries: &'a mut [E],
         projective_scratch: &mut [ProjectivePoint<C>],
         field_scratch: &mut [PastaField<C::Base>],
     ) -> Result<Self, CurveError> {
@@ -152,7 +146,7 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
         // window shares an inversion across h entries; the final carry needs
         // one more. This bounds scratch independently of the number of windows.
         let mut window_base = base.to_projective();
-        for window in entries[..requirements.affine_points - 1].chunks_exact_mut(h) {
+        for window in entries[..requirements.table_entries - 1].chunks_exact_mut(h) {
             let mut multiple = window_base;
             for point in projective_scratch.iter_mut() {
                 *point = multiple;
@@ -161,18 +155,22 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
             batch::normalize(projective_scratch, field_scratch, |index, point| {
                 // A nonzero base in a prime-order group stays nonzero for these
                 // small multiples and powers of two.
-                window[index] = *point
-                    .as_affine()
-                    .expect("fixed-base entries are nonidentity");
+                window[index] = E::from_affine(
+                    point
+                        .as_affine()
+                        .expect("fixed-base entries are nonidentity"),
+                );
             });
             for _ in 0..description.window_bits {
                 window_base = window_base.double();
             }
         }
-        entries[requirements.affine_points - 1] = *window_base
-            .to_point()
-            .as_affine()
-            .expect("a power of two times a nonidentity base is nonidentity");
+        entries[requirements.table_entries - 1] = E::from_affine(
+            window_base
+                .to_point()
+                .as_affine()
+                .expect("a power of two times a nonidentity base is nonidentity"),
+        );
         Ok(Self {
             description,
             base: *base,
@@ -184,13 +182,13 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
     ///
     /// Uses [`FixedBaseDescription`]'s layout. Returns the description, base,
     /// and length errors from [`Self::bind_trusted`], or
-    /// [`CurveError::InvalidTable`] if an entry has unreduced coordinates or
-    /// differs from its specified multiple. Validation uses no scratch,
-    /// allocation, or inversion.
+    /// [`CurveError::InvalidTable`] if an entry has unreduced coordinates,
+    /// differs from its specified multiple, or has an inconsistent cache.
+    /// Validation uses no scratch, allocation, or inversion.
     pub fn bind(
         description: FixedBaseDescription,
         base: &AffinePoint<C>,
-        entries: &'a [AffinePoint<C>],
+        entries: &'a [E],
     ) -> Result<Self, CurveError> {
         let table = Self::bind_trusted(description, base, entries)?;
         table.validate()?;
@@ -202,6 +200,8 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
     /// Checks the description, base, and exact length, but does not inspect table
     /// entries. They must be the reduced, on-curve multiples in
     /// [`FixedBaseDescription`]'s layout, including the final carry entry.
+    /// Cached coordinates must satisfy
+    /// [`PreparedAffinePoint`](super::PreparedAffinePoint)'s invariants.
     /// Incorrect entries can make [`Self::mul`] panic or give incorrect results
     /// but remain memory-safe. Use [`Self::bind`] for unvalidated data, or call
     /// [`Self::validate`] before multiplication.
@@ -213,7 +213,7 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
     pub fn bind_trusted(
         description: FixedBaseDescription,
         base: &AffinePoint<C>,
-        entries: &'a [AffinePoint<C>],
+        entries: &'a [E],
     ) -> Result<Self, CurveError> {
         check_inputs(description, base, entries.len())?;
         Ok(Self {
@@ -225,9 +225,10 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
 
     /// Checks every entry against its specified multiple without inversion.
     ///
-    /// Returns [`CurveError::InvalidTable`] for unreduced or incorrect entries.
-    /// This also checks views created by [`Self::bind_trusted`] and requires
-    /// neither scratch nor allocation.
+    /// Returns [`CurveError::InvalidTable`] for unreduced or incorrect entries,
+    /// including inconsistent cached coordinates. This also checks views
+    /// created by [`Self::bind_trusted`] and requires neither scratch nor
+    /// allocation.
     pub fn validate(&self) -> Result<(), CurveError> {
         let h = self.description.requirements()?.projective_scratch;
         let mut window_base = self.base.to_projective();
@@ -255,7 +256,7 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
     }
 
     /// Borrows entries in [`FixedBaseDescription`]'s storage order.
-    pub const fn as_slice(&self) -> &'a [AffinePoint<C>] {
+    pub const fn as_slice(&self) -> &'a [E] {
         self.entries
     }
 
@@ -264,31 +265,28 @@ impl<'a, C: PastaCurve> FixedBaseTable<'a, C> {
     /// Processes the full canonical scalar; zero returns identity. The scalar
     /// must satisfy [`PastaField`]'s reduced-residue invariant, and a table
     /// created with [`Self::bind_trusted`] must satisfy its entry requirements.
-    /// Execution is variable-time and requires no doubling, allocation, or
-    /// scratch.
+    /// Execution is variable-time and uses bounded stack storage without
+    /// doubling, allocation, or caller scratch.
     pub fn mul(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
-        let scalar = scalar.to_canonical_uint();
+        let (a, b) = glv_decompose::<C>(scalar);
         let w = self.description.window_bits as usize;
         let h = 1 << (w - 1);
-        let n = 255_usize.div_ceil(w);
-        let mut carry = 0;
+        let n = 128_usize.div_ceil(w);
         let mut result = ProjectivePoint::IDENTITY;
-        for window in 0..n {
-            let offset = window * w;
-            // The last window is zero-padded; asking for all w bits can run
-            // past CanonicalUint's 256-bit boundary for some supported widths.
-            let value = scalar.window(offset, w.min(255 - offset)).unwrap() as usize + carry;
-            // value = digit + 2^w * carry, with digit in [-h, h - 1]. The
-            // positive table stores magnitudes 1..=h; negation handles -h too.
-            carry = usize::from(value >= h);
-            let digit = value as isize - ((carry << w) as isize);
-            if digit != 0 {
-                let entry = &self.entries[window * h + digit.unsigned_abs() - 1];
-                result = result.add_mixed(&if digit < 0 { entry.neg() } else { *entry });
+        for (rotation, half) in [a, b].into_iter().enumerate() {
+            let (digits, carry) = signed_window_digits(half.unsigned_abs(), w);
+            for (window, &digit) in digits[..n].iter().enumerate() {
+                if digit != 0 {
+                    let entry = self.entries[window * h + digit.unsigned_abs() as usize - 1]
+                        .rotated(rotation);
+                    let negative = (digit < 0) ^ (half < 0);
+                    result = result.add_mixed(&if negative { entry.neg() } else { entry });
+                }
             }
-        }
-        if carry != 0 {
-            result = result.add_mixed(&self.entries[n * h]);
+            if carry {
+                let entry = self.entries[n * h].rotated(rotation);
+                result = result.add_mixed(&if half < 0 { entry.neg() } else { entry });
+            }
         }
         result
     }
@@ -298,23 +296,31 @@ fn check_inputs<C: PastaCurve>(
     description: FixedBaseDescription,
     base: &AffinePoint<C>,
     length: usize,
-) -> Result<FixedBaseRequirements, CurveError> {
+) -> Result<CurveTableRequirements, CurveError> {
     let requirements = description.requirements()?;
-    check_length("entries", requirements.affine_points, length)?;
+    check_length("entries", requirements.table_entries, length)?;
     if AffinePoint::<C>::from_xy(base.x, base.y).is_none() {
         return Err(CurveError::InvalidBase);
     }
     Ok(requirements)
 }
 
-fn check_entry<C: PastaCurve>(
-    expected: &ProjectivePoint<C>,
-    entry: &AffinePoint<C>,
-) -> Result<(), CurveError> {
-    // Check raw residues before any field operation on potentially stored data.
-    // Equality with a valid projective multiple also establishes curve membership.
-    if !is_reduced(&entry.x) || !is_reduced(&entry.y) || *expected != entry.to_projective() {
-        return Err(CurveError::InvalidTable);
+/// Encodes a magnitude in signed width-`w` digits and a final carry.
+///
+/// Requires `w` in `2..=8`; digits are in `[-2^(w - 1), 2^(w - 1) - 1]`.
+/// Only the first `ceil(128 / w)` digits are used; the remaining digits are zero.
+pub(super) fn signed_window_digits(mut magnitude: u128, w: usize) -> ([i16; 64], bool) {
+    // Zero-pad the last partial window. Pasta's lattice bounds are
+    // |k1| < (a + b)/2 + 1 and |k2| < (b + d)/2 + 1, where d = a + b.
+    // Only k2 at width 2 can carry; other layouts keep the uniform final slot.
+    let mut digits = [0; 64];
+    let mut carry = 0;
+    let h = 1 << (w - 1);
+    for digit in &mut digits[..128_usize.div_ceil(w)] {
+        let value = (magnitude & ((1 << w) - 1)) as i16 + carry;
+        magnitude >>= w;
+        carry = i16::from(value >= h);
+        *digit = value - (carry << w);
     }
-    Ok(())
+    (digits, carry != 0)
 }

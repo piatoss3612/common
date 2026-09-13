@@ -65,11 +65,13 @@ generation with Bento POD, and the [crate docs](crates/udon/src/lib.rs) for
 feature definitions.
 
 The [`curve` module](crates/udon/src/curve/mod.rs) provides Pallas and Vesta
-points, canonical encodings, scalar multiplication, batch normalization, and
-borrowed fixed-base tables. Nonidentity affine points implement `bento::Pod`
-for direct storage. All curve operations are variable-time and require no
-allocation. See the [curve guide](docs/CURVES.md) for point representations,
-caller-owned preparation buffers, and table validation.
+points, canonical encodings, GLV/Eisenstein scalar multiplication, batch
+normalization, and borrowed compact and expanded fixed-base tables.
+Nonidentity `AffinePoint` and cached `PreparedAffinePoint` entries implement
+`bento::Pod` for direct storage. All curve operations are variable-time and
+require no allocation. See the [curve guide](docs/CURVES.md) for point
+representations, caller-owned preparation buffers, and table validation, and the
+[performance report](docs/CURVE_PERFORMANCE.md) for timing and storage tradeoffs.
 
 Additional traits and utilities needed downstream for Tachyon remain planned.
 

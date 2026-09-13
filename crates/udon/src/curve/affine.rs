@@ -52,6 +52,18 @@ impl<C: PastaCurve> AffinePoint<C> {
         (&self.x, &self.y)
     }
 
+    /// Applies the order-three endomorphism `(x, y) -> (zeta * x, y)`.
+    ///
+    /// Here `zeta` is the coordinate field's [`PastaField::zeta`] value.
+    /// This map equals multiplication by the scalar field's
+    /// [`PastaField::zeta`] value.
+    pub fn endomorphism(&self) -> Self {
+        Self {
+            x: self.x.mul(&PastaField::zeta()),
+            ..*self
+        }
+    }
+
     /// Returns the additive inverse `(x, -y)`.
     pub fn neg(&self) -> Self {
         Self {
@@ -74,11 +86,29 @@ impl<C: PastaCurve> AffinePoint<C> {
     /// Multiplies by a scalar using variable-time doubling and mixed addition.
     ///
     /// Processes the full canonical scalar; zero returns identity. The scalar
-    /// must satisfy [`PastaField`]'s reduced-residue invariant. No table or
-    /// scratch is required; use [`super::FixedBaseTable`] for repeated
-    /// multiplication of the same base.
+    /// must satisfy [`PastaField`]'s reduced-residue invariant. Uses bounded
+    /// internal stack storage, with no caller table, scratch, or allocation.
+    ///
+    /// The current implementation uses an inversion-free binary ladder for
+    /// scalars below `2^64`. Larger scalars prepare eight cached affine entries
+    /// on the stack, using one field inversion per call, then run a GLV/Eisenstein
+    /// ladder. The strategy is selected internally; stack frame sizes depend on
+    /// the compiler and target.
+    ///
+    /// Use [`EisensteinTable`](super::EisensteinTable) or
+    /// [`FixedBaseTable`](super::FixedBaseTable) to retain
+    /// preparation for repeated multiplication of the same base.
     pub fn mul_projective(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
-        super::scalar::multiply(scalar, |point| point.add_mixed(self))
+        // Short scalars use the binary ladder without paying for table setup.
+        if scalar
+            .to_canonical_uint()
+            .highest_set_bit()
+            .is_none_or(|high| high < 64)
+        {
+            super::scalar::multiply(scalar, |point| point.add_mixed(self))
+        } else {
+            super::eisenstein::multiply_once(&self.to_projective(), scalar)
+        }
     }
 
     // Const generic limbs let the compile-time arithmetic macros validate

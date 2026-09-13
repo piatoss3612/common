@@ -44,6 +44,18 @@ builds check both constant point macros through an aliased dependency and
 re-exports, and reject invalid coordinates, runtime
 arguments, wrong fields, wrong curves, and wrong scalar types.
 
+MSM tests compare dense and repeated-index inputs in all three base layouts
+against binary-ladder sums that bypass GLV and MSM recoding. Both curves cover
+dispatch and digit-chunk boundaries, zero and full-width scalars, final signed
+carries, bucket doubling and cancellation, odd survivors, and passes as short
+as one term. Grouped execution checks varied budgets, unequal jobs, nested
+single-worker execution, and dirty scratch reuse after either scheduling phase
+unwinds.
+
+Compact-table batches check shared preparation, retained scalar digits, and
+same-scalar products against individual multiplication. Synthetic digit
+schedules exercise exact modular exception detection and its projective fallback.
+
 FFT tests cover both fields against direct polynomial evaluation and an
 independently scheduled reference FFT, all subsets of optional tables, coset
 shifts, short prefixes, tiled execution, residue layouts, expansion, and fused
@@ -201,8 +213,8 @@ runtime operations for both Pallas and Vesta:
 Constant accessors and storage sizing, plain representation copies, derived
 affine equality, the constant cache check for uncached entries, and debug
 formatting are omitted. Table multiplication includes internal recoding, which
-has no separate benchmark. Rejection of invalid descriptions and buffer lengths
-remains in the correctness suite.
+has no separate benchmark in this suite. Rejection of invalid descriptions and
+buffer lengths remains in the correctness suite.
 
 ```console
 cargo bench --locked -p zakura-udon --bench curve
@@ -227,6 +239,49 @@ baselines.
 Use name filters for focused timing runs or `--test` to exercise every case
 once; CI runs test mode with both square-root configurations. These measurements
 describe the chosen inputs, not a constant-time guarantee.
+
+## MSM and compact-table batch benchmarks
+
+The [MSM Criterion suite](../crates/udon/benches/msm.rs) measures both curves with
+preallocated outputs and scratch. Compact batches compare preparation, ordinary
+per-table multiplication, reused scalar digits, and shared same-scalar ladders
+in both entry layouts, at 1, 8, 32, 64, 128, and 512 bases. MSM cases cover dense
+and indexed access in all three base layouts with full-width scalars. Short
+scalars use affine bases. Sizes straddle dispatch boundaries and extend to
+4,096 terms.
+
+Grouped `ipa` cases use two equal indexed jobs; `commitments` uses four unequal
+dense jobs. Each runs serially and inside a persistent four-worker Rayon pool,
+with no pass cap and with a 512-term cap. Benchmark names identify the curve,
+operation, base layout, scalar corpus, execution policy, cap, and size. MSM
+names also identify dense or indexed access, either explicitly or through the
+grouped fixture's name. For example:
+
+```text
+pallas/eisenstein/mul_prepared/full/serial/cap_all/64
+pallas/msm/indexed/affine/full/serial/cap_all/128
+pallas/msm_batch/ipa/cached/full/rayon4/cap_512/1024
+```
+
+Fixture checks compare MSMs with scalar inner products over known generator
+multiples before timing. Allocation and pool entry are outside timing. MSM
+input construction, including length and index validation, is also outside
+timing; execution's scratch checks, recoding, initialization, scheduling, and
+arithmetic are inside. Compact preparation includes base validation. The
+`mul_prepared` and `mul_same_scalar` cases prepare scalar digits before timing;
+`mul` prepares them for each table during timing.
+
+```console
+cargo bench --locked -p zakura-udon --bench msm
+cargo bench --locked -p zakura-udon --bench msm -- pallas/msm/dense/affine/full
+cargo bench --locked -p zakura-udon --bench msm -- pallas/msm_batch
+cargo bench --locked -p zakura-udon --bench msm -- pallas/eisenstein
+cargo bench --locked -p zakura-udon --bench msm -- --test
+```
+
+CI runs every case once in test mode. The
+[curve performance report](CURVE_PERFORMANCE.md) records dispatch experiments,
+scratch tradeoffs, and the limits of the local measurements.
 
 ## FFT benchmarks
 
@@ -365,9 +420,11 @@ The [curve embedding consumer](../crates/udon/tests/fixtures/curve_embedding)
 also owns its record schema and generator. It prepares both curves' compact and
 expanded tables with affine and cached entries through Udon, writes them through
 Bento POD, and checks multiplication from borrowed embedded records against
-ordinary multiplication. Both feature configurations run the consumer and
-damage cases. Truncation must fail during compilation; obsolete schema,
-incorrect curve, table-kind, entry-layout, or
+ordinary multiplication. It also reuses prepared scalar digits, borrows compact
+table batches, and executes indexed MSMs directly from affine and cached
+embedded entries with const-sized stack scratch and capped passes. Both feature
+configurations run the consumer and damage cases. Truncation must fail during
+compilation; obsolete schema, incorrect curve, table-kind, entry-layout, or
 window metadata, unreduced or off-curve entries, reordered multiples, wrong
 bases, inconsistent caches, and incorrect final carry entries must fail
 validation before multiplication.

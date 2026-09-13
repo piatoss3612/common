@@ -315,12 +315,14 @@ pub(super) fn signed_window_digits(mut magnitude: u128, w: usize) -> ([i16; 64],
     // Only k2 at width 2 can carry; other layouts keep the uniform final slot.
     let mut digits = [0; 64];
     let mut carry = 0;
-    let h = 1 << (w - 1);
     for digit in &mut digits[..128_usize.div_ceil(w)] {
-        let value = (magnitude & ((1 << w) - 1)) as i16 + carry;
+        *digit = super::scalar::centered_digit(
+            (magnitude & ((1 << w) - 1)) as u16,
+            false,
+            &mut carry,
+            w as u32,
+        );
         magnitude >>= w;
-        carry = i16::from(value >= h);
-        *digit = value - (carry << w);
     }
     (digits, carry != 0)
 }

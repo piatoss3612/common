@@ -7,8 +7,11 @@ use crate::field::PastaField;
 
 /// Exact table length and minimum scratch lengths for curve table preparation.
 ///
-/// All lengths count elements, not bytes. Multiplication and binding need no
-/// caller scratch. Preparation leaves scratch tails beyond these lengths untouched.
+/// All lengths count elements, not bytes. Preparation leaves scratch tails
+/// beyond these lengths untouched. Batch multiplication reports its scratch
+/// through [`EisensteinTableBatch::multiplication_scratch`][batch_scratch].
+///
+/// [batch_scratch]: super::EisensteinTableBatch::multiplication_scratch
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CurveTableRequirements {
     /// Number of entries, in the caller-selected representation.
@@ -106,7 +109,7 @@ pub(super) mod sealed {
 /// assert_eq!(entries[0].rotated(1), base.endomorphism());
 /// assert!(entries[0].valid_cache());
 /// ```
-pub trait CurveTableEntry<C: PastaCurve>: sealed::Entry + Copy + fmt::Debug {
+pub trait CurveTableEntry<C: PastaCurve>: sealed::Entry + Copy + fmt::Debug + Send + Sync {
     /// Constructs an entry from a point satisfying [`AffinePoint`]'s invariants.
     ///
     /// Copies affine coordinates and computes any cached endomorphism coordinate.

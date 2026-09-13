@@ -1,7 +1,37 @@
-//! Batch inversion of the nonzero Jacobian scales.
+//! Shared inversion helpers and batch normalization.
 
 use super::{CurveError, PastaCurve, Point, ProjectivePoint, check_length, check_scratch};
-use crate::field::PastaField;
+use crate::field::{PastaField, PrimeModulus};
+
+/// Inverts nonzero values in place, using at least `values.len()` prefix elements.
+///
+/// Callers must establish nonzero denominators for their schedule or remove
+/// exceptional pairs before calling.
+pub(super) fn invert_nonzero<M: PrimeModulus>(
+    values: &mut [PastaField<M>],
+    prefix: &mut [PastaField<M>],
+) {
+    if values.is_empty() {
+        return;
+    }
+    // Two product lanes shorten multiplication dependencies while sharing one
+    // inversion of their combined product.
+    let mut products = [PastaField::ONE; 2];
+    for (i, value) in values.iter().enumerate() {
+        prefix[i] = products[i & 1];
+        products[i & 1] = products[i & 1].mul(value);
+    }
+    let inverse = products[0]
+        .mul(&products[1])
+        .invert()
+        .expect("nonzero denominators");
+    let mut inverses = [inverse.mul(&products[1]), inverse.mul(&products[0])];
+    for (i, value) in values.iter_mut().enumerate().rev() {
+        let result = inverses[i & 1].mul(&prefix[i]);
+        inverses[i & 1] = inverses[i & 1].mul(value);
+        *value = result;
+    }
+}
 
 /// Normalizes points in order, preserving identity positions.
 ///

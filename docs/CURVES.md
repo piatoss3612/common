@@ -143,6 +143,37 @@ of each scratch type. Preparation shares one inversion across all entries. Use
 `prepare(base, entries, projective_scratch, field_scratch)` to fill the table,
 or `bind(base, entries)` for checked use of existing storage.
 
+When one scalar acts on several bases, construct `EisensteinScalar::<C>::new`
+once and call each table's `mul_prepared(&scalar)`. The opaque value retains the
+GLV decomposition's joint digits without borrowing the scalar or tables.
+Ordinary `mul(&scalar)` prepares digits for a single product. Expanded tables
+use their own width-specific recoding and take the field scalar directly.
+
+### Compact table batches and same-scalar products
+
+[`EisensteinTableBatch<C, E>`](../crates/udon/src/curve/eisenstein_batch.rs)
+borrows a flat slice of consecutive eight-entry tables. Its const
+`requirements(number_of_bases)` reports the exact entry count and minimum
+projective and field scratch counts. `prepare` accepts either nonidentity base
+layout and writes the caller-selected entry layout, allowing preparation to
+share inversions across bases. Supply a `TaskBudget` and an `Executor`; serial
+callers use `TaskBudget::SERIAL` and `SerialExecutor`. The counts are independent
+of the budget, so the same buffers work with either executor.
+
+The returned view borrows only entries. `get(index)` borrows an individual
+`EisensteinTable`, while `mul_prepared` multiplies every base by an
+`EisensteinScalar`, writing projective products in table order. `mul` also
+prepares the scalar. The const `multiplication_scratch(number_of_bases)` query
+reports field scratch for these batch methods. The type docs include an
+executable example that reuses field scratch after preparation.
+
+Use `bind` or `bind_trusted` for stored entries, following the
+[table validation workflow](#preparation-binding-and-stored-formats). A single
+compact table's eight entries can also be bound as a one-base batch without
+changing the stored format. The
+[performance report](CURVE_PERFORMANCE.md#compact-table-batches-and-scalar-reuse)
+describes when shared preparation and same-scalar multiplication pay off.
+
 ### Expanded tables
 
 `FixedBaseTable<C>` stores shifted multiples to avoid all doublings during
@@ -206,10 +237,10 @@ same scratch lengths for either entry type.
 
 ### Preparation, binding, and stored formats
 
-Both table types return a view borrowing only the entries, leaving both scratch
-buffers available for other work. Entry lengths must match exactly; scratch
-may be longer, and preparation leaves unused tails untouched. Preparation
-errors leave all buffers unchanged.
+Compact and expanded tables, including compact batches, return views borrowing
+only the entries, leaving scratch available for other work. Entry lengths must
+match exactly; scratch may be longer, and preparation leaves unused tails
+untouched. Preparation errors leave all buffers unchanged.
 
 Checked `bind` validates each entry against its specified multiple, including
 cached coordinates, without scratch or inversion. Use `bind_trusted`
@@ -235,6 +266,66 @@ There is no compatibility binding for the older layout.
 
 Bump the owner's schema when adopting this layout. Udon's `STORED_FORM`
 continues to describe the unchanged field representation.
+
+## Multiscalar multiplication
+
+[`curve::msm`](../crates/udon/src/curve/msm/mod.rs) computes sums of scalar/base
+products, returning projective results. Choose the input view to match the
+data already owned by the caller:
+
+| Input | Construction | Contract |
+| --- | --- | --- |
+| Dense | `Input::new(bases, scalars)` | One scalar per base |
+| Indexed | `Input::indexed(bases, indices, scalars)` | One `u32` index per scalar; repeated indices contribute separately |
+
+`Bases::Affine`, `Bases::Prepared`, and `Bases::Points` borrow the three
+supported base layouts. Choose `Points` when bases may include identity, or
+borrow affine or cached entries directly from POD storage. Construction checks
+lengths and index bounds without gathering bases. The
+[`Input` docs](../crates/udon/src/curve/msm/mod.rs) define the mathematical
+invariants that the producer must establish before execution.
+
+### Sizing and reusing scratch
+
+`ExecutionOptions::SERIAL` selects one task and no pass cap. For parallel work,
+set `task_budget`. Set `max_terms_per_pass` to `Some(NonZeroUsize)` to trade more
+passes for less temporary point storage in each concurrent partition. This
+does not bound total scratch: digits still occupy storage proportional to all
+terms. Udon chooses scalar recoding and arithmetic internally. The
+[performance report](CURVE_PERFORMANCE.md#grouped-execution-and-working-storage)
+shows the measured memory and timing tradeoff.
+
+`input.requirements(options)` returns element counts for all five `Scratch`
+slices: digit bytes, affine points, projective points, base-field elements, and
+working `usize` indices. The const
+`Input::<C>::requirements_for_len(terms, options)` query returns the same
+counts from length alone, supporting static arrays and downstream buffer
+owners. Obtain counts from the API instead of copying implementation formulas.
+
+Initialize affine scratch with a valid point such as the generator; initialize
+other buffers with zero or identity. Execution overwrites every value it uses,
+so buffers can be reused without clearing. A retained `Scratch` can lend its
+slices again through `reborrow()`. `input.execute(options, executor, scratch)`
+returns the sum as a projective point. The module docs include an executable
+example using const-sized arrays and specify the buffer, error, and panic
+contracts.
+
+### Grouped jobs and other work
+
+Place borrowed `Input` handles in a slice to group independent MSMs. Inputs can
+mix sizes, layouts, and dense/indexed access for the same curve. Query
+`batch_requirements(&inputs, options)`, then call
+`execute_batch(&inputs, &mut output, options, executor, scratch)` with exactly
+one output per input. Results preserve input order. Grouped scheduling shares
+concurrency across inputs and reuses working storage between jobs. Size the
+batch as a whole because grouping changes how work and scratch are partitioned.
+
+Compose fixed-base products or other work with
+[`Executor::join`](../crates/udon/src/exec.rs), splitting the outer
+`TaskBudget` among simultaneous operations. Pass the MSM branch's budget to its
+`ExecutionOptions`; ordinary fixed-base products need no executor. This uses the
+same scoped execution contract as FFTs and works inside an existing pool,
+including a one-thread pool.
 
 ## Validation and performance
 

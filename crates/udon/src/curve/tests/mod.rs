@@ -6,6 +6,7 @@ use std::{vec, vec::Vec};
 mod arithmetic;
 mod contracts;
 mod eisenstein;
+mod eisenstein_batch;
 mod fixed_base;
 mod glv;
 mod reference;

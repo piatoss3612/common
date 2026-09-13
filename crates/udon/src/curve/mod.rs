@@ -9,6 +9,10 @@
 //! [`EisensteinTable`] or [`FixedBaseTable`] to prepare a base for repeated
 //! scalar multiplication. [`glv_decompose`] and point endomorphisms are also
 //! available to callers implementing their own scalar algorithms.
+//! [`EisensteinScalar`] retains joint digits for compact tables, and
+//! [`EisensteinTableBatch`] prepares or multiplies several bases together.
+//! [`msm`] sums dense or indexed scalar/base terms with caller-owned scratch
+//! and execution.
 //!
 //! Coordinates and scalars must satisfy [`PastaField`]'s reduced-residue
 //! invariant. Stored affine points must also satisfy [`AffinePoint`]'s curve
@@ -33,9 +37,11 @@ use crate::field::{PastaField, PrimeModulus};
 mod affine;
 mod batch;
 mod eisenstein;
+mod eisenstein_batch;
 mod encoding;
 mod fixed_base;
 mod glv;
+pub mod msm;
 mod parameters;
 mod point;
 mod projective;
@@ -43,7 +49,8 @@ mod scalar;
 mod table_entry;
 
 pub use batch::batch_normalize;
-pub use eisenstein::EisensteinTable;
+pub use eisenstein::{EisensteinScalar, EisensteinTable};
+pub use eisenstein_batch::EisensteinTableBatch;
 pub use fixed_base::{FixedBaseDescription, FixedBaseTable};
 pub use glv::glv_decompose;
 pub use parameters::{Pallas, PastaCurve, Vesta};
@@ -153,6 +160,19 @@ pub enum CurveError {
     InvalidBase,
     /// A table entry is invalid or differs from its specified multiple.
     InvalidTable,
+    /// A requested buffer length cannot be represented by a Rust slice.
+    SizeOverflow,
+    /// A batch table does not contain a whole number of eight-entry tables.
+    InvalidTableLayout,
+    /// An indexed MSM refers past the end of its base slice.
+    BaseIndexOutOfBounds {
+        /// Position in the index slice.
+        position: usize,
+        /// Supplied base index.
+        index: u32,
+        /// Number of available bases.
+        bases: usize,
+    },
     /// An input or output buffer does not have the required exact length.
     LengthMismatch {
         /// The buffer's role.
@@ -179,6 +199,20 @@ impl fmt::Display for CurveError {
             Self::InvalidWindowBits { bits } => write!(f, "window width {bits} is outside 2..=8"),
             Self::InvalidBase => f.write_str("invalid curve base"),
             Self::InvalidTable => f.write_str("invalid curve table entry"),
+            Self::SizeOverflow => f.write_str("curve buffer size overflows a slice length"),
+            Self::InvalidTableLayout => {
+                f.write_str("batch table length is not a multiple of eight")
+            }
+            Self::BaseIndexOutOfBounds {
+                position,
+                index,
+                bases,
+            } => {
+                write!(
+                    f,
+                    "base index {index} at position {position} exceeds {bases} bases"
+                )
+            }
             Self::LengthMismatch {
                 buffer,
                 expected,
@@ -222,4 +256,11 @@ fn check_scratch(buffer: &'static str, required: usize, provided: usize) -> Resu
         });
     }
     Ok(())
+}
+
+const fn checked_count<T>(count: usize, per_item: usize) -> Result<usize, CurveError> {
+    match count.checked_mul(per_item) {
+        Some(length) if length <= isize::MAX as usize / core::mem::size_of::<T>() => Ok(length),
+        _ => Err(CurveError::SizeOverflow),
+    }
 }

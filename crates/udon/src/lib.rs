@@ -5,7 +5,8 @@
 //! fixed exponentiation schedules use this workspace's `bento` support.
 //! [`curve`] provides Pallas and Vesta points, canonical encodings,
 //! GLV scalar multiplication, batch normalization, and borrowed compact and
-//! expanded fixed-base tables.
+//! expanded fixed-base tables. [`curve::msm`] sums dense or indexed inputs with
+//! caller-owned scratch and execution.
 //! [`fft`] provides power-of-two transforms, cosets, residue expansion, and fused
 //! interpolation with caller-owned tables, buffers, scratch, and execution.
 //! [`exec`] provides scoped fork/join, task budgets, and borrowed work helpers

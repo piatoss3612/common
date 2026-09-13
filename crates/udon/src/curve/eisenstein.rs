@@ -11,6 +11,43 @@ use super::{
     table_entry::check_entry,
 };
 use crate::field::PastaField;
+use core::marker::PhantomData;
+
+pub(super) const MAX_DIGITS: usize = 132;
+
+/// A scalar decomposed and recoded for joint Eisenstein multiplication.
+///
+/// Prepare once for [`EisensteinTable::mul_prepared`] or
+/// [`EisensteinTableBatch::mul_prepared`](super::EisensteinTableBatch::mul_prepared)
+/// when the same scalar acts on several bases. This fixed-size, allocation-free
+/// value is specific to its curve and borrows neither the scalar nor a table.
+/// Preparation and multiplication are variable-time.
+#[derive(Clone, Copy, Debug)]
+pub struct EisensteinScalar<C: PastaCurve> {
+    digits: [u8; MAX_DIGITS],
+    len: usize,
+    marker: PhantomData<C>,
+}
+
+impl<C: PastaCurve> EisensteinScalar<C> {
+    /// Decomposes a reduced scalar and records its joint doubling-ladder digits.
+    ///
+    /// The scalar must satisfy [`PastaField`]'s reduced-residue invariant.
+    /// Violations remain memory-safe but can cause panics or incorrect results.
+    pub fn new(scalar: &PastaField<C::Scalar>) -> Self {
+        let (a, b) = glv_decompose::<C>(scalar);
+        let (digits, len) = recode(a, b);
+        Self {
+            digits,
+            len,
+            marker: PhantomData,
+        }
+    }
+
+    pub(super) fn digits(&self) -> &[u8] {
+        &self.digits[..self.len]
+    }
+}
 
 /// Coefficients `a + b*lambda`, in retained table order.
 pub(super) const REPRESENTATIVES: [(i8, i8); 8] = [
@@ -63,9 +100,9 @@ const SELECTOR: [(i8, i8, u8); 64] = {
 // Each digit coordinate has magnitude at most 5. Dividing by two after
 // subtraction takes 127-bit inputs to magnitude <= 5 in 127 steps; the
 // remaining small pairs terminate within five further steps.
-pub(super) fn recode(mut a: i128, mut b: i128) -> ([u8; 132], usize) {
+pub(super) fn recode(mut a: i128, mut b: i128) -> ([u8; MAX_DIGITS], usize) {
     debug_assert!(a != i128::MIN && b != i128::MIN);
-    let mut digits = [0; 132];
+    let mut digits = [0; MAX_DIGITS];
     let mut len = 0;
     while a != 0 || b != 0 {
         let (digit_a, digit_b, code) = SELECTOR[(((a & 7) << 3) | (b & 7)) as usize];
@@ -122,8 +159,8 @@ pub(super) fn representatives<C: PastaCurve>(base: &ProjectivePoint<C>) -> [Proj
 /// All constructors check the base and exact entry count.
 #[derive(Clone, Copy)]
 pub struct EisensteinTable<'a, C: PastaCurve, E: CurveTableEntry<C> = AffinePoint<C>> {
-    base: AffinePoint<C>,
-    entries: &'a [E],
+    pub(super) base: AffinePoint<C>,
+    pub(super) entries: &'a [E],
 }
 
 impl<C: PastaCurve, E: CurveTableEntry<C>> core::fmt::Debug for EisensteinTable<'_, C, E> {
@@ -248,7 +285,15 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
     /// requirements. Uses bounded stack storage without caller scratch or
     /// allocation. Execution is variable-time.
     pub fn mul(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
-        multiply(self.entries, scalar)
+        self.mul_prepared(&EisensteinScalar::new(scalar))
+    }
+
+    /// Multiplies using digits that can be reused across tables and batches.
+    ///
+    /// Has the same entry requirements as [`Self::mul`], and requires no
+    /// scratch or allocation. A zero scalar returns identity.
+    pub fn mul_prepared(&self, scalar: &EisensteinScalar<C>) -> ProjectivePoint<C> {
+        multiply(self.entries, scalar.digits())
     }
 }
 
@@ -260,7 +305,7 @@ fn check_inputs<C: PastaCurve>(base: &AffinePoint<C>, length: usize) -> Result<(
     Ok(())
 }
 
-fn normalize<C: PastaCurve, E: CurveTableEntry<C>>(
+pub(super) fn normalize<C: PastaCurve, E: CurveTableEntry<C>>(
     points: &[ProjectivePoint<C>],
     field: &mut [PastaField<C::Base>],
     entries: &mut [E],
@@ -272,19 +317,24 @@ fn normalize<C: PastaCurve, E: CurveTableEntry<C>>(
     });
 }
 
-fn multiply<C: PastaCurve, E: CurveTableEntry<C>>(
+pub(super) fn digit_point<C: PastaCurve, E: CurveTableEntry<C>>(
     entries: &[E],
-    scalar: &PastaField<C::Scalar>,
+    code: u8,
+) -> AffinePoint<C> {
+    let value = usize::from(code - 1);
+    let entry = entries[value / 6].rotated((value % 6) >> 1);
+    if value & 1 == 1 { entry.neg() } else { entry }
+}
+
+pub(super) fn multiply<C: PastaCurve, E: CurveTableEntry<C>>(
+    entries: &[E],
+    digits: &[u8],
 ) -> ProjectivePoint<C> {
-    let (a, b) = glv_decompose::<C>(scalar);
-    let (digits, len) = recode(a, b);
     let mut result = ProjectivePoint::IDENTITY;
-    for &code in digits[..len].iter().rev() {
+    for &code in digits.iter().rev() {
         result = result.double();
         if code != 0 {
-            let value = usize::from(code - 1);
-            let entry = entries[value / 6].rotated((value % 6) >> 1);
-            result = result.add_mixed(&if value & 1 == 1 { entry.neg() } else { entry });
+            result = result.add_mixed(&digit_point(entries, code));
         }
     }
     result
@@ -302,5 +352,5 @@ pub(super) fn multiply_once<C: PastaCurve>(
     let mut entries = [PreparedAffinePoint::from_affine(&AffinePoint::GENERATOR); 8];
     let mut field = [PastaField::ZERO; 8];
     normalize(&points, &mut field, &mut entries);
-    multiply(&entries, scalar)
+    multiply(&entries, EisensteinScalar::<C>::new(scalar).digits())
 }

@@ -4,9 +4,10 @@
 
 use bento::const_arithmetic::{U256, U320, m255, u256};
 use udon::curve::{
-    AffinePoint, CurveError, CurveTableRequirements, EisensteinTable, FixedBaseDescription,
-    FixedBaseTable, Pallas, PallasAffine, PastaCurve, Point, PreparedAffinePoint, ProjectivePoint,
-    Vesta, VestaAffine, batch_normalize, glv_decompose,
+    AffinePoint, CurveError, CurveTableRequirements, EisensteinScalar, EisensteinTable,
+    EisensteinTableBatch, FixedBaseDescription, FixedBaseTable, Pallas, PallasAffine, PastaCurve,
+    Point, PreparedAffinePoint, ProjectivePoint, Vesta, VestaAffine, batch_normalize,
+    glv_decompose, msm,
 };
 use udon::exec::{Executor, SerialExecutor, TaskBudget, for_each_chunk_mut, for_each_mut};
 use udon::fft::{
@@ -116,6 +117,12 @@ fn curve_operations<C: PastaCurve>(
         EisensteinTable::prepare(&base, &mut compact_entries, &mut projective, &mut field)?;
     EisensteinTable::bind(&base, compact.as_slice())?.validate()?;
     assert_eq!(compact.mul(scalar), product);
+    assert_eq!(
+        compact.mul_prepared(&EisensteinScalar::new(scalar)),
+        product
+    );
+    table_batch_operations(&base, scalar, product)?;
+    msm_operations(&base, scalar)?;
     let (a, b) = glv_decompose::<C>(scalar);
     assert!(a != i128::MIN && b != i128::MIN);
     assert_eq!(
@@ -140,6 +147,117 @@ pub fn pallas_operations(bytes: [u8; 32], scalar: &Fq) -> Result<[u8; 32], Curve
 
 pub fn vesta_operations(bytes: [u8; 32], scalar: &Fp) -> Result<[u8; 32], CurveError> {
     curve_operations::<Vesta>(bytes, scalar)
+}
+
+fn table_batch_operations<C: PastaCurve>(
+    base: &AffinePoint<C>,
+    scalar: &PastaField<C::Scalar>,
+    expected: ProjectivePoint<C>,
+) -> Result<(), CurveError> {
+    const N: usize = 64;
+    const R: CurveTableRequirements = match EisensteinTableBatch::<Pallas>::requirements(N) {
+        Ok(r) => r,
+        Err(_) => panic!("unsupported table batch size"),
+    };
+    const MUL: usize = match EisensteinTableBatch::<Pallas>::multiplication_scratch(N) {
+        Ok(n) => n,
+        Err(_) => panic!("unsupported table batch size"),
+    };
+    const FIELD: usize = if MUL > R.field_scratch {
+        MUL
+    } else {
+        R.field_scratch
+    };
+    let bases = [*base; N];
+    let mut entries = [PreparedAffinePoint::from_affine(base); R.table_entries];
+    let mut projective = [ProjectivePoint::IDENTITY; R.projective_scratch];
+    let mut field = [PastaField::ZERO; FIELD];
+    let batch = EisensteinTableBatch::prepare(
+        &bases,
+        &mut entries,
+        &mut projective,
+        &mut field,
+        TaskBudget::SERIAL,
+        &SerialExecutor,
+    )?;
+    let mut output = [ProjectivePoint::IDENTITY; N];
+    batch.mul_prepared(
+        &EisensteinScalar::new(scalar),
+        &mut output,
+        &mut field,
+        TaskBudget::SERIAL,
+        &SerialExecutor,
+    )?;
+    assert!(output.iter().all(|&p| p == expected));
+    Ok(())
+}
+
+const MSM_OPTIONS: msm::ExecutionOptions = msm::ExecutionOptions {
+    max_terms_per_pass: core::num::NonZeroUsize::new(17),
+    ..msm::ExecutionOptions::SERIAL
+};
+const MSM_SCRATCH: msm::Requirements =
+    match msm::Input::<Pallas>::requirements_for_len(257, MSM_OPTIONS) {
+        Ok(r) => r,
+        Err(_) => panic!("unsupported MSM size"),
+    };
+const _: () = {
+    assert!(matches!(
+        msm::Input::<Pallas>::requirements_for_len(usize::MAX, MSM_OPTIONS),
+        Err(CurveError::SizeOverflow)
+    ));
+    assert!(matches!(
+        EisensteinTableBatch::<Pallas>::requirements(usize::MAX),
+        Err(CurveError::SizeOverflow)
+    ));
+    if usize::BITS == 32 {
+        assert!(matches!(
+            msm::Input::<Pallas>::requirements_for_len(1 << 27, MSM_OPTIONS),
+            Err(CurveError::SizeOverflow)
+        ));
+        assert!(matches!(
+            EisensteinTableBatch::<Pallas>::multiplication_scratch(1 << 25),
+            Err(CurveError::SizeOverflow)
+        ));
+    }
+};
+
+fn msm_operations<C: PastaCurve>(
+    base: &AffinePoint<C>,
+    scalar: &PastaField<C::Scalar>,
+) -> Result<(), CurveError> {
+    assert_eq!(
+        msm::Input::<C>::requirements_for_len(257, MSM_OPTIONS)?,
+        MSM_SCRATCH
+    );
+    let points = [base.to_point(), Point::IDENTITY];
+    let indices: [u32; 257] = core::array::from_fn(|i| (i % 2) as u32);
+    let scalars = [*scalar; 257];
+    let input = msm::Input::indexed(msm::Bases::Points(&points), &indices, &scalars)?;
+    let mut digits = [0; MSM_SCRATCH.digits];
+    let mut affine = [AffinePoint::GENERATOR; MSM_SCRATCH.affine];
+    let mut projective = [ProjectivePoint::IDENTITY; MSM_SCRATCH.projective];
+    let mut field = [PastaField::ZERO; MSM_SCRATCH.field];
+    let mut working_indices = [0; MSM_SCRATCH.indices];
+    let mut output = [ProjectivePoint::IDENTITY];
+    msm::execute_batch(
+        &[input],
+        &mut output,
+        MSM_OPTIONS,
+        &SerialExecutor,
+        msm::Scratch {
+            digits: &mut digits,
+            affine: &mut affine,
+            projective: &mut projective,
+            field: &mut field,
+            indices: &mut working_indices,
+        },
+    )?;
+    assert_eq!(
+        output[0],
+        base.mul_projective(&scalar.mul(&PastaField::from_u64(129)))
+    );
+    Ok(())
 }
 
 const _: () = {

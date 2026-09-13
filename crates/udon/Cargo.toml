@@ -40,3 +40,7 @@ harness = false
 [[bench]]
 name = "curve"
 harness = false
+
+[[bench]]
+name = "msm"
+harness = false

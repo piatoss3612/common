@@ -9,11 +9,106 @@ use crate::{
 
 /// Reduces disjoint buckets to zero or one affine point, updating their lengths.
 ///
-/// Bucket `i` occupies `points[starts[i]..starts[i] + lens[i]]`. The caller must
-/// reserve disjoint ranges within `points`, one start per length, six field
-/// elements per possible pair, and one write index per possible pair. Pair
-/// capacity is `points.len() / 2`; survivors end up at their bucket's start.
+/// Bucket `i` occupies `points[starts[i]..starts[i] + lens[i]]`. The caller
+/// reserves disjoint ranges, one start per length, and two field elements per
+/// possible pair (`points.len() / 2`). Survivors end up at their bucket's start.
 pub(super) fn reduce<C: PastaCurve>(
+    points: &mut [AffinePoint<C>],
+    starts: &[usize],
+    lens: &mut [usize],
+    fields: &mut [PastaField<C::Base>],
+) {
+    reduce_with::<C, false>(points, starts, lens, fields, |_, _| {});
+}
+
+pub(super) fn reduce_with<C: PastaCurve, const FUSED: bool>(
+    points: &mut [AffinePoint<C>],
+    starts: &[usize],
+    lens: &mut [usize],
+    fields: &mut [PastaField<C::Base>],
+    mut level: impl FnMut(usize, usize),
+) {
+    while lens.iter().any(|&n| n > 1) {
+        let terms = lens.iter().sum();
+        let staged = reduce_level::<C, FUSED>(points, starts, lens, fields);
+        level(staged, terms);
+    }
+}
+
+/// Reduces one pair-tree level and returns the number of staged denominators.
+///
+/// Storage follows [`reduce`]. Keeping the level separate lets timing experiments
+/// include the production traversal without timing an entire reduction.
+#[inline(always)]
+pub(super) fn reduce_level<C: PastaCurve, const FUSED: bool>(
+    points: &mut [AffinePoint<C>],
+    starts: &[usize],
+    lens: &mut [usize],
+    fields: &mut [PastaField<C::Base>],
+) -> usize {
+    let (denom, prefix) = fields.split_at_mut(points.len() / 2);
+    let mut staged = 0;
+    for (&start, &len) in starts.iter().zip(lens.iter()) {
+        for pair in points[start..start + len].chunks_exact(2) {
+            let (p, q) = (pair[0], pair[1]);
+            if p.x == q.x && p.y != q.y {
+                continue;
+            }
+            denom[staged] = if p.x == q.x {
+                p.y.double()
+            } else {
+                q.x.sub(&p.x)
+            };
+            staged += 1;
+        }
+    }
+    invert_nonzero(&mut denom[..staged], prefix);
+    // Even when every pair cancels, this pass must compact odd survivors
+    // and publish the new lengths. Pair j reads positions 2j and 2j+1 before
+    // writing at most position j; it cannot overwrite a later unread pair.
+    let mut read = 0;
+    for (&start, len) in starts.iter().zip(lens.iter_mut()) {
+        let old = *len;
+        let mut written = 0;
+        for i in (0..old.saturating_sub(1)).step_by(2) {
+            let (p, q) = (points[start + i], points[start + i + 1]);
+            if p.x == q.x && p.y != q.y {
+                continue;
+            }
+            let numerator = if p.x == q.x {
+                let xx = p.x.square();
+                xx.double().add(&xx)
+            } else {
+                q.y.sub(&p.y)
+            };
+            let slope = numerator.mul(&denom[read]);
+            read += 1;
+            let x = slope.square().sub(&p.x).sub(&q.x);
+            let y = if FUSED {
+                slope.mul_sub(&p.x.sub(&x), &p.y)
+            } else {
+                slope.mul(&p.x.sub(&x)).sub(&p.y)
+            };
+            points[start + written] = AffinePoint {
+                x,
+                y,
+                marker: PhantomData,
+            };
+            written += 1;
+        }
+        if old & 1 != 0 {
+            points[start + written] = points[start + old - 1];
+            written += 1;
+        }
+        *len = written;
+    }
+    debug_assert_eq!(read, staged);
+    staged
+}
+
+/// Retained native benchmark control with the original six-field staging layout.
+#[cfg(test)]
+pub(super) fn reduce_original<C: PastaCurve>(
     points: &mut [AffinePoint<C>],
     starts: &[usize],
     lens: &mut [usize],

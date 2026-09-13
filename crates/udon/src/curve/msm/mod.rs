@@ -1,239 +1,128 @@
-//! Variable-time multiscalar multiplication with borrowed inputs and scratch.
+//! Variable-time multiscalar multiplication with caller-owned storage.
 //!
-//! A multiscalar multiplication (MSM) sums products of scalars and curve points.
-//! [`Input`] borrows dense or indexed terms without gathering bases.
-//! [`PreparedScalars`] retains scalar preparation across changing bases or
-//! indices, with no digit scratch needed during execution.
-//! [`execute_batch`] groups differently sized inputs under one scoped task
-//! budget. Use [`Executor::join`] to compose these jobs with fixed-base products
-//! or other work, dividing the caller's budget between simultaneous operations.
+//! [`Input::execute`] is the convenience entry point. [`Selection`] retains
+//! validated base mappings across scalar rows; [`PreparedScalars`] retains
+//! classification and GLV data across base sets and execution policies.
+//! [`Bases::Compact`] consumes ordinary embedded or prepared compact tables.
+//! [`ExecutionPlan`] retains scheduling metadata for repeated execution.
 //!
-//! All buffers and execution resources belong to the caller. No operation
-//! allocates or requires a feature flag. [`Input`] checks lengths and indices;
-//! its type docs describe the mathematical invariants required of stored data.
-//! All operations are variable-time, with no constant-time guarantee for secret
-//! bases, scalars, or indices.
-//!
-//! Indexed inputs can borrow embedded bases directly. Const sizing also works
-//! for dense inputs of the same length, and allows execution without an allocator:
+//! All runtime operations are allocation-free and variable-time, with no
+//! constant-time guarantee for secret bases, scalars, or indices. Resource
+//! limits are explicit; see [`ExecutionOptions::with_memory_limit`].
 //!
 //! ```
 //! use zakura_udon::{
-//!     curve::{
-//!         Pallas, PallasAffine, PallasProjective,
-//!         msm::{Bases, ExecutionOptions, Input, PreparedScalars, Requirements, Scratch},
-//!     },
-//!     exec::{SerialExecutor, TaskBudget},
-//!     field::{Fp, Fq},
+//!     curve::{AffinePoint, Pallas, ProjectivePoint, msm::*},
+//!     exec::SerialExecutor,
+//!     field::PastaField,
 //! };
-//!
-//! const OPTIONS: ExecutionOptions = ExecutionOptions::SERIAL;
+//! const OPTIONS: ExecutionOptions = ExecutionOptions::SERIAL.with_memory_limit(8192);
 //! const R: Requirements = match Input::<Pallas>::requirements_for_len(3, OPTIONS) {
 //!     Ok(r) => r,
-//!     Err(_) => panic!("MSM is too large"),
-//! };
-//! let g = PallasAffine::GENERATOR;
-//! let bases = [g, g.neg()];
-//! let indices = [0, 1, 0];
-//! let scalars = [Fq::from_u64(2), Fq::from_u64(3), Fq::from_u64(5)];
-//! let input = Input::indexed(Bases::Affine(&bases), &indices, &scalars)?;
-//! let mut digits = [0; R.digits];
-//! let mut affine = [g; R.affine];
-//! let mut projective = [PallasProjective::IDENTITY; R.projective];
-//! let mut field = [Fp::ZERO; R.field];
-//! let mut working_indices = [0; R.indices];
-//! let mut scratch = Scratch {
-//!     digits: &mut digits,
-//!     affine: &mut affine,
-//!     projective: &mut projective,
-//!     field: &mut field,
-//!     indices: &mut working_indices,
-//! };
-//! let result = input.execute(OPTIONS, &SerialExecutor, scratch.reborrow())?;
-//! assert_eq!(result, g.mul_projective(&Fq::from_u64(4)));
-//! // Reuse the same storage without clearing it.
-//! assert_eq!(input.execute(OPTIONS, &SerialExecutor, scratch.reborrow())?, result);
-//! // Retain scalar preparation while changing the selected bases.
-//! const PREPARED_BYTES: usize = match PreparedScalars::<Pallas>::storage_len(3) {
-//!     Ok(bytes) => bytes,
 //!     Err(_) => panic!("unsupported size"),
 //! };
-//! let mut storage = [0; PREPARED_BYTES];
-//! let retained = PreparedScalars::<Pallas>::prepare(
-//!     &scalars, &mut storage, TaskBudget::SERIAL, &SerialExecutor,
-//! )?;
-//! let indices = [0, 0, 0];
-//! let reused = Input::indexed_prepared(Bases::Affine(&bases), &indices, retained)?;
-//! assert_eq!(reused.requirements(OPTIONS)?.digits, 0);
-//! assert_eq!(reused.execute(OPTIONS, &SerialExecutor, scratch)?,
-//!     g.mul_projective(&Fq::from_u64(10)));
+//! let bases = [AffinePoint::<Pallas>::GENERATOR; 2];
+//! let indices = [0, 1, 0];
+//! let selection = Selection::indexed(Bases::Affine(&bases), &indices)?;
+//! let mut records = [ScalarStorage::ZERO; R.scalars()];
+//! let mut digits = [0; R.digits()];
+//! let mut affine = [AffinePoint::GENERATOR; R.affine()];
+//! let mut projective = [ProjectivePoint::IDENTITY; R.projective()];
+//! let mut field = [PastaField::ZERO; R.field()];
+//! let mut indices_scratch = [0; R.indices()];
+//! let mut scratch = Scratch::new(&mut records, &mut digits, &mut affine,
+//!     &mut projective, &mut field, &mut indices_scratch);
+//! for row in [[1_i128, -1, 3], [0, 2, 1]] {
+//!     let input = selection.with_signed(&row)?;
+//!     let sum = input.execute(OPTIONS, &SerialExecutor, scratch.reborrow())?;
+//!     assert_eq!(sum, bases[0].mul_projective(&PastaField::from_u64(3)));
+//! }
 //! # Ok::<(), zakura_udon::curve::CurveError>(())
 //! ```
 
-use core::num::NonZeroUsize;
-
 use super::{
-    AffinePoint, CurveError, PastaCurve, Point, PreparedAffinePoint, ProjectivePoint, check_length,
-    check_scratch, checked_count,
+    AffinePoint, CurveError, EisensteinTableBatch, PastaCurve, Point, PreparedAffinePoint,
+    ProjectivePoint, check_length, check_scratch, checked_count,
 };
 use crate::{
     exec::{Executor, TaskBudget},
-    field::PastaField,
+    field::{CanonicalUint, PastaField},
 };
+use core::num::NonZeroUsize;
 
 mod buckets;
 mod kernels;
 mod prepared;
 mod recode;
 mod schedule;
-pub use prepared::PreparedScalars;
-// Measured dispatch policy, shared by sizing, recoding, and arithmetic.
+pub use prepared::{PreparedScalars, ScalarStorage};
+pub use schedule::{ExecutionPlan, JobStorage, WorkerStorage};
 const BOOTH_MIN: usize = 128;
-const WINDOW_BITS: usize = 8;
-const WINDOWS: usize = 128_usize.div_ceil(WINDOW_BITS) + 1;
-const BUCKETS: usize = 1 << (WINDOW_BITS - 1);
 #[cfg(test)]
 mod tests;
 
-/// Borrowed base storage for an [`Input`].
+/// Borrowed ordinary, cached, or compact-table base storage.
 ///
-/// Affine and cached affine entries are nonidentity and support Bento POD
-/// storage. [`Point`] slices can also contain identities. No representation is
-/// copied or gathered when constructing an input.
+/// Stored affine points must be nonidentity and satisfy their documented curve
+/// invariants. Compact tables must satisfy [`EisensteinTableBatch`]'s binding or
+/// preparation contract, including the owner's obligations for trusted bindings.
+/// MSM construction and execution do not recheck these mathematical invariants;
+/// see [`Input`] for the consequences of invalid data.
 #[derive(Clone, Copy, Debug)]
 pub enum Bases<'a, C: PastaCurve> {
-    /// Nonidentity affine bases.
+    /// Nonidentity affine points.
     Affine(&'a [AffinePoint<C>]),
-    /// Nonidentity bases with cached endomorphism coordinates.
+    /// Affine points with cached endomorphism coordinates.
     Prepared(&'a [PreparedAffinePoint<C>]),
-    /// Affine bases that may include identity.
+    /// Points that may contain identities.
     Points(&'a [Point<C>]),
+    /// Borrowed compact tables, reusable across scalar rows.
+    Compact(EisensteinTableBatch<'a, C>),
+    /// Compact tables with cached endomorphism coordinates.
+    CompactPrepared(EisensteinTableBatch<'a, C, PreparedAffinePoint<C>>),
 }
-
 impl<C: PastaCurve> Bases<'_, C> {
-    /// Returns the number of available bases.
+    /// Number of available bases (not compact table entries).
     pub const fn len(&self) -> usize {
         match self {
             Self::Affine(b) => b.len(),
             Self::Prepared(b) => b.len(),
             Self::Points(b) => b.len(),
+            Self::Compact(b) => b.len(),
+            Self::CompactPrepared(b) => b.len(),
         }
     }
-
-    /// Returns whether the base slice is empty.
+    /// Whether there are no bases.
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
-/// Borrowed MSM terms with checked lengths and indices.
+/// Validated base mapping with a lifetime independent of scalar rows.
 ///
-/// Cloning this handle copies references only. Its immutable borrows preserve
-/// these checks for subsequent executions. Bases and scalars must already
-/// satisfy the mathematical invariants of [`AffinePoint`],
-/// [`PreparedAffinePoint`], [`Point`], and [`PastaField`], as applicable. These
-/// invariants are not checked here, including when inputs come from POD storage.
-/// Violations remain memory-safe but can make execution panic or return an
-/// incorrect result.
+/// Cloning copies references. Immutable base and index borrows preserve index
+/// validation across scalar rows. Every binding requires exactly [`Self::len`]
+/// scalars, returning [`CurveError::LengthMismatch`] otherwise. Only
+/// [`Self::with_canonical`] additionally validates scalar values.
+/// The mathematical invariants of [`Bases`] remain the producer's responsibility.
 #[derive(Clone, Copy, Debug)]
-pub struct Input<'a, C: PastaCurve> {
+pub struct Selection<'a, C: PastaCurve> {
     bases: Bases<'a, C>,
-    scalars: Scalars<'a, C>,
     indices: Option<&'a [u32]>,
 }
-
-#[derive(Clone, Copy)]
-enum Scalars<'a, C: PastaCurve> {
-    Raw(&'a [PastaField<C::Scalar>]),
-    Prepared(PreparedScalars<'a, C>),
-}
-
-impl<C: PastaCurve + core::fmt::Debug> core::fmt::Debug for Scalars<'_, C> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::Raw(s) => f.debug_tuple("Raw").field(s).finish(),
-            Self::Prepared(s) => f.debug_tuple("Prepared").field(s).finish(),
-        }
-    }
-}
-
-impl<C: PastaCurve> Scalars<'_, C> {
-    const fn len(&self) -> usize {
-        match self {
-            Self::Raw(s) => s.len(),
-            Self::Prepared(s) => s.len(),
-        }
-    }
-}
-
-impl<'a, C: PastaCurve> Input<'a, C> {
-    /// Borrows dense terms, requiring one scalar for each base.
-    ///
-    /// Term `i` is `scalars[i] * bases[i]`. Empty inputs are accepted.
-    /// Returns [`CurveError::LengthMismatch`] when the lengths differ.
-    pub fn new(
-        bases: Bases<'a, C>,
-        scalars: &'a [PastaField<C::Scalar>],
-    ) -> Result<Self, CurveError> {
-        check_length("scalars", bases.len(), scalars.len())?;
-        Ok(Self {
+impl<'a, C: PastaCurve> Selection<'a, C> {
+    /// Selects every base in storage order.
+    pub const fn new(bases: Bases<'a, C>) -> Self {
+        Self {
             bases,
-            scalars: Scalars::Raw(scalars),
             indices: None,
-        })
+        }
     }
-
-    /// Borrows indexed terms without gathering the selected bases.
+    /// Selects bases by index without gathering their coordinates.
     ///
-    /// Term `i` is `scalars[i] * bases[indices[i]]`. Empty inputs are accepted;
-    /// repeated indices contribute separately. Returns
-    /// [`CurveError::LengthMismatch`] unless there is one index per scalar, or
+    /// Repeated indices contribute separately. Returns
     /// [`CurveError::BaseIndexOutOfBounds`] if an index is at least `bases.len()`.
-    pub fn indexed(
-        bases: Bases<'a, C>,
-        indices: &'a [u32],
-        scalars: &'a [PastaField<C::Scalar>],
-    ) -> Result<Self, CurveError> {
-        Self::with_indices(bases, indices, Scalars::Raw(scalars))
-    }
-
-    /// Borrows dense bases paired with reusable scalar preparation.
-    ///
-    /// Pairs scalars and bases in the order passed to their constructors, with
-    /// the length and empty-input contracts of [`Self::new`]. Execution requires
-    /// no digit scratch; use [`Self::requirements`] to size its remaining buffers.
-    pub fn new_prepared(
-        bases: Bases<'a, C>,
-        scalars: PreparedScalars<'a, C>,
-    ) -> Result<Self, CurveError> {
-        check_length("scalars", bases.len(), scalars.len())?;
-        Ok(Self {
-            bases,
-            scalars: Scalars::Prepared(scalars),
-            indices: None,
-        })
-    }
-
-    /// Borrows indexed bases paired with reusable scalar preparation.
-    ///
-    /// Has the index and length contracts of [`Self::indexed`], including its
-    /// errors. Execution requires no digit scratch; use [`Self::requirements`]
-    /// to size its remaining buffers. Indices may differ between uses of the
-    /// same [`PreparedScalars`] handle.
-    pub fn indexed_prepared(
-        bases: Bases<'a, C>,
-        indices: &'a [u32],
-        scalars: PreparedScalars<'a, C>,
-    ) -> Result<Self, CurveError> {
-        Self::with_indices(bases, indices, Scalars::Prepared(scalars))
-    }
-
-    fn with_indices(
-        bases: Bases<'a, C>,
-        indices: &'a [u32],
-        scalars: Scalars<'a, C>,
-    ) -> Result<Self, CurveError> {
-        check_length("indices", scalars.len(), indices.len())?;
+    pub fn indexed(bases: Bases<'a, C>, indices: &'a [u32]) -> Result<Self, CurveError> {
         for (position, &index) in indices.iter().enumerate() {
             if u64::from(index) >= bases.len() as u64 {
                 return Err(CurveError::BaseIndexOutOfBounds {
@@ -245,169 +134,524 @@ impl<'a, C: PastaCurve> Input<'a, C> {
         }
         Ok(Self {
             bases,
-            scalars,
             indices: Some(indices),
         })
     }
-
-    /// Returns the number of scalar/base terms.
+    /// Number of selected terms.
     pub const fn len(&self) -> usize {
-        self.scalars.len()
+        match self.indices {
+            Some(i) => i.len(),
+            None => self.bases.len(),
+        }
     }
-
-    /// Returns whether the sum has no terms.
+    /// Whether the selection is empty.
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    fn bind<'s>(&self, scalars: Scalars<'s, C>) -> Result<Input<'s, C>, CurveError>
+    where
+        'a: 's,
+    {
+        check_length("scalars", self.len(), scalars.len())?;
+        Ok(Input {
+            bases: self.bases,
+            indices: self.indices,
+            scalars,
+        })
+    }
+    /// Binds a field scalar row with an O(1) length check.
+    ///
+    /// Scalars must satisfy [`Input`]'s reduced-residue invariant. See
+    /// [`Selection`] for the exact-length requirement.
+    pub fn with_scalars<'s>(
+        &self,
+        scalars: &'s [PastaField<C::Scalar>],
+    ) -> Result<Input<'s, C>, CurveError>
+    where
+        'a: 's,
+    {
+        self.bind(Scalars::Raw(scalars))
+    }
+    /// Binds prepared scalars with an O(1) length check.
+    ///
+    /// See [`Selection`] for the exact-length requirement.
+    pub fn with_prepared_scalars<'s>(
+        &self,
+        scalars: PreparedScalars<'s, C>,
+    ) -> Result<Input<'s, C>, CurveError>
+    where
+        'a: 's,
+    {
+        self.bind(Scalars::Prepared(scalars))
+    }
+    /// Binds unsigned coefficients whose type guarantees the 128-bit bound.
+    ///
+    /// See [`Selection`] for the exact-length requirement.
+    pub fn with_unsigned<'s>(&self, scalars: &'s [u128]) -> Result<Input<'s, C>, CurveError>
+    where
+        'a: 's,
+    {
+        self.bind(Scalars::Unsigned(scalars))
+    }
+    /// Binds signed coefficients, including `i128::MIN`.
+    ///
+    /// A negative coefficient subtracts its magnitude's base multiple. See
+    /// [`Selection`] for the exact-length requirement.
+    pub fn with_signed<'s>(&self, scalars: &'s [i128]) -> Result<Input<'s, C>, CurveError>
+    where
+        'a: 's,
+    {
+        self.bind(Scalars::Signed(scalars))
+    }
+    /// Checks canonical integers against the scalar modulus and a bit bound.
+    ///
+    /// Each integer must be below the scalar modulus and fit in `bits` bits.
+    /// The bound must be in `0..=256`; zero permits only zero coefficients.
+    /// Returns [`CurveError::InvalidScalar`] for a violation, recording the first
+    /// invalid position, or position zero for an invalid bound, even on an empty
+    /// row. No value is truncated. See [`Selection`] for the length requirement.
+    pub fn with_canonical<'s>(
+        &self,
+        scalars: &'s [CanonicalUint],
+        bits: usize,
+    ) -> Result<Input<'s, C>, CurveError>
+    where
+        'a: 's,
+    {
+        check_length("scalars", self.len(), scalars.len())?;
+        prepared::validate_canonical::<C>(scalars, bits)?;
+        self.bind(Scalars::Canonical(scalars))
+    }
+}
 
-    const fn digit_scratch_len(&self) -> Result<usize, CurveError> {
-        match self.scalars {
-            Scalars::Raw(s) => recode::storage_len(s.len()),
-            Scalars::Prepared(_) => Ok(0),
+/// Borrowed MSM terms with checked lengths and indices.
+///
+/// Field scalars must satisfy [`PastaField`]'s reduced-residue invariant; stored
+/// bases must satisfy [`Bases`]' mathematical invariants. Violations remain
+/// memory-safe but may panic or produce incorrect results. Arithmetic is
+/// variable-time and gives no constant-time guarantee for secret inputs.
+#[derive(Clone, Copy, Debug)]
+pub struct Input<'a, C: PastaCurve> {
+    bases: Bases<'a, C>,
+    scalars: Scalars<'a, C>,
+    indices: Option<&'a [u32]>,
+}
+#[derive(Clone, Copy)]
+enum Scalars<'a, C: PastaCurve> {
+    Raw(&'a [PastaField<C::Scalar>]),
+    Prepared(PreparedScalars<'a, C>),
+    Unsigned(&'a [u128]),
+    Signed(&'a [i128]),
+    Canonical(&'a [CanonicalUint]),
+}
+impl<C: PastaCurve> core::fmt::Debug for Scalars<'_, C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Scalars")
+            .field("len", &self.len())
+            .finish_non_exhaustive()
+    }
+}
+impl<'a, C: PastaCurve> Scalars<'a, C> {
+    const fn len(&self) -> usize {
+        match self {
+            Self::Raw(s) => s.len(),
+            Self::Prepared(s) => s.len(),
+            Self::Unsigned(s) => s.len(),
+            Self::Signed(s) => s.len(),
+            Self::Canonical(s) => s.len(),
         }
     }
-
-    /// Returns scratch counts for unprepared scalars and execution options.
+    fn slice(self, range: core::ops::Range<usize>) -> Self {
+        match self {
+            Self::Raw(s) => Self::Raw(&s[range]),
+            Self::Unsigned(s) => Self::Unsigned(&s[range]),
+            Self::Signed(s) => Self::Signed(&s[range]),
+            Self::Canonical(s) => Self::Canonical(&s[range]),
+            Self::Prepared(s) => Self::Prepared(PreparedScalars {
+                // A whole-row bound remains valid for each chunk; execution
+                // already retains its selected geometry in the job metadata.
+                records: &s.records[range],
+                shape: s.shape,
+                cached: None,
+            }),
+        }
+    }
+}
+impl<'a, C: PastaCurve> Input<'a, C> {
+    /// Borrows one field scalar per base in storage order.
     ///
-    /// Counts are independent of base representation, indices, and scalar values.
-    /// This const query supports static buffers and returns
-    /// [`CurveError::SizeOverflow`] when a buffer cannot be represented by a
-    /// slice. Counts can change between crate versions; obtain them from this API.
-    /// For inputs borrowing [`PreparedScalars`], use [`Self::requirements`] to
-    /// omit digit scratch.
+    /// Returns [`CurveError::LengthMismatch`] unless the lengths are equal.
+    pub fn new(
+        bases: Bases<'a, C>,
+        scalars: &'a [PastaField<C::Scalar>],
+    ) -> Result<Self, CurveError> {
+        Selection::new(bases).with_scalars(scalars)
+    }
+    /// Checks indices and scalar length, without gathering bases.
+    ///
+    /// Returns [`CurveError::LengthMismatch`] unless each scalar has an index.
+    /// Index bounds and repeated indices follow [`Selection::indexed`].
+    pub fn indexed(
+        bases: Bases<'a, C>,
+        indices: &'a [u32],
+        scalars: &'a [PastaField<C::Scalar>],
+    ) -> Result<Self, CurveError> {
+        check_length("indices", scalars.len(), indices.len())?;
+        Selection::indexed(bases, indices)?.with_scalars(scalars)
+    }
+    /// Binds one prepared scalar per base.
+    ///
+    /// Returns [`CurveError::LengthMismatch`] unless the lengths are equal.
+    pub fn new_prepared(
+        bases: Bases<'a, C>,
+        scalars: PreparedScalars<'a, C>,
+    ) -> Result<Self, CurveError> {
+        Selection::new(bases).with_prepared_scalars(scalars)
+    }
+    /// Checks indices and binds prepared scalars.
+    ///
+    /// Returns [`CurveError::LengthMismatch`] unless each scalar has an index.
+    /// Index bounds and repeated indices follow [`Selection::indexed`].
+    pub fn indexed_prepared(
+        bases: Bases<'a, C>,
+        indices: &'a [u32],
+        scalars: PreparedScalars<'a, C>,
+    ) -> Result<Self, CurveError> {
+        check_length("indices", scalars.len(), indices.len())?;
+        Selection::indexed(bases, indices)?.with_prepared_scalars(scalars)
+    }
+    /// Retains this input's validated base mapping for another scalar row.
+    pub const fn selection(&self) -> Selection<'a, C> {
+        Selection {
+            bases: self.bases,
+            indices: self.indices,
+        }
+    }
+    /// Number of terms.
+    pub const fn len(&self) -> usize {
+        self.scalars.len()
+    }
+    /// Whether the sum has no terms.
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// Conservative const scratch counts for unprepared scalars and ordinary bases.
+    ///
+    /// Supports field and integer scalar rows with [`Bases::Affine`],
+    /// [`Bases::Prepared`], or [`Bases::Points`]. Use [`Self::requirements`] for
+    /// retained scalars or compact tables: their memory planning can select a
+    /// different layout, whose individual buffer counts may be larger.
+    ///
+    /// Returns [`CurveError::SizeOverflow`] if sizing exceeds slice limits, or
+    /// [`CurveError::MemoryLimit`] under the
+    /// [memory policy](ExecutionOptions::with_memory_limit).
     pub const fn requirements_for_len(
         terms: usize,
         options: ExecutionOptions,
     ) -> Result<Requirements, CurveError> {
         schedule::single_requirements::<C>(terms, options)
     }
-
-    /// Returns scratch counts for this input and execution policy.
+    /// Scratch counts for this input, accounting for retained preparation.
     ///
-    /// Equivalent to [`Self::requirements_for_len`] with `self.len()`, except
-    /// inputs borrowing [`PreparedScalars`] require zero digit bytes. Returns
-    /// [`CurveError::SizeOverflow`] if a buffer exceeds slice limits.
-    pub const fn requirements(
-        &self,
-        options: ExecutionOptions,
-    ) -> Result<Requirements, CurveError> {
-        match Self::requirements_for_len(self.len(), options) {
-            Ok(mut r) => {
-                if let Scalars::Prepared(_) = self.scalars {
-                    r.digits = 0;
-                }
-                Ok(r)
-            }
-            Err(error) => Err(error),
-        }
+    /// Errors and memory accounting match [`batch_requirements`].
+    pub fn requirements(&self, options: ExecutionOptions) -> Result<Requirements, CurveError> {
+        batch_requirements(core::slice::from_ref(self), options)
     }
-
-    /// Computes the sum, returning identity when there are no terms.
+    /// Computes the sum with caller-owned scratch and execution resources.
     ///
-    /// Size scratch with [`Self::requirements`] using the same `options`.
-    /// Initial contents do not matter; tails beyond the reported counts are
-    /// untouched.
+    /// An empty input returns the identity. Size scratch with
+    /// [`Self::requirements`] and the same options. Initial scratch contents do
+    /// not matter; tails beyond the required prefixes remain untouched.
     ///
-    /// # Errors
-    ///
-    /// Returns [`CurveError::ScratchTooSmall`] for insufficient scratch or
-    /// [`CurveError::SizeOverflow`] if sizing exceeds slice limits. These checks
-    /// precede all writes, so returned errors leave scratch unchanged.
-    ///
-    /// # Panics
-    ///
-    /// An executor panic may leave scratch partially written. All scoped jobs
-    /// finish or unwind before it propagates, as required by [`Executor`].
-    /// The buffers can then be reused without clearing them.
+    /// Sizing errors match [`Self::requirements`]; insufficient scratch returns
+    /// [`CurveError::ScratchTooSmall`]. Returned errors precede all writes.
+    /// An executor panic may leave scratch partially written; scoped work must
+    /// finish unwinding before reuse, as required by [`Executor`].
     pub fn execute<X: Executor>(
         &self,
         options: ExecutionOptions,
         executor: &X,
         scratch: Scratch<'_, C>,
     ) -> Result<ProjectivePoint<C>, CurveError> {
-        let mut output = [ProjectivePoint::IDENTITY];
+        let mut result = [ProjectivePoint::IDENTITY];
         execute_batch(
             core::slice::from_ref(self),
-            &mut output,
+            &mut result,
             options,
             executor,
             scratch,
         )?;
-        Ok(output[0])
+        Ok(result[0])
     }
 }
 
-/// Concurrency and working storage limits for MSM execution.
+/// Booth bucket accumulation preference for tuning and kernel comparisons.
+///
+/// Short-scalar and joint-table kernels do not use this preference.
+/// [Streaming buckets](ExecutionOptions::with_streaming_buckets) always use
+/// projective accumulation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Accumulation {
+    /// Select a policy using the effective pass size.
+    Auto,
+    /// Affine pair trees with batch inversion.
+    Affine,
+    /// Projective buckets, with no affine pair scratch.
+    Projective,
+    /// Affine early passes and a projective final pass.
+    Hybrid,
+}
+/// Caller-selected concurrency, memory, and arithmetic policy.
+///
+/// Task, pass, and chunk limits are upper bounds; the planner may use less.
+/// Explicit kernel selections override earlier selections as documented on the
+/// builders. Automatic kernel and scheduling choices may change between releases.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ExecutionOptions {
-    /// Total allowance for simultaneous work partitions, including nested work.
-    pub task_budget: TaskBudget,
-    /// Maximum terms staged together in each concurrent arithmetic partition.
-    ///
-    /// `None` permits staging the whole partition. A cap trades additional passes
-    /// over the terms for less temporary point storage. It does not bound total
-    /// scratch: digit storage still scales with all terms, and concurrent
-    /// partitions each need working storage. Query [`Input::requirements`] or
-    /// [`batch_requirements`] to size buffers for the chosen options.
-    pub max_terms_per_pass: Option<NonZeroUsize>,
+    task_budget: TaskBudget,
+    max_terms_per_pass: Option<NonZeroUsize>,
+    memory_limit: Option<usize>,
+    chunk_size: Option<NonZeroUsize>,
+    window_bits: Option<u8>,
+    joint_tables: bool,
+    streaming: bool,
+    accumulation: Accumulation,
 }
-
 impl ExecutionOptions {
-    /// Serial execution without a pass cap.
+    /// Serial execution with no caller-imposed memory ceiling.
     pub const SERIAL: Self = Self {
         task_budget: TaskBudget::SERIAL,
         max_terms_per_pass: None,
+        memory_limit: None,
+        chunk_size: None,
+        window_bits: None,
+        joint_tables: false,
+        streaming: false,
+        accumulation: Accumulation::Auto,
     };
+    /// Sets the total scoped concurrency allowance.
+    pub const fn with_task_budget(mut self, budget: TaskBudget) -> Self {
+        self.task_budget = budget;
+        self
+    }
+    /// Caps terms staged for affine buckets or temporary joint tables.
+    ///
+    /// `None` removes the cap. This does not bound scalar records or recoding
+    /// bytes; use [`Self::with_chunk_size`] or [`Self::with_memory_limit`] for
+    /// those. Kernels without this staging, including projective buckets and
+    /// short-scalar ladders, do not split their arithmetic at the cap.
+    pub const fn with_max_terms_per_pass(mut self, cap: Option<NonZeroUsize>) -> Self {
+        self.max_terms_per_pass = cap;
+        self
+    }
+    /// Bounds the typed temporary buffer capacity required by a plan, in bytes.
+    ///
+    /// Counts the required [`Scratch`] prefixes, intermediate results, and any
+    /// [`ExecutionPlan`] metadata prefixes reserved by its sizing query. Excludes
+    /// surplus buffer tails, inputs, outputs, retained preparation, fixed stack
+    /// frames, and executor resources. This is not a process memory limit.
+    ///
+    /// The planner may reduce staging, concurrency, or chunk size and change
+    /// automatic kernel choices, preserving explicit width and accumulator
+    /// selections. It returns [`CurveError::MemoryLimit`] if its search finds no
+    /// fitting layout. The search is not exhaustive and does not prove that no
+    /// possible layout fits.
+    pub const fn with_memory_limit(mut self, bytes: usize) -> Self {
+        self.memory_limit = Some(bytes);
+        self
+    }
+    /// Caps the terms prepared and recoded together.
+    ///
+    /// By default, execution completes each chunk's MSM and reuses its workspace.
+    /// [Streaming execution](Self::with_streaming_buckets) instead retains window
+    /// buckets across chunks. Both bound scratch independently of the total term
+    /// count; a [memory ceiling](Self::with_memory_limit) may reduce the chunk size.
+    pub const fn with_chunk_size(mut self, terms: NonZeroUsize) -> Self {
+        self.chunk_size = Some(terms);
+        self
+    }
+    /// Forces a Booth width for comparisons or application-specific tuning.
+    ///
+    /// Returns [`CurveError::InvalidMsmWindow`] outside `4..=12`. Overrides a
+    /// previous joint-table selection and preserves streaming execution, if set.
+    pub const fn with_booth_width(mut self, bits: u32) -> Result<Self, CurveError> {
+        if bits < 4 || bits > 12 {
+            return Err(CurveError::InvalidMsmWindow { bits });
+        }
+        self.window_bits = Some(bits as u8);
+        self.joint_tables = false;
+        Ok(self)
+    }
+    /// Forces the compact joint ladder for comparisons or retained table reuse.
+    ///
+    /// Ordinary bases prepare temporary tables within each arithmetic pass.
+    /// Compact bases reuse their tables. Overrides a previously selected Booth
+    /// width or streaming mode; [`Accumulation`] does not affect this kernel.
+    pub const fn with_joint_tables(mut self) -> Self {
+        self.window_bits = None;
+        self.joint_tables = true;
+        self.streaming = false;
+        self
+    }
+    /// Retains projective window buckets while recoding successive chunks.
+    ///
+    /// This trades a larger fixed bucket workspace for one collapse per window.
+    /// It supplies a Booth width and chunk size unless already configured, and
+    /// overrides a joint-table selection. Bucket accumulation is serial within
+    /// each job; scalar preparation may use the assigned task budget.
+    /// The byte ceiling includes all retained window buckets. A later call to
+    /// [`Self::with_joint_tables`] restores complete-chunk execution.
+    pub const fn with_streaming_buckets(mut self) -> Self {
+        self.streaming = true;
+        self.joint_tables = false;
+        if self.window_bits.is_none() {
+            self.window_bits = Some(8);
+        }
+        if self.chunk_size.is_none() {
+            self.chunk_size = NonZeroUsize::new(256);
+        }
+        self
+    }
+    /// Selects an [`Accumulation`] preference for nonstreaming Booth kernels.
+    pub const fn with_accumulation(mut self, accumulation: Accumulation) -> Self {
+        self.accumulation = accumulation;
+        self
+    }
+    /// Requested task budget; a memory-constrained plan may use fewer workers.
+    pub const fn task_budget(&self) -> TaskBudget {
+        self.task_budget
+    }
+    /// Requested byte ceiling, if any.
+    pub const fn memory_limit(&self) -> Option<usize> {
+        self.memory_limit
+    }
+    /// Requested per-pass term cap.
+    pub const fn max_terms_per_pass(&self) -> Option<NonZeroUsize> {
+        self.max_terms_per_pass
+    }
 }
-
 impl Default for ExecutionOptions {
     fn default() -> Self {
         Self::SERIAL
     }
 }
 
-/// Minimum scratch lengths, counted in elements of the corresponding slice.
+/// Element counts for initialized, typed caller-owned temporary buffers.
 ///
-/// Obtain counts from [`Input::requirements_for_len`], [`Input::requirements`],
-/// or [`batch_requirements`]. Larger buffers can be reused; execution touches
-/// only the reported prefixes.
+/// Obtain these counts from [`Input::requirements`], [`batch_requirements`], or
+/// [`ExecutionPlan::requirements`] for the execution being sized.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Requirements {
-    /// Number of digit bytes.
-    pub digits: usize,
-    /// Number of nonidentity affine points.
-    pub affine: usize,
-    /// Number of projective points.
-    pub projective: usize,
-    /// Number of base-field elements.
-    pub field: usize,
-    /// Number of temporary `usize` indices used during execution.
-    pub indices: usize,
+    scalars: usize,
+    digits: usize,
+    affine: usize,
+    projective: usize,
+    field: usize,
+    indices: usize,
 }
-
-/// Caller-owned working slices for one execution or group of MSMs.
+impl Requirements {
+    /// Scalar classification and GLV records.
+    pub const fn scalars(&self) -> usize {
+        self.scalars
+    }
+    /// Recoding bytes.
+    pub const fn digits(&self) -> usize {
+        self.digits
+    }
+    /// Affine points.
+    pub const fn affine(&self) -> usize {
+        self.affine
+    }
+    /// Projective points, including intermediate results.
+    pub const fn projective(&self) -> usize {
+        self.projective
+    }
+    /// Base-field elements.
+    pub const fn field(&self) -> usize {
+        self.field
+    }
+    /// Working indices.
+    pub const fn indices(&self) -> usize {
+        self.indices
+    }
+    /// Checked total bytes in these buffers for curve `C`.
+    ///
+    /// Counts only the required prefixes of the six [`Scratch`] buffers, using
+    /// `C`'s element sizes. [`ExecutionPlan::temporary_bytes`] also counts metadata.
+    /// Returns [`CurveError::SizeOverflow`] if the byte count overflows `usize`.
+    pub const fn bytes<C: PastaCurve>(&self) -> Result<usize, CurveError> {
+        let counts = [
+            self.scalars,
+            self.digits,
+            self.affine,
+            self.projective,
+            self.field,
+            self.indices,
+        ];
+        let sizes = [
+            core::mem::size_of::<ScalarStorage<C>>(),
+            1,
+            core::mem::size_of::<AffinePoint<C>>(),
+            core::mem::size_of::<ProjectivePoint<C>>(),
+            core::mem::size_of::<PastaField<C::Base>>(),
+            core::mem::size_of::<usize>(),
+        ];
+        let mut bytes = 0usize;
+        let mut i = 0;
+        while i < counts.len() {
+            let Some(n) = counts[i].checked_mul(sizes[i]) else {
+                return Err(CurveError::SizeOverflow);
+            };
+            let Some(total) = bytes.checked_add(n) else {
+                return Err(CurveError::SizeOverflow);
+            };
+            bytes = total;
+            i += 1;
+        }
+        Ok(bytes)
+    }
+}
+/// Initialized caller-owned buffers whose contents may be reused between executions.
 ///
-/// Initialize affine storage with any valid point, such as the generator.
-/// Execution initializes every value it reads, so the buffers can be reused
-/// without clearing them. An [`Input`] retains no scratch borrows.
+/// Execution overwrites each value before using it. See [`Input::execute`] for
+/// sizing, untouched tails, and reuse after an executor panic.
 #[derive(Debug)]
 pub struct Scratch<'a, C: PastaCurve> {
-    /// Recoded digit storage, sized by [`Requirements::digits`].
-    pub digits: &'a mut [u8],
-    /// Affine working storage, sized by [`Requirements::affine`].
-    pub affine: &'a mut [AffinePoint<C>],
-    /// Projective working storage, sized by [`Requirements::projective`].
-    pub projective: &'a mut [ProjectivePoint<C>],
-    /// Base-field working storage, sized by [`Requirements::field`].
-    pub field: &'a mut [PastaField<C::Base>],
-    /// Working indices, sized by [`Requirements::indices`].
-    pub indices: &'a mut [usize],
+    scalars: &'a mut [ScalarStorage<C>],
+    digits: &'a mut [u8],
+    affine: &'a mut [AffinePoint<C>],
+    projective: &'a mut [ProjectivePoint<C>],
+    field: &'a mut [PastaField<C::Base>],
+    indices: &'a mut [usize],
 }
-
 impl<'a, C: PastaCurve> Scratch<'a, C> {
-    /// Borrows the buffers for an execution while retaining this scratch handle.
+    /// Borrows initialized buffers without checking their lengths.
+    ///
+    /// Execution checks lengths against its [`Requirements`] before writing.
+    /// Suitable initializers are [`ScalarStorage::ZERO`],
+    /// [`AffinePoint::GENERATOR`], [`ProjectivePoint::IDENTITY`],
+    /// [`PastaField::ZERO`], and zero for byte and index storage.
+    pub fn new(
+        scalars: &'a mut [ScalarStorage<C>],
+        digits: &'a mut [u8],
+        affine: &'a mut [AffinePoint<C>],
+        projective: &'a mut [ProjectivePoint<C>],
+        field: &'a mut [PastaField<C::Base>],
+        indices: &'a mut [usize],
+    ) -> Self {
+        Self {
+            scalars,
+            digits,
+            affine,
+            projective,
+            field,
+            indices,
+        }
+    }
+    /// Reborrows storage for another execution.
     pub fn reborrow(&mut self) -> Scratch<'_, C> {
         Scratch {
+            scalars: self.scalars,
             digits: self.digits,
             affine: self.affine,
             projective: self.projective,
@@ -415,14 +659,15 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
             indices: self.indices,
         }
     }
-
     fn checked(self, r: Requirements) -> Result<Self, CurveError> {
+        check_scratch("scalars", r.scalars, self.scalars.len())?;
         check_scratch("digits", r.digits, self.digits.len())?;
         check_scratch("affine", r.affine, self.affine.len())?;
         check_scratch("projective", r.projective, self.projective.len())?;
         check_scratch("field", r.field, self.field.len())?;
         check_scratch("indices", r.indices, self.indices.len())?;
         Ok(Self {
+            scalars: &mut self.scalars[..r.scalars],
             digits: &mut self.digits[..r.digits],
             affine: &mut self.affine[..r.affine],
             projective: &mut self.projective[..r.projective],
@@ -431,33 +676,28 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
         })
     }
 }
-
-/// Returns scratch counts for grouped inputs sharing one task budget.
+/// Returns scratch counts for inputs sharing one task budget and memory ceiling.
 ///
-/// The counts depend on input lengths, whether scalars are prepared, and options,
-/// including the pass cap.
-/// Returns [`CurveError::SizeOverflow`] if a buffer would exceed slice limits.
+/// Counts account for workspace reuse across jobs and concurrent workers; they
+/// are not the sum of independent input requirements. Returns
+/// [`CurveError::SizeOverflow`] if sizing exceeds slice limits, or
+/// [`CurveError::MemoryLimit`] if the
+/// [memory policy](ExecutionOptions::with_memory_limit) finds no fitting layout.
+/// Reusable plan metadata is excluded; size a retained plan with
+/// [`ExecutionPlan::requirements`] instead.
 pub fn batch_requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],
     options: ExecutionOptions,
 ) -> Result<Requirements, CurveError> {
     Ok(schedule::Plan::new(inputs, options)?.requirements)
 }
-
-/// Computes one projective result per input, preserving input order.
+/// Computes one result per input, in input order.
 ///
-/// Inputs can mix base representations and dense or indexed access. They share
-/// the task budget in `options`. Size scratch with [`batch_requirements`] using
-/// the same inputs and options. The initial-content, scratch-tail, and panic
-/// contracts of [`Input::execute`] apply; a panic may also leave output partially
-/// written.
-///
-/// # Errors
-///
-/// Returns [`CurveError::LengthMismatch`] unless `output.len() == inputs.len()`,
-/// [`CurveError::ScratchTooSmall`] for insufficient scratch, or
-/// [`CurveError::SizeOverflow`] if sizing exceeds slice limits. All checks
-/// precede writes, so returned errors leave both output and scratch unchanged.
+/// Size scratch with [`batch_requirements`] for the same inputs and options.
+/// Returns [`CurveError::LengthMismatch`] unless `output.len() == inputs.len()`;
+/// sizing and scratch errors match [`Input::execute`]. All returned errors
+/// precede writes. An executor panic may partially write output and scratch;
+/// reuse after unwinding follows [`Input::execute`].
 pub fn execute_batch<C: PastaCurve, X: Executor>(
     inputs: &[Input<'_, C>],
     output: &mut [ProjectivePoint<C>],
@@ -471,3 +711,6 @@ pub fn execute_batch<C: PastaCurve, X: Executor>(
     schedule::execute(&plan, inputs, output, executor, scratch);
     Ok(())
 }
+
+#[cfg(test)]
+mod experiments;

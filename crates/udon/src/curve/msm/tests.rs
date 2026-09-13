@@ -6,7 +6,8 @@ use crate::{
 };
 use std::{vec, vec::Vec};
 
-struct Buffers<C: PastaCurve> {
+pub(super) struct Buffers<C: PastaCurve> {
+    scalars: Vec<ScalarStorage<C>>,
     digits: Vec<u8>,
     affine: Vec<AffinePoint<C>>,
     projective: Vec<ProjectivePoint<C>>,
@@ -15,8 +16,9 @@ struct Buffers<C: PastaCurve> {
 }
 
 impl<C: PastaCurve> Buffers<C> {
-    fn new(r: Requirements) -> Self {
+    pub(super) fn new(r: Requirements) -> Self {
         Self {
+            scalars: vec![ScalarStorage::ZERO; r.scalars + 1],
             digits: vec![73; r.digits + 1],
             affine: vec![AffinePoint::GENERATOR; r.affine + 1],
             projective: vec![ProjectivePoint::GENERATOR; r.projective + 1],
@@ -24,8 +26,9 @@ impl<C: PastaCurve> Buffers<C> {
             indices: vec![73; r.indices + 1],
         }
     }
-    fn borrow(&mut self) -> Scratch<'_, C> {
+    pub(super) fn borrow(&mut self) -> Scratch<'_, C> {
         Scratch {
+            scalars: &mut self.scalars,
             digits: &mut self.digits,
             affine: &mut self.affine,
             projective: &mut self.projective,
@@ -34,6 +37,7 @@ impl<C: PastaCurve> Buffers<C> {
         }
     }
     fn tails(&self, r: Requirements) {
+        assert!(self.scalars[r.scalars] == ScalarStorage::ZERO);
         assert_eq!(self.digits[r.digits], 73);
         assert_eq!(self.affine[r.affine], AffinePoint::GENERATOR);
         assert_eq!(self.projective[r.projective], ProjectivePoint::GENERATOR);
@@ -66,6 +70,8 @@ fn reference<C: PastaCurve>(input: &Input<'_, C>) -> ProjectivePoint<C> {
             Bases::Affine(b) => b[j].to_projective(),
             Bases::Prepared(b) => b[j].to_affine().to_projective(),
             Bases::Points(b) => b[j].to_projective(),
+            Bases::Compact(b) => b.get(j).unwrap().base().to_projective(),
+            Bases::CompactPrepared(b) => b.get(j).unwrap().base().to_projective(),
         };
         sum = sum.add(&scalar::multiply(k, |sum| sum.add(&base)));
     }
@@ -116,7 +122,8 @@ fn differentials<C: PastaCurve>() {
         0, 1, 7, 8, 15, 31, 32, 33, 127, 128, 129, 255, 256, 257, 513, 1030,
     ] {
         for scalars in [&full[..n], &short[..n]] {
-            let mut storage = vec![73; PreparedScalars::<C>::storage_len(n).unwrap() + 1];
+            let mut storage =
+                vec![ScalarStorage::ZERO; PreparedScalars::<C>::storage_len(n).unwrap() + 1];
             let retained = PreparedScalars::<C>::prepare(
                 scalars,
                 &mut storage,
@@ -146,10 +153,9 @@ fn differentials<C: PastaCurve>() {
                         (3, NonZeroUsize::new(17)),
                         (65, NonZeroUsize::new(67)),
                     ] {
-                        let options = ExecutionOptions {
-                            task_budget: TaskBudget::new(tasks).unwrap(),
-                            max_terms_per_pass: cap,
-                        };
+                        let options = ExecutionOptions::SERIAL
+                            .with_task_budget(TaskBudget::new(tasks).unwrap())
+                            .with_max_terms_per_pass(cap);
                         let r = input.requirements(options).unwrap();
                         assert_eq!(r, batch_requirements(&[input], options).unwrap());
                         let mut buffers = Buffers::new(r);
@@ -167,7 +173,7 @@ fn differentials<C: PastaCurve>() {
                         );
                         buffers.tails(r);
                         let r = reused.requirements(options).unwrap();
-                        assert_eq!(r.digits, 0);
+                        assert_eq!(r.scalars, 0);
                         assert_eq!(r, batch_requirements(&[reused], options).unwrap());
                         let mut buffers = Buffers::new(r);
                         assert_eq!(
@@ -178,7 +184,7 @@ fn differentials<C: PastaCurve>() {
                     }
                 }
             }
-            assert_eq!(*storage.last().unwrap(), 73);
+            assert!(*storage.last().unwrap() == ScalarStorage::ZERO);
         }
     }
 }
@@ -194,7 +200,7 @@ fn prepared_scalars_validate_before_writes_and_release_originals() {
     let raw = Input::new(Bases::Affine(&bases), &scalars).unwrap();
     let expected = reference(&raw);
     let bytes = PreparedScalars::<C>::storage_len(scalars.len()).unwrap();
-    let mut storage = vec![73; bytes + 1];
+    let mut storage = vec![ScalarStorage::ZERO; bytes + 1];
     assert!(matches!(
         PreparedScalars::<C>::prepare(
             &scalars,
@@ -204,7 +210,7 @@ fn prepared_scalars_validate_before_writes_and_release_originals() {
         ),
         Err(CurveError::ScratchTooSmall { .. })
     ));
-    assert!(storage.iter().all(|b| *b == 73));
+    assert!(storage.iter().all(|b| *b == ScalarStorage::ZERO));
     assert_eq!(
         PreparedScalars::<C>::storage_len(usize::MAX),
         Err(CurveError::SizeOverflow)
@@ -236,10 +242,9 @@ fn prepared_scalars_validate_before_writes_and_release_originals() {
         Input::new_prepared(Bases::Affine(&bases), retained).unwrap(),
         Input::indexed_prepared(Bases::Affine(&negative[..1]), &indices, retained).unwrap(),
     ];
-    let options = ExecutionOptions {
-        task_budget: TaskBudget::new(4).unwrap(),
-        max_terms_per_pass: NonZeroUsize::new(17),
-    };
+    let options = ExecutionOptions::SERIAL
+        .with_task_budget(TaskBudget::new(4).unwrap())
+        .with_max_terms_per_pass(NonZeroUsize::new(17));
     let r = batch_requirements(&inputs, options).unwrap();
     let mut buffers = Buffers::new(r);
     let mut output = [ProjectivePoint::GENERATOR; 3];
@@ -249,7 +254,7 @@ fn prepared_scalars_validate_before_writes_and_release_originals() {
         [ProjectivePoint::IDENTITY, expected, expected.neg()]
     );
     buffers.tails(r);
-    assert_eq!(storage[bytes], 73);
+    assert!(storage[bytes] == ScalarStorage::ZERO);
 }
 
 #[test]
@@ -282,7 +287,8 @@ fn scalar_boundaries<C: PastaCurve>() {
             let indices: Vec<_> = (0..n).map(|i| (i % bases.len()) as u32).collect();
             let input = Input::indexed(Bases::Points(&bases), &indices, &scalars).unwrap();
             let expected = reference(&input);
-            let mut storage = vec![73; PreparedScalars::<C>::storage_len(n).unwrap()];
+            let mut storage =
+                vec![ScalarStorage::ZERO; PreparedScalars::<C>::storage_len(n).unwrap()];
             let retained = PreparedScalars::<C>::prepare(
                 &scalars,
                 &mut storage,
@@ -294,10 +300,9 @@ fn scalar_boundaries<C: PastaCurve>() {
                 Input::indexed_prepared(Bases::Points(&bases), &indices, retained).unwrap();
             for tasks in [1, 4] {
                 for cap in [1, 7, 8, 17, n] {
-                    let options = ExecutionOptions {
-                        task_budget: TaskBudget::new(tasks).unwrap(),
-                        max_terms_per_pass: NonZeroUsize::new(cap),
-                    };
+                    let options = ExecutionOptions::SERIAL
+                        .with_task_budget(TaskBudget::new(tasks).unwrap())
+                        .with_max_terms_per_pass(NonZeroUsize::new(cap));
                     let r = input.requirements(options).unwrap();
                     let mut buffers = Buffers::new(r);
                     assert_eq!(
@@ -326,6 +331,70 @@ fn scalar_boundaries<C: PastaCurve>() {
 fn short_scalar_dispatch_and_highest_windows() {
     scalar_boundaries::<Pallas>();
     scalar_boundaries::<Vesta>();
+}
+
+#[test]
+fn dense_and_sparse_bounded_rows_cross_chunk_policies() {
+    fn check<C: PastaCurve>() {
+        let bases = [
+            Point::<C>::GENERATOR,
+            Point::GENERATOR.neg(),
+            Point::IDENTITY,
+        ];
+        for n in [511, 512, 513] {
+            for bits in [32, 64, 128] {
+                for dense in [false, true] {
+                    let magnitude = if dense {
+                        u128::MAX >> (128 - bits)
+                    } else {
+                        1_u128 << (bits - 1)
+                    };
+                    let scalar =
+                        PastaField::from_canonical_uint(crate::field::CanonicalUint::from_limbs([
+                            magnitude as u64,
+                            (magnitude >> 64) as u64,
+                            0,
+                            0,
+                        ]))
+                        .unwrap();
+                    let scalars: Vec<_> = (0..n)
+                        .map(|i| if i % 2 == 0 { scalar } else { scalar.neg() })
+                        .collect();
+                    let indices: Vec<_> = (0..n).map(|i| (i % 3) as u32).collect();
+                    let raw = Input::indexed(Bases::Points(&bases), &indices, &scalars).unwrap();
+                    let expected = reference(&raw);
+                    let mut records = vec![ScalarStorage::ZERO; n];
+                    let prepared = PreparedScalars::prepare(
+                        &scalars,
+                        &mut records,
+                        TaskBudget::SERIAL,
+                        &SerialExecutor,
+                    )
+                    .unwrap();
+                    let cache_options = ExecutionOptions::SERIAL;
+                    let mut digits = vec![73; prepared.cache_len(cache_options).unwrap()];
+                    let cached = prepared.cache(cache_options, &mut digits).unwrap();
+                    let reused = raw.selection().with_prepared_scalars(cached).unwrap();
+                    for chunk in [n, 257] {
+                        let options = ExecutionOptions::SERIAL
+                            .with_chunk_size(NonZeroUsize::new(chunk).unwrap())
+                            .with_task_budget(TaskBudget::new(3).unwrap());
+                        for input in [raw, reused] {
+                            let r = input.requirements(options).unwrap();
+                            let mut buffers = Buffers::new(r);
+                            assert_eq!(
+                                input.execute(options, &Pool, buffers.borrow()).unwrap(),
+                                expected
+                            );
+                            buffers.tails(r);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
 }
 
 #[test]
@@ -361,13 +430,12 @@ fn scratch_can_be_reused_after_executor_unwind() {
     let scalars: Vec<_> = field_samples().take(bases.len()).collect();
     let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
     let expected = reference(&input);
-    let options = ExecutionOptions {
-        task_budget: TaskBudget::new(4).unwrap(),
-        max_terms_per_pass: NonZeroUsize::new(37),
-    };
+    let options = ExecutionOptions::SERIAL
+        .with_task_budget(TaskBudget::new(4).unwrap())
+        .with_max_terms_per_pass(NonZeroUsize::new(37));
     let r = input.requirements(options).unwrap();
     let mut buffers = Buffers::new(r);
-    // The first two joins prepare three digit chunks; later joins evaluate
+    // The first two joins prepare three scalar-record chunks; later joins evaluate
     // windows. Exercise an unwind after writes in either scoped phase.
     for at in [0, 2] {
         let executor = Panics {
@@ -387,7 +455,32 @@ fn scratch_can_be_reused_after_executor_unwind() {
         );
         buffers.tails(r);
     }
-    let mut storage = vec![73; PreparedScalars::<Pallas>::storage_len(bases.len()).unwrap() + 1];
+    let inputs = [input, input];
+    let (j, w) = ExecutionPlan::<Pallas>::storage_len(inputs.len(), options).unwrap();
+    let mut jobs = vec![JobStorage::EMPTY; j];
+    let mut workers = vec![WorkerStorage::EMPTY; w];
+    let plan = ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+    let mut planned_buffers = Buffers::new(plan.requirements());
+    let mut output = [ProjectivePoint::IDENTITY; 2];
+    for at in [0, 2] {
+        let executor = Panics {
+            calls: AtomicUsize::new(0),
+            at,
+        };
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                plan.execute(&mut output, &executor, planned_buffers.borrow())
+                    .unwrap();
+            }))
+            .is_err()
+        );
+        plan.execute(&mut output, &Pool, planned_buffers.borrow())
+            .unwrap();
+        assert_eq!(output, [expected; 2]);
+        planned_buffers.tails(plan.requirements());
+    }
+    let mut storage =
+        vec![ScalarStorage::ZERO; PreparedScalars::<Pallas>::storage_len(bases.len()).unwrap() + 1];
     let executor = Panics {
         calls: AtomicUsize::new(0),
         at: 0,
@@ -404,7 +497,7 @@ fn scratch_can_be_reused_after_executor_unwind() {
         }))
         .is_err()
     );
-    assert_eq!(*storage.last().unwrap(), 73);
+    assert!(*storage.last().unwrap() == ScalarStorage::ZERO);
     let retained =
         PreparedScalars::<Pallas>::prepare(&scalars, &mut storage, options.task_budget, &Pool)
             .unwrap();
@@ -414,7 +507,7 @@ fn scratch_can_be_reused_after_executor_unwind() {
         expected
     );
     buffers.tails(r);
-    assert_eq!(*storage.last().unwrap(), 73);
+    assert!(*storage.last().unwrap() == ScalarStorage::ZERO);
 }
 
 fn collisions<C: PastaCurve>() {
@@ -479,10 +572,9 @@ fn grouped_jobs_and_nested_single_worker() {
         .build()
         .unwrap();
     for tasks in [1, 3, 7, 32, 128] {
-        let options = ExecutionOptions {
-            task_budget: TaskBudget::new(tasks).unwrap(),
-            max_terms_per_pass: NonZeroUsize::new(63),
-        };
+        let options = ExecutionOptions::SERIAL
+            .with_task_budget(TaskBudget::new(tasks).unwrap())
+            .with_max_terms_per_pass(NonZeroUsize::new(63));
         let r = batch_requirements(&jobs, options).unwrap();
         let mut buffers = Buffers::new(r);
         let mut output = [ProjectivePoint::IDENTITY; 5];
@@ -530,7 +622,7 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
     };
     let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
     assert_eq!(input.requirements(ExecutionOptions::SERIAL).unwrap(), R);
-    for short in 0..6 {
+    for short in 0..7 {
         let mut b = Buffers::<C>::new(R);
         let mut scratch = b.borrow();
         match short {
@@ -539,10 +631,11 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
             2 => scratch.projective = &mut scratch.projective[..R.projective - 1],
             3 => scratch.field = &mut scratch.field[..R.field - 1],
             4 => scratch.indices = &mut scratch.indices[..R.indices - 1],
+            5 => scratch.scalars = &mut scratch.scalars[..R.scalars - 1],
             _ => (),
         }
         let mut output = [ProjectivePoint::GENERATOR; 2];
-        let len = if short == 5 { 2 } else { 1 };
+        let len = if short == 6 { 2 } else { 1 };
         assert!(
             execute_batch(
                 &[input],
@@ -597,4 +690,604 @@ fn packed_midpoint_carries_reconstruct_signed_extremes() {
             }
         }
     }
+}
+
+#[test]
+fn affine_reducer_and_weighted_collapse_match_biguint() {
+    fn check<C: PastaCurve>() {
+        use crate::{curve::tests::reference::Reference, test_support::modulus};
+        use num_bigint::BigUint;
+        let modulus = modulus::<C::Base>();
+        let g = AffinePoint::<C>::GENERATOR;
+        let pool: Vec<_> = (1..=13)
+            .map(|i| {
+                *g.mul_projective(&PastaField::from_u64(i))
+                    .to_point()
+                    .as_affine()
+                    .unwrap()
+            })
+            .collect();
+        for case in 0..96 {
+            let mut points = Vec::new();
+            let mut starts = Vec::new();
+            let mut lens = Vec::new();
+            let mut expected = Vec::new();
+            for bucket in 0..7 {
+                starts.push(points.len());
+                let n = (case * 7 + bucket * 3) % 19;
+                lens.push(n);
+                let mut sum = Reference::identity();
+                for i in 0..n {
+                    // Includes all-cancelling levels, odd survivors, and equal
+                    // operands alongside distinct points.
+                    let mut p = pool[if case % 3 == 0 {
+                        bucket
+                    } else {
+                        (case + i / 2) % pool.len()
+                    }];
+                    if case % 2 == 0 && i % 2 == 1 {
+                        p = p.neg();
+                    }
+                    sum = sum.add(&Reference::from_point(&p.to_point()), &modulus);
+                    points.push(p);
+                }
+                expected.push(sum);
+            }
+            let mut control = points.clone();
+            let mut control_lens = lens.clone();
+            let pairs = points.len() / 2;
+            buckets::reduce_original(
+                &mut control,
+                &starts,
+                &mut control_lens,
+                &mut vec![PastaField::ZERO; pairs * 6],
+                &mut vec![0; pairs],
+            );
+            buckets::reduce(
+                &mut points,
+                &starts,
+                &mut lens,
+                &mut vec![PastaField::ONE; pairs * 2],
+            );
+            assert_eq!(lens, control_lens);
+            let mut survivors = vec![g; starts.len()];
+            let mut weighted = Reference::identity();
+            for i in 0..starts.len() {
+                let result = if lens[i] == 0 {
+                    Point::IDENTITY
+                } else {
+                    survivors[i] = points[starts[i]];
+                    assert_eq!(points[starts[i]], control[starts[i]]);
+                    points[starts[i]].to_point()
+                };
+                expected[i].assert_point(&result);
+                weighted =
+                    weighted.add(&expected[i].mul(&BigUint::from(i + 1), &modulus), &modulus);
+            }
+            weighted.assert_point(&buckets::collapse(&survivors, &lens).to_point());
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
+fn production_booth_rows_reconstruct_both_glv_halves() {
+    fn check<C: PastaCurve>() {
+        use num_bigint::BigInt;
+        for tail in 1..=recode::CHUNK {
+            let n = recode::CHUNK + tail;
+            let scalars: Vec<_> = field_samples::<C::Scalar>().take(n).collect();
+            let mut storage = vec![ScalarStorage::<C>::ZERO; n];
+            let retained = PreparedScalars::prepare(
+                &scalars,
+                &mut storage,
+                TaskBudget::SERIAL,
+                &SerialExecutor,
+            )
+            .unwrap();
+            for width in 4..=12 {
+                let geometry = recode::Geometry::Booth(width);
+                let mut digits = vec![73; geometry.storage_len(n).unwrap()];
+                recode::write(retained.records, geometry, &mut digits);
+                let mut values = vec![[BigInt::from(0), BigInt::from(0)]; n];
+                for window in (0..geometry.windows()).rev() {
+                    recode::rows(&digits, n, 0..n, geometry, window, |term, a, b| {
+                        values[term][0] = (&values[term][0] << width) + BigInt::from(a);
+                        values[term][1] = (&values[term][1] << width) + BigInt::from(b);
+                    });
+                }
+                for (term, record) in retained.records.iter().enumerate() {
+                    assert_eq!(values[term], record.halves.map(BigInt::from));
+                }
+            }
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
+fn forced_kernels_chunks_and_incompatible_caches() {
+    fn check<C: PastaCurve>() {
+        let n = 259;
+        let scalars: Vec<_> = field_samples::<C::Scalar>().take(n).collect();
+        let bases: Vec<_> = (0..n)
+            .map(|i| {
+                if i % 5 == 0 {
+                    Point::IDENTITY
+                } else if i % 2 == 0 {
+                    AffinePoint::<C>::GENERATOR.neg().to_point()
+                } else {
+                    AffinePoint::<C>::GENERATOR.to_point()
+                }
+            })
+            .collect();
+        let raw = Input::new(Bases::Points(&bases), &scalars).unwrap();
+        let expected = reference(&raw);
+        let mut records = vec![ScalarStorage::ZERO; n];
+        let prepared =
+            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
+                .unwrap();
+        let cached_options = ExecutionOptions::SERIAL.with_booth_width(8).unwrap();
+        let mut bytes = vec![73; prepared.cache_len(cached_options).unwrap() + 1];
+        let cached = prepared.cache(cached_options, &mut bytes).unwrap();
+        let reused = raw.selection().with_prepared_scalars(cached).unwrap();
+        assert_eq!(reused.requirements(cached_options).unwrap().digits(), 0);
+        for width in 4..=12 {
+            for accumulation in [
+                Accumulation::Affine,
+                Accumulation::Projective,
+                Accumulation::Hybrid,
+            ] {
+                for (chunk, pass) in [
+                    (None, None),
+                    (NonZeroUsize::new(67), NonZeroUsize::new(17)),
+                    (NonZeroUsize::new(2), NonZeroUsize::new(1)),
+                ] {
+                    // The widest cap-one cases repeat thousands of empty bucket
+                    // collapses; the smaller widths cover that lifetime boundary.
+                    if chunk.is_some_and(|c| c.get() == 2) && width > 5 {
+                        continue;
+                    }
+                    let options = ExecutionOptions::SERIAL
+                        .with_booth_width(width)
+                        .unwrap()
+                        .with_accumulation(accumulation)
+                        .with_chunk_size(chunk.unwrap_or(NonZeroUsize::MAX))
+                        .with_max_terms_per_pass(pass)
+                        .with_task_budget(TaskBudget::new(3).unwrap());
+                    let r = raw.requirements(options).unwrap();
+                    let mut buffers = Buffers::new(r);
+                    assert_eq!(
+                        raw.execute(options, &Pool, buffers.borrow()).unwrap(),
+                        expected
+                    );
+                    buffers.tails(r);
+                    let r = reused.requirements(options).unwrap();
+                    let mut buffers = Buffers::new(r);
+                    assert_eq!(
+                        reused.execute(options, &Pool, buffers.borrow()).unwrap(),
+                        expected
+                    );
+                    buffers.tails(r);
+                }
+            }
+        }
+        assert_eq!(bytes[n * 32], 73);
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
+fn typed_sources_validate_bounds_and_signed_extremes() {
+    fn check<C: PastaCurve>() {
+        use crate::field::PrimeModulus;
+        let g = AffinePoint::<C>::GENERATOR;
+        let bases = [g; 6];
+        let indices = [5, 3, 1, 2, 2, 0];
+        let selection = Selection::indexed(Bases::Affine(&bases), &indices).unwrap();
+        let signed = [i128::MIN, i128::MAX, -1, 0, 1, -129];
+        let unsigned = [0, 1, 129, u128::MAX, 1 << 127, 17];
+        let raw_signed: Vec<_> = signed
+            .iter()
+            .map(|s| {
+                let n = s.unsigned_abs();
+                let value =
+                    PastaField::from_canonical_uint(crate::field::CanonicalUint::from_limbs([
+                        n as u64,
+                        (n >> 64) as u64,
+                        0,
+                        0,
+                    ]))
+                    .unwrap();
+                if *s < 0 { value.neg() } else { value }
+            })
+            .collect();
+        let raw_unsigned: Vec<_> = unsigned
+            .iter()
+            .map(|s| {
+                PastaField::from_canonical_uint(crate::field::CanonicalUint::from_limbs([
+                    *s as u64,
+                    (s >> 64) as u64,
+                    0,
+                    0,
+                ]))
+                .unwrap()
+            })
+            .collect();
+        for (typed, raw) in [
+            (selection.with_signed(&signed).unwrap(), &raw_signed),
+            (selection.with_unsigned(&unsigned).unwrap(), &raw_unsigned),
+        ] {
+            let expected = reference(&selection.with_scalars(raw).unwrap());
+            for width in [None, Some(5), Some(12)] {
+                let options = width.map_or(ExecutionOptions::SERIAL, |w| {
+                    ExecutionOptions::SERIAL.with_booth_width(w).unwrap()
+                });
+                let mut buffers = Buffers::new(typed.requirements(options).unwrap());
+                assert_eq!(
+                    typed
+                        .execute(options, &SerialExecutor, buffers.borrow())
+                        .unwrap(),
+                    expected
+                );
+            }
+        }
+        let mut records = [ScalarStorage::<C>::ZERO; 7];
+        let mut canonical: Vec<_> = raw_unsigned.iter().map(|s| s.to_canonical_uint()).collect();
+        assert!(selection.with_canonical(&canonical, 127).is_err());
+        assert!(
+            PreparedScalars::canonical(
+                &canonical,
+                127,
+                &mut records,
+                TaskBudget::SERIAL,
+                &SerialExecutor
+            )
+            .is_err()
+        );
+        assert!(records.iter().all(|r| *r == ScalarStorage::ZERO));
+        canonical[2] = crate::field::CanonicalUint::from_limbs(C::Scalar::MODULUS);
+        assert!(selection.with_canonical(&canonical, 256).is_err());
+        assert!(
+            PreparedScalars::canonical(
+                &canonical,
+                256,
+                &mut records,
+                TaskBudget::SERIAL,
+                &SerialExecutor
+            )
+            .is_err()
+        );
+        assert!(records.iter().all(|r| *r == ScalarStorage::ZERO));
+        assert!(selection.with_unsigned(&unsigned[..5]).is_err());
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
+fn memory_ceiling_and_reusable_weighted_plans() {
+    type C = Pallas;
+    let scalars: Vec<_> = field_samples::<<C as PastaCurve>::Scalar>()
+        .take(1025)
+        .collect();
+    let bases = vec![AffinePoint::<C>::GENERATOR; scalars.len()];
+    let sizes = [3, 1025, 0, 17, 65, 2];
+    let inputs: Vec<_> = sizes
+        .iter()
+        .map(|&n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap())
+        .collect();
+    let expected: Vec<_> = inputs.iter().map(reference).collect();
+    let serial = batch_requirements(&inputs, ExecutionOptions::SERIAL).unwrap();
+    assert_eq!(
+        serial.digits(),
+        inputs[1]
+            .requirements(ExecutionOptions::SERIAL)
+            .unwrap()
+            .digits()
+    );
+    for tasks in [1, 2, 3, 5, 17] {
+        for limit in [8192, 32768, 262144, 8 * 1024 * 1024] {
+            let options = ExecutionOptions::SERIAL
+                .with_task_budget(TaskBudget::new(tasks).unwrap())
+                .with_memory_limit(limit);
+            let r = batch_requirements(&inputs, options).unwrap();
+            assert!(r.bytes::<C>().unwrap() <= limit);
+            let conservative = Input::<C>::requirements_for_len(1025, options).unwrap();
+            assert!(conservative.bytes::<C>().unwrap() <= limit);
+            let (j, w) = ExecutionPlan::<C>::storage_len(inputs.len(), options).unwrap();
+            let mut jobs = vec![JobStorage::EMPTY; j + 1];
+            let mut workers = vec![WorkerStorage::EMPTY; w + 1];
+            let plan = ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+            assert!(plan.temporary_bytes() <= limit);
+            assert!(plan.worker_ranges() <= tasks);
+            let r = plan.requirements();
+            let mut buffers = Buffers::new(r);
+            let mut output = vec![ProjectivePoint::GENERATOR; inputs.len()];
+            for _ in 0..2 {
+                plan.execute(&mut output, &Pool, buffers.borrow()).unwrap();
+                assert_eq!(output, expected);
+                buffers.tails(r);
+            }
+            assert_eq!(jobs[j], JobStorage::EMPTY);
+            assert_eq!(workers[w], WorkerStorage::EMPTY);
+        }
+    }
+    let options = ExecutionOptions::SERIAL.with_memory_limit(0);
+    let mut jobs = [JobStorage::EMPTY; 6];
+    let mut workers = [WorkerStorage::EMPTY; 1];
+    assert!(matches!(
+        ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers),
+        Err(CurveError::MemoryLimit { .. })
+    ));
+    assert!(jobs.iter().all(|j| *j == JobStorage::EMPTY));
+    assert!(workers.iter().all(|w| *w == WorkerStorage::EMPTY));
+    // A fixed ceiling bounds every buffer even at sizing-only stress lengths.
+    for n in [32768, 1 << 20] {
+        assert!(
+            Input::<C>::requirements_for_len(n, ExecutionOptions::SERIAL.with_memory_limit(32768))
+                .unwrap()
+                .bytes::<C>()
+                .unwrap()
+                <= 32768
+        );
+    }
+}
+
+#[test]
+fn compact_tables_and_selection_rebind_across_scalar_rows() {
+    fn check<C: PastaCurve>() {
+        use crate::curve::EisensteinTableBatch;
+        let n = 35;
+        let bases = vec![AffinePoint::<C>::GENERATOR; n];
+        let r = EisensteinTableBatch::<C>::requirements(n).unwrap();
+        let mut entries = vec![AffinePoint::GENERATOR; r.table_entries];
+        let mut projective = vec![ProjectivePoint::IDENTITY; r.projective_scratch];
+        let mut field = vec![PastaField::ZERO; r.field_scratch];
+        let tables = EisensteinTableBatch::prepare(
+            &bases,
+            &mut entries,
+            &mut projective,
+            &mut field,
+            TaskBudget::new(3).unwrap(),
+            &Pool,
+        )
+        .unwrap();
+        let cached_entries: Vec<_> = tables
+            .as_slice()
+            .iter()
+            .map(PreparedAffinePoint::from_affine)
+            .collect();
+        let cached_tables = EisensteinTableBatch::bind(&cached_entries).unwrap();
+        let indices: Vec<_> = (0..259).map(|i| (i % 7) as u32).collect();
+        for basis in [
+            Bases::Compact(tables),
+            Bases::CompactPrepared(cached_tables),
+        ] {
+            let selection = Selection::indexed(basis, &indices).unwrap();
+            for row in 0..3 {
+                let scalars: Vec<_> = field_samples::<C::Scalar>()
+                    .skip(row * indices.len())
+                    .take(indices.len())
+                    .collect();
+                let input = selection.with_scalars(&scalars).unwrap();
+                let expected = reference(&input);
+                for options in [
+                    ExecutionOptions::SERIAL,
+                    ExecutionOptions::SERIAL.with_chunk_size(NonZeroUsize::new(31).unwrap()),
+                    ExecutionOptions::SERIAL.with_memory_limit(8192),
+                ] {
+                    let mut buffers = Buffers::new(input.requirements(options).unwrap());
+                    assert_eq!(
+                        input.execute(options, &Pool, buffers.borrow()).unwrap(),
+                        expected
+                    );
+                }
+            }
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
+fn production_booth_bounds_and_partial_row_visits() {
+    fn check<C: PastaCurve>() {
+        use crate::curve::parameters::GlvParameters;
+        use num_bigint::BigInt;
+        let mut records = vec![ScalarStorage::<C>::ZERO; 769];
+        for (i, record) in records.iter_mut().enumerate() {
+            for (half, bound) in GlvParameters::<C>::BOUNDS.into_iter().enumerate() {
+                let magnitude = match i % 6 {
+                    0 => bound,
+                    1 => bound - 1,
+                    2 => 0,
+                    3 => 1,
+                    4 => 128,
+                    _ => 255,
+                };
+                record.halves[half] = if (i / 6 + half) % 2 == 0 {
+                    magnitude as i128
+                } else {
+                    -(magnitude as i128)
+                };
+            }
+        }
+        for width in 4..=12 {
+            let geometry = recode::Geometry::Booth(width);
+            let mut digits = vec![73; geometry.storage_len(records.len()).unwrap() + 1];
+            recode::write(
+                &records,
+                geometry,
+                &mut digits[..geometry.storage_len(records.len()).unwrap()],
+            );
+            assert_eq!(*digits.last().unwrap(), 73);
+            for range in [0..769, 1..255, 255..257, 256..513, 511..769, 769..769] {
+                let mut values = vec![[BigInt::from(0), BigInt::from(0)]; records.len()];
+                let mut visits = vec![0; records.len()];
+                for window in (0..geometry.windows()).rev() {
+                    recode::rows(
+                        &digits,
+                        records.len(),
+                        range.clone(),
+                        geometry,
+                        window,
+                        |i, a, b| {
+                            visits[i] += 1;
+                            values[i][0] = (&values[i][0] << width) + a;
+                            values[i][1] = (&values[i][1] << width) + b;
+                        },
+                    );
+                }
+                for (i, record) in records.iter().enumerate() {
+                    assert_eq!(
+                        visits[i],
+                        if range.contains(&i) {
+                            geometry.windows()
+                        } else {
+                            0
+                        }
+                    );
+                    assert_eq!(
+                        values[i],
+                        if range.contains(&i) {
+                            record.halves.map(BigInt::from)
+                        } else {
+                            [BigInt::from(0), BigInt::from(0)]
+                        }
+                    );
+                }
+            }
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
+fn optional_compact_batch_certificate_preserves_fallbacks() {
+    use crate::curve::{EisensteinScalar, EisensteinTableBatch};
+    fn check<C: PastaCurve>() {
+        let bases = [AffinePoint::<C>::GENERATOR; 32];
+        let r = EisensteinTableBatch::<C>::requirements(bases.len()).unwrap();
+        let mut entries = vec![AffinePoint::GENERATOR; r.table_entries];
+        let mut projective = vec![ProjectivePoint::IDENTITY; r.projective_scratch];
+        let mut fields = vec![PastaField::ZERO; r.field_scratch];
+        let tables = EisensteinTableBatch::prepare(
+            &bases,
+            &mut entries,
+            &mut projective,
+            &mut fields,
+            TaskBudget::SERIAL,
+            &SerialExecutor,
+        )
+        .unwrap();
+        let mut fields = vec![
+            PastaField::ZERO;
+            EisensteinTableBatch::<C>::multiplication_scratch(bases.len())
+                .unwrap()
+        ];
+        for scalar in [PastaField::ZERO, PastaField::ONE, PastaField::ONE.neg()]
+            .into_iter()
+            .chain(field_samples::<C::Scalar>().take(64))
+        {
+            let prepared = EisensteinScalar::new(&scalar);
+            let certified = prepared.certify_batch();
+            assert_eq!(prepared.digits(), certified.digits());
+            assert_eq!(prepared.batch_safe(), certified.batch_safe());
+            let mut plain = [ProjectivePoint::IDENTITY; 32];
+            let mut cached = plain;
+            tables
+                .mul_prepared(
+                    &prepared,
+                    &mut plain,
+                    &mut fields,
+                    TaskBudget::SERIAL,
+                    &SerialExecutor,
+                )
+                .unwrap();
+            tables
+                .mul_prepared(
+                    &certified,
+                    &mut cached,
+                    &mut fields,
+                    TaskBudget::new(3).unwrap(),
+                    &Pool,
+                )
+                .unwrap();
+            assert_eq!(plain, cached);
+            assert!(
+                cached
+                    .iter()
+                    .all(|p| *p == bases[0].mul_projective(&scalar))
+            );
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
+fn streaming_buckets_match_complete_chunks_and_reuse() {
+    fn check<C: PastaCurve>() {
+        let scalars: Vec<_> = field_samples::<C::Scalar>().take(513).collect();
+        let bases: Vec<_> = (0..17)
+            .map(|i| {
+                if i % 5 == 0 {
+                    Point::IDENTITY
+                } else {
+                    AffinePoint::<C>::GENERATOR.to_point()
+                }
+            })
+            .collect();
+        let indices: Vec<_> = (0..scalars.len()).map(|i| (i % 17) as u32).collect();
+        let raw = Input::indexed(Bases::Points(&bases), &indices, &scalars).unwrap();
+        let expected = reference(&raw);
+        let mut records = vec![ScalarStorage::ZERO; scalars.len()];
+        let prepared =
+            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
+                .unwrap();
+        for width in 4..=12 {
+            for chunk in [1, 2, 17, 256, 513] {
+                let options = ExecutionOptions::SERIAL
+                    .with_booth_width(width)
+                    .unwrap()
+                    .with_chunk_size(NonZeroUsize::new(chunk).unwrap())
+                    .with_streaming_buckets();
+                for input in [
+                    raw,
+                    raw.selection().with_prepared_scalars(prepared).unwrap(),
+                ] {
+                    let r = input.requirements(options).unwrap();
+                    let mut buffers = Buffers::new(r);
+                    for _ in 0..2 {
+                        assert_eq!(
+                            input
+                                .execute(options, &SerialExecutor, buffers.borrow())
+                                .unwrap(),
+                            expected
+                        );
+                        buffers.tails(r);
+                    }
+                }
+            }
+        }
+        let o = ExecutionOptions::SERIAL
+            .with_booth_width(4)
+            .unwrap()
+            .with_streaming_buckets()
+            .with_memory_limit(32768);
+        let r = raw.requirements(o).unwrap();
+        assert!(r.bytes::<C>().unwrap() <= 32768);
+        let mut buffers = Buffers::new(r);
+        assert_eq!(
+            raw.execute(o, &SerialExecutor, buffers.borrow()).unwrap(),
+            expected
+        );
+    }
+    check::<Pallas>();
+    check::<Vesta>();
 }

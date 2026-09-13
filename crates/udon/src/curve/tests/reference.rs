@@ -6,7 +6,7 @@ use num_bigint::BigUint;
 use super::*;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct Reference {
+pub(crate) struct Reference {
     pub coordinates: Option<(BigUint, BigUint)>,
 }
 

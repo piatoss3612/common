@@ -5,9 +5,11 @@ multiplication latency by about half on the measured target. Expanded tables
 use approximately half the former storage and preparation time, with a modest
 increase in multiplication latency at the same window width. The
 [curve guide](CURVES.md) describes the APIs, storage contracts, and migration.
-The later [MSM review follow-up](MSM_REVIEW_PERFORMANCE.md) measures inversion
+The later [arithmetic follow-up](MSM_ARITHMETIC_PERFORMANCE.md) measures inversion
 endpoints, cheaper projective formulas, reusable scalar vectors, and broader
-MSM distributions against the completed MSM implementation.
+MSM distributions against the completed MSM implementation. The subsequent
+[MSM review remediation](MSM_REVIEW_PERFORMANCE.md) covers memory policy,
+preparation lifetimes, scheduling, and workload measurements.
 
 ## Method
 
@@ -172,32 +174,9 @@ inputs, supporting the direct transition to Booth. For sums below 128 terms
 whose scalars all fit 128 bits, bit interleaving avoids table preparation; from
 32 terms, four-bit projective buckets improve that short-scalar path. These
 measurements predate the follow-up's dispatch for small dense 128-bit inputs;
-see the [dispatch comparison](MSM_REVIEW_PERFORMANCE.md#broader-corpus-and-dispatch).
+see the [dispatch comparison](MSM_ARITHMETIC_PERFORMANCE.md#broader-corpus-and-dispatch).
 The `short` timings above cover coefficients of the form `137 * i`, a small subset
 of 128-bit scalars. The Booth reducer skips empty high buckets.
-
-A separate local comparison checked identical compressed results against the
-prototype in `../bento` at revision
-`fe69bfb0a080524f6f06d36aee74ee5d07626d35`. Both implementations received the
-same scalars and cached bases through their public serial APIs. Three timed
-repetitions alternated implementation order after warmup; each repetition ran
-for at least 250 milliseconds. The medians below are microseconds. Udon reused
-scratch, while the prototype's one-shot API allocated internally, so these are
-API cost comparisons rather than isolated arithmetic-kernel comparisons.
-
-| Terms | Pallas Udon / prototype | Vesta Udon / prototype |
-| --- | ---: | ---: |
-| 31 | 183.95 / 182.67 | 184.04 / 184.09 |
-| 32 | 188.58 / 427.73 | 190.65 / 417.31 |
-| 64 | 367.87 / 641.44 | 370.85 / 624.62 |
-| 128 | 742.85 / 1,028.35 | 742.04 / 1,040.64 |
-| 255 | 1,114.00 / 1,814.91 | 1,089.94 / 1,782.31 |
-| 256 | 1,110.27 / 1,135.78 | 1,131.29 / 1,087.99 |
-| 1,024 | 3,436.64 / 3,379.21 | 3,468.27 / 3,422.16 |
-| 4,096 | 12,533.41 / 12,310.77 | 12,544.48 / 12,412.38 |
-
-The 32–255 term cases improved by roughly 1.4–2.3 times. Larger cases stayed
-within a few percent, with small regressions as well as improvements.
 
 ### Grouped execution and working storage
 

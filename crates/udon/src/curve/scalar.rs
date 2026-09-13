@@ -5,7 +5,7 @@ use crate::field::PastaField;
 
 /// Centers an unsigned window, applying its magnitude's sign and updating carry.
 ///
-/// Requires `width` in `2..=8`, `window < 2^width`, and `carry` in `0..=1`.
+/// Requires `width` in `2..=12`, `window < 2^width`, and `carry` in `0..=1`.
 pub(super) fn centered_digit(window: u16, negative: bool, carry: &mut i16, width: u32) -> i16 {
     let value = window as i16 + *carry;
     let half = 1 << (width - 1);

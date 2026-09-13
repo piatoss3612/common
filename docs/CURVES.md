@@ -167,6 +167,13 @@ prepares the scalar. The const `multiplication_scratch(number_of_bases)` query
 reports field scratch for these batch methods. The type docs include an
 executable example that reuses field scratch after preparation.
 
+For repeated large batches, `scalar.certify_batch()` optionally retains the
+check for exceptional affine intermediates. Ordinary scalar preparation leaves
+this check unevaluated. Certification preserves complete projective arithmetic
+for ladders with exceptional intermediates. See
+[`EisensteinScalar::certify_batch`](../crates/udon/src/curve/eisenstein.rs) for the
+reuse contract.
+
 Use `bind` or `bind_trusted` for stored entries, following the
 [table validation workflow](#preparation-binding-and-stored-formats). A single
 compact table's eight entries can also be bound as a one-base batch without
@@ -280,60 +287,99 @@ data already owned by the caller:
 | Dense, prepared scalars | `Input::new_prepared(bases, prepared)` | One prepared scalar per base |
 | Indexed, prepared scalars | `Input::indexed_prepared(bases, indices, prepared)` | One index per prepared scalar |
 
-`Bases::Affine`, `Bases::Prepared`, and `Bases::Points` borrow the three
-supported base layouts. Choose `Points` when bases may include identity, or
-borrow affine or cached entries directly from POD storage. Construction checks
-lengths and index bounds without gathering bases. The
-[`Input` docs](../crates/udon/src/curve/msm/mod.rs) define the mathematical
-invariants that the producer must establish before execution.
+`Bases::Affine`, `Bases::Prepared`, and `Bases::Points` borrow ordinary,
+cached, and identity-capable base layouts. `Bases::Compact` and
+`Bases::CompactPrepared` borrow `EisensteinTableBatch` in either entry layout,
+including tables embedded with Bento. The compact ladder consumes those tables
+directly. Construction checks lengths and index bounds without gathering bases;
+the producer must establish the mathematical invariants documented on each type.
 
-When a scalar vector is reused with different bases or indices, size a byte
-buffer with `PreparedScalars::<C>::storage_len(terms)`, then call
-`PreparedScalars::prepare(scalars, storage, budget, executor)`. The returned
-handle borrows the prepared bytes, allowing the original scalar buffer to be
-reused. Keep this storage separate from execution scratch. The
-[`PreparedScalars` docs](../crates/udon/src/curve/msm/prepared.rs) define its
-input, storage, concurrency, and error contracts; the
-[`msm` example](../crates/udon/src/curve/msm/mod.rs) shows indexed reuse.
-The [scalar-reuse measurements](MSM_REVIEW_PERFORMANCE.md#reusing-scalar-vectors)
-separate its one-time preparation cost from subsequent execution.
+Retain `Selection::indexed(bases, indices)` when several scalar rows use the
+same mapping. `selection.with_scalars(row)` checks only the length, preserving
+index validation independently of the scalar borrow. `with_unsigned(&[u128])`
+and `with_signed(&[i128])` avoid Montgomery conversion; signed inputs include
+`i128::MIN`. `with_canonical(integers, bits)` checks every integer against both
+the scalar modulus and the declared bit bound before execution can write scratch.
+
+For reuse across base sets, allocate initialized `ScalarStorage::ZERO` entries
+using `PreparedScalars::<C>::storage_len(terms)`, then call
+`PreparedScalars::prepare(scalars, storage, budget, executor)`. Preparation
+retains signed GLV components and small-integer classification and releases the
+original scalar borrow. It remains usable across chunk sizes, widths, and
+backends. Its optional `cache(options, bytes)` retains recoding as well; size
+those bytes with `cache_len(options)`. Cache allocation covers the complete
+scalar vector independently of the execution memory ceiling. See
+[`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs) for the
+geometry and chunking conditions that permit reuse.
+`retained_bytes()` counts the borrowed records and optional cache. This storage
+is separate from execution scratch and is not a POD serialization format.
 
 ### Sizing and reusing scratch
 
-`ExecutionOptions::SERIAL` selects one task and no pass cap. For parallel work,
-set `task_budget`. Set `max_terms_per_pass` to `Some(NonZeroUsize)` to trade more
-passes for less temporary point storage in each concurrent partition. This
-does not bound total scratch: digits still occupy storage proportional to all
-terms. Udon chooses scalar recoding and arithmetic internally. The
-[performance report](CURVE_PERFORMANCE.md#grouped-execution-and-working-storage)
-shows the measured memory and timing tradeoff.
+`ExecutionOptions::SERIAL` selects one task without a memory ceiling.
+Use `with_task_budget` for scoped concurrency. `with_max_terms_per_pass` caps
+affine bucket and temporary table staging; it alone does not bound scalar records
+or recoding bytes. By default, `with_chunk_size` completes independent chunk MSMs
+and reuses their temporary buffers, trading repeated collapses for storage
+independent of total input size. `with_memory_limit(bytes)` lets the planner
+reduce pass size, concurrency, and chunk size and select projective buckets.
 
-`input.requirements(options)` returns element counts for all five `Scratch`
-slices: digit bytes, affine points, projective points, base-field elements, and
-working `usize` indices. The const
-`Input::<C>::requirements_for_len(terms, options)` query sizes ordinary inputs
-from length alone, supporting static arrays and downstream buffer owners.
-Prepared inputs have the same arithmetic workspace requirements and need zero
-digit scratch. Obtain counts from the API instead of copying implementation
-formulas.
+`with_streaming_buckets()` instead retains projective buckets for all windows
+while preparing and recoding one chunk at a time. It avoids repeating each
+chunk's weighted collapse, with a larger fixed workspace floor. Bucket updates
+are serial within each job; scalar preparation can use the assigned task budget.
+This choice respects the same memory ceiling and supports indexed and retained
+bases. Use `with_booth_width(bits)` with `bits` in `4..=12` and
+`with_accumulation` for controlled comparisons of complete-chunk kernels;
+streaming always uses projective accumulation. Explicit width and accumulator
+choices also restrict the planner's memory search. See the
+[MSM report](MSM_REVIEW_PERFORMANCE.md) for measured tradeoffs.
 
-Initialize affine scratch with a valid point such as the generator; initialize
-other buffers with zero or identity. Execution overwrites every value it uses,
-so buffers can be reused without clearing. A retained `Scratch` can lend its
-slices again through `reborrow()`. `input.execute(options, executor, scratch)`
-returns the sum as a projective point. The module docs include an executable
-example using const-sized arrays and specify the buffer, error, and panic
-contracts.
+The ceiling counts required execution buffer prefixes and reserved plan metadata;
+it excludes retained preparation and surplus buffer tails. The accounting and
+search contract lives on
+[`ExecutionOptions::with_memory_limit`](../crates/udon/src/curve/msm/mod.rs).
+The search is not exhaustive. A `MemoryLimit` error reports the storage needed
+at its stopping point, which may be the metadata alone; it does not establish
+the minimum possible storage. Planning and scratch errors precede writes.
+
+`input.requirements(options)` returns counts for six private `Scratch` slices;
+use `scalars()`, `digits()`, `affine()`, `projective()`, `field()`, and `indices()`.
+`Requirements::bytes::<C>()` computes their total with checked arithmetic.
+The const `Input::<C>::requirements_for_len(terms, options)` query supports static
+arrays for unprepared scalars with ordinary, cached affine, or identity-capable
+bases. Use `input.requirements(options)` for retained scalars or compact tables;
+their memory planning can select a different layout. Prepared-input queries
+can omit record scratch and, when cache reuse is possible, recoding scratch.
+Obtain counts from the API rather than copying formulas.
+
+Construct scratch with `Scratch::new(records, digits, affine, projective, field,
+indices)`. Initialize records with `ScalarStorage::ZERO`, affine entries with
+the generator, and other entries with zero or identity. Buffers can be reused
+without clearing through `scratch.reborrow()`. Execution overwrites every value
+it uses and leaves tails beyond the required prefixes untouched. The
+[module example](../crates/udon/src/curve/msm/mod.rs)
+executes two signed scalar rows using static arrays and one validated selection.
 
 ### Grouped jobs and other work
 
-Place borrowed `Input` handles in a slice to group independent MSMs. Inputs can
-mix sizes, layouts, and dense/indexed access for the same curve. Query
+Group borrowed `Input` handles for one curve in a slice, query
 `batch_requirements(&inputs, options)`, then call
-`execute_batch(&inputs, &mut output, options, executor, scratch)` with exactly
-one output per input. Results preserve input order. Grouped scheduling shares
-concurrency across inputs and reuses working storage between jobs. Size the
-batch as a whole because grouping changes how work and scratch are partitioned.
+`execute_batch(&inputs, &mut output, options, executor, scratch)`. There is one
+output per input, in input order. Jobs share the task budget, and sequential jobs
+reuse scratch. The [MSM report](MSM_REVIEW_PERFORMANCE.md#preparation-reuse-and-scheduling)
+describes the current scheduling policy and measured workload tradeoffs.
+
+For repeated execution of immutable inputs, retain `ExecutionPlan`. Its
+`storage_len(input_count, options)` returns job and worker metadata counts;
+initialize those slices with `JobStorage::EMPTY` and `WorkerStorage::EMPTY`, then
+call `ExecutionPlan::new`. Planning validates resource limits before modifying
+metadata. Use the plan's `requirements()` to size its execution scratch: metadata
+accounting may lead it to choose a different layout from `batch_requirements`.
+Its `temporary_bytes()` includes reserved metadata prefixes. `execute` reuses the
+retained schedule with new output buffers or dirty scratch. Ordinary
+`Input::execute` needs no metadata buffer. Selection rebinding and scalar
+preparation remain optional independent capabilities.
 
 Compose fixed-base products or other work with
 [`Executor::join`](../crates/udon/src/exec.rs), splitting the outer

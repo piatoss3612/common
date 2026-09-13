@@ -156,6 +156,30 @@ pub enum CurveError {
         /// The supplied width.
         bits: u32,
     },
+    /// An MSM Booth width is outside `4..=12`.
+    InvalidMsmWindow {
+        /// Supplied window width.
+        bits: u32,
+    },
+    /// A scalar is not below its modulus, exceeds its bit bound, or has an
+    /// invalid bound.
+    InvalidScalar {
+        /// Position of the invalid scalar (zero for an invalid bound).
+        position: usize,
+    },
+    /// The planner found no layout within the caller's temporary byte ceiling.
+    ///
+    /// The search follows [`msm::ExecutionOptions::with_memory_limit`] and is not
+    /// exhaustive; this does not establish a global minimum storage requirement.
+    MemoryLimit {
+        /// Supplied byte ceiling.
+        limit: usize,
+        /// Bytes required at the planner's stopping point, including metadata.
+        ///
+        /// This can be the metadata alone if it already exceeds the limit. An
+        /// unrepresentable total is reported as `usize::MAX`.
+        required: usize,
+    },
     /// The base has unreduced coordinates or fails the curve equation.
     InvalidBase,
     /// A table entry is invalid or differs from its specified multiple.
@@ -197,6 +221,13 @@ impl fmt::Display for CurveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidWindowBits { bits } => write!(f, "window width {bits} is outside 2..=8"),
+            Self::InvalidMsmWindow { bits } => write!(f, "MSM width {bits} is outside 4..=12"),
+            Self::InvalidScalar { position } => {
+                write!(f, "invalid MSM scalar at position {position}")
+            }
+            Self::MemoryLimit { limit, required } => {
+                write!(f, "MSM needs {required} temporary bytes, limit is {limit}")
+            }
             Self::InvalidBase => f.write_str("invalid curve base"),
             Self::InvalidTable => f.write_str("invalid curve table entry"),
             Self::SizeOverflow => f.write_str("curve buffer size overflows a slice length"),

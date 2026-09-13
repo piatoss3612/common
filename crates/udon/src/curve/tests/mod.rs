@@ -10,7 +10,7 @@ mod eisenstein;
 mod eisenstein_batch;
 mod fixed_base;
 mod glv;
-mod reference;
+pub(crate) mod reference;
 
 fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {
     let mut values = vec![PastaField::ZERO, PastaField::ONE, PastaField::ONE.neg()];

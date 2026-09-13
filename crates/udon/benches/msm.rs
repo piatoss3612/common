@@ -9,7 +9,10 @@ use zakura_udon::{
     curve::{
         AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve,
         Point, PreparedAffinePoint, ProjectivePoint, Vesta,
-        msm::{self, Bases, ExecutionOptions, Input, PreparedScalars, Requirements, Scratch},
+        msm::{
+            self, Bases, ExecutionOptions, Input, PreparedScalars, Requirements, ScalarStorage,
+            Scratch,
+        },
     },
     exec::{Executor, SerialExecutor, TaskBudget},
     field::{CanonicalUint, PastaField, PrimeModulus},
@@ -29,6 +32,7 @@ impl Executor for Pool {
 }
 
 struct Buffers<C: PastaCurve> {
+    scalars: Vec<ScalarStorage<C>>,
     digits: Vec<u8>,
     affine: Vec<AffinePoint<C>>,
     projective: Vec<ProjectivePoint<C>>,
@@ -38,21 +42,23 @@ struct Buffers<C: PastaCurve> {
 impl<C: PastaCurve> Buffers<C> {
     fn new(r: Requirements) -> Self {
         Self {
-            digits: vec![0; r.digits],
-            affine: vec![AffinePoint::GENERATOR; r.affine],
-            projective: vec![ProjectivePoint::IDENTITY; r.projective],
-            field: vec![PastaField::ZERO; r.field],
-            indices: vec![0; r.indices],
+            scalars: vec![ScalarStorage::ZERO; r.scalars()],
+            digits: vec![0; r.digits()],
+            affine: vec![AffinePoint::GENERATOR; r.affine()],
+            projective: vec![ProjectivePoint::IDENTITY; r.projective()],
+            field: vec![PastaField::ZERO; r.field()],
+            indices: vec![0; r.indices()],
         }
     }
     fn borrow(&mut self) -> Scratch<'_, C> {
-        Scratch {
-            digits: &mut self.digits,
-            affine: &mut self.affine,
-            projective: &mut self.projective,
-            field: &mut self.field,
-            indices: &mut self.indices,
-        }
+        Scratch::new(
+            &mut self.scalars,
+            &mut self.digits,
+            &mut self.affine,
+            &mut self.projective,
+            &mut self.field,
+            &mut self.indices,
+        )
     }
 }
 
@@ -297,10 +303,9 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                 .collect();
             for (execution, tasks) in [("serial", 1), ("rayon4", 4)] {
                 for (cap, maximum) in [("all", None), ("512", NonZeroUsize::new(512))] {
-                    let options = ExecutionOptions {
-                        task_budget: TaskBudget::new(tasks).unwrap(),
-                        max_terms_per_pass: maximum,
-                    };
+                    let options = ExecutionOptions::SERIAL
+                        .with_task_budget(TaskBudget::new(tasks).unwrap())
+                        .with_max_terms_per_pass(maximum);
                     let mut buffers =
                         Buffers::new(msm::batch_requirements(&jobs, options).unwrap());
                     let mut output = vec![ProjectivePoint::IDENTITY; jobs.len()];
@@ -448,7 +453,8 @@ fn corpus<C: PastaCurve>(
                 })
             });
             if matches!(name, "full" | "random128" | "cancellation") {
-                let mut storage = vec![0; PreparedScalars::<C>::storage_len(n).unwrap()];
+                let mut storage =
+                    vec![ScalarStorage::ZERO; PreparedScalars::<C>::storage_len(n).unwrap()];
                 group.bench_function(
                     BenchmarkId::new(format!("{name}/prepare_scalars"), n),
                     |b| {

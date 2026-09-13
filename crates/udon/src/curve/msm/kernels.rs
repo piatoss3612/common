@@ -1,9 +1,9 @@
-//! Monomorphic base access and arithmetic shared by serial and grouped execution.
-//!
-//! Select the base representation and indexed access once per task, so inner
-//! loops specialize without repeating enum dispatch for every term.
+//! Monomorphic base access and arithmetic for one complete chunk or window.
 
-use super::{Bases, Input, buckets, recode};
+use super::{
+    Accumulation, Bases, Input, ScalarStorage, buckets,
+    recode::{self, Geometry},
+};
 use crate::{
     curve::{
         AffinePoint, CurveTableEntry, EisensteinTableBatch, PastaCurve, Point, PreparedAffinePoint,
@@ -19,22 +19,17 @@ pub(super) struct Work<'a, C: PastaCurve> {
     pub field: &'a mut [PastaField<C::Base>],
     pub indices: &'a mut [usize],
 }
-
 #[derive(Clone, Copy)]
 pub(super) struct Task {
+    pub offset: usize,
     pub window: usize,
-    pub part: usize,
-    pub parts: usize,
     pub pass: usize,
+    pub geometry: Geometry,
+    pub accumulation: Accumulation,
 }
-
 trait Base<C: PastaCurve>: Copy + Sync {
     fn point(self, rotation: usize) -> Option<AffinePoint<C>>;
-    fn is_identity(self) -> bool {
-        false
-    }
 }
-
 impl<C: PastaCurve> Base<C> for AffinePoint<C> {
     fn point(self, rotation: usize) -> Option<AffinePoint<C>> {
         Some(self.rotated(rotation))
@@ -49,160 +44,209 @@ impl<C: PastaCurve> Base<C> for Point<C> {
     fn point(self, rotation: usize) -> Option<AffinePoint<C>> {
         self.as_affine().map(|p| p.rotated(rotation))
     }
-    fn is_identity(self) -> bool {
-        Point::is_identity(&self)
-    }
 }
-
 struct View<'a, B, const INDEXED: bool> {
     bases: &'a [B],
     indices: &'a [u32],
+    offset: usize,
+    stride: usize,
 }
-
 impl<B: Copy, const INDEXED: bool> View<'_, B, INDEXED> {
     #[inline]
+    fn index(&self, term: usize) -> usize {
+        let i = self.offset + term;
+        if INDEXED { self.indices[i] as usize } else { i }
+    }
+    #[inline]
     fn at(&self, term: usize) -> B {
-        self.bases[if INDEXED {
-            self.indices[term] as usize
-        } else {
-            term
-        }]
+        self.bases[self.index(term) * self.stride]
     }
 }
 
 pub(super) fn run<C: PastaCurve>(
     input: &Input<'_, C>,
+    records: &[ScalarStorage<C>],
     digits: &[u8],
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
     match input.bases {
-        Bases::Affine(bases) => access(input, bases, digits, task, work),
-        Bases::Prepared(bases) => access(input, bases, digits, task, work),
-        Bases::Points(bases) => access(input, bases, digits, task, work),
+        Bases::Affine(b) => access(input, b, records, digits, task, work, 1),
+        Bases::Prepared(b) => access(input, b, records, digits, task, work, 1),
+        Bases::Points(b) => access(input, b, records, digits, task, work, 1),
+        Bases::Compact(b) => compact(input, b.as_slice(), records, digits, task, work),
+        Bases::CompactPrepared(b) => compact(input, b.as_slice(), records, digits, task, work),
     }
+}
+
+fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
+    input: &Input<'_, C>,
+    bases: &[B],
+    records: &[ScalarStorage<C>],
+    digits: &[u8],
+    task: Task,
+    work: &mut Work<'_, C>,
+) -> ProjectivePoint<C> {
+    if task.geometry != Geometry::Joint {
+        return access(input, bases, records, digits, task, work, 8);
+    }
+    let top = digits
+        .chunks_exact(recode::JOINT_STRIDE)
+        .map(|r| usize::from(r[eisenstein::MAX_DIGITS]))
+        .max()
+        .unwrap_or(0);
+    let mut sum = ProjectivePoint::IDENTITY;
+    for column in (0..top).rev() {
+        sum = sum.double();
+        for (i, row) in digits.chunks_exact(recode::JOINT_STRIDE).enumerate() {
+            let code = row[column];
+            if code != 0 {
+                let j = input
+                    .indices
+                    .map_or(task.offset + i, |indices| indices[task.offset + i] as usize);
+                sum = sum.add_mixed(&eisenstein::digit_point(&bases[8 * j..8 * j + 8], code));
+            }
+        }
+    }
+    sum
 }
 
 fn access<C: PastaCurve, B: Base<C>>(
     input: &Input<'_, C>,
     bases: &[B],
+    records: &[ScalarStorage<C>],
     digits: &[u8],
     task: Task,
     work: &mut Work<'_, C>,
+    stride: usize,
 ) -> ProjectivePoint<C> {
     match input.indices {
         Some(indices) => execute(
-            input,
-            View::<_, true> { bases, indices },
+            View::<_, true> {
+                bases,
+                indices,
+                offset: task.offset,
+                stride,
+            },
+            records,
             digits,
             task,
             work,
         ),
         None => execute(
-            input,
             View::<_, false> {
                 bases,
                 indices: &[],
+                offset: task.offset,
+                stride,
             },
+            records,
             digits,
             task,
             work,
         ),
     }
 }
-
 fn execute<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
-    input: &Input<'_, C>,
     view: View<'_, B, INDEXED>,
+    records: &[ScalarStorage<C>],
     digits: &[u8],
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
-    if input.len() < super::BOOTH_MIN {
-        small(input, view, digits, task, work)
-    } else {
-        window(input.len(), view, digits, task, work)
+    match task.geometry {
+        Geometry::Short(bits) => short(view, records, bits, work),
+        Geometry::Joint => joint(view, records, digits, task.pass, work),
+        Geometry::Booth(_) => window(view, records.len(), digits, task, work),
     }
 }
-
-fn small<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
-    input: &Input<'_, C>,
+fn short<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
     view: View<'_, B, INDEXED>,
-    digits: &[u8],
-    task: Task,
+    records: &[ScalarStorage<C>],
+    bits: u8,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
-    let range = term_range(input.len(), task.part, task.parts);
-    let pass = task.pass;
     let mut sum = ProjectivePoint::IDENTITY;
-    let bits = usize::from(digits[0]);
-    let digits = &digits[1..];
-    if bits != 255 {
-        // Short scalars avoid GLV setup. At 32 terms, four-bit projective
-        // buckets amortize their reduction better than bit interleaving.
-        if input.len() >= 32 {
-            let buckets = &mut work.projective[..16];
-            for window in (0..bits.div_ceil(4)).rev() {
-                for _ in 0..4 {
-                    sum = sum.double();
-                }
-                buckets.fill(ProjectivePoint::IDENTITY);
-                for i in range.clone() {
-                    let digit = (digits[i * eisenstein::MAX_DIGITS + window / 2]
-                        >> (4 * (window % 2)))
-                        & 15;
-                    if digit != 0
-                        && let Some(p) = view.at(i).point(0)
-                    {
-                        buckets[usize::from(digit)] = buckets[usize::from(digit)].add_mixed(&p);
-                    }
-                }
-                let mut running = ProjectivePoint::IDENTITY;
-                for bucket in buckets[1..].iter().rev() {
-                    running = running.add(bucket);
-                    sum = sum.add(&running);
-                }
-            }
-            return sum;
-        }
+    // Zero, Boolean, and signed-unit rows execute at every input length without
+    // GLV tables, inversions, or a full-width doubling ladder.
+    if bits <= 1 || records.len() < 32 {
         for bit in (0..bits).rev() {
             sum = sum.double();
-            for i in range.clone() {
-                if digits[i * eisenstein::MAX_DIGITS + bit / 8] & (1 << (bit % 8)) != 0
+            for (i, record) in records.iter().enumerate() {
+                if record.magnitude & (1 << bit) != 0
                     && let Some(p) = view.at(i).point(0)
                 {
-                    sum = sum.add_mixed(&p);
+                    sum = sum.add_mixed(&if record.negative { p.neg() } else { p });
                 }
             }
         }
-        return sum;
-    }
-    for start in (range.start..range.end).step_by(pass) {
-        let n = pass.min(range.end - start);
-        let (tables, bases) = work.affine.split_at_mut(8 * n);
-        let bases = &mut bases[..n];
-        // Compact preparation requires nonidentity bases. Substitute the generator
-        // for identities, then suppress those terms using the recorded flags.
-        for (i, base) in bases.iter_mut().enumerate() {
-            let p = view.at(start + i).point(0);
-            work.indices[i] = usize::from(p.is_some());
-            *base = p.unwrap_or(AffinePoint::GENERATOR);
+    } else {
+        let buckets = &mut work.projective[..16];
+        for window in (0..usize::from(bits).div_ceil(4)).rev() {
+            for _ in 0..4 {
+                sum = sum.double();
+            }
+            buckets.fill(ProjectivePoint::IDENTITY);
+            for (i, record) in records.iter().enumerate() {
+                let digit = ((record.magnitude >> (4 * window)) & 15) as usize;
+                if digit != 0
+                    && let Some(p) = view.at(i).point(0)
+                {
+                    buckets[digit] =
+                        buckets[digit].add_mixed(&if record.negative { p.neg() } else { p });
+                }
+            }
+            let mut running = ProjectivePoint::IDENTITY;
+            for bucket in buckets[1..].iter().rev() {
+                running = running.add(bucket);
+                sum = sum.add(&running);
+            }
         }
-        let r = EisensteinTableBatch::<C>::requirements(n).unwrap();
+    }
+    sum
+}
+fn joint<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
+    view: View<'_, B, INDEXED>,
+    records: &[ScalarStorage<C>],
+    digits: &[u8],
+    pass: usize,
+    work: &mut Work<'_, C>,
+) -> ProjectivePoint<C> {
+    let mut sum = ProjectivePoint::IDENTITY;
+    for first in (0..records.len()).step_by(pass) {
+        let end = records.len().min(first + pass);
+        let (tables, bases) = work.affine.split_at_mut(8 * (end - first));
+        let mut active = 0;
+        let mut top = 0;
+        for i in first..end {
+            let len = usize::from(digits[i * recode::JOINT_STRIDE + eisenstein::MAX_DIGITS]);
+            if len != 0
+                && let Some(p) = view.at(i).point(0)
+            {
+                bases[active] = p;
+                work.indices[active] = i;
+                active += 1;
+                top = top.max(len);
+            }
+        }
+        if active == 0 {
+            continue;
+        }
+        let r = EisensteinTableBatch::<C>::requirements(active).unwrap();
         eisenstein_batch::prepare_inner(
-            bases,
-            tables,
+            &bases[..active],
+            &mut tables[..8 * active],
             &mut work.projective[..r.projective_scratch],
             &mut work.field[..r.field_scratch],
             1,
             &SerialExecutor,
         );
         let mut partial = ProjectivePoint::IDENTITY;
-        for column in (0..eisenstein::MAX_DIGITS).rev() {
+        for column in (0..top).rev() {
             partial = partial.double();
-            for i in 0..n {
-                let code = digits[(start + i) * eisenstein::MAX_DIGITS + column];
-                if code != 0 && work.indices[i] != 0 {
+            for (i, &term) in work.indices[..active].iter().enumerate() {
+                let code = digits[term * recode::JOINT_STRIDE + column];
+                if code != 0 {
                     partial = partial
                         .add_mixed(&eisenstein::digit_point(&tables[8 * i..8 * i + 8], code));
                 }
@@ -212,46 +256,101 @@ fn small<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
     }
     sum
 }
-
-pub(super) fn term_range(n: usize, part: usize, parts: usize) -> core::ops::Range<usize> {
-    let start = (n / parts) * part + part.min(n % parts);
-    start..start + n / parts + usize::from(part < n % parts)
+pub(super) fn collapse_projective<C: PastaCurve>(
+    buckets: &[ProjectivePoint<C>],
+) -> ProjectivePoint<C> {
+    let mut running = ProjectivePoint::IDENTITY;
+    let mut sum = ProjectivePoint::IDENTITY;
+    for bucket in buckets.iter().rev() {
+        running = running.add(bucket);
+        sum = sum.add(&running);
+    }
+    sum
 }
-
 fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
-    terms: usize,
     view: View<'_, B, INDEXED>,
+    terms: usize,
     digits: &[u8],
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
-    let halves = 2;
-    let buckets = super::BUCKETS;
-    let range = term_range(terms, task.part, task.parts);
-    let pass = task.pass.min(range.len());
-    let capacity = halves * pass + buckets;
-    let (points, survivors) = work.affine.split_at_mut(capacity);
+    let buckets = task.geometry.buckets();
+    if task.accumulation == Accumulation::Projective {
+        let sums = &mut work.projective[..buckets];
+        sums.fill(ProjectivePoint::IDENTITY);
+        recode::rows(
+            digits,
+            terms,
+            0..terms,
+            task.geometry,
+            task.window,
+            &mut |term, a: i16, b: i16| {
+                for (half, digit) in [a, b].into_iter().enumerate() {
+                    if digit != 0
+                        && let Some(p) = view.at(term).point(half)
+                    {
+                        let i = usize::from(digit.unsigned_abs()) - 1;
+                        sums[i] = sums[i].add_mixed(&if digit < 0 { p.neg() } else { p });
+                    }
+                }
+            },
+        );
+        return collapse_projective(sums);
+    }
+    let pass = task.pass.min(terms);
+    let (points, survivors) = work.affine.split_at_mut(2 * pass + buckets);
     let survivors = &mut survivors[..buckets];
     let (starts, indices) = work.indices.split_at_mut(buckets);
-    let (lens, indices) = indices.split_at_mut(buckets);
-    let (cursors, writes) = indices.split_at_mut(buckets);
+    let (lens, cursors) = indices.split_at_mut(buckets);
+    let cursors = &mut cursors[..buckets];
     lens.fill(0);
-    for first in (range.start..range.end).step_by(pass) {
-        let end = range.end.min(first + pass);
-        // Reserve space for both prior survivors and this pass's deposits before
-        // writing either, keeping every bucket's segment disjoint.
-        cursors.copy_from_slice(lens);
-        for term in first..end {
-            if view.at(term).is_identity() {
-                continue;
+    for first in (0..terms).step_by(pass) {
+        let end = terms.min(first + pass);
+        if task.accumulation == Accumulation::Hybrid && end == terms {
+            let sums = &mut work.projective[..buckets];
+            for i in 0..buckets {
+                sums[i] = if lens[i] == 0 {
+                    ProjectivePoint::IDENTITY
+                } else {
+                    survivors[i].to_projective()
+                };
             }
-            for half in 0..halves {
-                let digit = recode::digit(digits, terms, term, task.window * halves + half);
-                if digit != 0 {
-                    cursors[usize::from(digit.unsigned_abs()) - 1] += 1;
-                }
-            }
+            recode::rows(
+                digits,
+                terms,
+                first..end,
+                task.geometry,
+                task.window,
+                &mut |term, a: i16, b: i16| {
+                    for (half, digit) in [a, b].into_iter().enumerate() {
+                        if digit != 0
+                            && let Some(p) = view.at(term).point(half)
+                        {
+                            let i = usize::from(digit.unsigned_abs()) - 1;
+                            sums[i] = sums[i].add_mixed(&if digit < 0 { p.neg() } else { p });
+                        }
+                    }
+                },
+            );
+            return collapse_projective(sums);
         }
+        cursors.copy_from_slice(lens);
+        recode::rows(
+            digits,
+            terms,
+            first..end,
+            task.geometry,
+            task.window,
+            &mut |term, a: i16, b: i16| {
+                if view.at(term).point(0).is_some() {
+                    for digit in [a, b] {
+                        if digit != 0 {
+                            cursors[usize::from(digit.unsigned_abs()) - 1] += 1;
+                        }
+                    }
+                }
+            },
+        );
         let mut total = 0;
         for i in 0..buckets {
             starts[i] = total;
@@ -263,29 +362,101 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
             lens[i] = cursors[i];
             cursors[i] = cursor;
         }
-        for term in first..end {
-            let base = view.at(term);
-            for half in 0..halves {
-                let digit = recode::digit(digits, terms, term, task.window * halves + half);
-                if digit != 0
-                    && let Some(point) = base.point(half)
-                {
-                    let bucket = usize::from(digit.unsigned_abs()) - 1;
-                    points[cursors[bucket]] = if digit < 0 { point.neg() } else { point };
-                    cursors[bucket] += 1;
+        recode::rows(
+            digits,
+            terms,
+            first..end,
+            task.geometry,
+            task.window,
+            &mut |term, a: i16, b: i16| {
+                for (half, digit) in [a, b].into_iter().enumerate() {
+                    if digit != 0
+                        && let Some(p) = view.at(term).point(half)
+                    {
+                        let i = usize::from(digit.unsigned_abs()) - 1;
+                        points[cursors[i]] = if digit < 0 { p.neg() } else { p };
+                        cursors[i] += 1;
+                    }
                 }
-            }
-        }
-        // All levels share the same field staging storage. Restricting to the
-        // actual deposits also shortens each structure-of-arrays stride.
-        buckets::reduce(&mut points[..total], starts, lens, work.field, writes);
+            },
+        );
+        buckets::reduce(&mut points[..total], starts, lens, work.field);
         for i in 0..buckets {
             if lens[i] != 0 {
                 survivors[i] = points[starts[i]];
             }
         }
     }
-    // Carry affine survivors across passes; pay weighted projective collapse
-    // only once per window partition.
     buckets::collapse(survivors, lens)
+}
+
+pub(super) fn stream<C: PastaCurve>(
+    input: &Input<'_, C>,
+    terms: usize,
+    digits: &[u8],
+    task: Task,
+    sums: &mut [ProjectivePoint<C>],
+) {
+    fn deposit<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
+        view: View<'_, B, INDEXED>,
+        terms: usize,
+        digits: &[u8],
+        task: Task,
+        sums: &mut [ProjectivePoint<C>],
+    ) {
+        recode::rows(
+            digits,
+            terms,
+            0..terms,
+            task.geometry,
+            task.window,
+            |term, a, b| {
+                for (half, digit) in [a, b].into_iter().enumerate() {
+                    if digit != 0
+                        && let Some(p) = view.at(term).point(half)
+                    {
+                        let i = usize::from(digit.unsigned_abs()) - 1;
+                        sums[i] = sums[i].add_mixed(&if digit < 0 { p.neg() } else { p });
+                    }
+                }
+            },
+        );
+    }
+    macro_rules! access {
+        ($bases:expr, $stride:expr) => {
+            match input.indices {
+                Some(indices) => deposit(
+                    View::<_, true> {
+                        bases: $bases,
+                        indices,
+                        offset: task.offset,
+                        stride: $stride,
+                    },
+                    terms,
+                    digits,
+                    task,
+                    sums,
+                ),
+                None => deposit(
+                    View::<_, false> {
+                        bases: $bases,
+                        indices: &[],
+                        offset: task.offset,
+                        stride: $stride,
+                    },
+                    terms,
+                    digits,
+                    task,
+                    sums,
+                ),
+            }
+        };
+    }
+    match input.bases {
+        Bases::Affine(b) => access!(b, 1),
+        Bases::Prepared(b) => access!(b, 1),
+        Bases::Points(b) => access!(b, 1),
+        Bases::Compact(b) => access!(b.as_slice(), 8),
+        Bases::CompactPrepared(b) => access!(b.as_slice(), 8),
+    }
 }

@@ -7,9 +7,12 @@ use udon::{
     curve::{
         AffinePoint, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve, Point,
         ProjectivePoint, Vesta,
-        msm::{Bases, ExecutionOptions, Input, Requirements, Scratch},
+        msm::{
+            Bases, ExecutionOptions, ExecutionPlan, Input, JobStorage, PreparedScalars,
+            Requirements, ScalarStorage, Scratch, Selection, WorkerStorage,
+        },
     },
-    exec::SerialExecutor,
+    exec::{SerialExecutor, TaskBudget},
     field::{CanonicalUint, PastaField},
 };
 
@@ -65,10 +68,9 @@ fn exercise_curve<C: PastaCurve>(record: &record::Record<C>) {
 
 fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
     const N: usize = 257;
-    const OPTIONS: ExecutionOptions = ExecutionOptions {
-        max_terms_per_pass: core::num::NonZeroUsize::new(17),
-        ..ExecutionOptions::SERIAL
-    };
+    const OPTIONS: ExecutionOptions = ExecutionOptions::SERIAL
+        .with_memory_limit(8192)
+        .with_max_terms_per_pass(core::num::NonZeroUsize::new(17));
     // Both sealed curve pairings have the same element sizes. Assert that the
     // concrete sizing used for these arrays agrees with each instantiation.
     const R: Requirements = match Input::<Pallas>::requirements_for_len(N, OPTIONS) {
@@ -84,29 +86,56 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
         .fold(ProjectivePoint::IDENTITY, |sum, (&index, scalar)| {
             sum.add(&record.entries[index as usize].mul_projective(scalar))
         });
-    let mut digits = [0; R.digits];
-    let mut affine = [AffinePoint::GENERATOR; R.affine];
-    let mut projective = [ProjectivePoint::IDENTITY; R.projective];
-    let mut field = [PastaField::ZERO; R.field];
-    let mut working_indices = [0; R.indices];
-    let mut scratch = Scratch {
-        digits: &mut digits,
-        affine: &mut affine,
-        projective: &mut projective,
-        field: &mut field,
-        indices: &mut working_indices,
-    };
+    let mut records = [ScalarStorage::ZERO; R.scalars()];
+    let mut digits = [0; R.digits()];
+    let mut affine = [AffinePoint::GENERATOR; R.affine()];
+    let mut projective = [ProjectivePoint::IDENTITY; R.projective()];
+    let mut field = [PastaField::ZERO; R.field()];
+    let mut working_indices = [0; R.indices()];
+    let mut scratch = Scratch::new(
+        &mut records,
+        &mut digits,
+        &mut affine,
+        &mut projective,
+        &mut field,
+        &mut working_indices,
+    );
     for bases in [
         Bases::Affine(&record.entries),
         Bases::Prepared(&record.cached),
     ] {
-        let input = Input::indexed(bases, &indices, &scalars).unwrap();
+        let selection = Selection::indexed(bases, &indices).unwrap();
+        let input = selection.with_scalars(&scalars).unwrap();
         assert_eq!(
             input
                 .execute(OPTIONS, &SerialExecutor, scratch.reborrow())
                 .unwrap(),
             expected
         );
+    }
+    // Embedded compact layouts must support retained preparation and selection
+    // rebinding in a consumer without an allocator.
+    let indices = [0; N];
+    let mut retained = [ScalarStorage::ZERO; N];
+    for bases in [
+        Bases::Compact(EisensteinTableBatch::bind(&record.compact).unwrap()),
+        Bases::CompactPrepared(EisensteinTableBatch::bind(&record.compact_cached).unwrap()),
+    ] {
+        let selection = Selection::indexed(bases, &indices).unwrap();
+        for row in [scalars, scalars.map(|s| s.neg())] {
+            let prepared =
+                PreparedScalars::prepare(&row, &mut retained, TaskBudget::SERIAL, &SerialExecutor)
+                    .unwrap();
+            let inputs = [selection.with_prepared_scalars(prepared).unwrap()];
+            let expected = row.iter().fold(PastaField::ZERO, |sum, s| sum.add(s));
+            let mut jobs = [JobStorage::EMPTY];
+            let mut workers = [WorkerStorage::EMPTY];
+            let plan = ExecutionPlan::new(&inputs, OPTIONS, &mut jobs, &mut workers).unwrap();
+            let mut output = [ProjectivePoint::IDENTITY];
+            plan.execute(&mut output, &SerialExecutor, scratch.reborrow())
+                .unwrap();
+            assert_eq!(output[0], record.base.mul_projective(&expected));
+        }
     }
 }
 

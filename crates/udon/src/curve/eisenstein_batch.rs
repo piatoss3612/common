@@ -274,6 +274,8 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
     /// Initial buffer contents do not matter; scratch beyond the reported count
     /// is untouched. A zero scalar writes identities. Entries must satisfy the
     /// mathematical contract of [`EisensteinTable::mul`].
+    /// [`EisensteinScalar::certify_batch`] can retain the scalar-only check for
+    /// exceptional affine intermediates across repeated calls.
     ///
     /// # Errors
     ///
@@ -300,9 +302,9 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         check_length("output", n, output.len())?;
         check_scratch("field", required, field.len())?;
         let digits = scalar.digits();
-        // This modular check is shared by the whole batch, and deliberately
-        // absent from scalar preparation used by ordinary compact-table muls.
-        let affine = n >= LADDER_AFFINE_MIN && !digits.is_empty() && ladder_safe::<C>(digits);
+        // The exceptional-intermediate check depends only on the scalar, so its
+        // result applies to every base. A certificate also reuses it across calls.
+        let affine = n >= LADDER_AFFINE_MIN && !digits.is_empty() && scalar.batch_safe();
         multiply_inner(
             self.entries,
             digits,

@@ -192,10 +192,9 @@ fn table_batch_operations<C: PastaCurve>(
     Ok(())
 }
 
-const MSM_OPTIONS: msm::ExecutionOptions = msm::ExecutionOptions {
-    max_terms_per_pass: core::num::NonZeroUsize::new(17),
-    ..msm::ExecutionOptions::SERIAL
-};
+const MSM_OPTIONS: msm::ExecutionOptions = msm::ExecutionOptions::SERIAL
+    .with_memory_limit(8192)
+    .with_max_terms_per_pass(core::num::NonZeroUsize::new(17));
 const MSM_SCRATCH: msm::Requirements =
     match msm::Input::<Pallas>::requirements_for_len(257, MSM_OPTIONS) {
         Ok(r) => r,
@@ -233,25 +232,28 @@ fn msm_operations<C: PastaCurve>(
     let points = [base.to_point(), Point::IDENTITY];
     let indices: [u32; 257] = core::array::from_fn(|i| (i % 2) as u32);
     let scalars = [*scalar; 257];
-    let input = msm::Input::indexed(msm::Bases::Points(&points), &indices, &scalars)?;
-    let mut digits = [0; MSM_SCRATCH.digits];
-    let mut affine = [AffinePoint::GENERATOR; MSM_SCRATCH.affine];
-    let mut projective = [ProjectivePoint::IDENTITY; MSM_SCRATCH.projective];
-    let mut field = [PastaField::ZERO; MSM_SCRATCH.field];
-    let mut working_indices = [0; MSM_SCRATCH.indices];
+    let selection = msm::Selection::indexed(msm::Bases::Points(&points), &indices)?;
+    let input = selection.with_scalars(&scalars)?;
+    let mut records = [msm::ScalarStorage::ZERO; MSM_SCRATCH.scalars()];
+    let mut digits = [0; MSM_SCRATCH.digits()];
+    let mut affine = [AffinePoint::GENERATOR; MSM_SCRATCH.affine()];
+    let mut projective = [ProjectivePoint::IDENTITY; MSM_SCRATCH.projective()];
+    let mut field = [PastaField::ZERO; MSM_SCRATCH.field()];
+    let mut working_indices = [0; MSM_SCRATCH.indices()];
     let mut output = [ProjectivePoint::IDENTITY];
     msm::execute_batch(
         &[input],
         &mut output,
         MSM_OPTIONS,
         &SerialExecutor,
-        msm::Scratch {
-            digits: &mut digits,
-            affine: &mut affine,
-            projective: &mut projective,
-            field: &mut field,
-            indices: &mut working_indices,
-        },
+        msm::Scratch::new(
+            &mut records,
+            &mut digits,
+            &mut affine,
+            &mut projective,
+            &mut field,
+            &mut working_indices,
+        ),
     )?;
     assert_eq!(
         output[0],

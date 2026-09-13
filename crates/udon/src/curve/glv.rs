@@ -33,10 +33,17 @@ use crate::field::{
 /// assert_eq!(signed_field(a).add(&Fq::zeta().mul(&signed_field(b))), scalar);
 /// ```
 pub fn glv_decompose<C: PastaCurve>(scalar: &PastaField<C::Scalar>) -> (i128, i128) {
-    decompose(
-        scalar.to_canonical_uint().limbs(),
-        &GlvParameters::<C>::BASIS,
-    )
+    decompose_canonical::<C>(scalar.to_canonical_uint())
+}
+
+/// Decomposes an already checked canonical scalar without Montgomery conversion.
+///
+/// The caller must establish that the integer is below `C`'s scalar modulus;
+/// [`crate::field::CanonicalUint`] alone does not enforce this bound.
+pub(super) fn decompose_canonical<C: PastaCurve>(
+    scalar: crate::field::CanonicalUint,
+) -> (i128, i128) {
+    decompose(scalar.limbs(), &GlvParameters::<C>::BASIS)
 }
 
 /// Multiplies two little-endian limb strings into a zeroed result.

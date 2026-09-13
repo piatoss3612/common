@@ -26,6 +26,7 @@ pub(super) const MAX_DIGITS: usize = 132;
 pub struct EisensteinScalar<C: PastaCurve> {
     digits: [u8; MAX_DIGITS],
     len: usize,
+    batch_safe: Option<bool>,
     marker: PhantomData<C>,
 }
 
@@ -40,8 +41,27 @@ impl<C: PastaCurve> EisensteinScalar<C> {
         Self {
             digits,
             len,
+            batch_safe: None,
             marker: PhantomData,
         }
+    }
+
+    /// Retains the check for exceptional intermediates in affine batch ladders.
+    ///
+    /// The variable-time check depends only on the scalar and applies to every
+    /// nonidentity base on this curve. [`super::EisensteinTableBatch::mul_prepared`]
+    /// reuses its result across calls; [`Self::new`] leaves it unevaluated.
+    /// A ladder with exceptional intermediates uses complete projective
+    /// arithmetic. This choice concerns mathematical validity and performance;
+    /// memory safety does not depend on calling this method.
+    pub fn certify_batch(mut self) -> Self {
+        self.batch_safe = Some(super::eisenstein_batch::ladder_safe::<C>(self.digits()));
+        self
+    }
+
+    pub(super) fn batch_safe(&self) -> bool {
+        self.batch_safe
+            .unwrap_or_else(|| super::eisenstein_batch::ladder_safe::<C>(self.digits()))
     }
 
     pub(super) fn digits(&self) -> &[u8] {

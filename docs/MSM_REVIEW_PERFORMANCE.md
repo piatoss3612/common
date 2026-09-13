@@ -1,228 +1,340 @@
-# MSM curve-review follow-up
+# MSM review remediation: September 13, 2026
 
-The September 12, 2026 changes address inversion endpoint work, projective
-formulas, reusable MSM scalar preparation, and missing benchmark distributions.
-The measured gains are strongest in small denominator batches, projective
-arithmetic, small dense 128-bit MSMs, and workloads that reuse scalar vectors.
-Large random MSMs benefit much less.
+This report covers MSM storage, preparation, scheduling, and measurements.
+The runtime remains allocation-free and retains caller-owned initialized typed
+scratch and scoped execution. The unpublished
+MSM API changes deliberately; see [migration](#migration).
 
-## Measurement method
+The results support smaller affine pair staging, resource-aware planning, and
+several workload-specific choices. They do **not** establish that Udon is the
+fastest Pasta implementation. Historical arithmetic measurements from September
+12 are preserved [separately](MSM_ARITHMETIC_PERFORMANCE.md);
+they describe `70c00ed`, not this rewrite.
 
-Measurements used Rust 1.91.0, LLVM 21.1.2, `aarch64-apple-darwin`, and default
-features. The original implementation is revision
-`eb1ce31d1ce9d02245f95efa21c6ac61282c9ec0`. Criterion binaries were retained for
-each implementation so comparisons did not require a build between timing
-runs. Builds and tests did not run concurrently with measurements.
+## Method and provenance
 
-The [curve harness](../crates/udon/benches/curve.rs) used 30 samples, 0.5
-seconds of warmup, and two seconds of measurement. The [MSM
-corpus](../crates/udon/benches/msm.rs) used 20 samples, 0.3 seconds of warmup,
-and one second of measurement for the final comparisons. Inputs, allocation, and
-fixture checks are outside timing. MSM execution includes scratch checks,
-initialization, scheduling, and recoding unless explicitly labeled reused. All
-MSM results here use affine bases and `SerialExecutor`, without a pass cap.
+Measurements used an Apple M4 Max, `aarch64-apple-darwin`, Rust 1.91.0, and LLVM
+21.1.2. Udon started at `70c00ed`; the candidate was a working-tree change.
+A temporary development harness used an isolated Cargo package. The harness
+and its raw result artifacts are no longer retained in this repository; the
+tables below preserve the summarized measurements.
 
-Tables report means with 95% bootstrap confidence intervals. These intervals
-describe sampling within a run; they do not capture changes in machine state
-between binaries. Controls with unchanged algorithms moved by roughly 1–5%
-across the dispatch runs, so small effects are not strong evidence. These are
-local microbenchmarks, without x86-64 or application measurements.
+Both curves use deterministic pseudorandom 254-bit coefficients and bases with
+separately generated known generator multiples. These coefficients exercise
+full-width arithmetic but are not uniform samples of the scalar field.
+Every alternative is checked outside timing against an independent scalar inner
+product over those known multiples. Results cover zero and one as controls,
+powers of two through 32,768, and neighbors of 8, 32, 64, 128, and 256. The
+1,048,576-term case measures sizing only. No x86 machine was available.
 
-## Inversion endpoints
+Tables below report median microseconds. The full-width MSM measurements use
+seven samples of at least 30 ms. Exploratory corpus and policy runs use three
+of at least 10 ms; final lifecycle and grouped rechecks use five of at least
+20 ms. Each sample repeats the operation until its duration is met. Samples
+describe within-run spread; these are not confidence intervals. Fixture creation,
+pool entry, allocation, and result checks are excluded unless the case explicitly
+names that lifecycle. Builds and tests were kept separate from timing runs.
+Unchanged controls moved by several percent, occasionally around 10%; small
+rankings are not portable crossover guarantees.
 
-The MSM denominator helper keeps its two independent multiplication lanes.
-Seeding each lane directly and omitting its final unused update removes six
-field multiplications per nonempty call: `3(n - 1)` instead of `3n + 3`, where
-`n` is the denominator count and both counts exclude the inversion itself.
-A singleton calls field inversion directly. This change concerns the nonzero
-denominator helper; the public identity-preserving normalization helper has a
-separate schedule.
+## Full-width MSM measurements
 
-The [retained control](../crates/udon/src/curve/tests/batch_inversion.rs)
-compares both schedules in the same process on the same nonzero inputs,
-alternating each vector with its inverse. It uses 30 samples, 0.3 seconds of
-warmup, and one second of measurement. Times below are nanoseconds; the complete
-experiment also covers 2, 3, 32, and 128 denominators.
+Times are microseconds for Udon's complete MSM execution.
 
-| Field | Denominators | Former schedule | Endpoint schedule |
+| Terms | Workers | Pallas | Vesta |
+| ---: | ---: | ---: | ---: |
+| 32 | 1 | 175 | 182 |
+| 128 | 1 | 610 | 630 |
+| 1,024 | 1 | 3,651 | 3,715 |
+| 32,768 | 1 | 80,541 | 80,835 |
+| 32 | 4 | 182 | 183 |
+| 128 | 4 | 218 | 218 |
+| 1,024 | 4 | 1,058 | 1,057 |
+| 32,768 | 4 | 22,691 | 22,697 |
+
+The singleton convenience call measured 15.59 / 16.64 us versus 15.35 / 16.38 us
+for direct scalar multiplication. That small difference does not justify a
+separate singleton implementation in this change.
+
+## Selected arithmetic and memory policies
+
+Width-eight Booth recoding now emits sixteen data windows, with no dead carry
+window. Central curve-specific GLV bounds establish that the final carry is
+zero. The writer overwrites all digit bytes and the reader visits contiguous
+rows once per intersecting chunk. Wider supported windows use two-byte digits.
+
+The affine reducer retains denominator and inversion prefix only. Pair `j`
+reads positions `2j` and `2j+1` before writing at most position `j`; cancellation
+only moves the destination earlier. The second pass runs even when every pair
+cancels. On this 64-bit target, pair workspace falls from 200 to 64 bytes, a
+68% reduction. This is a pair-workspace claim, not a whole-MSM memory reduction.
+
+The retained original reducer, replacement, and fused-expression candidate run
+in the same native test binary. At 128 points with occupancy 17, Pallas medians
+were 10.576, 10.621, and 10.710 us; the repeated original was 10.579 us. At 8,192
+points with occupancy 17, Vesta medians were 536.7, 540.3, and 542.0 us, with
+532.7 us for the repeated original. The two-pass reducer is retained for its
+storage reduction without a timing improvement claim. Fused expressions did
+not win consistently and are confined to the test experiment. Existing tiny
+inversion and two-lane endpoint optimizations were already present in `70c00ed`.
+
+Full-width complete chunks below 128 terms retain the joint ladder. Larger
+chunks select widths 6 below 192 terms, 7 below 512, 8 below 4,096, 10 below
+32,768, and 11 thereafter. These are replaceable internal defaults. The serial
+width sweep measured the following Pallas/Vesta pairs:
+
+| Terms | Chosen width | Chosen time (us) | Width-eight control (us) |
 | --- | ---: | ---: | ---: |
-| Fp | 1 | 582.91 [579.25, 586.28] | 525.10 [521.95, 527.82] |
-| Fp | 8 | 770.08 [767.17, 772.87] | 722.65 [718.57, 726.21] |
-| Fp | 1,024 | 27,215.85 [27,069.20, 27,343.81] | 27,380.25 [27,249.67, 27,477.35] |
-| Fq | 1 | 586.46 [584.60, 588.15] | 523.02 [518.12, 526.88] |
-| Fq | 8 | 775.30 [772.16, 777.97] | 727.45 [724.32, 730.26] |
-| Fq | 1,024 | 27,283.05 [27,175.43, 27,384.63] | 27,406.14 [27,309.84, 27,493.21] |
+| 128 | 6 | 608 / 612 | about 740 / 740 |
+| 256 | 7 | 1,038 / 1,063 | 1,071 / 1,095 |
+| 1,024 | 8 | 3,616 / 3,744 | same candidate |
+| 4,096 | 10 | 12,002 / 12,171 | 13,206 / 13,317 |
+| 8,192 | 10 | 22,398 / 22,614 | 25,520 / 26,063 |
+| 32,768 | 11 | 79,604 / 80,609 | 101,179 / 102,462 |
 
-The 1–8 element cases improve by about 6–11%; 32 elements improve by about 3%.
-At 128–1,024 elements the difference is about 1% or less. The fixed work saving
-does not establish a material speedup for every large bucket batch.
+At 2,048 terms width ten was only about 2% faster; width eight retains fewer
+bytes. At 8,192 and 16,384, width eleven's small gain over ten did not justify
+its bucket floor. Widths 4 through 12 and all three accumulation backends remain
+forceable for application-specific measurements. The selected width follows
+the effective chunk size, including retained scalar input.
 
-## Projective formulas
+Projective buckets win for tiny effective passes: unlike an affine tree, they
+retain bucket sums across passes without repeatedly inverting sparse levels.
+At 1,024 terms and pass 128, affine width eight measured about 4.2 ms serially,
+against roughly 4.5 ms projective; the hybrid was about 4.3 ms. At passes 1, 2,
+and 17 the projective alternative won. Hybrid remains an explicit candidate.
+The boundary sweep also favored projective at pass 64 for repeated passes over
+larger inputs. Auto therefore uses projective below pass 128. A single 64-term
+pass can favor affine; the rule is a conservative default, not a universal
+occupancy crossover.
 
-General and mixed addition use unscaled differences and the existing fused
-`mul_sub_product` kernel. Doubling uses half-scaled Jacobian coordinates and
-halves the stored Montgomery residue with a conditional modulus addition and
-shift. Equal, inverse, and identity branches remain complete.
+`with_memory_limit` accounts for scalar records, digits, arithmetic buffers,
+indices, window results, and reusable plan metadata. It reduces pass size,
+concurrency, and chunk size and can select projective buckets. Its nonexhaustive
+search reports an error before writes if it finds no fitting layout. See the
+[memory contract](CURVES.md#sizing-and-reusing-scratch) for accounting and error
+semantics. The figures below count typed buffer capacity, not process RSS.
 
-Addition was measured after changing addition and inversion, while retaining the
-former doubling formula. Doubling candidates share the new addition and
-inversion implementations. Times are nanoseconds.
+Sizing 1,048,576 terms requires no input allocation or execution:
 
-| Curve | Operation | Original | Selected formula |
-| --- | --- | ---: | ---: |
-| Pallas | `add` | 153.23 [152.94, 153.51] | 140.42 [139.43, 141.48] |
-| Pallas | `add_mixed` | 107.02 [106.77, 107.25] | 96.70 [96.50, 96.92] |
-| Pallas | `double` | 73.98 [73.80, 74.16] | 66.63 [66.52, 66.73] |
-| Vesta | `add` | 154.81 [154.42, 155.18] | 141.69 [141.29, 142.12] |
-| Vesta | `add_mixed` | 107.87 [107.62, 108.12] | 97.47 [97.30, 97.67] |
-| Vesta | `double` | 75.07 [74.84, 75.31] | 67.28 [67.16, 67.41] |
+| Policy | Temporary bytes | MiB |
+| --- | ---: | ---: |
+| Serial, uncapped | 318,958,208 | 304.18 |
+| Budget 12, uncapped | 2,535,640,192 | 2,418.17 |
+| Serial, pass 512 | 117,729,920 | 112.28 |
+| Budget 12, pass 512 | 120,900,736 | 115.30 |
+| Either budget, 32 KiB ceiling | 19,008 | 0.018 |
 
-Unscaled addition improves these kernels by about 8–10%. Against the unchanged
-doubling control in the same implementation stage, half-scaled doubling improves
-by 8–9%. An alternative with two field multiplications and five squarings was
-also measured. For input Jacobian coordinates `(X, Y, Z)`, it computes
-`D = 2 * ((X + Y²)² - X² - Y⁴)` while retaining the former doubling formula's
-other terms. It took 72.01 ns [71.64, 72.45] on Pallas and 72.88 ns
-[72.68, 73.08] on Vesta, slower than the retained half-scaled formula.
+Uncapped execution still grows with input length and concurrency. Retained
+records and width-eleven digits also make a pass cap alone larger than the old
+34-byte-per-term digit-only preparation. Use a byte ceiling or chunk size when
+bounded temporary storage is required; a pass cap is insufficient. The tiny
+ceiling trades additional chunk collapses for the much smaller workspace.
 
-Full-width affine scalar multiplication, including its table preparation,
-changed from 16.10 to 15.21 microseconds on Pallas and 16.40 to 15.58 on Vesta.
-The addition and inversion changes contribute to those combined results; they
-should not be attributed entirely to doubling.
+Completing independent chunks bounds every temporary buffer but repeats
+collapses. `with_streaming_buckets` retains all windows' projective buckets and
+recodes one chunk at a time, avoiding those repeated collapses. In the isolated
+8,192-term Pallas experiment, width eight with chunks of 256 took 34.69 ms with
+retained windows versus 49.27 ms with complete projective chunks. Its prototype
+workspace was 221,184 versus 38,400 bytes. These are different memory budgets;
+the public implementation additionally accounts for its reserved intermediate
+prefix. Streaming is an explicit serial bucket policy, not the default under
+every ceiling. Width and chunk choices let the caller control its fixed floor.
 
-Independent BigUint affine references cover full-width points at unrelated
-nonunit Jacobian scales, including equal and inverse inputs. Field tests check
-halving against integer arithmetic, including stored residues near zero and the
-modulus. Canonical coordinate encodings remain unchanged.
+## Preparation, reuse, and scheduling
 
-## Reusing scalar vectors
+Raw execution converts and classifies each coefficient once per chunk, retaining
+signed small-integer metadata and GLV components. Scalar shape applies at every
+input length. Zero, one, Boolean, small negative, and sparse bounded-integer rows
+use short arithmetic. For complete rows, dense bounded inputs of at least 512
+terms and 32 useful bits use Booth when their average population exceeds eight
+set bits per coefficient.
+This retains the cheap paths for sparse rows while avoiding a serial four-bit
+ladder on large dense rows. Joint ladders use their actual highest occupied
+column and skip table preparation for zero scalars and identity bases.
 
-The [curve guide](CURVES.md#multiscalar-multiplication) explains how to retain
-scalar preparation with `msm::PreparedScalars`. Reused execution excludes
-recoding and scalar-dependent dispatch and needs no digit scratch. Ordinary
-execution performs preparation each time, then shares the dispatch result across
-arithmetic partitions.
+The bounded-row sweep at 8,192 Pallas terms measured the previous short policy at
+7.87 / 15.74 / 31.62 ms for signed 32 / 64 / 128-bit rows. The selected policy
+recheck measured 3.83 / 6.56 / 17.63 ms serially and 3.59 / 4.68 / 6.89 ms with
+three workers. These are separate runs; the large changes exceed the observed
+control drift. At 128 terms the dense 128-bit short kernel still wins serially,
+so the default retains it. Forced Booth can improve parallel execution there.
 
-The following measurements use the same implementation for ordinary execution,
-preparation alone, and execution with retained scalars. Times are microseconds.
-Preparation is a one-time cost; the reused column excludes it.
+`Selection` retains checked index mapping independently of a scalar borrow.
+Rebinding a field scalar row checks only its length; canonical integer binding
+also validates values. `PreparedScalars` retains opaque records across bases,
+widths, and chunk policies; optional cached digits are reused only for compatible
+geometry in a single, nonstreaming chunk. Its retention is reported separately
+from execution scratch. Embedded ordinary or cached compact tables bind directly
+as MSM bases.
+`EisensteinScalar::certify_batch` optionally retains the adjacent compact batch
+ladder's check for exceptional affine intermediates, including the decision to
+use complete projective arithmetic.
 
-| Curve | Corpus | Terms | Ordinary | Prepare once | Reused |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Pallas | full | 32 | 171.22 [170.62, 171.86] | 13.13 [13.11, 13.16] | 159.42 [158.95, 159.90] |
-| Pallas | full | 1,024 | 3,446.81 [3,424.24, 3,469.10] | 44.77 [44.50, 45.00] | 3,389.09 [3,374.86, 3,402.19] |
-| Pallas | cancellation | 32 | 1.34 [1.34, 1.35] | 0.39 [0.38, 0.39] | 0.96 [0.95, 0.96] |
-| Pallas | cancellation | 1,024 | 78.42 [78.18, 78.66] | 39.74 [39.59, 39.90] | 38.39 [38.32, 38.46] |
-| Vesta | full | 32 | 177.04 [176.30, 177.77] | 13.30 [13.25, 13.36] | 164.10 [163.55, 164.66] |
-| Vesta | full | 1,024 | 3,551.95 [3,531.94, 3,571.84] | 45.75 [45.53, 45.96] | 3,478.62 [3,463.19, 3,492.96] |
-| Vesta | cancellation | 32 | 1.38 [1.38, 1.39] | 0.40 [0.39, 0.40] | 0.98 [0.98, 0.98] |
-| Vesta | cancellation | 1,024 | 78.51 [78.39, 78.64] | 40.13 [39.94, 40.31] | 38.41 [38.36, 38.45] |
+Grouped scheduling splits contiguous ranges by estimated work and assigns each
+worker its own maximum scratch across sequential jobs. Serial groups reuse
+maximum digit storage rather than summing all rows. Independent output folds
+run within their job's worker. `ExecutionPlan` retains job and worker metadata
+for repeat execution; no scalar-sized task objects or dynamic queue are needed.
+The weight is intentionally coarse; it does not model every cache or occupancy
+effect. The workload harness compared this policy with serial calls and
+caller-scheduled independent MSMs in the same fixed-size pool.
 
-Full-width 32-term execution improves by about 7% when scalars are retained. At
-1,024 random terms the observed gain is only about 2%, near the scale of
-between-run variation. Exact cancellation makes scalar preparation a larger
-fraction of runtime: retaining it saves about 29% at 32 terms and 51% at 1,024.
-These exceptional inputs are useful cost controls, not representative random
-MSMs. These measurements do not establish a benefit from separate preparation
-for a scalar vector used just once.
+The Pallas lifecycle recheck separates retained data from temporary buffers:
 
-## Broader corpus and dispatch
-
-The [testing guide](TESTING.md#msm-and-compact-table-batch-benchmarks) defines
-the scalar and base distributions and the `warm` and `cold` timing boundaries.
-The `cold` cases apply cache pressure without guaranteeing hardware-cold inputs;
-their times can be similar to warm times.
-
-The former policy sent every scalar vector fitting 128 bits to bit interleaving
-or four-bit buckets. For dense random 128-bit vectors, joint Eisenstein
-preparation amortizes at eight terms in these measurements. The retained change
-uses it for dense inputs at 8–32 terms. The guards in
-[`short_bits`](../crates/udon/src/curve/msm/recode.rs) preserve existing paths
-for sparse scalars, moderate bit lengths, singletons, and larger sums.
-
-These are policy ablations with the new arithmetic and preparation API on both
-sides. Times are microseconds for ordinary execution on random 128-bit scalars.
-
-| Curve | Terms | Former short policy | Joint candidate |
+| Case | 32 terms (us) | 1,024 terms (us) | 32,768 terms (us) |
 | --- | ---: | ---: | ---: |
-| Pallas | 8 | 56.31 [56.15, 56.47] | 51.18 [50.99, 51.36] |
-| Pallas | 16 | 109.78 [109.23, 110.19] | 87.97 [87.69, 88.23] |
-| Pallas | 31 | 207.37 [206.04, 208.34] | 162.11 [161.66, 162.54] |
-| Pallas | 32 | 190.69 [190.18, 191.23] | 167.87 [167.47, 168.26] |
-| Pallas | 47 | 238.26 [237.46, 239.00] | 242.12 [241.49, 242.75] |
-| Vesta | 8 | 58.07 [57.90, 58.24] | 52.04 [51.89, 52.19] |
-| Vesta | 16 | 112.79 [112.44, 113.15] | 88.88 [88.53, 89.18] |
-| Vesta | 31 | 212.23 [211.42, 213.01] | 164.13 [163.47, 164.80] |
-| Vesta | 32 | 194.53 [193.69, 195.37] | 168.62 [167.64, 169.31] |
-| Vesta | 47 | 241.89 [241.18, 242.60] | 242.89 [242.10, 243.62] |
+| Raw execution | 176 | 3,636 | 79,285 |
+| Scalar preparation alone | 0.96 | 30.4 | 978 |
+| Recoding cache alone | 12.1 | 29.5 | 834 |
+| Execution with prepared records | 176 | 3,512 | 79,031 |
+| Execution with cached scalar digits | 163 | 3,592 | 77,065 |
+| Temporary endomorphism cache plus execution | 176 | 3,473 | 76,905 |
 
-The retained 8–32 term cases improve by 9–23% in this repeat; an earlier run
-measured 16–26% at 31–32 terms. At 47 terms, an initial 3% gain changed to a
-0–2% regression in the repeat, so that candidate was rejected. A broader
-candidate that routed every scalar wider than 64 bits to joint arithmetic
-regressed Pallas 64- and 127-term random 128-bit sums by about 7% and 28%. Those
-sizes keep their four-bit buckets.
+At 1,024 terms, raw scratch is 321,536 bytes. Prepared execution uses 256,000
+temporary bytes plus 65,536 retained bytes; cached digits reduce temporary bytes
+to 223,232 and increase retention to 98,304. Cache timing does not establish a
+consistent win over prepared records at this size. At 32,768 terms, scalar
+records occupy 2 MiB and width-eleven digits another 1.5 MiB. These are optional
+retention costs, not memory removed from the process.
 
-Random 96-bit, sparse 128-bit, and singleton controls retain the same arithmetic
-paths. In the final dispatch experiment they moved by about 1–5%, alongside the
-shift in random 128-bit timings. These controls support retaining only the
-larger, repeated gains; they do not prove that all unchanged cases have
-identical latency. The new corpus also exposes the extra cost of sparse 128-bit
-inputs at the existing 32-term bucket transition. Optimizing that separate
-policy remains outside this change.
+Retained ordinary compact tables at 32 terms execute in 142 us, with 20.8 us to
+prepare their 16 KiB table. Cached compact entries execute in 135 us with a larger
+table. At 32,768 terms, forcing the compact joint ladder takes about 207 ms;
+letting the same table-backed input use Booth takes about 79 ms. Table availability
+therefore does not force joint execution. Optional batch certification costs
+about 1.5 us and showed no consistent complete-ladder speedup; its benefit is
+retaining the exceptional-intermediate check when that scalar is reused.
 
-## Complete MSM comparison
+Temporarily caching each 256-term chunk took 4.84 ms versus 5.00 ms for ordinary
+chunks at 1,024 terms, and 160.6 versus 165.2 ms at 32,768. It adds 24 KiB to the
+90,400-byte ordinary chunk workspace. These modest local gains do not make it a
+default. At 32,768 terms, explicit streaming width eight takes 137.9 ms with
+222,720 temporary bytes; complete execution under a 32 KiB ceiling takes 222.1 ms
+with 19,008 bytes, and under 8 KiB takes 382.6 ms with 6,656 bytes. They offer
+different time/storage tradeoffs.
 
-Times are microseconds for ordinary execution, including recoding. The original
-binary was remeasured after the final implementation to check the earlier
-baseline against changes in machine state.
+The corrected grouped scheduler preserves a dominant job's internal worker
+budget when neighboring jobs are too small to justify a separate range. Odd
+budgets divide work in proportion to the available workers. With three workers,
+the 1,024-term heterogeneous family measured 1.73 ms with a reused plan, versus
+3.91 ms for serial calls and 3.58 ms for caller-scheduled serial MSMs. The
+8,192-term family measured 9.40, 22.91, and 22.41 ms respectively. A group of 256
+two-term jobs measured 2.36 ms planned versus 6.51 ms serial and 2.55 ms
+caller-scheduled. The 8,192-term shrinking IPA family measured 45.75 ms planned,
+102.08 ms serial, and 84.31 ms caller-scheduled. The ordinary batch wrapper
+stayed close to retained-plan execution; metadata reuse mostly removes setup.
 
-| Curve | Corpus | Terms | Cache | Original | Follow-up |
-| --- | --- | ---: | --- | ---: | ---: |
-| Pallas | full | 32 | warm | 184.84 [184.12, 185.70] | 171.22 [170.62, 171.86] |
-| Pallas | full | 128 | warm | 730.82 [728.41, 733.44] | 691.84 [688.17, 696.54] |
-| Pallas | full | 1,024 | warm | 3,456.29 [3,441.59, 3,471.56] | 3,446.81 [3,424.24, 3,469.10] |
-| Pallas | sparse_high | 1,024 | warm | 3,174.41 [3,154.71, 3,193.41] | 3,122.88 [3,106.40, 3,139.82] |
-| Pallas | equal | 1,024 | warm | 2,784.17 [2,765.12, 2,803.73] | 2,769.03 [2,749.02, 2,790.11] |
-| Pallas | inverse | 1,024 | warm | 2,811.22 [2,789.90, 2,832.00] | 2,736.47 [2,718.39, 2,756.12] |
-| Pallas | inverse | 1,024 | cold | 2,781.58 [2,765.31, 2,795.61] | 2,769.14 [2,752.64, 2,784.49] |
-| Pallas | cancellation | 1,024 | warm | 77.59 [77.28, 77.88] | 78.42 [78.18, 78.66] |
-| Vesta | full | 32 | warm | 188.46 [187.43, 189.33] | 177.04 [176.30, 177.77] |
-| Vesta | full | 128 | warm | 741.52 [737.43, 746.35] | 712.06 [707.10, 717.80] |
-| Vesta | full | 1,024 | warm | 3,523.11 [3,507.50, 3,539.86] | 3,551.95 [3,531.94, 3,571.84] |
-| Vesta | sparse_high | 1,024 | warm | 3,211.10 [3,193.28, 3,228.80] | 3,213.37 [3,194.63, 3,232.32] |
-| Vesta | equal | 1,024 | warm | 2,780.88 [2,762.91, 2,799.41] | 2,734.34 [2,714.63, 2,756.11] |
-| Vesta | inverse | 1,024 | warm | 2,806.25 [2,791.92, 2,819.09] | 2,805.27 [2,775.84, 2,833.41] |
-| Vesta | inverse | 1,024 | cold | 2,785.55 [2,762.99, 2,808.45] | 2,764.53 [2,744.45, 2,784.93] |
-| Vesta | cancellation | 1,024 | warm | 77.55 [77.32, 77.76] | 78.51 [78.39, 78.64] |
+## Caller-side candidates
 
-The 32-term full-width sums improve by 6–7%, and 128-term sums by 4–5%. At 1,024
-terms, differences are mostly small and mixed. Ordinary cancellation is about 1%
-slower in this comparison; its large scalar-reuse gain comes from skipping
-preparation on subsequent executions. Equal/inverse and cache-pressure controls
-do not establish a broad speedup for large sums.
+Computing two separate GLV-half MSMs and applying the endomorphism at the end
+did not win: at 8,192 Pallas terms it took 27.97 ms versus 23.06 ms serially,
+and 10.85 versus 9.22 ms with three workers. It also required two workspaces.
+The production path continues to deposit both halves into each window.
 
-## Reproduction
+Partitioning the mostly-small fixture (one full-width exception per 64 terms)
+did win. At 8,192 terms, including classification, gathering, and validation,
+the caller-side partition took 1.46 ms versus 2.72 ms for uniform execution;
+with three workers it took 0.95 versus 1.49 ms. That lifecycle used 2,923,552
+temporary bytes versus 2,620,128 for the uniform serial case. The experiment
+remains explicit because it requires additional gathering buffers and a scan
+whose value depends on the distribution.
 
-The stable cases and timing boundaries are described in the
-[testing guide](TESTING.md#msm-and-compact-table-batch-benchmarks). Run timing
-experiments sequentially. Criterion stores means, intervals, and samples under
-`target/criterion`. The reported comparison used local binaries and logs under
-`target/curve-review`; these artifacts are not part of the repository.
+Sorted index coalescing also pays for strong repetition. At 1,024 terms selecting
+eight bases from a 32,768-point pool, sorting and accumulating coefficients plus
+execution took 66.5 us and 91,336 temporary bytes, versus 3,598 us and 321,536
+bytes for ordinary indexed execution. At 8,192 terms it took 165 us versus
+22,195 us. A skewed selection improved from 20.95 to 2.17 ms, while the
+nonrepeating cold-pool selection stayed around 23 ms. Clearing a coefficient
+array for the entire pool was much less effective at small sizes and required
+over 11 MB. Both approaches were measured as caller-side experiments; indexed
+binding continues to preserve the supplied terms without implicit sorting.
 
-```console
-cargo test --release --locked -p zakura-udon --lib compare_batch_inversion_endpoints -- --ignored --nocapture
-cargo bench --locked -p zakura-udon --bench curve -- '(Pallas|Vesta)/operations/(add|add_mixed|double|mul_affine)$' --sample-size 30 --warm-up-time 0.5 --measurement-time 2 --save-baseline candidate
-cargo bench --locked -p zakura-udon --bench msm -- 'msm_corpus/(full|cancellation)/(warm|prepare_scalars|reused)/(32|1024)$' --sample-size 20 --warm-up-time 0.3 --measurement-time 1 --save-baseline candidate
-cargo bench --locked -p zakura-udon --bench msm -- 'msm_corpus/(random128|sparse128)/warm/(8|16|31|32|47|48|64|127)$' --sample-size 20 --warm-up-time 0.3 --measurement-time 1 --save-baseline candidate
-cargo bench --locked -p zakura-udon --bench msm -- 'msm_corpus/(sparse_high|equal|inverse)/(warm|cold)/1024$' --sample-size 20 --warm-up-time 0.3 --measurement-time 1 --save-baseline candidate
-```
+## Phase accounting
 
-The original MSM comparison backported the corpus to the original revision,
-omitting the unavailable prepared-scalar cases. The dispatch control uses the
-new arithmetic and preparation API but always chooses the short path when all
-scalars fit 128 bits. This isolates dispatch from the arithmetic improvements.
-The scalar-reuse and inversion comparisons require no alternate build.
+The isolated width-eight Pallas run at 1,024 terms measured canonicalization at
+5.07 us and GLV rounding from canonical values at 10.86 us. Counting window zero
+took 1.06 us, scatter 12.03 us, weighted collapse 31.44 us, and final recombination
+10.95 us. All sixteen production window kernels together took 3,531 us. These
+are separate experiments, not additive subdivisions of one measured execution.
 
-For correctness, documentation, and benchmark smoke checks, use the [testing
-guide](TESTING.md) and [CI gates](../.github/workflows/ci.yml).
+That first window scanned 2,048 half-term digits, deposited 2,039 points, and
+staged `[980, 501, 249, 129, 51, 1]` denominators across six levels. Individual
+level timings were `[67.10, 36.49, 18.96, 11.06, 5.80, 2.67]` us, including
+restoring points and lengths before each iteration. Vesta staged
+`[990, 495, 250, 122, 56]` in the corresponding fixture. Counters are collected
+outside timed loops.
+
+## Finding disposition and validation
+
+| Review concern | Disposition |
+| --- | --- |
+| Dead carry and duplicated geometry | Central GLV bounds and one geometry for sizing, cache, recoding, and execution; sixteen width-eight windows |
+| Excess affine staging | Two-pass reducer; original and fused controls retained only in ignored tests |
+| Repeated scalar classification | One conversion/preparation per chunk; retained shape; signed/unsigned/canonical bindings with checked bounds |
+| Full-input scratch multiplied by concurrency | Explicit ceiling, bounded complete chunks, optional retained window buckets, checked byte counts |
+| Mandatory width-eight affine path | Forced widths 4–12 and affine/projective/hybrid backends; measured defaults |
+| Coupled preparation lifetimes | Rebindable selection, reusable records and optional recoding, compact basis binding, reusable plans |
+| Heterogeneous scheduling and serial tail | Weighted ranges, per-worker maxima, independent folds, retained offsets |
+| Missing optimization invariants | Direct BigUint reducer/collapse oracle, production layouts and bounds, forced modes, planner partitions, cache and input contracts |
+| Public implementation layout | Private option/count/scratch fields with constructors and accessors; typed initialized storage preserved |
+| Broader FFT convention changes | Deferred as outside MSM scope |
+
+Production layout tests cover both curves, signs and GLV halves, widths 4–12,
+all final-chunk lengths, partial row visits, high actual decompositions and
+conservative bounds. Reducer cases include empty buckets, gaps, doubling,
+inverses, odd survivors, and cancellation-only levels. Planner tests exercise
+empty jobs, budgets including 3/5/17/65, pass 1/2/17 and larger caps, metadata
+coverage, disjoint scratch splitting, output ordering, memory floors, overflow,
+retained preparation, and dirty buffers. Forced-backend differentials include
+incompatible caches, repeated indices, identity bases, and signed extremes.
+Reusable plans and preparation recover after an injected scoped executor panic.
+The real no-allocator embedding and cross-target consumers exercise bounded
+execution and retained table/selection reuse.
+
+Validation passed with the pinned toolchain:
+
+- The release workspace suite with all features, including doctests, and Udon's
+  default-feature release suite.
+- Udon's debug library suites with default and all features: 116 and 119 tests
+  passed respectively, with four opt-in experiments ignored in each suite.
+- All four opt-in Udon compiler/artifact consumer tests. The curve consumer
+  exercises retained preparation, selections, and plans without an allocator.
+- Bento's portability consumer, including 32-bit `thumbv7em-none-eabi` builds
+  and `s390x-unknown-linux-gnu` builds and expected embedding rejections.
+- Every MSM Criterion case in test mode, `ci/check-format`, workspace Clippy
+  with all targets/features, default-feature Udon Clippy, and workspace rustdoc
+  with warnings denied.
+
+The native control and phase experiments also passed their result checks.
+Cross-target consumers were compiled, not executed. Miri was not run for this
+change; the typed storage implementation introduces no new unsafe code.
+
+## Migration
+
+- Replace `ExecutionOptions` literals with `ExecutionOptions::SERIAL` and
+  builders. There is no default byte ceiling. The pass cap alone is not a total
+  memory bound; use `with_memory_limit` or `with_chunk_size` for that requirement.
+- Replace public requirement fields with `scalars()`, `digits()`, `affine()`,
+  `projective()`, `field()`, and `indices()`; use `bytes::<C>()` for checked totals.
+  Use `input.requirements(options)` for retained scalars and compact tables;
+  the const length-only query sizes unprepared scalars with ordinary bases.
+- Construct six-slice `Scratch::new` with a new initialized `ScalarStorage::ZERO`
+  buffer before the digit and arithmetic slices. Use `reborrow()` for reuse.
+- Prepare scalars into `ScalarStorage` entries. The returned handle releases the
+  original coefficient borrow. Call `cache_len` and `cache` only when retaining
+  a particular recoding is useful; reuse conditions are documented on
+  [`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs).
+- Retain `Selection` for repeated indexed rows and `ExecutionPlan` for immutable
+  input batches. Initialize plan metadata with `JobStorage::EMPTY` and
+  `WorkerStorage::EMPTY`. Its `temporary_bytes()` includes metadata; ordinary
+  single-input execution needs no metadata buffer.
+- Existing compact POD tables and field/point formats are unchanged. Bind them
+  through `EisensteinTableBatch` and select `Bases::Compact` or
+  `Bases::CompactPrepared`. Scalar records and plans are ephemeral, not POD.
+
+See the [curve guide](CURVES.md#multiscalar-multiplication) for contracts and an
+executable static-buffer example, and the
+[testing guide](TESTING.md#internal-msm-experiments) for the retained internal
+controls and phase experiments. Measurements in this report span implementation
+stages; they are not measurements of one identical working-tree snapshot.

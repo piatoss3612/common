@@ -80,6 +80,18 @@ impl<C: PastaCurve> GlvParameters<C> {
     const AD: [u64; 8] = bento::const_arithmetic::u256::mul_wide!(&Self::A, &Self::D_LIMBS);
     const BB: [u64; 8] = bento::const_arithmetic::u256::mul_wide!(&Self::B, &Self::B);
 
+    /// Conservative Babai residual magnitudes, including rounding error.
+    pub const BOUNDS: [u128; 2] = [(C::GLV_A + C::GLV_B) / 2 + 1, (C::GLV_B + Self::D) / 2 + 1];
+
+    /// Number of width-eight data windows, requiring no extra carry window.
+    pub const BOOTH_WINDOWS: usize = {
+        // The top byte plus an incoming carry stays below the positive centered
+        // digit threshold. Negating a component therefore needs no extra row either.
+        assert!((Self::BOUNDS[0] >> 120) + 1 < 128);
+        assert!((Self::BOUNDS[1] >> 120) + 1 < 128);
+        16
+    };
+
     pub const BASIS: GlvBasis = {
         use bento::const_arithmetic::{m255, u256};
         let (determinant, carry) = u256::add_with_carry!(

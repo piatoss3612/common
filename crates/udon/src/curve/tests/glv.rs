@@ -178,16 +178,12 @@ fn signed_windows_reconstruct_partial_windows_and_carries() {
 #[test]
 fn pasta_lattice_bounds_allow_only_second_half_width_two_carries() {
     use crate::curve::fixed_base::signed_window_digits;
-    for lattice in [
-        GlvParameters::<Pallas>::BASIS,
-        GlvParameters::<Vesta>::BASIS,
+    for bounds in [
+        GlvParameters::<Pallas>::BOUNDS,
+        GlvParameters::<Vesta>::BOUNDS,
     ] {
         // Final carry is monotone in the magnitude. These conservative integer
         // upper bounds exclude every other width and the first width-2 half.
-        let bounds = [
-            (lattice.a + lattice.b) / 2 + 1,
-            (lattice.b + lattice.d) / 2 + 1,
-        ];
         for w in 2..=8 {
             for (half, bound) in bounds.into_iter().enumerate() {
                 assert_eq!(signed_window_digits(bound, w).1, w == 2 && half == 1);

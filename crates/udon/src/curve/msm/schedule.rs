@@ -2,12 +2,12 @@
 //!
 //! Each worker borrows exclusive working slices and reuses them across tasks.
 //! Only digits and task results need storage spanning all inputs. Sizing uses
-//! input lengths and options alone, so it must cover every scalar-dependent
-//! kernel choice, including the short-scalar paths.
+//! input lengths, whether scalars are prepared, and options, covering every
+//! scalar-dependent kernel choice, including the short-scalar paths.
 
 use super::{
-    CurveError, ExecutionOptions, Input, PastaCurve, ProjectivePoint, Requirements, Scratch,
-    checked_count,
+    CurveError, ExecutionOptions, Input, PastaCurve, ProjectivePoint, Requirements, Scalars,
+    Scratch, checked_count,
     kernels::{self, Task, Work},
     recode,
 };
@@ -182,7 +182,7 @@ pub(super) const fn single_requirements<C: PastaCurve>(
     let parts = parts(terms, natural, options.task_budget.get());
     let tasks = natural * parts;
     let workers = min(tasks, options.task_budget.get());
-    let digits = size!(checked_count::<u8>(terms, recode::stride(terms)));
+    let digits = size!(recode::storage_len(terms));
     size!(Workspace::new::<C>(terms, parts, options)).requirements::<C>(digits, tasks, workers)
 }
 
@@ -204,10 +204,7 @@ impl Plan {
         let mut digits = 0;
         for input in inputs {
             natural = add(natural, windows(input.len()))?;
-            digits = add(
-                digits,
-                checked_count::<u8>(input.len(), recode::stride(input.len()))?,
-            )?;
+            digits = add(digits, input.digit_scratch_len()?)?;
         }
         let mut work = Workspace::default();
         let mut tasks = 0;
@@ -295,7 +292,7 @@ fn prepare<C: PastaCurve, X: Executor>(
         let mid = inputs.len() / 2;
         let left_len = inputs[..mid]
             .iter()
-            .map(|i| i.len() * recode::stride(i.len()))
+            .map(|i| i.digit_scratch_len().unwrap())
             .sum();
         let (a, b) = digits.split_at_mut(left_len);
         let (left, right) = budget.split_at(budget.get() / 2).unwrap();
@@ -305,8 +302,10 @@ fn prepare<C: PastaCurve, X: Executor>(
         );
     } else {
         for input in inputs {
-            let (head, tail) = digits.split_at_mut(input.len() * recode::stride(input.len()));
-            recode::prepare(input, head, budget, executor);
+            let (head, tail) = digits.split_at_mut(input.digit_scratch_len().unwrap());
+            if let Scalars::Raw(scalars) = input.scalars {
+                recode::prepare::<C, X>(scalars, head, budget, executor);
+            }
             digits = tail;
         }
     }
@@ -379,12 +378,16 @@ fn visit<C: PastaCurve, X: Executor>(
         let count = windows(input.len()) * parts;
         let begin = max(offset, task_offset);
         let end = min(offset + results.len(), task_offset + count);
-        let len = input.len() * recode::stride(input.len());
+        let len = input.digit_scratch_len().unwrap();
+        let prepared = match input.scalars {
+            Scalars::Raw(_) => &digits[digit_offset..digit_offset + len],
+            Scalars::Prepared(s) => s.digits,
+        };
         for task in begin..end {
             let relative = task - task_offset;
             results[task - offset] = kernels::run(
                 input,
-                &digits[digit_offset..digit_offset + len],
+                prepared,
                 Task {
                     window: relative / parts,
                     part: relative % parts,

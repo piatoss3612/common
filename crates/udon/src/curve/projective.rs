@@ -141,17 +141,17 @@ impl<C: PastaCurve> ProjectivePoint<C> {
         if self.is_identity() {
             return Self::IDENTITY;
         }
-        // With no linear term in the curve equation, the tangent numerator is
-        // 3*x^2. Taking z' = 2*y*z absorbs its denominator into Jacobian scaling.
-        let a = self.x.square();
+        // For y^2 = x^3 + 5, use tangent numerator (3/2)*x^2 and z' = y*z.
+        // Scaling this output by (4, 8, 2) gives the usual Jacobian doubling
+        // coordinates, so omitting those factors preserves the affine point.
         let b = self.y.square();
         let c = b.square();
-        let d = self.x.mul(&b).mul_by_4();
-        let e = a.triple();
+        let d = self.x.mul(&b);
+        let e = self.x.square().triple().half();
         let f = e.square();
-        let z = self.z.mul(&self.y).double();
+        let z = self.z.mul(&self.y);
         let x = f.sub(&d.double());
-        let y = e.mul_sub(&d.sub(&x), &c.mul_by_8());
+        let y = e.mul_sub(&d.sub(&x), &c);
         Self {
             x,
             y,
@@ -185,13 +185,15 @@ impl<C: PastaCurve> ProjectivePoint<C> {
             };
         }
         let h = u2.sub(&u1);
-        let i = h.double().square();
+        // Unscaled differences give z' = z1*z2*h. The common doubled-difference
+        // formula scales this output by (4, 8, 2), preserving the affine point.
+        let i = h.square();
         let j = h.mul(&i);
-        let r = s2.sub(&s1).double();
+        let r = s2.sub(&s1);
         let v = u1.mul(&i);
         let x = r.square().sub(&j).sub(&v.double());
-        let y = r.mul_sub_double_product(&v.sub(&x), &s1, &j);
-        let z = self.z.mul(&rhs.z).mul(&h).double();
+        let y = r.mul_sub_product(&v.sub(&x), &s1, &j);
+        let z = self.z.mul(&rhs.z).mul(&h);
         Self {
             x,
             y,
@@ -219,13 +221,14 @@ impl<C: PastaCurve> ProjectivePoint<C> {
             };
         }
         let h = u2.sub(&self.x);
-        let i = h.double().square();
+        // The unscaled formula in add specializes to z2 = 1 here.
+        let i = h.square();
         let j = h.mul(&i);
-        let r = s2.sub(&self.y).double();
+        let r = s2.sub(&self.y);
         let v = self.x.mul(&i);
         let x = r.square().sub(&j).sub(&v.double());
-        let y = r.mul_sub_double_product(&v.sub(&x), &self.y, &j);
-        let z = self.z.mul(&h).double();
+        let y = r.mul_sub_product(&v.sub(&x), &self.y, &j);
+        let z = self.z.mul(&h);
         Self {
             x,
             y,

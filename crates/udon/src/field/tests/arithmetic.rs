@@ -11,6 +11,7 @@ fn check_arithmetic<M: PrimeModulus>() {
         assert_value(a.neg(), &(&p - x));
         assert_value(a.square(), &(x * x));
         assert_value(a.double(), &(x * 2u8));
+        assert_value(a.half(), &(x * ((&p + 1u8) >> 1usize)));
         assert_value(a.triple(), &(x * 3u8));
         assert_value(a.mul_by_4(), &(x * 4u8));
         assert_value(a.mul_by_8(), &(x * 8u8));
@@ -29,6 +30,32 @@ fn check_arithmetic<M: PrimeModulus>() {
             assert_value(a.pow_u64(exponent), &x.modpow(&BigUint::from(exponent), &p));
         }
     }
+}
+
+fn halving_stored_endpoints<M: PrimeModulus>() {
+    let p = modulus::<M>();
+    for stored in [
+        BigUint::from(0u8),
+        BigUint::from(1u8),
+        BigUint::from(2u8),
+        &p - 2u8,
+        &p - 1u8,
+    ] {
+        let value = PastaField::<M>::from_montgomery_limbs(limbs(&stored));
+        assert_eq!(value.half().double(), value);
+        let expected = if stored.bit(0) {
+            (&stored + &p) >> 1usize
+        } else {
+            &stored >> 1usize
+        };
+        assert_eq!(integer(&value.half().montgomery_limbs()), expected);
+    }
+}
+
+#[test]
+fn halving_handles_stored_residue_endpoints() {
+    halving_stored_endpoints::<PallasBase>();
+    halving_stored_endpoints::<PallasScalar>();
 }
 
 #[test]

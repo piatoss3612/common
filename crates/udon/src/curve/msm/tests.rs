@@ -57,7 +57,10 @@ impl Executor for Pool {
 
 fn reference<C: PastaCurve>(input: &Input<'_, C>) -> ProjectivePoint<C> {
     let mut sum = ProjectivePoint::IDENTITY;
-    for (i, k) in input.scalars.iter().enumerate() {
+    let Scalars::Raw(scalars) = input.scalars else {
+        panic!("reference needs original scalars")
+    };
+    for (i, k) in scalars.iter().enumerate() {
         let j = input.indices.map_or(i, |indices| indices[i] as usize);
         let base = match input.bases {
             Bases::Affine(b) => b[j].to_projective(),
@@ -113,6 +116,16 @@ fn differentials<C: PastaCurve>() {
         0, 1, 7, 8, 15, 31, 32, 33, 127, 128, 129, 255, 256, 257, 513, 1030,
     ] {
         for scalars in [&full[..n], &short[..n]] {
+            let mut storage = vec![73; PreparedScalars::<C>::storage_len(n).unwrap() + 1];
+            let retained = PreparedScalars::<C>::prepare(
+                scalars,
+                &mut storage,
+                TaskBudget::new(3).unwrap(),
+                &Pool,
+            )
+            .unwrap();
+            assert_eq!(retained.len(), n);
+            assert_eq!(retained.is_empty(), n == 0);
             for bases in [
                 Bases::Affine(&affine[..n]),
                 Bases::Prepared(&prepared[..n]),
@@ -122,6 +135,11 @@ fn differentials<C: PastaCurve>() {
                 let ix: Vec<_> = indices[..n].iter().map(|i| i % n.max(1) as u32).collect();
                 let indexed = Input::indexed(bases, &ix, scalars).unwrap();
                 for input in [dense, indexed] {
+                    let reused = match input.indices {
+                        Some(indices) => Input::indexed_prepared(bases, indices, retained),
+                        None => Input::new_prepared(bases, retained),
+                    }
+                    .unwrap();
                     let expected = reference(&input);
                     for (tasks, cap) in [
                         (1, None),
@@ -148,11 +166,90 @@ fn differentials<C: PastaCurve>() {
                             expected
                         );
                         buffers.tails(r);
+                        let r = reused.requirements(options).unwrap();
+                        assert_eq!(r.digits, 0);
+                        assert_eq!(r, batch_requirements(&[reused], options).unwrap());
+                        let mut buffers = Buffers::new(r);
+                        assert_eq!(
+                            reused.execute(options, &Pool, buffers.borrow()).unwrap(),
+                            expected
+                        );
+                        buffers.tails(r);
                     }
                 }
             }
+            assert_eq!(*storage.last().unwrap(), 73);
         }
     }
+}
+
+#[test]
+fn prepared_scalars_validate_before_writes_and_release_originals() {
+    type C = Pallas;
+    let mut scalars: Vec<_> = field_samples::<<C as PastaCurve>::Scalar>()
+        .take(257)
+        .collect();
+    let g = AffinePoint::<C>::GENERATOR;
+    let bases = vec![g; scalars.len()];
+    let raw = Input::new(Bases::Affine(&bases), &scalars).unwrap();
+    let expected = reference(&raw);
+    let bytes = PreparedScalars::<C>::storage_len(scalars.len()).unwrap();
+    let mut storage = vec![73; bytes + 1];
+    assert!(matches!(
+        PreparedScalars::<C>::prepare(
+            &scalars,
+            &mut storage[..bytes - 1],
+            TaskBudget::SERIAL,
+            &SerialExecutor
+        ),
+        Err(CurveError::ScratchTooSmall { .. })
+    ));
+    assert!(storage.iter().all(|b| *b == 73));
+    assert_eq!(
+        PreparedScalars::<C>::storage_len(usize::MAX),
+        Err(CurveError::SizeOverflow)
+    );
+    let retained =
+        PreparedScalars::<C>::prepare(&scalars, &mut storage, TaskBudget::SERIAL, &SerialExecutor)
+            .unwrap();
+    scalars.fill(PastaField::ZERO);
+    assert!(matches!(
+        Input::new_prepared(Bases::Affine(&bases[..1]), retained),
+        Err(CurveError::LengthMismatch { .. })
+    ));
+    assert!(matches!(
+        Input::indexed_prepared(Bases::Affine(&bases), &[], retained),
+        Err(CurveError::LengthMismatch { .. })
+    ));
+    let mut indices = vec![0; bases.len()];
+    indices[13] = bases.len() as u32;
+    assert!(matches!(
+        Input::indexed_prepared(Bases::Affine(&bases), &indices, retained),
+        Err(CurveError::BaseIndexOutOfBounds { position: 13, .. })
+    ));
+    let negative = vec![g.neg(); bases.len()];
+    // Mix ordinary and prepared jobs, sharing one preparation across changing
+    // bases and indices. The source scalar vector has already been overwritten.
+    indices.fill(0);
+    let inputs = [
+        Input::new(Bases::Affine(&bases), &scalars).unwrap(),
+        Input::new_prepared(Bases::Affine(&bases), retained).unwrap(),
+        Input::indexed_prepared(Bases::Affine(&negative[..1]), &indices, retained).unwrap(),
+    ];
+    let options = ExecutionOptions {
+        task_budget: TaskBudget::new(4).unwrap(),
+        max_terms_per_pass: NonZeroUsize::new(17),
+    };
+    let r = batch_requirements(&inputs, options).unwrap();
+    let mut buffers = Buffers::new(r);
+    let mut output = [ProjectivePoint::GENERATOR; 3];
+    execute_batch(&inputs, &mut output, options, &Pool, buffers.borrow()).unwrap();
+    assert_eq!(
+        output,
+        [ProjectivePoint::IDENTITY, expected, expected.neg()]
+    );
+    buffers.tails(r);
+    assert_eq!(storage[bytes], 73);
 }
 
 #[test]
@@ -172,19 +269,29 @@ fn scalar_boundaries<C: PastaCurve>() {
         Point::GENERATOR.neg(),
         Point::IDENTITY,
     ];
-    for bits in [0, 1, 63, 64, 65, 127, 128, 129, 254] {
+    for bits in [0, 1, 63, 64, 65, 120, 121, 127, 128, 129, 254] {
         let mut limbs = [0; 4];
         for bit in 0..bits {
             limbs[bit / 64] |= 1 << (bit % 64);
         }
         let scalar = PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs)).unwrap();
-        for n in [31, 32, 63, 127, 128, 129] {
+        for n in [1, 7, 8, 16, 31, 32, 47, 48, 49, 63, 127, 128, 129] {
             let scalars: Vec<_> = (0..n)
                 .map(|i| if i % 5 == 0 { PastaField::ZERO } else { scalar })
                 .collect();
             let indices: Vec<_> = (0..n).map(|i| (i % bases.len()) as u32).collect();
             let input = Input::indexed(Bases::Points(&bases), &indices, &scalars).unwrap();
             let expected = reference(&input);
+            let mut storage = vec![73; PreparedScalars::<C>::storage_len(n).unwrap()];
+            let retained = PreparedScalars::<C>::prepare(
+                &scalars,
+                &mut storage,
+                TaskBudget::SERIAL,
+                &SerialExecutor,
+            )
+            .unwrap();
+            let reused =
+                Input::indexed_prepared(Bases::Points(&bases), &indices, retained).unwrap();
             for tasks in [1, 4] {
                 for cap in [1, 7, 8, 17, n] {
                     let options = ExecutionOptions {
@@ -199,6 +306,14 @@ fn scalar_boundaries<C: PastaCurve>() {
                             .unwrap(),
                         expected,
                         "bits={bits}, n={n}, tasks={tasks}, cap={cap}"
+                    );
+                    buffers.tails(r);
+                    assert_eq!(
+                        reused
+                            .execute(options, &SerialExecutor, buffers.borrow())
+                            .unwrap(),
+                        expected,
+                        "prepared bits={bits}, n={n}, tasks={tasks}, cap={cap}"
                     );
                     buffers.tails(r);
                 }
@@ -272,6 +387,34 @@ fn scratch_can_be_reused_after_executor_unwind() {
         );
         buffers.tails(r);
     }
+    let mut storage = vec![73; PreparedScalars::<Pallas>::storage_len(bases.len()).unwrap() + 1];
+    let executor = Panics {
+        calls: AtomicUsize::new(0),
+        at: 0,
+    };
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            PreparedScalars::<Pallas>::prepare(
+                &scalars,
+                &mut storage,
+                options.task_budget,
+                &executor,
+            )
+            .unwrap();
+        }))
+        .is_err()
+    );
+    assert_eq!(*storage.last().unwrap(), 73);
+    let retained =
+        PreparedScalars::<Pallas>::prepare(&scalars, &mut storage, options.task_budget, &Pool)
+            .unwrap();
+    let reused = Input::new_prepared(Bases::Affine(&bases), retained).unwrap();
+    assert_eq!(
+        reused.execute(options, &Pool, buffers.borrow()).unwrap(),
+        expected
+    );
+    buffers.tails(r);
+    assert_eq!(*storage.last().unwrap(), 73);
 }
 
 fn collisions<C: PastaCurve>() {

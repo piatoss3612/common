@@ -250,6 +250,17 @@ and indexed access in all three base layouts with full-width scalars. Short
 scalars use affine bases. Sizes straddle dispatch boundaries and extend to
 4,096 terms.
 
+The `msm_corpus` groups add random 96- and 128-bit scalars, two-bit scalars within
+128 bits and with a bit above position 128, repeated equal bases, alternating
+inverse bases with random scalars, and exact pair cancellation. Sizes include
+both sides of the 32- and 128-term dispatch boundaries. `warm` reuses input
+and working buffers. `cold` touches every 64 bytes of a 64 MiB eviction buffer
+before each measured execution at 128 and 1,024 terms; eviction time is excluded.
+This establishes repeatable cache pressure, not a hardware guarantee that every
+input is absent from cache. `prepare_scalars` times preparation separately;
+`reused` retains a `PreparedScalars` handle and includes execution with its
+reduced scratch counts.
+
 Grouped `ipa` cases use two equal indexed jobs; `commitments` uses four unequal
 dense jobs. Each runs serially and inside a persistent four-worker Rayon pool,
 with no pass cap and with a 512-term cap. Benchmark names identify the curve,
@@ -276,12 +287,24 @@ cargo bench --locked -p zakura-udon --bench msm
 cargo bench --locked -p zakura-udon --bench msm -- pallas/msm/dense/affine/full
 cargo bench --locked -p zakura-udon --bench msm -- pallas/msm_batch
 cargo bench --locked -p zakura-udon --bench msm -- pallas/eisenstein
+cargo bench --locked -p zakura-udon --bench msm -- pallas/msm_corpus
 cargo bench --locked -p zakura-udon --bench msm -- --test
 ```
 
 CI runs every case once in test mode. The
 [curve performance report](CURVE_PERFORMANCE.md) records dispatch experiments,
 scratch tradeoffs, and the limits of the local measurements.
+
+An ignored Criterion experiment retains the former batch-inversion schedule
+for a same-process comparison with the endpoint optimization in both fields:
+
+```console
+cargo test --release --locked -p zakura-udon --lib compare_batch_inversion_endpoints -- --ignored --nocapture
+```
+
+It checks equivalent outputs before timing and alternates each input vector
+with its inverse, using the same operands in both schedules. Run timing
+experiments without concurrent builds or tests.
 
 ## FFT benchmarks
 
@@ -396,9 +419,10 @@ cargo test --release --locked -p zakura-udon \
 
 CI runs this command in a separate step. Each consumer selects its own dependency
 feature matrix, so it only needs to run once. Naming these integration targets
-also avoids selecting the ignored FFT timing experiment, which has its own
-command. Target portability checks belong to Bento and run separately. To run
-one consumer, retain just its `--test` argument and `-- --ignored`.
+also avoids selecting the ignored FFT and inversion timing experiments, which
+have their own commands. Target portability checks belong to Bento and run
+separately. To run one consumer, retain just its `--test` argument and
+`-- --ignored`.
 
 ### Generated artifacts
 

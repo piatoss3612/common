@@ -2,6 +2,8 @@
 //!
 //! A multiscalar multiplication (MSM) sums products of scalars and curve points.
 //! [`Input`] borrows dense or indexed terms without gathering bases.
+//! [`PreparedScalars`] retains scalar preparation across changing bases or
+//! indices, with no digit scratch needed during execution.
 //! [`execute_batch`] groups differently sized inputs under one scoped task
 //! budget. Use [`Executor::join`] to compose these jobs with fixed-base products
 //! or other work, dividing the caller's budget between simultaneous operations.
@@ -19,9 +21,9 @@
 //! use zakura_udon::{
 //!     curve::{
 //!         Pallas, PallasAffine, PallasProjective,
-//!         msm::{Bases, ExecutionOptions, Input, Requirements, Scratch},
+//!         msm::{Bases, ExecutionOptions, Input, PreparedScalars, Requirements, Scratch},
 //!     },
-//!     exec::SerialExecutor,
+//!     exec::{SerialExecutor, TaskBudget},
 //!     field::{Fp, Fq},
 //! };
 //!
@@ -50,7 +52,21 @@
 //! let result = input.execute(OPTIONS, &SerialExecutor, scratch.reborrow())?;
 //! assert_eq!(result, g.mul_projective(&Fq::from_u64(4)));
 //! // Reuse the same storage without clearing it.
-//! assert_eq!(input.execute(OPTIONS, &SerialExecutor, scratch)?, result);
+//! assert_eq!(input.execute(OPTIONS, &SerialExecutor, scratch.reborrow())?, result);
+//! // Retain scalar preparation while changing the selected bases.
+//! const PREPARED_BYTES: usize = match PreparedScalars::<Pallas>::storage_len(3) {
+//!     Ok(bytes) => bytes,
+//!     Err(_) => panic!("unsupported size"),
+//! };
+//! let mut storage = [0; PREPARED_BYTES];
+//! let retained = PreparedScalars::<Pallas>::prepare(
+//!     &scalars, &mut storage, TaskBudget::SERIAL, &SerialExecutor,
+//! )?;
+//! let indices = [0, 0, 0];
+//! let reused = Input::indexed_prepared(Bases::Affine(&bases), &indices, retained)?;
+//! assert_eq!(reused.requirements(OPTIONS)?.digits, 0);
+//! assert_eq!(reused.execute(OPTIONS, &SerialExecutor, scratch)?,
+//!     g.mul_projective(&Fq::from_u64(10)));
 //! # Ok::<(), zakura_udon::curve::CurveError>(())
 //! ```
 
@@ -67,8 +83,10 @@ use crate::{
 
 mod buckets;
 mod kernels;
+mod prepared;
 mod recode;
 mod schedule;
+pub use prepared::PreparedScalars;
 // Measured dispatch policy, shared by sizing, recoding, and arithmetic.
 const BOOTH_MIN: usize = 128;
 const WINDOW_BITS: usize = 8;
@@ -120,8 +138,32 @@ impl<C: PastaCurve> Bases<'_, C> {
 #[derive(Clone, Copy, Debug)]
 pub struct Input<'a, C: PastaCurve> {
     bases: Bases<'a, C>,
-    scalars: &'a [PastaField<C::Scalar>],
+    scalars: Scalars<'a, C>,
     indices: Option<&'a [u32]>,
+}
+
+#[derive(Clone, Copy)]
+enum Scalars<'a, C: PastaCurve> {
+    Raw(&'a [PastaField<C::Scalar>]),
+    Prepared(PreparedScalars<'a, C>),
+}
+
+impl<C: PastaCurve + core::fmt::Debug> core::fmt::Debug for Scalars<'_, C> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Raw(s) => f.debug_tuple("Raw").field(s).finish(),
+            Self::Prepared(s) => f.debug_tuple("Prepared").field(s).finish(),
+        }
+    }
+}
+
+impl<C: PastaCurve> Scalars<'_, C> {
+    const fn len(&self) -> usize {
+        match self {
+            Self::Raw(s) => s.len(),
+            Self::Prepared(s) => s.len(),
+        }
+    }
 }
 
 impl<'a, C: PastaCurve> Input<'a, C> {
@@ -136,7 +178,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
         check_length("scalars", bases.len(), scalars.len())?;
         Ok(Self {
             bases,
-            scalars,
+            scalars: Scalars::Raw(scalars),
             indices: None,
         })
     }
@@ -151,6 +193,45 @@ impl<'a, C: PastaCurve> Input<'a, C> {
         bases: Bases<'a, C>,
         indices: &'a [u32],
         scalars: &'a [PastaField<C::Scalar>],
+    ) -> Result<Self, CurveError> {
+        Self::with_indices(bases, indices, Scalars::Raw(scalars))
+    }
+
+    /// Borrows dense bases paired with reusable scalar preparation.
+    ///
+    /// Pairs scalars and bases in the order passed to their constructors, with
+    /// the length and empty-input contracts of [`Self::new`]. Execution requires
+    /// no digit scratch; use [`Self::requirements`] to size its remaining buffers.
+    pub fn new_prepared(
+        bases: Bases<'a, C>,
+        scalars: PreparedScalars<'a, C>,
+    ) -> Result<Self, CurveError> {
+        check_length("scalars", bases.len(), scalars.len())?;
+        Ok(Self {
+            bases,
+            scalars: Scalars::Prepared(scalars),
+            indices: None,
+        })
+    }
+
+    /// Borrows indexed bases paired with reusable scalar preparation.
+    ///
+    /// Has the index and length contracts of [`Self::indexed`], including its
+    /// errors. Execution requires no digit scratch; use [`Self::requirements`]
+    /// to size its remaining buffers. Indices may differ between uses of the
+    /// same [`PreparedScalars`] handle.
+    pub fn indexed_prepared(
+        bases: Bases<'a, C>,
+        indices: &'a [u32],
+        scalars: PreparedScalars<'a, C>,
+    ) -> Result<Self, CurveError> {
+        Self::with_indices(bases, indices, Scalars::Prepared(scalars))
+    }
+
+    fn with_indices(
+        bases: Bases<'a, C>,
+        indices: &'a [u32],
+        scalars: Scalars<'a, C>,
     ) -> Result<Self, CurveError> {
         check_length("indices", scalars.len(), indices.len())?;
         for (position, &index) in indices.iter().enumerate() {
@@ -176,15 +257,24 @@ impl<'a, C: PastaCurve> Input<'a, C> {
 
     /// Returns whether the sum has no terms.
     pub const fn is_empty(&self) -> bool {
-        self.scalars.is_empty()
+        self.len() == 0
     }
 
-    /// Returns scratch counts from an input's length and execution options.
+    const fn digit_scratch_len(&self) -> Result<usize, CurveError> {
+        match self.scalars {
+            Scalars::Raw(s) => recode::storage_len(s.len()),
+            Scalars::Prepared(_) => Ok(0),
+        }
+    }
+
+    /// Returns scratch counts for unprepared scalars and execution options.
     ///
     /// Counts are independent of base representation, indices, and scalar values.
     /// This const query supports static buffers and returns
     /// [`CurveError::SizeOverflow`] when a buffer cannot be represented by a
     /// slice. Counts can change between crate versions; obtain them from this API.
+    /// For inputs borrowing [`PreparedScalars`], use [`Self::requirements`] to
+    /// omit digit scratch.
     pub const fn requirements_for_len(
         terms: usize,
         options: ExecutionOptions,
@@ -194,13 +284,22 @@ impl<'a, C: PastaCurve> Input<'a, C> {
 
     /// Returns scratch counts for this input and execution policy.
     ///
-    /// Equivalent to [`Self::requirements_for_len`] with `self.len()`, including
-    /// its [`CurveError::SizeOverflow`] error.
+    /// Equivalent to [`Self::requirements_for_len`] with `self.len()`, except
+    /// inputs borrowing [`PreparedScalars`] require zero digit bytes. Returns
+    /// [`CurveError::SizeOverflow`] if a buffer exceeds slice limits.
     pub const fn requirements(
         &self,
         options: ExecutionOptions,
     ) -> Result<Requirements, CurveError> {
-        Self::requirements_for_len(self.len(), options)
+        match Self::requirements_for_len(self.len(), options) {
+            Ok(mut r) => {
+                if let Scalars::Prepared(_) = self.scalars {
+                    r.digits = 0;
+                }
+                Ok(r)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Computes the sum, returning identity when there are no terms.
@@ -335,7 +434,8 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
 
 /// Returns scratch counts for grouped inputs sharing one task budget.
 ///
-/// The counts depend only on input lengths and options, including the pass cap.
+/// The counts depend on input lengths, whether scalars are prepared, and options,
+/// including the pass cap.
 /// Returns [`CurveError::SizeOverflow`] if a buffer would exceed slice limits.
 pub fn batch_requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],

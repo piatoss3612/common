@@ -85,6 +85,44 @@ fn group_laws<C: PastaCurve>() {
             expected.assert_point(&scaled(&lhs, 7).add(&scaled(&rhs, 13)).to_point());
         }
     }
+    // Full-width coordinates and unrelated Jacobian scales exercise reduction
+    // carries and the equal/inverse branches independently of output scaling.
+    let scale = |p: &AffinePoint<C>, z: PastaField<C::Base>| ProjectivePoint {
+        x: p.x.mul(&z.square()),
+        y: p.y.mul(&z.square()).mul(&z),
+        z,
+        marker: PhantomData,
+    };
+    let scales: Vec<_> = field_samples::<C::Base>()
+        .filter(|z| !z.is_zero())
+        .take(32)
+        .collect();
+    for (i, scalar) in field_samples::<C::Scalar>()
+        .filter(|s| !s.is_zero())
+        .take(16)
+        .enumerate()
+    {
+        let p = *affine
+            .mul_projective(&scalar)
+            .to_point()
+            .as_affine()
+            .unwrap();
+        let q = *p.to_point().add(&generator).as_affine().unwrap();
+        let a = scale(&p, scales[2 * i]);
+        let same = scale(&p, scales[2 * i + 1]);
+        let b = scale(&q, scales[2 * i + 1]);
+        let modulus = modulus::<C::Base>();
+        let rp = Reference::from_point(&p.to_point());
+        let rq = Reference::from_point(&q.to_point());
+        rp.add(&rq, &modulus).assert_point(&a.add(&b).to_point());
+        rp.add(&rq, &modulus)
+            .assert_point(&a.add_mixed(&q).to_point());
+        rp.add(&rp, &modulus).assert_point(&a.double().to_point());
+        assert_eq!(a.add(&same), a.double());
+        assert_eq!(a.add(&same.neg()), ProjectivePoint::IDENTITY);
+        assert_eq!(a.add_mixed(&p), a.double());
+        assert_eq!(a.add_mixed(&p.neg()), ProjectivePoint::IDENTITY);
+    }
 }
 
 fn scalar_multiplication<C: PastaCurve>() {
@@ -123,6 +161,32 @@ fn scalar_multiplication<C: PastaCurve>() {
         generator.mul_projective(&PastaField::ONE.neg()),
         generator.neg().to_projective()
     );
+}
+
+fn inversion_endpoints<M: PrimeModulus>() {
+    let values: Vec<_> = field_samples::<M>()
+        .filter(|x| !x.is_zero())
+        .take(257)
+        .collect();
+    for n in [0, 1, 2, 3, 4, 7, 8, 31, 32, 127, 128, 257] {
+        let mut input = values[..n].to_vec();
+        let mut prefix = vec![PastaField::from_u64(91); n + 1];
+        super::super::batch::invert_nonzero(&mut input, &mut prefix);
+        assert_eq!(prefix[n], PastaField::from_u64(91));
+        for (value, inverse) in values.iter().zip(&input) {
+            assert_eq!(value.mul(inverse), PastaField::ONE);
+        }
+        // Reuse dirty prefixes with unit denominators and both lane parities.
+        input.fill(PastaField::ONE);
+        super::super::batch::invert_nonzero(&mut input, &mut prefix);
+        assert!(input.iter().all(|x| *x == PastaField::ONE));
+    }
+}
+
+#[test]
+fn batch_inversion_handles_lane_endpoints() {
+    inversion_endpoints::<crate::field::PallasBase>();
+    inversion_endpoints::<crate::field::PallasScalar>();
 }
 
 #[test]

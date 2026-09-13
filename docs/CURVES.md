@@ -277,6 +277,8 @@ data already owned by the caller:
 | --- | --- | --- |
 | Dense | `Input::new(bases, scalars)` | One scalar per base |
 | Indexed | `Input::indexed(bases, indices, scalars)` | One `u32` index per scalar; repeated indices contribute separately |
+| Dense, prepared scalars | `Input::new_prepared(bases, prepared)` | One prepared scalar per base |
+| Indexed, prepared scalars | `Input::indexed_prepared(bases, indices, prepared)` | One index per prepared scalar |
 
 `Bases::Affine`, `Bases::Prepared`, and `Bases::Points` borrow the three
 supported base layouts. Choose `Points` when bases may include identity, or
@@ -284,6 +286,17 @@ borrow affine or cached entries directly from POD storage. Construction checks
 lengths and index bounds without gathering bases. The
 [`Input` docs](../crates/udon/src/curve/msm/mod.rs) define the mathematical
 invariants that the producer must establish before execution.
+
+When a scalar vector is reused with different bases or indices, size a byte
+buffer with `PreparedScalars::<C>::storage_len(terms)`, then call
+`PreparedScalars::prepare(scalars, storage, budget, executor)`. The returned
+handle borrows the prepared bytes, allowing the original scalar buffer to be
+reused. Keep this storage separate from execution scratch. The
+[`PreparedScalars` docs](../crates/udon/src/curve/msm/prepared.rs) define its
+input, storage, concurrency, and error contracts; the
+[`msm` example](../crates/udon/src/curve/msm/mod.rs) shows indexed reuse.
+The [scalar-reuse measurements](MSM_REVIEW_PERFORMANCE.md#reusing-scalar-vectors)
+separate its one-time preparation cost from subsequent execution.
 
 ### Sizing and reusing scratch
 
@@ -298,9 +311,11 @@ shows the measured memory and timing tradeoff.
 `input.requirements(options)` returns element counts for all five `Scratch`
 slices: digit bytes, affine points, projective points, base-field elements, and
 working `usize` indices. The const
-`Input::<C>::requirements_for_len(terms, options)` query returns the same
-counts from length alone, supporting static arrays and downstream buffer
-owners. Obtain counts from the API instead of copying implementation formulas.
+`Input::<C>::requirements_for_len(terms, options)` query sizes ordinary inputs
+from length alone, supporting static arrays and downstream buffer owners.
+Prepared inputs have the same arithmetic workspace requirements and need zero
+digit scratch. Obtain counts from the API instead of copying implementation
+formulas.
 
 Initialize affine scratch with a valid point such as the generator; initialize
 other buffers with zero or identity. Execution overwrites every value it uses,

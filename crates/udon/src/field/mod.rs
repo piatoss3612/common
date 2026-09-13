@@ -221,6 +221,28 @@ impl<M: PrimeModulus> PastaField<M> {
         Self::from_montgomery(reduce_once::<M>(limbs))
     }
 
+    /// Returns `self / 2` for a reduced Montgomery residue.
+    #[inline]
+    pub(crate) fn half(&self) -> Self {
+        // Stored parity can differ from canonical parity. For residue a and
+        // odd modulus p, adding p when a is odd makes the integer even without
+        // changing its field value. The Pasta bound p < 2^255 ensures that
+        // a + p fits in 256 bits; halving leaves a reduced residue.
+        let mask = (self.limbs[0] & 1).wrapping_neg();
+        let mut limbs = self.limbs;
+        let mut carry = 0;
+        for (limb, modulus) in limbs.iter_mut().zip(M::MODULUS) {
+            (*limb, carry) = adc(*limb, modulus & mask, carry);
+        }
+        debug_assert_eq!(carry, 0);
+        Self::from_montgomery([
+            (limbs[0] >> 1) | (limbs[1] << 63),
+            (limbs[1] >> 1) | (limbs[2] << 63),
+            (limbs[2] >> 1) | (limbs[3] << 63),
+            limbs[3] >> 1,
+        ])
+    }
+
     /// Returns `3 * self`.
     #[inline]
     pub fn triple(&self) -> Self {

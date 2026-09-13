@@ -1,11 +1,15 @@
-use std::{hint::black_box, num::NonZeroUsize};
+use std::{
+    hint::black_box,
+    num::NonZeroUsize,
+    time::{Duration, Instant},
+};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use zakura_udon::{
     curve::{
         AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve,
         Point, PreparedAffinePoint, ProjectivePoint, Vesta,
-        msm::{self, Bases, ExecutionOptions, Input, Requirements, Scratch},
+        msm::{self, Bases, ExecutionOptions, Input, PreparedScalars, Requirements, Scratch},
     },
     exec::{Executor, SerialExecutor, TaskBudget},
     field::{CanonicalUint, PastaField, PrimeModulus},
@@ -190,6 +194,7 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
         })
         .collect();
     let indices: Vec<_> = (0..4096).map(|i| ((i * 13) % 4096) as u32).collect();
+    corpus(c, curve, &full, &affine);
     compact::<C, AffinePoint<C>>(c, curve, "eisenstein", &affine, &full[0]);
     compact::<C, PreparedAffinePoint<C>>(c, curve, "eisenstein_cached", &affine, &full[0]);
 
@@ -344,6 +349,173 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
         }
         group.finish();
     }
+}
+
+// These fixtures exercise scalar-dependent dispatch and exceptional bucket
+// pairs independently of the ordinary layout/access benchmark matrix.
+fn corpus<C: PastaCurve>(
+    c: &mut Criterion,
+    curve: &str,
+    full: &[PastaField<C::Scalar>],
+    affine: &[AffinePoint<C>],
+) {
+    let random128: Vec<_> = full
+        .iter()
+        .map(|s| {
+            let mut limbs = s.to_canonical_uint().limbs();
+            limbs[2] = 0;
+            limbs[3] = 0;
+            PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs)).unwrap()
+        })
+        .collect();
+    let sparse: Vec<_> = (0..full.len())
+        .map(|i| {
+            let mut limbs = [0; 4];
+            let bit = 129 + i % 125;
+            limbs[bit / 64] = 1 << (bit % 64);
+            limbs[0] = 1 << (i % 64);
+            PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs)).unwrap()
+        })
+        .collect();
+    let random96: Vec<_> = random128
+        .iter()
+        .map(|s| {
+            let mut limbs = s.to_canonical_uint().limbs();
+            limbs[1] &= u32::MAX as u64;
+            PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs)).unwrap()
+        })
+        .collect();
+    let sparse128: Vec<_> = (0..full.len())
+        .map(|i| {
+            let limbs = [1 << (i % 64), 1 << (i % 64), 0, 0];
+            PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs)).unwrap()
+        })
+        .collect();
+    let ones = vec![PastaField::ONE; full.len()];
+    let equal = vec![AffinePoint::<C>::GENERATOR; full.len()];
+    let inverse: Vec<_> = (0..full.len())
+        .map(|i| {
+            if i % 2 == 0 {
+                AffinePoint::<C>::GENERATOR
+            } else {
+                AffinePoint::GENERATOR.neg()
+            }
+        })
+        .collect();
+    let mut group = c.benchmark_group(format!("{curve}/msm_corpus"));
+    // Eviction is outside timing. This is a repeatable cache-pressure scenario,
+    // not a guarantee about any particular processor's cache hierarchy.
+    let mut eviction = vec![0u64; 64 * 1024 * 1024 / 8];
+    for n in [1, 8, 16, 31, 32, 47, 48, 64, 127, 128, 256, 1024] {
+        group.throughput(Throughput::Elements(n as u64));
+        for (name, bases, scalars) in [
+            ("full", &affine[..n], &full[..n]),
+            ("random128", &affine[..n], &random128[..n]),
+            ("random96", &affine[..n], &random96[..n]),
+            ("sparse_high", &affine[..n], &sparse[..n]),
+            ("sparse128", &affine[..n], &sparse128[..n]),
+            ("equal", &equal[..n], &full[..n]),
+            ("inverse", &inverse[..n], &full[..n]),
+            ("cancellation", &inverse[..n], &ones[..n]),
+        ] {
+            let input = Input::new(Bases::Affine(bases), scalars).unwrap();
+            let mut buffers = Buffers::new(input.requirements(ExecutionOptions::SERIAL).unwrap());
+            let expected = scalars
+                .iter()
+                .enumerate()
+                .fold(PastaField::ZERO, |sum, (i, s)| match name {
+                    "equal" => sum.add(s),
+                    "inverse" | "cancellation" => {
+                        if i % 2 == 0 {
+                            sum.add(s)
+                        } else {
+                            sum.sub(s)
+                        }
+                    }
+                    _ => sum.add(&full[i].mul(s)),
+                });
+            assert_eq!(
+                input
+                    .execute(ExecutionOptions::SERIAL, &SerialExecutor, buffers.borrow())
+                    .unwrap(),
+                AffinePoint::<C>::GENERATOR.mul_projective(&expected)
+            );
+            group.bench_function(BenchmarkId::new(format!("{name}/warm"), n), |b| {
+                b.iter(|| {
+                    black_box(input)
+                        .execute(ExecutionOptions::SERIAL, &SerialExecutor, buffers.borrow())
+                        .unwrap()
+                })
+            });
+            if matches!(name, "full" | "random128" | "cancellation") {
+                let mut storage = vec![0; PreparedScalars::<C>::storage_len(n).unwrap()];
+                group.bench_function(
+                    BenchmarkId::new(format!("{name}/prepare_scalars"), n),
+                    |b| {
+                        b.iter(|| {
+                            black_box(
+                                PreparedScalars::<C>::prepare(
+                                    black_box(scalars),
+                                    &mut storage,
+                                    TaskBudget::SERIAL,
+                                    &SerialExecutor,
+                                )
+                                .unwrap(),
+                            );
+                        })
+                    },
+                );
+                let retained = PreparedScalars::<C>::prepare(
+                    scalars,
+                    &mut storage,
+                    TaskBudget::SERIAL,
+                    &SerialExecutor,
+                )
+                .unwrap();
+                let reused = Input::new_prepared(Bases::Affine(bases), retained).unwrap();
+                let mut buffers =
+                    Buffers::new(reused.requirements(ExecutionOptions::SERIAL).unwrap());
+                assert_eq!(
+                    reused
+                        .execute(ExecutionOptions::SERIAL, &SerialExecutor, buffers.borrow())
+                        .unwrap(),
+                    AffinePoint::<C>::GENERATOR.mul_projective(&expected)
+                );
+                group.bench_function(BenchmarkId::new(format!("{name}/reused"), n), |b| {
+                    b.iter(|| {
+                        black_box(reused)
+                            .execute(ExecutionOptions::SERIAL, &SerialExecutor, buffers.borrow())
+                            .unwrap()
+                    })
+                });
+            }
+            if n == 128 || n == 1024 {
+                group.bench_function(BenchmarkId::new(format!("{name}/cold"), n), |b| {
+                    b.iter_custom(|iterations| {
+                        let mut elapsed = Duration::ZERO;
+                        for _ in 0..iterations {
+                            for word in eviction.iter_mut().step_by(8) {
+                                *word = word.wrapping_add(1);
+                            }
+                            black_box(&eviction);
+                            let start = Instant::now();
+                            black_box(input)
+                                .execute(
+                                    ExecutionOptions::SERIAL,
+                                    &SerialExecutor,
+                                    buffers.borrow(),
+                                )
+                                .map(black_box)
+                                .unwrap();
+                            elapsed += start.elapsed();
+                        }
+                        elapsed
+                    })
+                });
+            }
+        }
+    }
+    group.finish();
 }
 
 fn benchmarks(c: &mut Criterion) {

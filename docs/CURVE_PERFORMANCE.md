@@ -5,6 +5,9 @@ multiplication latency by about half on the measured target. Expanded tables
 use approximately half the former storage and preparation time, with a modest
 increase in multiplication latency at the same window width. The
 [curve guide](CURVES.md) describes the APIs, storage contracts, and migration.
+The later [MSM review follow-up](MSM_REVIEW_PERFORMANCE.md) measures inversion
+endpoints, cheaper projective formulas, reusable scalar vectors, and broader
+MSM distributions against the completed MSM implementation.
 
 ## Method
 
@@ -71,7 +74,7 @@ entries, excluding the base, handle, and temporary preparation scratch.
 | Expanded width 8, cached | 196,704 | 499.01 | 116.99 | 500.21 | 117.18 |
 
 Compact tables save repeated preparation with a small retained footprint.
-Expanded tables avoid doublings and achieve substantially lower multiplication
+Expanded tables avoid scheduled doublings and achieve lower multiplication
 latency at the cost of more storage and setup. Cached entries add 50% storage
 at a fixed width and gave only about 1–2% lower multiplication times here;
 the compact intervals overlap. Affine entries remain the default.
@@ -167,8 +170,10 @@ Booth windows group digits of the two GLV halves into buckets for summation.
 An intermediate signed width-four tier was slower on the measured full-width
 inputs, supporting the direct transition to Booth. For sums below 128 terms
 whose scalars all fit 128 bits, bit interleaving avoids table preparation; from
-32 terms, four-bit projective buckets improve that short-scalar path. The
-`short` timings above cover coefficients of the form `137 * i`, a small subset
+32 terms, four-bit projective buckets improve that short-scalar path. These
+measurements predate the follow-up's dispatch for small dense 128-bit inputs;
+see the [dispatch comparison](MSM_REVIEW_PERFORMANCE.md#broader-corpus-and-dispatch).
+The `short` timings above cover coefficients of the form `137 * i`, a small subset
 of 128-bit scalars. The Booth reducer skips empty high buckets.
 
 A separate local comparison checked identical compressed results against the

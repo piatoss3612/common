@@ -14,10 +14,18 @@ pub(super) fn invert_nonzero<M: PrimeModulus>(
     if values.is_empty() {
         return;
     }
+    if values.len() == 1 {
+        values[0] = values[0].invert().expect("nonzero denominators");
+        return;
+    }
     // Two product lanes shorten multiplication dependencies while sharing one
     // inversion of their combined product.
-    let mut products = [PastaField::ONE; 2];
-    for (i, value) in values.iter().enumerate() {
+    // Seed each lane with its first value. The reverse pass leaves those two
+    // inverses directly, avoiding multiplication by one and unused updates.
+    // Including the lane merge, n = values.len() needs 3*(n-1) multiplications
+    // outside the inversion.
+    let mut products = [values[0], values[1]];
+    for (i, value) in values.iter().enumerate().skip(2) {
         prefix[i] = products[i & 1];
         products[i & 1] = products[i & 1].mul(value);
     }
@@ -26,11 +34,12 @@ pub(super) fn invert_nonzero<M: PrimeModulus>(
         .invert()
         .expect("nonzero denominators");
     let mut inverses = [inverse.mul(&products[1]), inverse.mul(&products[0])];
-    for (i, value) in values.iter_mut().enumerate().rev() {
+    for (i, value) in values.iter_mut().enumerate().skip(2).rev() {
         let result = inverses[i & 1].mul(&prefix[i]);
         inverses[i & 1] = inverses[i & 1].mul(value);
         *value = result;
     }
+    values[..2].copy_from_slice(&inverses);
 }
 
 /// Normalizes points in order, preserving identity positions.

@@ -135,7 +135,9 @@ fn small<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
     let range = term_range(input.len(), task.part, task.parts);
     let pass = task.pass;
     let mut sum = ProjectivePoint::IDENTITY;
-    if let Some(bits) = recode::short_bits(input) {
+    let bits = usize::from(digits[0]);
+    let digits = &digits[1..];
+    if bits != 255 {
         // Short scalars avoid GLV setup. At 32 terms, four-bit projective
         // buckets amortize their reduction better than bit interleaving.
         if input.len() >= 32 {

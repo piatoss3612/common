@@ -43,6 +43,107 @@ impl<M: PrimeModulus> InversionLanes<M> {
     }
 }
 
+/// Two inversion lanes that track their first nonzero factors.
+///
+/// Callers skip zeros and push nonzero factors in increasing input-index order;
+/// index parity selects the lane. Save each returned prefix, call `invert` once,
+/// then pop the same factors and indices in reverse order. `invert` returns
+/// `None` if no factors were pushed.
+///
+/// A lane's first push returns `None`, and its matching pop ignores the prefix.
+/// Seeding these endpoints avoids multiplication by one; a single occupied lane
+/// also avoids the product merge needed to share an inversion across two lanes.
+pub(crate) struct NonzeroInversionLanes<M: PrimeModulus> {
+    products: InversionLanes<M>,
+    first: [Option<usize>; 2],
+}
+
+impl<M: PrimeModulus> NonzeroInversionLanes<M> {
+    pub(crate) fn new() -> Self {
+        Self {
+            products: InversionLanes([PastaField::ONE; 2]),
+            first: [None; 2],
+        }
+    }
+
+    pub(crate) fn push(&mut self, index: usize, value: &PastaField<M>) -> Option<PastaField<M>> {
+        let lane = index & 1;
+        if self.first[lane].is_some() {
+            Some(self.products.push(index, value))
+        } else {
+            self.first[lane] = Some(index);
+            self.products.0[lane] = *value;
+            None
+        }
+    }
+
+    pub(crate) fn invert(mut self) -> Option<Self> {
+        let lane = match self.first {
+            [None, None] => return None,
+            [Some(_), Some(_)] => {
+                self.products = self.products.invert();
+                return Some(self);
+            }
+            [Some(_), None] => 0,
+            [None, Some(_)] => 1,
+        };
+        self.products.0[lane] = self.products.0[lane].invert().expect("nonzero product");
+        Some(self)
+    }
+
+    pub(crate) fn pop(
+        &mut self,
+        index: usize,
+        value: &PastaField<M>,
+        prefix: &PastaField<M>,
+    ) -> PastaField<M> {
+        if self.first[index & 1] == Some(index) {
+            self.products.0[index & 1]
+        } else {
+            self.products.pop(index, value, prefix)
+        }
+    }
+}
+
+/// Inverts a slice of nonzero field elements in place with one inversion.
+///
+/// Every value must be reduced and nonzero. `prefix` must have at least
+/// `values.len()` elements; its initial contents do not matter, and its unused
+/// tail is untouched. Empty input performs no inversion. Callers using chord
+/// denominators must remove exceptional pairs before calling.
+pub(crate) fn invert_nonzero<M: PrimeModulus>(
+    values: &mut [PastaField<M>],
+    prefix: &mut [PastaField<M>],
+) {
+    if values.is_empty() {
+        return;
+    }
+    if values.len() == 1 {
+        values[0] = values[0].invert().expect("nonzero denominators");
+        return;
+    }
+    // Seed each lane with its first value. The reverse pass leaves those two
+    // inverses directly, avoiding multiplication by one and unused updates.
+    // Including the lane merge, n = values.len() needs 3*(n-1) multiplications
+    // outside the inversion.
+    let prefix = &mut prefix[..values.len()];
+    let mut products = InversionLanes([values[0], values[1]]);
+    for (i, (value, prefix)) in values.iter().zip(prefix.iter_mut()).enumerate().skip(2) {
+        *prefix = products.push(i, value);
+    }
+    let mut inverses = products.invert();
+    for (i, (value, prefix)) in values
+        .iter_mut()
+        .zip(prefix.iter())
+        .enumerate()
+        .skip(2)
+        .rev()
+    {
+        *value = inverses.pop(i, value, prefix);
+    }
+    values[..2].copy_from_slice(&inverses.0);
+}
+
 /// Invalid input or scratch lengths for batch inversion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BatchInversionError {
@@ -126,23 +227,22 @@ pub fn batch_invert_groups<M: PrimeModulus>(
     }
     let scratch = &mut scratch[..required];
     // Parity follows the concatenated input, including zeros and empty groups.
-    let mut products = InversionLanes([PastaField::ONE; 2]);
-    let mut any_nonzero = false;
+    let mut products = NonzeroInversionLanes::new();
     for (index, (value, prefix)) in groups
         .iter()
         .flat_map(|group| group.iter())
         .zip(scratch.iter_mut())
         .enumerate()
     {
-        if !value.is_zero() {
-            *prefix = products.push(index, value);
-            any_nonzero = true;
+        if !value.is_zero()
+            && let Some(product) = products.push(index, value)
+        {
+            *prefix = product;
         }
     }
-    if !any_nonzero {
+    let Some(mut inverses) = products.invert() else {
         return Ok(());
-    }
-    let mut inverses = products.invert();
+    };
     for (value, (index, prefix)) in groups
         .iter_mut()
         .flat_map(|group| group.iter_mut())

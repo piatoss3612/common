@@ -1,6 +1,8 @@
 //! Binary ladder for short scalars and independent multiplication tests.
 
 use super::{PastaCurve, ProjectivePoint};
+use crate::field::CanonicalUint;
+#[cfg(test)]
 use crate::field::PastaField;
 
 /// Centers an unsigned window, applying its magnitude's sign and updating carry.
@@ -20,11 +22,21 @@ pub(super) fn centered_digit(window: u16, negative: bool, carry: &mut i16, width
     if negative { -digit } else { digit }
 }
 
+#[cfg(test)]
 pub(super) fn multiply<C: PastaCurve>(
     scalar: &PastaField<C::Scalar>,
     add_base: impl Fn(&ProjectivePoint<C>) -> ProjectivePoint<C>,
 ) -> ProjectivePoint<C> {
-    let scalar = scalar.to_canonical_uint();
+    multiply_canonical(scalar.to_canonical_uint(), add_base)
+}
+
+/// Multiplies a fixed base by an unsigned integer.
+///
+/// Each `add_base` call must add the same base to the supplied point.
+pub(super) fn multiply_canonical<C: PastaCurve>(
+    scalar: CanonicalUint,
+    add_base: impl Fn(&ProjectivePoint<C>) -> ProjectivePoint<C>,
+) -> ProjectivePoint<C> {
     let mut result = ProjectivePoint::IDENTITY;
     if let Some(high) = scalar.highest_set_bit() {
         for bit in (0..=high).rev() {

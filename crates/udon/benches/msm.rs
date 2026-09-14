@@ -108,6 +108,28 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C>>(
                 black_box(tables);
             })
         });
+        let cached_bases: Vec<_> = bases[..n]
+            .iter()
+            .map(PreparedAffinePoint::from_affine)
+            .collect();
+        group.bench_with_input(
+            BenchmarkId::new("prepare_cached_batch", &case),
+            &n,
+            |b, _| {
+                b.iter(|| {
+                    let tables = EisensteinTableBatch::prepare(
+                        black_box(&cached_bases),
+                        &mut entries,
+                        &mut projective,
+                        &mut field,
+                        TaskBudget::SERIAL,
+                        &SerialExecutor,
+                    )
+                    .unwrap();
+                    black_box(tables);
+                })
+            },
+        );
         let tables = EisensteinTableBatch::prepare(
             &bases[..n],
             &mut entries,

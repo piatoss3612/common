@@ -1,4 +1,6 @@
-use super::{FftError, PastaField, PrimeModulus, check_domain_size, check_field_count, check_len};
+use super::{
+    FftError, PastaField, PrimeModulus, check_domain_size, check_field_count, check_length,
+};
 
 /// Retained representation of subgroup powers, independent of value ordering.
 ///
@@ -113,7 +115,7 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
         description: TwiddleDescription,
         values: &'a [PastaField<M>],
     ) -> Result<Self, FftError> {
-        check_len("twiddles", values.len(), description.requirements()?)?;
+        check_length("twiddles", description.requirements()?, values.len())?;
         Ok(Self {
             description,
             values,
@@ -129,7 +131,7 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
         description: TwiddleDescription,
         values: &'a mut [PastaField<M>],
     ) -> Result<Self, FftError> {
-        check_len("twiddles", values.len(), description.requirements()?)?;
+        check_length("twiddles", description.requirements()?, values.len())?;
         let mut remaining = &mut *values;
         for (len, step) in description.stages::<M>() {
             let (stage, rest) = remaining.split_at_mut(len);
@@ -241,7 +243,7 @@ impl<'a, M: PrimeModulus> PowerTable<'a, M> {
     }
 
     fn check_seeds(first: PastaField<M>, step: PastaField<M>) -> Result<(), FftError> {
-        if !super::is_reduced(first) || !super::is_reduced(step) {
+        if !first.is_reduced() || !step.is_reduced() {
             return Err(FftError::InvalidTables);
         }
         Ok(())

@@ -37,6 +37,10 @@ the caller's output.
 `inverse_bit_reversed` accepts evaluations already placed
 at bit-reversed positions and omits the input permutation.
 
+[`ElementOrder`](../crates/udon/src/fft/layout.rs) describes natural or
+bit-reversed storage for either coefficients or evaluations. Configured
+transforms select this order independently for input and output.
+
 Use `forward_prefix` when only the low-degree coefficients are present. It
 treats omitted coefficients as zero, and an empty prefix as the zero polynomial.
 Its output needs the full domain size and the queried scratch, including for
@@ -84,6 +88,12 @@ even if their storage aliases. `OperationRequirements` reports scratch in field
 elements, including the size and count of blocked column jobs' partitions.
 Configuration and attaching tables to prepared operations reject strategies
 that exceed a ceiling before execution.
+
+The configured operation can omit inverse-normalization tables before checking
+the byte ceiling; [`Plan::configure`](../crates/udon/src/fft/operation.rs) defines
+which tables it retains for each request and strategy. For example, a plan with
+only inverse-normalization tables can configure a subgroup inverse under a
+zero-byte table budget. The original plan remains reusable with all its tables.
 
 | Backend | Scratch | Execution |
 | --- | --- | --- |

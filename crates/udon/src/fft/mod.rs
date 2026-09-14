@@ -110,7 +110,7 @@
 //!     field::Fp,
 //!     exec::SerialExecutor,
 //!     fft::{Direction, Domain, Expansion, ExpansionOrder, ExpansionStorage,
-//!         ExpansionStrategy, InputOrder, Plan, Strategy, TransformRequest},
+//!         ExpansionStrategy, ElementOrder, Plan, Strategy, TransformRequest},
 //! };
 //!
 //! let base = Plan::without_tables(Domain::new(2).unwrap().subgroup());
@@ -130,7 +130,7 @@
 //! ).unwrap();
 //! let inverse = Plan::without_tables(extended).configure(
 //!     TransformRequest {
-//!         input_order: InputOrder::BitReversed,
+//!         input_order: ElementOrder::BitReversed,
 //!         ..TransformRequest::new(Direction::Inverse)
 //!     },
 //!     Strategy::serial(),
@@ -148,6 +148,7 @@ mod execution;
 mod expansion;
 mod expansion_operation;
 mod expansion_scales;
+mod finish;
 mod interpolation;
 mod interpolation_parallel;
 mod layout;
@@ -166,19 +167,17 @@ pub use expansion_operation::{
     ExpansionStrategy, PreparedExpansion, Residue,
 };
 pub use expansion_scales::{ExpansionScaleArtifact, ExpansionScaleNormalization, ExpansionScales};
-pub use interpolation::{
-    Class, ClassState, InputOrder, interpolate_classes, interpolation_scratch,
-};
+pub use interpolation::{Class, ClassState, interpolate_classes, interpolation_scratch};
 pub use interpolation_parallel::{
     InterpolationOptions, InterpolationRequirements, interpolate_classes_parallel, interpolate_sum,
 };
 pub use layout::{
-    CoefficientTiles, CoefficientView, EvaluationLayout, EvaluationView, ResidueLayout, ResidueView,
+    CoefficientTiles, CoefficientView, ElementOrder, EvaluationLayout, EvaluationView,
+    InverseScale, ResidueLayout, ResidueView,
 };
 pub use operation::{
-    Backend, Codelet, Direction, Initialization, InputPolicy, InputSupport, InverseScale,
-    OperationDescription, OperationRequirements, PreparedOperation, ResourceBudget, Strategy,
-    TransformRequest,
+    Backend, Codelet, Direction, Initialization, InputPolicy, InputSupport, OperationDescription,
+    OperationRequirements, PreparedOperation, ResourceBudget, Strategy, TransformRequest,
 };
 pub use powers::{PowerTable, TwiddleArtifact, TwiddleDescription, TwiddleStorage, TwiddleTable};
 pub use tables::{BoundTables, TableRequirements, Tables, TablesMut};
@@ -273,16 +272,7 @@ impl core::fmt::Display for FftError {
 
 impl core::error::Error for FftError {}
 
-fn is_reduced<M: PrimeModulus>(value: PastaField<M>) -> bool {
-    value
-        .montgomery_limbs()
-        .iter()
-        .rev()
-        .cmp(M::MODULUS.iter().rev())
-        .is_lt()
-}
-
-fn check_len(buffer: &'static str, actual: usize, expected: usize) -> Result<(), FftError> {
+fn check_length(buffer: &'static str, expected: usize, actual: usize) -> Result<(), FftError> {
     if actual == expected {
         Ok(())
     } else {

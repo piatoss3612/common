@@ -9,7 +9,7 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use zakura_udon::{
     exec::{Executor, SerialExecutor},
     fft::{
-        Class, CosetDomain, Domain, ExecutionOptions, Expansion, ExpansionOptions, InputOrder,
+        Class, CosetDomain, Domain, ElementOrder, ExecutionOptions, Expansion, ExpansionOptions,
         Plan, TableRequirements, Tables, TablesMut, interpolate_classes, reference,
     },
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
@@ -615,10 +615,10 @@ fn interpolation<M: PrimeModulus>(
             || input.clone(),
             |[output, a, b]| {
                 let mut output =
-                    Class::new(plans[0], black_box(output), InputOrder::Natural).unwrap();
+                    Class::new(plans[0], black_box(output), ElementOrder::Natural).unwrap();
                 let mut lifts = [
-                    Class::new(plans[1], black_box(a), InputOrder::Natural).unwrap(),
-                    Class::new(plans[2], black_box(b), InputOrder::Natural).unwrap(),
+                    Class::new(plans[1], black_box(a), ElementOrder::Natural).unwrap(),
+                    Class::new(plans[2], black_box(b), ElementOrder::Natural).unwrap(),
                 ];
                 interpolate_classes(
                     &mut output,

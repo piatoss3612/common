@@ -35,7 +35,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                     Initialization::Gather,
                     Initialization::Blocked,
                 ] {
-                    for order in [InputOrder::Natural, InputOrder::BitReversed] {
+                    for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
                         let operation = plan
                             .configure(
                                 TransformRequest {
@@ -61,7 +61,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                             )
                             .unwrap();
                         let factor_values = vec![PastaField::from_u64(11); size];
-                        let layout = if order == InputOrder::Natural {
+                        let layout = if order == ElementOrder::Natural {
                             EvaluationLayout::Natural
                         } else {
                             EvaluationLayout::BitReversed
@@ -184,9 +184,9 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                     }
                     assert_eq!(scratch.last(), Some(&PastaField::ONE));
                     let inner_order = if order == ExpansionOrder::Residues {
-                        InputOrder::Natural
+                        ElementOrder::Natural
                     } else {
-                        InputOrder::BitReversed
+                        ElementOrder::BitReversed
                     };
                     for residue in 0..expansion.layout().residues() {
                         let operation = expansion.residue(residue, inner_order).unwrap();
@@ -201,7 +201,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                             )
                             .unwrap();
                         for row in 0..size {
-                            let index = if inner_order == InputOrder::Natural {
+                            let index = if inner_order == ElementOrder::Natural {
                                 row
                             } else {
                                 reverse(row, size.ilog2())
@@ -262,7 +262,7 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
     for request in [
         TransformRequest::new(Direction::Inverse),
         TransformRequest {
-            input_order: InputOrder::BitReversed,
+            input_order: ElementOrder::BitReversed,
             ..TransformRequest::new(Direction::Forward)
         },
     ] {

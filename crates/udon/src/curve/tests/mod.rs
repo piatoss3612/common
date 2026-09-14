@@ -4,7 +4,6 @@ use crate::test_support::field_samples;
 use std::{vec, vec::Vec};
 
 mod arithmetic;
-mod batch_inversion;
 mod contracts;
 mod eisenstein;
 mod eisenstein_batch;

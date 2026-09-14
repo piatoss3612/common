@@ -1,11 +1,12 @@
 //! Shared-inversion compact tables and same-scalar ladders.
 
+use crate::field::invert_nonzero;
 use core::marker::PhantomData;
 
 use super::{
     AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, EisensteinScalar,
-    EisensteinTable, PastaCurve, ProjectivePoint, batch::invert_nonzero, check_length,
-    check_scratch, checked_count, eisenstein,
+    EisensteinTable, PastaCurve, ProjectivePoint, check_length, check_scratch, checked_count,
+    eisenstein,
 };
 use crate::{
     exec::{Executor, TaskBudget},
@@ -381,27 +382,27 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     for (i, base) in bases.iter().enumerate() {
         let p = base.affine();
         entries[8 * i] = E::from_affine(&p);
-        denom[i] = p.endomorphism().x.sub(&p.x);
+        denom[i] = base.rotated(1).x.sub(&p.x);
     }
     invert_nonzero(&mut denom[..n], prefix);
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
         let p = group[0].affine();
-        let d = chord(p, p.endomorphism().neg(), denom[i]);
+        let d = chord(p, group[0].rotated(1).neg(), denom[i]);
         group[1] = E::from_affine(&d);
-        denom[i] = d.endomorphism().x.sub(&d.x);
+        denom[i] = group[1].rotated(1).x.sub(&d.x);
     }
     invert_nonzero(&mut denom[..n], prefix);
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
         let d = group[1].affine();
-        let b = chord(d, d.endomorphism().neg(), denom[i]);
-        let minus_three = b.endomorphism().endomorphism();
+        let b = chord(d, group[1].rotated(1).neg(), denom[i]);
+        let minus_three = b.rotated(2);
         group[4] = E::from_affine(&minus_three.neg());
     }
     for (i, group) in entries.chunks_exact(8).enumerate() {
         let minus_three = group[4].affine().neg();
         let phi = group[0].rotated(1);
         denom[2 * i] = minus_three.x.sub(&phi.x);
-        denom[2 * i + 1] = minus_three.endomorphism().endomorphism().x.sub(&phi.x);
+        denom[2 * i + 1] = group[4].rotated(2).neg().x.sub(&phi.x);
     }
     // Each +/- pair shares a chord denominator, so four additions per base
     // need just two inverse entries and one inversion phase.
@@ -409,7 +410,7 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
         let phi = group[0].rotated(1);
         let minus_three = group[4].affine().neg();
-        let b_phi = minus_three.endomorphism().endomorphism();
+        let b_phi = group[4].rotated(2).neg();
         group[5] = E::from_affine(&chord(phi, minus_three, denom[2 * i]).neg());
         group[3] = E::from_affine(
             &chord(phi, minus_three.neg(), denom[2 * i])
@@ -418,7 +419,7 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
         );
         group[2] = E::from_affine(&chord(phi, b_phi.neg(), denom[2 * i + 1]).endomorphism());
         let four_b = chord(phi, b_phi, denom[2 * i + 1]);
-        group[6] = E::from_affine(&four_b.endomorphism().endomorphism());
+        group[6] = E::from_affine(&four_b.rotated(2));
     }
     for (i, group) in entries.chunks_exact(8).enumerate() {
         denom[i] = group[6].rotated(1).x.sub(&group[0].rotated(1).x);
@@ -426,7 +427,7 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     invert_nonzero(&mut denom[..n], prefix);
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
         let p = chord(group[0].rotated(1), group[6].rotated(1), denom[i]);
-        group[7] = E::from_affine(&p.endomorphism().endomorphism());
+        group[7] = E::from_affine(&p.rotated(2));
     }
 }
 

@@ -1,44 +1,7 @@
-//! Shared inversion helpers and batch normalization.
+//! Batch normalization with a shared field inversion.
 
 use super::{CurveError, PastaCurve, Point, ProjectivePoint, check_length, check_scratch};
-use crate::field::{InversionLanes, PastaField, PrimeModulus};
-
-/// Inverts nonzero values in place, using at least `values.len()` prefix elements.
-///
-/// Callers must establish nonzero denominators for their schedule or remove
-/// exceptional pairs before calling.
-pub(super) fn invert_nonzero<M: PrimeModulus>(
-    values: &mut [PastaField<M>],
-    prefix: &mut [PastaField<M>],
-) {
-    if values.is_empty() {
-        return;
-    }
-    if values.len() == 1 {
-        values[0] = values[0].invert().expect("nonzero denominators");
-        return;
-    }
-    // Seed each lane with its first value. The reverse pass leaves those two
-    // inverses directly, avoiding multiplication by one and unused updates.
-    // Including the lane merge, n = values.len() needs 3*(n-1) multiplications
-    // outside the inversion.
-    let prefix = &mut prefix[..values.len()];
-    let mut products = InversionLanes([values[0], values[1]]);
-    for (i, (value, prefix)) in values.iter().zip(prefix.iter_mut()).enumerate().skip(2) {
-        *prefix = products.push(i, value);
-    }
-    let mut inverses = products.invert();
-    for (i, (value, prefix)) in values
-        .iter_mut()
-        .zip(prefix.iter())
-        .enumerate()
-        .skip(2)
-        .rev()
-    {
-        *value = inverses.pop(i, value, prefix);
-    }
-    values[..2].copy_from_slice(&inverses.0);
-}
+use crate::field::{NonzeroInversionLanes, PastaField};
 
 /// Normalizes points in order, preserving identity positions.
 ///
@@ -86,21 +49,20 @@ pub(super) fn normalize<C: PastaCurve>(
 ) {
     // Skipping identities keeps both products invertible; their scratch slots
     // need no prefix because the reverse pass also skips them.
-    let mut products = InversionLanes([PastaField::ONE; 2]);
-    let mut any_nonidentity = false;
+    let mut products = NonzeroInversionLanes::new();
     for (index, (point, prefix)) in points.iter().zip(scratch.iter_mut()).enumerate() {
-        if !point.is_identity() {
-            any_nonidentity = true;
-            *prefix = products.push(index, &point.z);
+        if !point.is_identity()
+            && let Some(product) = products.push(index, &point.z)
+        {
+            *prefix = product;
         }
     }
-    if !any_nonidentity {
+    let Some(mut inverses) = products.invert() else {
         for index in 0..points.len() {
             write(index, Point::IDENTITY);
         }
         return;
-    }
-    let mut inverses = products.invert();
+    };
     for (index, (point, prefix)) in points.iter().zip(scratch.iter()).enumerate().rev() {
         if point.is_identity() {
             write(index, Point::IDENTITY);

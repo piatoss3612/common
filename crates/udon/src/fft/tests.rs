@@ -1079,7 +1079,7 @@ fn classed<M: PrimeModulus>(log: u32) {
     let small_prepared = Prepared::new(smaller);
     let plan = Plan::new(prepared.tables().bind(domain).unwrap());
     let small_plan = Plan::new(small_prepared.tables().bind(smaller).unwrap());
-    for order in [InputOrder::Natural, InputOrder::BitReversed] {
+    for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
         let mut full = vec![PastaField::ZERO; domain.size()];
         let mut small = vec![PastaField::ZERO; smaller.size()];
         let mut smallest_work = smallest_values.clone();
@@ -1089,7 +1089,7 @@ fn classed<M: PrimeModulus>(log: u32) {
             Class::new(
                 Plan::without_tables(smallest),
                 &mut smallest_work,
-                InputOrder::Natural,
+                ElementOrder::Natural,
             )
             .unwrap(),
         ];
@@ -1125,7 +1125,7 @@ fn classed<M: PrimeModulus>(log: u32) {
         assert_eq!(output.values(), expected);
         assert_eq!(lifts[0].values(), small_coefficients);
         assert_eq!(lifts[1].values(), smallest_coefficients);
-        assert_eq!(output.order(), InputOrder::Natural);
+        assert_eq!(output.order(), ElementOrder::Natural);
         assert_eq!(&scratch[count..], &[PastaField::ONE; 2]);
         let scratch_before = scratch.clone();
         assert_eq!(
@@ -1143,7 +1143,7 @@ fn classed<M: PrimeModulus>(log: u32) {
 
         // A fresh output must reject a spent lift before touching any buffer.
         let mut fresh_values = full_values.clone();
-        let mut fresh = Class::new(plan, &mut fresh_values, InputOrder::Natural).unwrap();
+        let mut fresh = Class::new(plan, &mut fresh_values, ElementOrder::Natural).unwrap();
         assert_eq!(
             interpolate_classes(&mut fresh, &mut lifts, options, &Threads, &mut scratch),
             Err(FftError::InvalidClassState)
@@ -1542,7 +1542,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         );
         assert_eq!(output, original);
     }
-    let mut class = Class::new(plan, &mut output, InputOrder::BitReversed).unwrap();
+    let mut class = Class::new(plan, &mut output, ElementOrder::BitReversed).unwrap();
     assert_eq!(
         class.scatter_strided(1, usize::MAX, &[Fp::ONE; 3]),
         Err(FftError::SizeOverflow)
@@ -1559,7 +1559,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     assert_eq!(class.values(), original);
     let mut lift_values = original.repeat(2);
     let lift_plan = Plan::without_tables(Domain::new(7).unwrap().subgroup());
-    let mut lifts = [Class::new(lift_plan, &mut lift_values, InputOrder::Natural).unwrap()];
+    let mut lifts = [Class::new(lift_plan, &mut lift_values, ElementOrder::Natural).unwrap()];
     assert_eq!(
         interpolate_classes(&mut class, &mut lifts, options, &SerialExecutor, &mut []),
         Err(FftError::InvalidClass)
@@ -1774,7 +1774,7 @@ fn executor_panics_leave_public_buffers_canonical() {
     );
     assert_canonical(&values);
     assert_canonical(&scratch);
-    let mut class = Class::new(plan, &mut values, InputOrder::Natural).unwrap();
+    let mut class = Class::new(plan, &mut values, ElementOrder::Natural).unwrap();
     assert!(
         catch_unwind(AssertUnwindSafe(|| interpolate_classes(
             &mut class,

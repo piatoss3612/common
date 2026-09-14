@@ -153,7 +153,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                     &format!("DIF/{codelet:?}"),
                     plan.configure(
                         TransformRequest {
-                            output_order: InputOrder::BitReversed,
+                            output_order: ElementOrder::BitReversed,
                             ..TransformRequest::new(Direction::Forward)
                         },
                         Strategy {
@@ -410,11 +410,11 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                     || [input.clone(), input.clone(), input.clone(), input.clone()],
                     |values| {
                         let [output, a, b, c] = values;
-                        let mut output = Class::new(base, output, InputOrder::Natural).unwrap();
+                        let mut output = Class::new(base, output, ElementOrder::Natural).unwrap();
                         let mut lifts = [
-                            Class::new(base, a, InputOrder::Natural).unwrap(),
-                            Class::new(base, b, InputOrder::Natural).unwrap(),
-                            Class::new(base, c, InputOrder::Natural).unwrap(),
+                            Class::new(base, a, ElementOrder::Natural).unwrap(),
+                            Class::new(base, b, ElementOrder::Natural).unwrap(),
+                            Class::new(base, c, ElementOrder::Natural).unwrap(),
                         ];
                         match mode {
                             "fused" => interpolate_classes(
@@ -599,7 +599,44 @@ fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     group.finish();
 }
 
+fn subgroup_expansion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
+    let base = Plan::without_tables(Domain::<M>::for_size(2048).unwrap().subgroup());
+    let input = inputs(base.domain().size());
+    let mut group = criterion.benchmark_group(format!("{field}/subgroup_expansion"));
+    for residues in [1, 8] {
+        let extended = Domain::for_size(2048 * residues).unwrap().subgroup();
+        let expansion = Expansion::new(base, extended, None).unwrap();
+        for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
+            let operation = expansion
+                .configure(
+                    order,
+                    ExpansionStorage::ReuseOutput,
+                    ExpansionStrategy::serial(),
+                )
+                .unwrap();
+            let mut output = vec![PastaField::ZERO; extended.size()];
+            let mut scratch = vec![PastaField::ZERO; operation.requirements().scratch_fields];
+            group.bench_function(BenchmarkId::new(format!("{order:?}"), residues), |b| {
+                b.iter(|| {
+                    operation
+                        .execute_into(
+                            black_box(&input),
+                            &mut output,
+                            &SerialExecutor,
+                            &mut scratch,
+                        )
+                        .unwrap();
+                    black_box(&output);
+                })
+            });
+        }
+    }
+    group.finish();
+}
+
 fn benchmarks(criterion: &mut Criterion) {
+    subgroup_expansion::<PallasBase>(criterion, "Fp");
+    subgroup_expansion::<PallasScalar>(criterion, "Fq");
     for tasks in [1, 4] {
         let runner = Runner {
             tasks,

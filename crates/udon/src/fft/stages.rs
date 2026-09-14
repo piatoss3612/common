@@ -4,8 +4,9 @@
 //! never receive a field slice or callback that can observe a partially reduced
 //! region.
 
+use super::finish::{Factors, InverseFinish};
 use super::{
-    Codelet, Executor, InputOrder, InverseScale, PastaField, Plan, PrimeModulus,
+    Codelet, ElementOrder, Executor, InverseScale, PastaField, Plan, PrimeModulus,
     TwiddleDescription, TwiddleStorage, TwiddleTable, reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
@@ -21,7 +22,7 @@ pub(super) struct StageKernel<'a, 'b, M: PrimeModulus> {
     pub scale: InverseScale,
     pub codelet: Codelet,
     pub twiddles: Option<TwiddleTable<'a, M>>,
-    pub output_order: InputOrder,
+    pub output_order: ElementOrder,
     pub factor: Option<&'b [PastaField<M>]>,
 }
 
@@ -224,9 +225,9 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         }
         guard.disarm();
         let native = if Self::DIF {
-            InputOrder::BitReversed
+            ElementOrder::BitReversed
         } else {
-            InputOrder::Natural
+            ElementOrder::Natural
         };
         if self.output_order != native {
             self.plan.permute(values);
@@ -240,7 +241,28 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         tasks: usize,
         executor: &E,
     ) {
-        dispatch_powers!(self, block, stage_with, values, block, tasks, executor);
+        if MODE == 2
+            && block == values.len()
+            && matches!(
+                InverseFinish::select(self.plan.domain, self.plan.tables.inverse_finish.is_some()),
+                InverseFinish::ScaledInputs
+            )
+        {
+            if self.plan.tables.inverse_finish.is_some() {
+                self.finish_stage(
+                    values,
+                    tasks,
+                    executor,
+                    Recurrence {
+                        step: PastaField::ONE,
+                    },
+                );
+            } else {
+                dispatch_powers!(self, block, finish_stage, values, tasks, executor);
+            }
+        } else {
+            dispatch_powers!(self, block, stage_with, values, block, tasks, executor);
+        }
     }
 
     fn stage_with<E: Executor, P: Powers<M>>(
@@ -265,16 +287,14 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
                 let (left, right) = values.split_at_mut(block / 2);
                 paired(left, right, 0, inner, executor, &|start, left, right| {
                     let mut power = powers.at(start);
-                    let mut low_scale = if terminal {
-                        self.inverse_factor(chunk * block + start)
+                    let factors = if terminal && self.inverse() {
+                        Factors::untwist(self.plan.domain)
                     } else {
-                        PastaField::ONE
+                        Factors::Identity
                     };
-                    let mut high_scale = if terminal {
-                        self.inverse_factor(chunk * block + start + block / 2)
-                    } else {
-                        PastaField::ONE
-                    };
+                    let mut low_scale = factors.at(chunk * block + start);
+                    let mut high_scale = factors.at(chunk * block + start + block / 2);
+                    let len = left.len();
                     for (offset, (left, right)) in left.iter_mut().zip(right).enumerate() {
                         let index = start + offset;
                         let twiddle = (index != 0).then_some(&power);
@@ -291,12 +311,13 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
                                 high_scale,
                                 Self::DIF,
                             );
-                            if self.inverse() {
-                                low_scale = low_scale.mul(&self.plan.domain.inverse_shift());
-                                high_scale = high_scale.mul(&self.plan.domain.inverse_shift());
+                            if self.inverse() && offset + 1 < len {
+                                low_scale = factors.next(chunk * block + index + 1, low_scale);
+                                high_scale =
+                                    factors.next(chunk * block + index + 1 + block / 2, high_scale);
                             }
                         }
-                        if index + 1 < block / 2 {
+                        if offset + 1 < len {
                             power = powers.next(index + 1, power);
                         }
                     }
@@ -305,12 +326,66 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         );
     }
 
-    fn inverse_factor(&self, index: usize) -> PastaField<M> {
-        if self.inverse() && self.plan.domain.inverse_shift() != PastaField::ONE {
-            self.plan.domain.inverse_shift().pow_u64(index as u64)
-        } else {
-            PastaField::ONE
-        }
+    fn finish_stage<E: Executor, P: Powers<M>>(
+        &self,
+        values: &mut [PastaField<M>],
+        tasks: usize,
+        executor: &E,
+        powers: P,
+    ) {
+        let half = values.len() / 2;
+        let factors = Factors::normalized(self.plan);
+        let upper = match factors {
+            Factors::Table { upper, .. } => upper,
+            _ => Factors::untwist(self.plan.domain).at(half),
+        };
+        let combined = self.plan.tables.inverse_finish;
+        let (left, right) = values.split_at_mut(half);
+        paired(
+            left,
+            right,
+            0,
+            TaskBudget::new(tasks).unwrap(),
+            executor,
+            &|start, left, right| {
+                let mut low_scale = factors.at(start);
+                let mut twiddle = if combined.is_none() {
+                    powers.at(start)
+                } else {
+                    PastaField::ONE
+                };
+                let len = left.len();
+                for (offset, (left, right)) in left.iter_mut().zip(right).enumerate() {
+                    let index = start + offset;
+                    let high_scale = combined.map_or_else(
+                        || {
+                            if index == 0 {
+                                low_scale
+                            } else {
+                                twiddle.mul(&low_scale)
+                            }
+                        },
+                        |table| table[index],
+                    );
+                    // The low factor includes the inverse size and shift; the
+                    // high factor also includes the inverse twiddle. Scaling
+                    // inputs here replaces normalization of the outputs.
+                    let low = scale(*left, &low_scale);
+                    let high = scale(*right, &high_scale);
+                    *left = low.add(&high);
+                    *right = low.sub(&high);
+                    if upper != PastaField::ONE {
+                        *right = right.mul(&upper);
+                    }
+                    if offset + 1 < len {
+                        low_scale = factors.next(index + 1, low_scale);
+                        if combined.is_none() {
+                            twiddle = powers.next(index + 1, twiddle);
+                        }
+                    }
+                }
+            },
+        );
     }
 
     #[inline]
@@ -333,7 +408,7 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
                 value.mul(&untwist)
             }
         } else if let Some(factor) = self.factor {
-            let desired_reversed = self.output_order == InputOrder::BitReversed;
+            let desired_reversed = self.output_order == ElementOrder::BitReversed;
             let index = if desired_reversed == bit_reversed {
                 index
             } else {
@@ -346,11 +421,29 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
     }
 
     fn finish_region(&self, values: &mut [PastaField<M>], start: usize, bit_reversed: bool) {
-        let mut untwist = self.inverse_factor(start);
+        let scaled = MODE == 2
+            && self.plan.tables.inverse_scales.is_some()
+            && matches!(
+                InverseFinish::select(self.plan.domain, false),
+                InverseFinish::ScaledInputs
+            );
+        let factors = if scaled {
+            Factors::normalized(self.plan)
+        } else if self.inverse() {
+            Factors::untwist(self.plan.domain)
+        } else {
+            Factors::Identity
+        };
+        let mut factor = factors.at(start);
+        let len = values.len();
         for (offset, value) in values.iter_mut().enumerate() {
-            *value = self.finish(*value, start + offset, untwist, bit_reversed);
-            if self.inverse() {
-                untwist = untwist.mul(&self.plan.domain.inverse_shift());
+            *value = if scaled {
+                scale(*value, &factor)
+            } else {
+                self.finish(*value, start + offset, factor, bit_reversed)
+            };
+            if self.inverse() && offset + 1 < len {
+                factor = factors.next(start + offset + 1, factor);
             }
         }
     }

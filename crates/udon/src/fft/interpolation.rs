@@ -1,20 +1,8 @@
 use super::transform::Run;
 use super::{
-    ExecutionOptions, Executor, FftError, PastaField, Plan, PrimeModulus, ScratchRequirements,
-    check_len,
+    ElementOrder, ExecutionOptions, Executor, FftError, PastaField, Plan, PrimeModulus,
+    ScratchRequirements, check_length,
 };
-
-/// Storage order of logical input or output positions.
-///
-/// For coefficients, logical position `j` is degree `j`. For evaluations it is
-/// the point `shift * root^j` from the plan, with `0 <= j < size`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InputOrder {
-    /// Logical position `j` is at index `j`.
-    Natural,
-    /// Logical position `j` is at the reversal of its low `log2(size)` bits.
-    BitReversed,
-}
 
 /// Meaning of an interpolation class's current working storage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -45,7 +33,7 @@ pub enum ClassState {
 pub struct Class<'a, M: PrimeModulus> {
     pub(super) plan: Plan<'a, M>,
     pub(super) values: &'a mut [PastaField<M>],
-    pub(super) order: InputOrder,
+    pub(super) order: ElementOrder,
     pub(super) state: ClassState,
 }
 
@@ -69,9 +57,9 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
     pub fn new(
         plan: Plan<'a, M>,
         values: &'a mut [PastaField<M>],
-        order: InputOrder,
+        order: ElementOrder,
     ) -> Result<Self, FftError> {
-        check_len("values", values.len(), plan.domain().size())?;
+        check_length("values", plan.domain().size(), values.len())?;
         Ok(Self {
             plan,
             values,
@@ -85,9 +73,9 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
     }
     /// Storage order for the current evaluation or coefficient phase.
     ///
-    /// Completed coefficients use [`InputOrder::Natural`]. The value has no
+    /// Completed coefficients use [`ElementOrder::Natural`]. The value has no
     /// result-order meaning in [`ClassState::Consumed`].
-    pub const fn order(&self) -> InputOrder {
+    pub const fn order(&self) -> ElementOrder {
         self.order
     }
 
@@ -147,8 +135,8 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
         for (index, value) in values.iter().enumerate() {
             let row = start + index * stride;
             let destination = match self.order {
-                InputOrder::Natural => row,
-                InputOrder::BitReversed => self.plan.reversed(row),
+                ElementOrder::Natural => row,
+                ElementOrder::BitReversed => self.plan.reversed(row),
             };
             self.values[destination] = *value;
         }
@@ -255,7 +243,7 @@ pub const fn interpolation_scratch<M: PrimeModulus>(
 ///
 /// Every lift must fit in the output domain. Their coset shifts may
 /// differ, and an empty lift slice is accepted. All buffers finish in increasing
-/// degree order, and their [`Class::order`] becomes [`InputOrder::Natural`].
+/// degree order, and their [`Class::order`] becomes [`ElementOrder::Natural`].
 /// Interpolation consumes each class's evaluation phase: another interpolation
 /// or scatter returns [`FftError::InvalidClassState`]. This also applies to any
 /// class whose transform began before an execution panic.
@@ -273,7 +261,7 @@ pub const fn interpolation_scratch<M: PrimeModulus>(
 ///     exec::SerialExecutor,
 ///     field::Fp,
 ///     fft::{
-///         Class, Domain, ExecutionOptions, Expansion, ExpansionOptions, InputOrder, Plan,
+///         Class, Domain, ExecutionOptions, Expansion, ExpansionOptions, ElementOrder, Plan,
 ///         interpolate_classes,
 ///     },
 /// };
@@ -288,7 +276,7 @@ pub const fn interpolation_scratch<M: PrimeModulus>(
 /// ).unwrap();
 /// let mut buffer = [Fp::ZERO; 4];
 /// let mut output = Class::new(
-///     Plan::without_tables(extended), &mut buffer, InputOrder::BitReversed,
+///     Plan::without_tables(extended), &mut buffer, ElementOrder::BitReversed,
 /// ).unwrap();
 /// let layout = expansion.layout();
 /// for (residue, values) in evaluations.chunks_exact(layout.rows()).enumerate() {
@@ -298,7 +286,7 @@ pub const fn interpolation_scratch<M: PrimeModulus>(
 /// let mut constant = [Fp::from_u64(5)];
 /// let mut lifts = [Class::new(
 ///     Plan::without_tables(Domain::new(0).unwrap().subgroup()),
-///     &mut constant, InputOrder::Natural,
+///     &mut constant, ElementOrder::Natural,
 /// ).unwrap()];
 /// interpolate_classes(
 ///     &mut output, &mut lifts, ExecutionOptions::serial(),
@@ -318,7 +306,7 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
     interpolation_scratch(output, lifts, options)?.check(scratch.len())?;
     for lift in lifts.iter_mut() {
         lift.state = ClassState::Consumed;
-        if lift.order == InputOrder::Natural {
+        if lift.order == ElementOrder::Natural {
             lift.plan.permute(lift.values);
         }
         let required = lift.plan.scratch_requirements(options)?.field_elements;
@@ -329,11 +317,11 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
             &mut scratch[..required],
             Run::inverse(&[]),
         );
-        lift.order = InputOrder::Natural;
+        lift.order = ElementOrder::Natural;
         lift.state = ClassState::Coefficients;
     }
     output.state = ClassState::Consumed;
-    if output.order == InputOrder::Natural {
+    if output.order == ElementOrder::Natural {
         output.plan.permute(output.values);
     }
     let required = output.plan.scratch_requirements(options)?.field_elements;
@@ -344,7 +332,7 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
         &mut scratch[..required],
         Run::inverse(lifts),
     );
-    output.order = InputOrder::Natural;
+    output.order = ElementOrder::Natural;
     output.state = ClassState::Coefficients;
     Ok(())
 }

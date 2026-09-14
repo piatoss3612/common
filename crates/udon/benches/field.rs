@@ -417,7 +417,43 @@ fn canonical_uint(criterion: &mut Criterion) {
 fn benchmarks(criterion: &mut Criterion) {
     field::<PallasBase>(criterion, "Fp");
     field::<PallasScalar>(criterion, "Fq");
+    batch_inversion::<PallasBase>(criterion, "Fp");
+    batch_inversion::<PallasScalar>(criterion, "Fq");
     canonical_uint(criterion);
+}
+
+fn batch_inversion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
+    let mut group = criterion.benchmark_group(format!("{field}/batch_invert"));
+    for size in [1, 2, 8, 64] {
+        for sparse in [false, true] {
+            let input: Vec<_> = (0..size)
+                .map(|i| {
+                    if sparse && i % 2 == 1 {
+                        PastaField::ZERO
+                    } else {
+                        PastaField::<M>::from_u64(i as u64 + 3)
+                    }
+                })
+                .collect();
+            let mut scratch = vec![PastaField::ZERO; size];
+            let shape = if sparse { "one_lane" } else { "dense" };
+            group.bench_function(BenchmarkId::new(shape, size), |b| {
+                b.iter_batched_ref(
+                    || input.clone(),
+                    |values| {
+                        zakura_udon::field::batch_invert(
+                            black_box(values),
+                            black_box(&mut scratch),
+                        )
+                        .unwrap();
+                        black_box(values);
+                    },
+                    BatchSize::SmallInput,
+                )
+            });
+        }
+    }
+    group.finish();
 }
 
 criterion_group!(benches, benchmarks);

@@ -1,7 +1,7 @@
 use super::transform::Run;
 use super::{
-    Class, ClassState, ExecutionOptions, Executor, FftError, InputOrder, PastaField, PrimeModulus,
-    ScratchRequirements, check_field_count, interpolation_scratch, min,
+    Class, ClassState, ElementOrder, ExecutionOptions, Executor, FftError, PastaField,
+    PrimeModulus, ScratchRequirements, check_field_count, interpolation_scratch, min,
 };
 use crate::exec::TaskBudget;
 
@@ -132,7 +132,7 @@ fn inverse<M: PrimeModulus, E: Executor>(
     scratch: &mut [PastaField<M>],
 ) {
     class.state = ClassState::Consumed;
-    if class.order == InputOrder::Natural {
+    if class.order == ElementOrder::Natural {
         class.plan.permute(class.values);
     }
     let fields = class
@@ -147,7 +147,7 @@ fn inverse<M: PrimeModulus, E: Executor>(
         &mut scratch[..fields],
         Run::inverse(&[]),
     );
-    class.order = InputOrder::Natural;
+    class.order = ElementOrder::Natural;
     class.state = ClassState::Coefficients;
 }
 

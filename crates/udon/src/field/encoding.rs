@@ -99,6 +99,18 @@ macro_rules! fq_hex {
 }
 
 impl<M: PrimeModulus> PastaField<M> {
+    /// Checks the reduced-residue invariant without field arithmetic.
+    ///
+    /// This accepts raw POD contents so validators can reject unreduced limbs
+    /// before calling arithmetic that assumes reduction.
+    pub(crate) fn is_reduced(&self) -> bool {
+        self.montgomery_limbs()
+            .iter()
+            .rev()
+            .cmp(M::MODULUS.iter().rev())
+            .is_lt()
+    }
+
     pub(super) fn from_canonical_limbs(limbs: [u64; 4]) -> Self {
         debug_assert!(compare_limbs(&limbs, &M::MODULUS).is_lt());
         Self::from_montgomery(montgomery_multiply::<M>(&limbs, &M::R2))

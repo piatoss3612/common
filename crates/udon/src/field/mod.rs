@@ -29,8 +29,8 @@ mod sqrt;
 mod uint;
 pub(crate) mod word;
 
-pub(crate) use batch::InversionLanes;
 pub use batch::{BatchInversionError, batch_invert, batch_invert_groups};
+pub(crate) use batch::{NonzeroInversionLanes, invert_nonzero};
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub use products::ProductSum;
 pub use uint::CanonicalUint;

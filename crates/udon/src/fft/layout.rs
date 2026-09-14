@@ -1,4 +1,29 @@
-use super::{CosetDomain, FftError, InverseScale, PastaField, PrimeModulus, check_len, reverse};
+use super::{CosetDomain, FftError, PastaField, PrimeModulus, check_length, reverse};
+
+/// Storage order of logical input or output positions.
+///
+/// For coefficients, logical position `j` is degree `j`. For evaluations, it is
+/// natural row `j` of the [`CosetDomain`]. In both cases, `0 <= j < size`, where
+/// `size` is the domain's element count.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElementOrder {
+    /// Logical position `j` is at index `j`.
+    Natural,
+    /// Logical position `j` is at the reversal of its low `log2(size)` bits.
+    BitReversed,
+}
+
+/// Whether an inverse divides by the domain size.
+///
+/// Both policies remove the coset shift as defined by [`Plan`](super::Plan).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InverseScale {
+    /// Return the polynomial's coefficients.
+    #[default]
+    Normalized,
+    /// Return each coefficient multiplied by the domain size.
+    Unscaled,
+}
 
 /// Coefficients in increasing degree order, with an explicit mathematical scale.
 ///
@@ -196,7 +221,7 @@ impl<'a, M: PrimeModulus> EvaluationView<'a, M> {
         domain: CosetDomain<M>,
         layout: EvaluationLayout,
     ) -> Result<Self, FftError> {
-        check_len("values", values.len(), domain.size())?;
+        check_length("values", domain.size(), values.len())?;
         layout.check(domain.size())?;
         Ok(Self {
             values,
@@ -246,7 +271,7 @@ impl<'a, M: PrimeModulus> EvaluationView<'a, M> {
     /// Validation precedes mutation. Field inputs follow the module's
     /// [representation contract](super).
     pub fn multiply_into(self, other: Self, output: &mut [PastaField<M>]) -> Result<(), FftError> {
-        check_len("output", output.len(), self.domain.size())?;
+        check_length("output", self.domain.size(), output.len())?;
         if !self.domain.same_domain(other.domain) || self.layout != other.layout {
             return Err(FftError::InvalidLayout);
         }
@@ -327,8 +352,8 @@ impl ResidueLayout {
     /// Both slices must have [`Self::size`] elements. Returns
     /// [`FftError::LengthMismatch`] before writing if either length differs.
     pub fn copy_from_natural<T: Copy>(self, input: &[T], output: &mut [T]) -> Result<(), FftError> {
-        check_len("input", input.len(), self.size)?;
-        check_len("output", output.len(), self.size)?;
+        check_length("input", self.size, input.len())?;
+        check_length("output", self.size, output.len())?;
         for (row, value) in input.iter().enumerate() {
             output[self.index(row).unwrap()] = *value;
         }
@@ -340,8 +365,8 @@ impl ResidueLayout {
     /// Both slices must have [`Self::size`] elements. Returns
     /// [`FftError::LengthMismatch`] before writing if either length differs.
     pub fn copy_to_natural<T: Copy>(self, input: &[T], output: &mut [T]) -> Result<(), FftError> {
-        check_len("input", input.len(), self.size)?;
-        check_len("output", output.len(), self.size)?;
+        check_length("input", self.size, input.len())?;
+        check_length("output", self.size, output.len())?;
         for (row, value) in output.iter_mut().enumerate() {
             *value = input[self.index(row).unwrap()];
         }
@@ -373,7 +398,7 @@ impl<'a, M: PrimeModulus> ResidueView<'a, M> {
     ///
     /// Returns [`FftError::LengthMismatch`] unless `values.len() == layout.size()`.
     pub fn new(values: &'a [PastaField<M>], layout: ResidueLayout) -> Result<Self, FftError> {
-        check_len("values", values.len(), layout.size())?;
+        check_length("values", layout.size(), values.len())?;
         Ok(Self { values, layout })
     }
     /// The layout of the borrowed values.

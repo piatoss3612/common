@@ -1,10 +1,10 @@
 use super::expansion::ResidueJobs;
 use super::transform::Run;
 use super::{
-    Codelet, CoefficientView, CosetDomain, EvaluationLayout, EvaluationView, ExecutionOptions,
-    Executor, Expansion, ExpansionOptions, ExpansionScaleNormalization, FftError, InputOrder,
+    Codelet, CoefficientView, CosetDomain, ElementOrder, EvaluationLayout, EvaluationView,
+    ExecutionOptions, Executor, Expansion, ExpansionOptions, ExpansionScaleNormalization, FftError,
     InverseScale, PastaField, PrimeModulus, ResourceBudget, ScratchRequirements, check_domain_size,
-    check_field_count, check_len, check_prefix, min,
+    check_field_count, check_length, check_prefix, min,
 };
 use crate::exec::TaskBudget;
 
@@ -13,7 +13,7 @@ use crate::exec::TaskBudget;
 pub enum ExpansionOrder {
     /// Naturally numbered residues and rows, as defined by [`super::ResidueLayout`].
     Residues,
-    /// Extended rows in [`InputOrder::BitReversed`] order.
+    /// Extended rows in [`ElementOrder::BitReversed`] order.
     ///
     /// Both residue blocks and rows within each block are bit-reversed. A full
     /// inverse accepting bit-reversed input can consume this layout directly.
@@ -334,7 +334,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// `order` describes positions inside that residue only. Returns
     /// [`FftError::InvalidLayout`] if `residue` is outside [`Self::layout`]'s
     /// residue count.
-    pub fn residue(self, residue: usize, order: InputOrder) -> Result<Residue<'a, M>, FftError> {
+    pub fn residue(self, residue: usize, order: ElementOrder) -> Result<Residue<'a, M>, FftError> {
         if residue >= self.layout.residues() {
             return Err(FftError::InvalidLayout);
         }
@@ -380,9 +380,9 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
         if self.description.storage == ExpansionStorage::Coefficients {
             check_prefix(input, 0, self.description.base_size)?;
         } else {
-            check_len("input", input, self.description.base_size)?;
+            check_length("input", self.description.base_size, input)?;
         }
-        check_len("output", output, self.description.extended_size)?;
+        check_length("output", self.description.extended_size, output)?;
         ScratchRequirements {
             field_elements: self.required.scratch_fields,
         }
@@ -414,6 +414,10 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
             ),
             ExpansionStorage::ReuseOutput => {
                 let (first, rest) = output.split_at_mut(self.description.base_size);
+                if rest.is_empty() && self.expansion.extended.shift() == PastaField::ONE {
+                    self.copy_first_residue(input, first);
+                    return Ok(());
+                }
                 self.expansion.base.scatter(input, first);
                 self.inverse_coefficients(first, executor, scratch);
                 self.residues(
@@ -425,6 +429,10 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
                     scratch,
                 );
                 // All readers of this coefficient buffer have completed.
+                if self.expansion.extended.shift() == PastaField::ONE {
+                    self.copy_first_residue(input, first);
+                    return Ok(());
+                }
                 let extra = self.residue_scale;
                 if let Some(scales) = self.expansion.scales {
                     for (value, scale) in first.iter_mut().zip(scales) {
@@ -432,9 +440,12 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
                     }
                 } else {
                     let mut power = extra;
-                    for value in first.iter_mut() {
+                    let len = first.len();
+                    for (index, value) in first.iter_mut().enumerate() {
                         *value = value.mul(&power);
-                        power = power.mul(&self.expansion.extended.shift());
+                        if index + 1 < len {
+                            power = power.mul(&self.expansion.extended.shift());
+                        }
                     }
                 }
                 if self.description.order == ExpansionOrder::BitReversed {
@@ -445,7 +456,7 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
                         scale: InverseScale::Normalized,
                         codelet: Codelet::Radix2,
                         twiddles: None,
-                        output_order: InputOrder::BitReversed,
+                        output_order: ElementOrder::BitReversed,
                         factor: None,
                     }
                     .run(first, 2, self.options.transform.max_tasks, executor);
@@ -463,6 +474,18 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
             _ => return Err(FftError::InvalidExecution),
         }
         Ok(())
+    }
+
+    /// Copies base evaluations into residue zero when the extended shift is one.
+    ///
+    /// Both slices must have the base domain size. Nested roots make this
+    /// residue the original subgroup, so no inverse/forward transform is needed.
+    fn copy_first_residue(self, input: &[PastaField<M>], output: &mut [PastaField<M>]) {
+        if self.description.order == ExpansionOrder::BitReversed {
+            self.expansion.base.scatter(input, output);
+        } else {
+            output.copy_from_slice(input);
+        }
     }
 
     /// Expands preserved base evaluations using a separate coefficient workspace.
@@ -488,10 +511,10 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
         let ExpansionStorage::CoefficientWorkspace { scale } = self.description.storage else {
             return Err(FftError::InvalidExecution);
         };
-        check_len(
+        check_length(
             "coefficients",
-            coefficients.len(),
             self.required.coefficient_fields,
+            coefficients.len(),
         )?;
         self.expansion.base.scatter(input, coefficients);
         self.inverse_coefficients(coefficients, executor, scratch);
@@ -646,7 +669,7 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
 pub struct Residue<'a, M: PrimeModulus> {
     expansion: Expansion<'a, M>,
     residue: usize,
-    order: InputOrder,
+    order: ElementOrder,
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for Residue<'_, M> {
@@ -695,7 +718,7 @@ impl<M: PrimeModulus> Residue<'_, M> {
             Ok(r) => r,
             Err(e) => return Err(e),
         };
-        Ok(if matches!(self.order, InputOrder::BitReversed) {
+        Ok(if matches!(self.order, ElementOrder::BitReversed) {
             ScratchRequirements { field_elements: 0 }
         } else {
             required
@@ -727,7 +750,7 @@ impl<M: PrimeModulus> Residue<'_, M> {
         let (normalized_coefficients, extra) = self.expansion.coefficient_input(input);
         let input = input.as_slice();
         check_prefix(input.len(), 0, self.expansion.base.domain().size())?;
-        check_len("output", output.len(), self.expansion.base.domain().size())?;
+        check_length("output", self.expansion.base.domain().size(), output.len())?;
         let required = self.scratch_requirements(options)?;
         required.check(scratch.len())?;
         ResidueJobs {
@@ -735,7 +758,7 @@ impl<M: PrimeModulus> Residue<'_, M> {
             coefficients: input,
             factor: None,
             normalized_coefficients,
-            order: if self.order == InputOrder::Natural {
+            order: if self.order == ElementOrder::Natural {
                 ExpansionOrder::Residues
             } else {
                 ExpansionOrder::BitReversed

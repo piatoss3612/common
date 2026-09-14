@@ -11,7 +11,7 @@ use udon::curve::{
 };
 use udon::exec::{Executor, SerialExecutor, TaskBudget, for_each_chunk_mut, for_each_mut};
 use udon::fft::{
-    Class, Domain, ExecutionOptions, Expansion, ExpansionOptions, FftError, InputOrder, Plan,
+    Class, Domain, ElementOrder, ExecutionOptions, Expansion, ExpansionOptions, FftError, Plan,
     TableRequirements, TablesMut, interpolate_classes,
 };
 use udon::field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum};
@@ -384,13 +384,13 @@ fn fft_operations<M: PrimeModulus>(values: &mut [PastaField<M>; FFT_SIZE]) -> Re
     let mut output = Class::new(
         Plan::without_tables(extended),
         &mut coefficients,
-        InputOrder::BitReversed,
+        ElementOrder::BitReversed,
     )?;
     // Residue-major evaluations scatter directly into interpolation order.
     for (residue, values) in evaluations.chunks_exact(FFT_SIZE).enumerate() {
         output.scatter_strided(residue, 2, values)?;
     }
-    let mut lifts = [Class::new(plan, values, InputOrder::Natural)?];
+    let mut lifts = [Class::new(plan, values, ElementOrder::Natural)?];
     const INTERPOLATION_SCRATCH: usize =
         match OPTIONS.interpolation_requirements(EXTENDED_FFT_SIZE, &[FFT_SIZE]) {
             Ok(required) => required.field_elements,

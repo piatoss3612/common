@@ -1,9 +1,9 @@
 use super::transform::Run;
 use super::{
-    Codelet, CosetDomain, EvaluationLayout, EvaluationView, ExecutionOptions, Executor,
-    ExpansionOrder, ExpansionScaleNormalization, ExpansionScales, FftError, InputOrder,
-    InverseScale, PastaField, Plan, PrimeModulus, ResidueLayout, ScratchRequirements,
-    check_domain_size, check_field_count, check_len, check_prefix, min, reverse,
+    Codelet, CosetDomain, ElementOrder, EvaluationLayout, EvaluationView, ExecutionOptions,
+    Executor, ExpansionOrder, ExpansionScaleNormalization, ExpansionScales, FftError, InverseScale,
+    PastaField, Plan, PrimeModulus, ResidueLayout, ScratchRequirements, check_domain_size,
+    check_field_count, check_length, check_prefix, min, reverse,
 };
 
 /// Caller-selected concurrency across residues and within each base transform.
@@ -259,29 +259,13 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         self,
         output: &mut [PastaField<M>],
     ) -> Result<ExpansionScales<'_, M>, FftError> {
-        check_len("output", output.len(), self.scale_count())?;
-        let mut step = self.extended.shift();
-        for (index, residue) in output
-            .chunks_exact_mut(self.base.domain().size())
-            .enumerate()
-        {
-            let mut power = PastaField::ONE;
-            for (column, value) in residue.iter_mut().enumerate() {
-                *value = power;
-                if column + 1 < self.base.domain().size() {
-                    power = power.mul(&step);
-                }
-            }
-            if index + 1 < self.layout.residues() {
-                step = step.mul(&self.extended.domain().root());
-            }
-        }
-        Ok(ExpansionScales {
-            base_size: self.base.domain().size(),
-            extended: self.extended,
-            normalization: ExpansionScaleNormalization::Coefficients,
-            values: output,
-        })
+        check_length("output", self.scale_count(), output.len())?;
+        ExpansionScales::prepare(
+            self.base.domain().size(),
+            self.extended,
+            ExpansionScaleNormalization::Coefficients,
+            output,
+        )
     }
 
     /// Checks every supplied residue scale without allocating or mutating it.
@@ -303,7 +287,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     }
 
     fn check(self, coefficients: usize, min: usize, output: usize) -> Result<(), FftError> {
-        check_len("output", output, self.extended.size())?;
+        check_length("output", self.extended.size(), output)?;
         check_prefix(coefficients, min, self.base.domain().size())
     }
 
@@ -405,8 +389,8 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
-        check_len("evaluations", evaluations.len(), self.base.domain().size())?;
-        check_len("output", output.len(), self.extended.size())?;
+        check_length("evaluations", self.base.domain().size(), evaluations.len())?;
+        check_length("output", self.extended.size(), output.len())?;
         let required = self.evaluation_scratch(options)?;
         required.check(scratch.len())?;
         if self.extended.shift() == PastaField::ONE && output.len() == evaluations.len() {
@@ -675,7 +659,7 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
                     scale: InverseScale::Normalized,
                     codelet: Codelet::Radix2,
                     twiddles: None,
-                    output_order: InputOrder::BitReversed,
+                    output_order: ElementOrder::BitReversed,
                     factor,
                 }
                 .run(output, first, self.options.max_tasks, self.executor);
@@ -711,7 +695,7 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
                 scale: InverseScale::Normalized,
                 codelet: Codelet::Radix2,
                 twiddles: None,
-                output_order: InputOrder::BitReversed,
+                output_order: ElementOrder::BitReversed,
                 factor,
             }
             .run(output, 2, self.options.max_tasks, self.executor);

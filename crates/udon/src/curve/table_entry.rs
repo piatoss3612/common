@@ -2,7 +2,7 @@
 
 use core::{fmt, marker::PhantomData};
 
-use super::{AffinePoint, CurveError, PastaCurve, ProjectivePoint, is_reduced};
+use super::{AffinePoint, CurveError, PastaCurve, ProjectivePoint};
 use crate::field::PastaField;
 
 /// Exact table length and minimum scratch lengths for curve table preparation.
@@ -188,7 +188,7 @@ impl<C: PastaCurve> CurveTableEntry<C> for PreparedAffinePoint<C> {
         }
     }
     fn valid_cache(&self) -> bool {
-        is_reduced(&self.endomorphism_x) && self.endomorphism_x == self.x.mul(&PastaField::zeta())
+        self.endomorphism_x.is_reduced() && self.endomorphism_x == self.x.mul(&PastaField::zeta())
     }
 }
 
@@ -199,8 +199,8 @@ pub(super) fn check_entry<C: PastaCurve, E: CurveTableEntry<C>>(
     let affine = entry.affine();
     // Reject raw residues before any arithmetic, including cached-coordinate
     // validation. Equality with a valid multiple establishes curve membership.
-    if !is_reduced(&affine.x)
-        || !is_reduced(&affine.y)
+    if !affine.x.is_reduced()
+        || !affine.y.is_reduced()
         || !entry.valid_cache()
         || *expected != affine.to_projective()
     {

@@ -89,7 +89,7 @@ impl<M: PrimeModulus> Domain<M> {
     /// Returns [`FftError::ZeroShift`] when `shift` is zero, or
     /// [`FftError::InvalidShift`] for an unreduced Montgomery representation.
     pub fn coset(self, shift: PastaField<M>) -> Result<CosetDomain<M>, FftError> {
-        if !super::is_reduced(shift) {
+        if !shift.is_reduced() {
             return Err(FftError::InvalidShift);
         }
         let inverse = shift.invert().ok_or(FftError::ZeroShift)?;

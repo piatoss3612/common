@@ -147,10 +147,9 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
         // one more. This bounds scratch independently of the number of windows.
         let mut window_base = base.to_projective();
         for window in entries[..requirements.table_entries - 1].chunks_exact_mut(h) {
-            let mut multiple = window_base;
-            for point in projective_scratch.iter_mut() {
-                *point = multiple;
-                multiple = multiple.add(&window_base);
+            projective_scratch[0] = window_base;
+            for i in 1..h {
+                projective_scratch[i] = projective_scratch[i - 1].add(&window_base);
             }
             batch::normalize(projective_scratch, field_scratch, |index, point| {
                 // A nonzero base in a prime-order group stays nonzero for these
@@ -161,9 +160,9 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
                         .expect("fixed-base entries are nonidentity"),
                 );
             });
-            for _ in 0..description.window_bits {
-                window_base = window_base.double();
-            }
+            // The last multiple is 2^(window_bits - 1) times this window's
+            // base, so one doubling advances to the next window.
+            window_base = projective_scratch[h - 1].double();
         }
         entries[requirements.table_entries - 1] = E::from_affine(
             window_base
@@ -234,13 +233,13 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
         let mut window_base = self.base.to_projective();
         for window in self.entries[..self.entries.len() - 1].chunks_exact(h) {
             let mut expected = window_base;
-            for entry in window {
+            for (i, entry) in window.iter().enumerate() {
                 check_entry(&expected, entry)?;
-                expected = expected.add(&window_base);
+                if i + 1 < h {
+                    expected = expected.add(&window_base);
+                }
             }
-            for _ in 0..self.description.window_bits {
-                window_base = window_base.double();
-            }
+            window_base = expected.double();
         }
         check_entry(&window_base, &self.entries[self.entries.len() - 1])
     }

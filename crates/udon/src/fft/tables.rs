@@ -1,4 +1,4 @@
-use super::{CosetDomain, FftError, PastaField, PrimeModulus, check_domain_size, check_len};
+use super::{CosetDomain, FftError, PastaField, PrimeModulus, check_domain_size, check_length};
 
 /// Lengths of independently optional prepared tables for one domain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -140,11 +140,11 @@ impl<'a, M: PrimeModulus> Tables<'a, M> {
             ("inverse_finish", self.inverse_finish),
         ] {
             if let Some(table) = table {
-                check_len(buffer, table.len(), requirements.twiddles)?;
+                check_length(buffer, requirements.twiddles, table.len())?;
             }
         }
         if let Some(table) = self.inverse_scales {
-            check_len("inverse_scales", table.len(), requirements.inverse_scales)?;
+            check_length("inverse_scales", requirements.inverse_scales, table.len())?;
         }
         Ok(())
     }
@@ -220,10 +220,6 @@ impl<M: PrimeModulus> Default for TablesMut<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> TablesMut<'a, M> {
-    /// Alias for [`Self::prepare`], with the same entries and errors.
-    pub fn prepare_bound(self, domain: CosetDomain<M>) -> Result<BoundTables<'a, M>, FftError> {
-        self.prepare(domain)
-    }
     /// Fills the supplied tables and returns a handle bound to their coset.
     ///
     /// Entries follow the formulas in [`Tables`]. Returns

@@ -1,7 +1,8 @@
 use super::execution::Geometry;
+use super::finish::{Factors, InverseFinish};
 use super::{
     BoundTables, CoefficientView, CosetDomain, ExecutionOptions, Executor, FftError, PastaField,
-    PrimeModulus, ScratchRequirements, Tables, check_len, check_prefix, reverse,
+    PrimeModulus, ScratchRequirements, Tables, check_length, check_prefix, reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
 use crate::field::fft::{
@@ -101,7 +102,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         options: ExecutionOptions,
         scratch_len: usize,
     ) -> Result<usize, FftError> {
-        check_len(buffer, len, self.domain.size())?;
+        check_length(buffer, self.domain.size(), len)?;
         let required = self.scratch_requirements(options)?;
         required.check(scratch_len)?;
         Ok(required.field_elements)
@@ -194,7 +195,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         let input = input.into();
         let extra = input.normalization_factor();
         let input = input.as_slice();
-        check_len("input", input.len(), self.domain.size())?;
+        check_length("input", self.domain.size(), input.len())?;
         let required = self.check("output", output.len(), options, scratch.len())?;
         let first = self.fill_prefix(input, output, self.domain.shift(), None, extra);
         self.run(
@@ -219,7 +220,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
-        check_len("input", input.len(), self.domain.size())?;
+        check_length("input", self.domain.size(), input.len())?;
         let required = self.check("output", output.len(), options, scratch.len())?;
         self.scatter(input, output);
         self.run(
@@ -389,13 +390,41 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         run: Run<'_, '_, M>,
     ) {
         if values.len() == 1 || run.first > values.len() {
+            let scaled = run.normalized
+                && self.tables.inverse_scales.is_some()
+                && matches!(
+                    InverseFinish::select(self.domain, false),
+                    InverseFinish::ScaledInputs
+                );
+            let factors = if scaled {
+                Factors::normalized(self)
+            } else if run.normalized {
+                Factors::untwist(self.domain)
+            } else {
+                Factors::Identity
+            };
+            let mut factor = factors.at(0);
+            let len = values.len();
             for (index, value) in values.iter_mut().enumerate() {
                 if run.normalized {
-                    *value = value.mul(&self.domain.inverse_scale(index));
+                    *value = if scaled {
+                        value.mul(&factor)
+                    } else {
+                        let normalized =
+                            divide_by_power_of_two(*value, self.domain.domain().log_size());
+                        if factor == PastaField::ONE {
+                            normalized
+                        } else {
+                            normalized.mul(&factor)
+                        }
+                    };
                     for lift in run.lifts {
                         if let Some(coefficient) = lift.values.get(index) {
                             *value = value.add(coefficient);
                         }
+                    }
+                    if index + 1 < len {
+                        factor = factors.next(index + 1, factor);
                     }
                 }
                 if let Some(factor) = run.factor {
@@ -405,20 +434,8 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
             return;
         }
         let geometry = options.geometry(values.len());
-        // Division removes the subgroup's general scaling products. For a
-        // cubic shift, pair it with periodic untwisting unless a retained
-        // combined finish table supplies the input factors directly.
-        let finish = if run.normalized && self.domain.shift() == PastaField::ONE {
-            InverseFinish::Subgroup
-        } else if run.normalized
-            && self.domain.inverse_scale_cycle.is_some()
-            && self.tables.inverse_finish.is_none()
-        {
-            InverseFinish::Periodic([
-                PastaField::ONE,
-                self.domain.inverse_shift(),
-                self.domain.inverse_shift().square(),
-            ])
+        let finish = if run.normalized {
+            InverseFinish::select(self.domain, self.tables.inverse_finish.is_some())
         } else {
             InverseFinish::ScaledInputs
         };
@@ -532,13 +549,6 @@ struct Kernel<'a, 'b, 'c, M: PrimeModulus> {
     plan: Plan<'a, M>,
     run: Run<'b, 'c, M>,
     finish: InverseFinish<M>,
-}
-
-#[derive(Clone, Copy)]
-enum InverseFinish<M: PrimeModulus> {
-    Subgroup,
-    Periodic([PastaField<M>; 3]),
-    ScaledInputs,
 }
 
 impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {

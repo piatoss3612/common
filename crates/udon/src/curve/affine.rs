@@ -3,7 +3,7 @@
 use bento::const_arithmetic::{m255, u256};
 use core::{fmt, marker::PhantomData};
 
-use super::{AffinePoint, PastaCurve, Point, ProjectivePoint, curve_rhs, is_reduced};
+use super::{AffinePoint, PastaCurve, Point, ProjectivePoint, curve_rhs};
 use crate::field::{PastaField, PrimeModulus};
 
 impl<C: PastaCurve> fmt::Debug for AffinePoint<C> {
@@ -37,7 +37,7 @@ impl<C: PastaCurve> AffinePoint<C> {
     /// also rejects unreduced residues read through POD storage, before doing
     /// field arithmetic.
     pub fn from_xy(x: PastaField<C::Base>, y: PastaField<C::Base>) -> Option<Self> {
-        if !is_reduced(&x) || !is_reduced(&y) || y.square() != curve_rhs(&x) {
+        if !x.is_reduced() || !y.is_reduced() || y.square() != curve_rhs(&x) {
             return None;
         }
         Some(Self {
@@ -100,12 +100,9 @@ impl<C: PastaCurve> AffinePoint<C> {
     /// preparation for repeated multiplication of the same base.
     pub fn mul_projective(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
         // Short scalars use the binary ladder without paying for table setup.
-        if scalar
-            .to_canonical_uint()
-            .highest_set_bit()
-            .is_none_or(|high| high < 64)
-        {
-            super::scalar::multiply(scalar, |point| point.add_mixed(self))
+        let scalar = scalar.to_canonical_uint();
+        if scalar.highest_set_bit().is_none_or(|high| high < 64) {
+            super::scalar::multiply_canonical(scalar, |point| point.add_mixed(self))
         } else {
             super::eisenstein::multiply_once(&self.to_projective(), scalar)
         }

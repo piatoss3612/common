@@ -1,6 +1,7 @@
 //! Retained control for measuring the inversion endpoint optimization.
 
 use super::*;
+use crate::test_support::field_samples;
 
 // The former two-lane schedule, including its multiplications by one and
 // unused final updates. Keeping it here allows a same-process comparison.
@@ -31,7 +32,7 @@ fn compare<M: PrimeModulus>(c: &mut criterion::Criterion, name: &str) {
         let mut old = values.clone();
         let mut new = values.clone();
         legacy(&mut old, &mut prefix);
-        super::super::batch::invert_nonzero(&mut new, &mut prefix);
+        crate::field::invert_nonzero(&mut new, &mut prefix);
         assert_eq!(old, new);
         for (v, inverse) in values.iter().zip(&new) {
             assert_eq!(v.mul(inverse), PastaField::ONE);
@@ -46,7 +47,7 @@ fn compare<M: PrimeModulus>(c: &mut criterion::Criterion, name: &str) {
         });
         group.bench_function(criterion::BenchmarkId::new("endpoints", n), |b| {
             b.iter(|| {
-                super::super::batch::invert_nonzero(black_box(&mut new), black_box(&mut prefix));
+                crate::field::invert_nonzero(black_box(&mut new), black_box(&mut prefix));
                 black_box(&new);
             })
         });

@@ -24,6 +24,7 @@ fn batches<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
                 .unwrap()
         })
         .collect();
+    let cached: Vec<_> = bases.iter().map(PreparedAffinePoint::from_affine).collect();
     for n in [0, 1, 7, 8, 15, 31, 32, 33, 63, 64, 65, 99, 128, 129] {
         let r = EisensteinTableBatch::<C, E>::requirements(n).unwrap();
         let mut entries = vec![E::from_affine(&g); r.table_entries];
@@ -40,6 +41,17 @@ fn batches<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
                 &Pool,
             )
             .unwrap();
+            let expected = tables.as_slice().to_vec();
+            let tables = EisensteinTableBatch::prepare(
+                &cached[..n],
+                &mut entries,
+                &mut projective,
+                &mut field,
+                budget,
+                &Pool,
+            )
+            .unwrap();
+            assert_eq!(tables.as_slice(), expected);
             assert_eq!(projective[r.projective_scratch], ProjectivePoint::GENERATOR);
             assert_eq!(field[r.field_scratch], PastaField::ONE);
             EisensteinTableBatch::<C, E>::bind(tables.as_slice()).unwrap();

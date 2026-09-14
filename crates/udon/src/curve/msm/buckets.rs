@@ -1,9 +1,10 @@
 //! Affine bucket reduction with one shared inversion per pair-tree level.
 
+use crate::field::invert_nonzero;
 use core::marker::PhantomData;
 
 use crate::{
-    curve::{AffinePoint, PastaCurve, ProjectivePoint, batch::invert_nonzero},
+    curve::{AffinePoint, PastaCurve, ProjectivePoint},
     field::PastaField,
 };
 

@@ -261,12 +261,9 @@ impl<C: PastaCurve> ProjectivePoint<C> {
             return Self::IDENTITY;
         }
         // Short scalars use the binary ladder without paying for table setup.
-        if scalar
-            .to_canonical_uint()
-            .highest_set_bit()
-            .is_some_and(|high| high < 64)
-        {
-            super::scalar::multiply(scalar, |point| point.add(self))
+        let scalar = scalar.to_canonical_uint();
+        if scalar.highest_set_bit().is_some_and(|high| high < 64) {
+            super::scalar::multiply_canonical(scalar, |point| point.add(self))
         } else {
             super::eisenstein::multiply_once(self, scalar)
         }

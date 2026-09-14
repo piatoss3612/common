@@ -1,23 +1,12 @@
+use super::finish::InverseFinish;
 use super::stages::StageKernel;
 use super::transform::Run;
 use super::{
-    CoefficientView, ExecutionOptions, Executor, FftError, InputOrder, PastaField, Plan,
-    PowerTable, PrimeModulus, ScratchRequirements, SerialExecutor, TwiddleTable, check_domain_size,
-    check_field_count, check_len, min, reverse,
+    CoefficientView, ElementOrder, ExecutionOptions, Executor, FftError, InverseScale, PastaField,
+    Plan, PowerTable, PrimeModulus, ScratchRequirements, SerialExecutor, TwiddleTable,
+    check_domain_size, check_field_count, check_length, min, reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-
-/// Whether an inverse divides by the domain size.
-///
-/// Both policies remove the coset shift as defined by [`Plan`].
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum InverseScale {
-    /// Return the polynomial's coefficients.
-    #[default]
-    Normalized,
-    /// Return each coefficient multiplied by the domain size.
-    Unscaled,
-}
 
 /// Mathematical transform direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -58,9 +47,9 @@ pub struct TransformRequest {
     /// Declared input support; a prefix requires natural input order.
     pub support: InputSupport,
     /// Order of coefficients or evaluations in the input.
-    pub input_order: InputOrder,
+    pub input_order: ElementOrder,
     /// Desired order of coefficients or evaluations in the output.
-    pub output_order: InputOrder,
+    pub output_order: ElementOrder,
     /// Inverse-size factor; forward requests must use [`InverseScale::Normalized`].
     pub inverse_scale: InverseScale,
     /// Whether input storage must be preserved.
@@ -73,8 +62,8 @@ impl TransformRequest {
         Self {
             direction,
             support: InputSupport::Full,
-            input_order: InputOrder::Natural,
-            output_order: InputOrder::Natural,
+            input_order: ElementOrder::Natural,
+            output_order: ElementOrder::Natural,
             inverse_scale: InverseScale::Normalized,
             input_policy: InputPolicy::Disposable,
         }
@@ -272,9 +261,11 @@ pub struct OperationDescription {
 impl OperationDescription {
     /// Checks the request and computes storage for a retained-table byte count.
     ///
-    /// Count every borrowed table slice, even when slices share backing storage
-    /// or the selected backend does not use them. No domain construction or
-    /// executor is needed.
+    /// Count each retained table slice separately, even when slices share
+    /// backing storage or the selected backend leaves them unused. This query
+    /// uses the supplied count unchanged; [`Plan::configure`] determines which
+    /// inverse-normalization tables to retain before supplying its count.
+    /// No domain construction or executor is needed.
     ///
     /// Returns [`FftError::InvalidPrefix`] for a prefix longer than `size`, or
     /// [`FftError::InvalidExecution`] for a prefix in bit-reversed input order,
@@ -304,7 +295,7 @@ impl OperationDescription {
             });
         }
         if matches!(self.request.support, InputSupport::Prefix(_))
-            && matches!(self.request.input_order, InputOrder::BitReversed)
+            && matches!(self.request.input_order, ElementOrder::BitReversed)
             || matches!(self.request.direction, Direction::Forward)
                 && matches!(self.request.inverse_scale, InverseScale::Unscaled)
         {
@@ -324,7 +315,7 @@ impl OperationDescription {
                 if blocked > 0
                     && blocked <= self.strategy.budget.scratch_fields
                     && matches!(self.strategy.codelet, Codelet::Radix2)
-                    && matches!(self.request.output_order, InputOrder::Natural)
+                    && matches!(self.request.output_order, ElementOrder::Natural)
                 {
                     Backend::Blocked
                 } else {
@@ -408,6 +399,17 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     /// [`FftError::SizeOverflow`] if the plan's retained table byte count overflows.
     /// Tables follow the module's [validation contract](super); configuration
     /// does not rescan their entries.
+    ///
+    /// Before checking the table-byte ceiling, the returned operation omits
+    /// [`Tables::inverse_finish`](super::Tables::inverse_finish) and
+    /// [`Tables::inverse_scales`](super::Tables::inverse_scales) for forward
+    /// requests, unscaled inverses, and domains with shift one. Other normalized
+    /// inverses retain `inverse_finish` only if a permitted execution path ends
+    /// in a radix-2 butterfly. For a shift of order three, `inverse_scales` is
+    /// retained only alongside `inverse_finish`; other shifts retain it for
+    /// coefficient scaling. All remaining table slices count toward the ceiling,
+    /// including unused forward or inverse twiddles. The original plan can be
+    /// reused with all its tables.
     pub fn configure(
         self,
         request: TransformRequest,
@@ -418,9 +420,48 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
             request,
             strategy,
         };
-        let required = description.requirements(self.tables.retained_bytes()?)?;
+        let backend = description.requirements(0)?.backend;
+        let mut plan = self;
+        let radix = if backend == Backend::Blocked {
+            2
+        } else {
+            match strategy.codelet {
+                Codelet::Radix2 => 2,
+                Codelet::Radix4 => 4,
+                Codelet::Radix8 => 8,
+            }
+        };
+        // A radix-4/8 codelet can finish the whole transform. Starting at a
+        // later stage bypasses that codelet; skipping every stage leaves only
+        // coefficient scaling, which cannot use combined butterfly factors.
+        let terminal_butterfly = |first| {
+            first <= description.size && (first != 2 || description.size > radix || radix == 2)
+        };
+        let first = match request.support {
+            InputSupport::Full => 2,
+            InputSupport::Prefix(len) => 2 * (description.size / len.max(1).next_power_of_two()),
+        };
+        // Separate-output prefixes skip identity stages. Disposable execution
+        // also permits the in-place path, which starts at the first stage.
+        let uses_combined = terminal_butterfly(first)
+            || request.input_policy == InputPolicy::Disposable && terminal_butterfly(2);
+        let normalized = request.direction == Direction::Inverse
+            && request.inverse_scale == InverseScale::Normalized;
+        if !normalized || !uses_combined {
+            plan.tables.inverse_finish = None;
+        }
+        if !normalized
+            || !matches!(
+                InverseFinish::select(plan.domain, plan.tables.inverse_finish.is_some()),
+                InverseFinish::ScaledInputs
+            )
+        {
+            plan.tables.inverse_finish = None;
+            plan.tables.inverse_scales = None;
+        }
+        let required = description.requirements(plan.tables.retained_bytes()?)?;
         Ok(PreparedOperation {
-            plan: self,
+            plan,
             description,
             required,
             twiddles: None,
@@ -441,7 +482,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     }
     /// Replaces natural coefficients with bit-reversed evaluations without scratch.
     ///
-    /// Output uses [`InputOrder::BitReversed`]. `values` must have the domain size
+    /// Output uses [`ElementOrder::BitReversed`]. `values` must have the domain size
     /// or this returns [`FftError::LengthMismatch`]. A zero `max_tasks` returns
     /// [`FftError::InvalidExecution`]; table accounting errors follow
     /// [`Self::configure`].
@@ -452,7 +493,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         executor: &E,
     ) -> Result<(), FftError> {
         let mut request = TransformRequest::new(Direction::Forward);
-        request.output_order = InputOrder::BitReversed;
+        request.output_order = ElementOrder::BitReversed;
         self.configure(request, stage_strategy(max_tasks))?
             .execute(values, executor, &mut [])
     }
@@ -531,15 +572,15 @@ struct CoefficientPowers<M: PrimeModulus> {
     shift: PastaField<M>,
     extra: PastaField<M>,
     ratios: [PastaField<M>; 32],
-    order: InputOrder,
+    order: ElementOrder,
     log_size: u32,
 }
 
 impl<M: PrimeModulus> CoefficientPowers<M> {
-    fn new(domain: super::CosetDomain<M>, order: InputOrder) -> Self {
+    fn new(domain: super::CosetDomain<M>, order: ElementOrder) -> Self {
         let mut ratios = [PastaField::ONE; 32];
         let log_size = domain.domain().log_size();
-        if order == InputOrder::BitReversed && domain.shift() != PastaField::ONE {
+        if order == ElementOrder::BitReversed && domain.shift() != PastaField::ONE {
             let mut reciprocal = [PastaField::ONE; 32];
             let mut power = domain.shift();
             let mut inverse = domain.inverse_shift();
@@ -568,7 +609,7 @@ impl<M: PrimeModulus> CoefficientPowers<M> {
         if self.shift == PastaField::ONE {
             return PastaField::ONE;
         }
-        let degree = if self.order == InputOrder::Natural {
+        let degree = if self.order == ElementOrder::Natural {
             index
         } else {
             reverse(index, self.log_size)
@@ -579,7 +620,7 @@ impl<M: PrimeModulus> CoefficientPowers<M> {
         if self.shift == PastaField::ONE {
             return power;
         }
-        power.mul(if self.order == InputOrder::Natural {
+        power.mul(if self.order == ElementOrder::Natural {
             &self.shift
         } else {
             &self.ratios[index.trailing_ones() as usize]
@@ -701,10 +742,10 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         {
             return Err(FftError::InvalidTables);
         }
-        check_len(
+        check_length(
             "forward_scales",
-            table.as_slice().len(),
             self.plan.domain.size(),
+            table.as_slice().len(),
         )?;
         self.forward_scales = Some(table);
         self.refresh()?;
@@ -724,20 +765,20 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         Ok(())
     }
     fn check(self, output: usize, scratch: usize) -> Result<(), FftError> {
-        check_len("output", output, self.required.output_fields)?;
+        check_length("output", self.required.output_fields, output)?;
         ScratchRequirements {
             field_elements: self.required.scratch_fields,
         }
         .check(scratch)
     }
-    fn working_order(self) -> InputOrder {
+    fn working_order(self) -> ElementOrder {
         if self.description.request.direction == Direction::Forward
-            && self.description.request.output_order == InputOrder::BitReversed
+            && self.description.request.output_order == ElementOrder::BitReversed
             && self.required.backend == Backend::InPlace
         {
-            InputOrder::Natural
+            ElementOrder::Natural
         } else {
-            InputOrder::BitReversed
+            ElementOrder::BitReversed
         }
     }
     /// Executes in place, consuming the input.
@@ -782,7 +823,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
-        check_len("input", input.len(), self.required.input_fields)?;
+        check_length("input", self.required.input_fields, input.len())?;
         self.check(output.len(), scratch.len())?;
         let first = self.initialize(input, output, executor, PastaField::ONE);
         self.run(output, first, executor, scratch, None);
@@ -822,10 +863,10 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         scratch_len: usize,
     ) -> Result<(), FftError> {
         let request = self.description.request;
-        if request.direction != Direction::Forward || request.input_order != InputOrder::Natural {
+        if request.direction != Direction::Forward || request.input_order != ElementOrder::Natural {
             return Err(FftError::InvalidExecution);
         }
-        check_len("input", input.as_slice().len(), self.required.input_fields)?;
+        check_length("input", self.required.input_fields, input.as_slice().len())?;
         self.check(output_len, scratch_len)
     }
 
@@ -844,8 +885,8 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         let layout = match self.description.request.output_order {
-            InputOrder::Natural => super::EvaluationLayout::Natural,
-            InputOrder::BitReversed => super::EvaluationLayout::BitReversed,
+            ElementOrder::Natural => super::EvaluationLayout::Natural,
+            ElementOrder::BitReversed => super::EvaluationLayout::BitReversed,
         };
         if self.description.request.direction != Direction::Forward
             || !factor.domain().same_domain(self.plan.domain)
@@ -853,7 +894,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         {
             return Err(FftError::InvalidLayout);
         }
-        check_len("input", input.len(), self.required.input_fields)?;
+        check_length("input", self.required.input_fields, input.len())?;
         self.check(output.len(), scratch.len())?;
         let first = self.initialize(input, output, executor, PastaField::ONE);
         self.run(output, first, executor, scratch, Some(factor.as_slice()));
@@ -876,8 +917,8 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
     ) -> Result<(), FftError> {
         self.check_coefficients(input, output.len(), scratch.len())?;
         let layout = match self.description.request.output_order {
-            InputOrder::Natural => super::EvaluationLayout::Natural,
-            InputOrder::BitReversed => super::EvaluationLayout::BitReversed,
+            ElementOrder::Natural => super::EvaluationLayout::Natural,
+            ElementOrder::BitReversed => super::EvaluationLayout::BitReversed,
         };
         if !factor.domain().same_domain(self.plan.domain) || factor.layout() != layout {
             return Err(FftError::InvalidLayout);
@@ -895,7 +936,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
     fn scale_input<E: Executor>(
         self,
         values: &mut [PastaField<M>],
-        order: InputOrder,
+        order: ElementOrder,
         executor: &E,
     ) {
         if self.plan.domain.shift() == PastaField::ONE && self.forward_scales.is_none() {
@@ -916,7 +957,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
     fn scale_input_with<E: Executor, S: CoefficientScaling<M>>(
         self,
         values: &mut [PastaField<M>],
-        order: InputOrder,
+        order: ElementOrder,
         executor: &E,
         scales: S,
     ) {
@@ -932,7 +973,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
                 let count = values.len();
                 for (offset, value) in values.iter_mut().enumerate() {
                     let index = start + offset;
-                    let degree = if order == InputOrder::BitReversed {
+                    let degree = if order == ElementOrder::BitReversed {
                         reverse(index, self.plan.domain.domain().log_size())
                     } else {
                         index
@@ -957,7 +998,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         // Sparse DIT initialization broadcasts the nonzero support through
         // identity-only stages, equally for forward and inverse roots.
         if matches!(request.support, InputSupport::Prefix(_))
-            && self.working_order() == InputOrder::BitReversed
+            && self.working_order() == ElementOrder::BitReversed
         {
             return self.plan.fill_prefix(
                 input,
@@ -1020,12 +1061,12 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
             output.fill(PastaField::ZERO);
             let mut seed = scales.seed(0);
             for (index, value) in input.iter().enumerate() {
-                let degree = if request.input_order == InputOrder::Natural {
+                let degree = if request.input_order == ElementOrder::Natural {
                     index
                 } else {
                     reverse(index, log_size)
                 };
-                let destination = if self.working_order() == InputOrder::Natural {
+                let destination = if self.working_order() == ElementOrder::Natural {
                     degree
                 } else {
                     reverse(degree, log_size)
@@ -1052,12 +1093,12 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
                     let count = output.len();
                     for (offset, output) in output.iter_mut().enumerate() {
                         let index = start + offset;
-                        let degree = if self.working_order() == InputOrder::Natural {
+                        let degree = if self.working_order() == ElementOrder::Natural {
                             index
                         } else {
                             reverse(index, log_size)
                         };
-                        let source = if request.input_order == InputOrder::Natural {
+                        let source = if request.input_order == ElementOrder::Natural {
                             degree
                         } else {
                             reverse(degree, log_size)
@@ -1088,7 +1129,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         let kernel = StageKernel {
             plan: self.plan,
             inverse: request.direction == Direction::Inverse,
-            dif: self.working_order() == InputOrder::Natural,
+            dif: self.working_order() == ElementOrder::Natural,
             scale: request.inverse_scale,
             codelet: self.description.strategy.codelet,
             twiddles: self.twiddles,
@@ -1098,7 +1139,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         match self.required.backend {
             Backend::InPlace => kernel.run(values, first, self.required.max_tasks, executor),
             Backend::Blocked => {
-                let fused_factor = factor.filter(|_| request.output_order == InputOrder::Natural);
+                let fused_factor = factor.filter(|_| request.output_order == ElementOrder::Natural);
                 let mut run = if request.direction == Direction::Forward {
                     fused_factor.map_or_else(
                         || Run::forward(first),
@@ -1116,7 +1157,7 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
                 {
                     kernel.untwist(values, self.required.max_tasks, executor);
                 }
-                if request.output_order == InputOrder::BitReversed {
+                if request.output_order == ElementOrder::BitReversed {
                     self.plan.permute(values);
                 }
                 if let Some(factor) = factor.filter(|_| fused_factor.is_none()) {

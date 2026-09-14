@@ -3,14 +3,21 @@ use super::*;
 fn batches<C: PastaCurve>() {
     let generator = Point::<C>::GENERATOR;
     for size in [0, 1, 2, 3, 7, 8, 17, 32] {
-        for identities in [false, true] {
+        for pattern in 0..6 {
             let expected: Vec<_> = (0..size)
                 .map(|i| {
-                    if identities && i % 3 != 0 {
+                    if match pattern {
+                        0 => false,
+                        1 => i % 3 != 0,
+                        2 => i % 2 == 0,
+                        3 => i % 2 != 0,
+                        4 => i + 1 != size,
+                        _ => i != 1,
+                    } {
                         Point::IDENTITY
                     } else {
                         generator
-                            .mul_projective(&PastaField::from_u64(i as u64))
+                            .mul_projective(&PastaField::from_u64(i as u64 + 1))
                             .to_point()
                     }
                 })

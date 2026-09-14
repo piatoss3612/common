@@ -1,5 +1,6 @@
 use super::*;
 use crate::field::{BatchInversionError, batch_invert, batch_invert_groups};
+use crate::test_support::field_samples;
 
 fn exercise<M: PrimeModulus>() {
     let samples = samples::<M>(37);
@@ -98,4 +99,30 @@ fn group_boundaries<M: PrimeModulus>() {
 fn group_boundaries_preserve_zero_positions() {
     group_boundaries::<PallasBase>();
     group_boundaries::<PallasScalar>();
+}
+
+fn inversion_endpoints<M: PrimeModulus>() {
+    let values: Vec<_> = field_samples::<M>()
+        .filter(|x| !x.is_zero())
+        .take(257)
+        .collect();
+    for n in [0, 1, 2, 3, 4, 7, 8, 31, 32, 127, 128, 257] {
+        let mut input = values[..n].to_vec();
+        let mut prefix = vec![PastaField::from_u64(91); n + 1];
+        crate::field::invert_nonzero(&mut input, &mut prefix);
+        assert_eq!(prefix[n], PastaField::from_u64(91));
+        for (value, inverse) in values.iter().zip(&input) {
+            assert_eq!(value.mul(inverse), PastaField::ONE);
+        }
+        // Reuse dirty prefixes with unit denominators and both lane parities.
+        input.fill(PastaField::ONE);
+        crate::field::invert_nonzero(&mut input, &mut prefix);
+        assert!(input.iter().all(|x| *x == PastaField::ONE));
+    }
+}
+
+#[test]
+fn batch_inversion_handles_lane_endpoints() {
+    inversion_endpoints::<crate::field::PallasBase>();
+    inversion_endpoints::<crate::field::PallasScalar>();
 }

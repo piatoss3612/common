@@ -43,7 +43,7 @@ A singleton calls field inversion directly. This change concerns the nonzero
 denominator helper; the public identity-preserving normalization helper has a
 separate schedule.
 
-The [retained control](../crates/udon/src/curve/tests/batch_inversion.rs)
+The [retained control](../crates/udon/src/field/tests/batch_inversion.rs)
 compares both schedules in the same process on the same nonzero inputs,
 alternating each vector with its inverse. It uses 30 samples, 0.3 seconds of
 warmup, and one second of measurement. Times below are nanoseconds; the complete

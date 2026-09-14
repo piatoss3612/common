@@ -1,5 +1,5 @@
 use super::{
-    CosetDomain, Domain, FftError, PastaField, PrimeModulus, check_domain_size, check_len,
+    CosetDomain, Domain, FftError, PastaField, PrimeModulus, check_domain_size, check_length,
 };
 
 /// Coefficient normalization expected by a residue power table.
@@ -68,10 +68,10 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
         normalization: ExpansionScaleNormalization,
         values: &'a [PastaField<M>],
     ) -> Result<Self, FftError> {
-        check_len(
+        check_length(
             "scales",
-            values.len(),
             Self::requirements(base_size, extended.size())?,
+            values.len(),
         )?;
         Ok(Self {
             base_size,
@@ -109,10 +109,10 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
         normalization: ExpansionScaleNormalization,
         values: &'a mut [PastaField<M>],
     ) -> Result<Self, FftError> {
-        check_len(
+        check_length(
             "scales",
-            values.len(),
             Self::requirements(base_size, extended.size())?,
+            values.len(),
         )?;
         let first = match normalization {
             ExpansionScaleNormalization::Coefficients => PastaField::ONE,
@@ -120,15 +120,10 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
                 Domain::<M>::for_size(base_size)?.size_inverse()
             }
         };
-        let mut step = extended.shift();
-        for residue in values.chunks_exact_mut(base_size) {
-            let mut power = first;
-            for value in residue {
-                *value = power;
-                power = power.mul(&step);
-            }
-            step = step.mul(&extended.domain().root());
-        }
+        visit_scales(base_size, extended, first, |index, power| {
+            values[index] = power;
+            Ok(())
+        })?;
         Ok(Self {
             base_size,
             extended,
@@ -147,17 +142,13 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
                 Domain::<M>::for_size(self.base_size)?.size_inverse()
             }
         };
-        let mut step = self.extended.shift();
-        for residue in self.values.chunks_exact(self.base_size) {
-            let mut power = first;
-            for value in residue {
-                if value.montgomery_limbs() != power.montgomery_limbs() {
-                    return Err(FftError::InvalidTables);
-                }
-                power = power.mul(&step);
+        visit_scales(self.base_size, self.extended, first, |index, power| {
+            // Compare representation before doing any arithmetic on imported data.
+            if self.values[index].montgomery_limbs() != power.montgomery_limbs() {
+                return Err(FftError::InvalidTables);
             }
-            step = step.mul(&self.extended.domain().root());
-        }
+            Ok(())
+        })?;
         Ok(self)
     }
 
@@ -239,4 +230,27 @@ impl ExpansionScaleArtifact {
         ExpansionScales::<M>::requirements(base_size, extended.size())?;
         Ok(())
     }
+}
+
+fn visit_scales<M: PrimeModulus>(
+    base_size: usize,
+    extended: CosetDomain<M>,
+    first: PastaField<M>,
+    mut visit: impl FnMut(usize, PastaField<M>) -> Result<(), FftError>,
+) -> Result<(), FftError> {
+    let mut step = extended.shift();
+    let residues = extended.size() / base_size;
+    for residue in 0..residues {
+        let mut power = first;
+        for column in 0..base_size {
+            visit(residue * base_size + column, power)?;
+            if column + 1 < base_size {
+                power = power.mul(&step);
+            }
+        }
+        if residue + 1 < residues {
+            step = step.mul(&extended.domain().root());
+        }
+    }
+    Ok(())
 }

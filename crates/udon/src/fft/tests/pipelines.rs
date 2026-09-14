@@ -211,7 +211,7 @@ fn expansions<M: PrimeModulus>() {
                             }
                         }
                     }
-                    for order in [InputOrder::Natural, InputOrder::BitReversed] {
+                    for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
                         let mut output = vec![PastaField::ONE; base.domain().size()];
                         for index in 0..expansion.layout().residues() {
                             let residue = expansion.residue(index, order).unwrap();
@@ -232,7 +232,7 @@ fn expansions<M: PrimeModulus>() {
                                     &mut scratch,
                                 )
                                 .unwrap();
-                            let layout = if order == InputOrder::Natural {
+                            let layout = if order == ElementOrder::Natural {
                                 EvaluationLayout::Natural
                             } else {
                                 EvaluationLayout::BitReversed
@@ -384,7 +384,7 @@ fn short_bit_reversed_residues_restore_fields_on_panic() {
     let base = Plan::without_tables(Domain::<PallasBase>::new(8).unwrap().subgroup());
     let domain = Domain::new(11).unwrap().coset(Fp::zeta()).unwrap();
     let expansion = Expansion::new(base, domain, None).unwrap();
-    let residue = expansion.residue(5, InputOrder::BitReversed).unwrap();
+    let residue = expansion.residue(5, ElementOrder::BitReversed).unwrap();
     let input = inputs(10);
     let expected = direct(&input, residue.domain());
     let options = expansion_strategy().transform;
@@ -649,10 +649,10 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
         let mut a = original.clone();
         let mut b = original.clone();
         let mut scratch = vec![Fp::ONE; fields];
-        let mut output_class = Class::new(plan, &mut output, InputOrder::Natural).unwrap();
+        let mut output_class = Class::new(plan, &mut output, ElementOrder::Natural).unwrap();
         let mut lifts = [
-            Class::new(plan, &mut a, InputOrder::Natural).unwrap(),
-            Class::new(other, &mut b, InputOrder::Natural).unwrap(),
+            Class::new(plan, &mut a, ElementOrder::Natural).unwrap(),
+            Class::new(other, &mut b, ElementOrder::Natural).unwrap(),
         ];
         let result = if sum {
             interpolate_sum(
@@ -696,10 +696,10 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
             let mut output = original.clone();
             let mut a = original.clone();
             let mut b = original.clone();
-            let mut output_class = Class::new(plan, &mut output, InputOrder::Natural).unwrap();
+            let mut output_class = Class::new(plan, &mut output, ElementOrder::Natural).unwrap();
             let mut lifts = [
-                Class::new(plan, &mut a, InputOrder::Natural).unwrap(),
-                Class::new(other, &mut b, InputOrder::Natural).unwrap(),
+                Class::new(plan, &mut a, ElementOrder::Natural).unwrap(),
+                Class::new(other, &mut b, ElementOrder::Natural).unwrap(),
             ];
             let executor = FailAt {
                 calls: AtomicUsize::new(0),
@@ -796,9 +796,9 @@ fn interpolation<M: PrimeModulus>() {
                         Plan::without_tables(domain),
                         values,
                         if i % 2 == 0 {
-                            InputOrder::BitReversed
+                            ElementOrder::BitReversed
                         } else {
-                            InputOrder::Natural
+                            ElementOrder::Natural
                         },
                     )
                     .unwrap()
@@ -807,7 +807,7 @@ fn interpolation<M: PrimeModulus>() {
             let mut class = Class::new(
                 Plan::without_tables(output_domain),
                 &mut output,
-                InputOrder::Natural,
+                ElementOrder::Natural,
             )
             .unwrap();
             let fields = if mode == 1 {
@@ -858,4 +858,75 @@ fn interpolation<M: PrimeModulus>() {
 fn equal_size_parallel_and_destructive_interpolation_match_polynomial_sums() {
     interpolation::<PallasBase>();
     interpolation::<PallasScalar>();
+}
+
+#[test]
+fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
+    fn check<M: PrimeModulus>() {
+        let base = Plan::without_tables(Domain::<M>::new(5).unwrap().subgroup());
+        let input = inputs(base.domain().size());
+        for normalization in [
+            ExpansionScaleNormalization::Coefficients,
+            ExpansionScaleNormalization::UnscaledInverse,
+        ] {
+            let mut scales = vec![PastaField::ZERO; input.len()];
+            let scales =
+                ExpansionScales::prepare(input.len(), base.domain(), normalization, &mut scales)
+                    .unwrap();
+            let expansion = Expansion::new(base, base.domain(), None)
+                .unwrap()
+                .with_scales(scales)
+                .unwrap();
+            for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
+                let operation = expansion
+                    .configure(order, ExpansionStorage::ReuseOutput, expansion_strategy())
+                    .unwrap();
+                let count = operation.requirements().scratch_fields;
+                assert!(count > 0);
+                let mut scratch = vec![PastaField::ONE; count + 1];
+                let mut output = vec![PastaField::ONE; input.len()];
+                let joins = CountJoins::default();
+                assert!(matches!(
+                    operation.execute_into(
+                        &input[..input.len() - 1],
+                        &mut output,
+                        &joins,
+                        &mut scratch
+                    ),
+                    Err(FftError::LengthMismatch {
+                        buffer: "input",
+                        ..
+                    })
+                ));
+                assert!(matches!(
+                    operation.execute_into(
+                        &input,
+                        &mut output[..input.len() - 1],
+                        &joins,
+                        &mut scratch
+                    ),
+                    Err(FftError::LengthMismatch {
+                        buffer: "output",
+                        ..
+                    })
+                ));
+                assert!(matches!(
+                    operation.execute_into(&input, &mut output, &joins, &mut scratch[..count - 1]),
+                    Err(FftError::ScratchTooSmall { .. })
+                ));
+                assert!(output.iter().all(|v| *v == PastaField::ONE));
+                operation
+                    .execute_into(&input, &mut output, &joins, &mut scratch)
+                    .unwrap();
+                let view = operation.view(&output).unwrap();
+                for (i, value) in input.iter().enumerate() {
+                    assert_eq!(view.get(i), Some(value));
+                }
+                assert_eq!(joins.take(), 0);
+                assert!(scratch.iter().all(|v| *v == PastaField::ONE));
+            }
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
 }

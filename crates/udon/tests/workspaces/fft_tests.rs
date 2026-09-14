@@ -6,9 +6,9 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use zakura_udon::{
     exec::{Executor, SerialExecutor, TaskBudget, for_each_mut},
     fft::{
-        self, Class, ClassState, Domain, ExecutionOptions, Expansion, ExpansionOrder,
-        ExpansionStorage, ExpansionStrategy, InputOrder, InterpolationOptions, InverseScale,
-        ResourceBudget, interpolate_classes_parallel, reference,
+        self, Class, ClassState, Domain, ElementOrder, ExecutionOptions, Expansion, ExpansionOrder,
+        ExpansionStorage, ExpansionStrategy, InterpolationOptions, InverseScale, ResourceBudget,
+        interpolate_classes_parallel, reference,
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -322,8 +322,8 @@ fn incomplete_producers_and_panics_require_refill() {
         vec![PastaField::ZERO; options.requirements(16, &[16]).unwrap().scratch_fields];
     {
         storage.fill(PastaField::ONE);
-        let mut output = Class::new(plan, &mut storage, InputOrder::Natural).unwrap();
-        let mut lifts = [Class::new(plan, &mut lift_storage, InputOrder::Natural).unwrap()];
+        let mut output = Class::new(plan, &mut storage, ElementOrder::Natural).unwrap();
+        let mut lifts = [Class::new(plan, &mut lift_storage, ElementOrder::Natural).unwrap()];
         assert!(
             catch_unwind(AssertUnwindSafe(|| {
                 interpolate_classes_parallel(
@@ -352,8 +352,8 @@ fn incomplete_producers_and_panics_require_refill() {
     }
     storage.fill(PastaField::ONE);
     lift_storage.fill(PastaField::ONE);
-    let mut output = Class::new(plan, &mut storage, InputOrder::Natural).unwrap();
-    let mut lifts = [Class::new(plan, &mut lift_storage, InputOrder::Natural).unwrap()];
+    let mut output = Class::new(plan, &mut storage, ElementOrder::Natural).unwrap();
+    let mut lifts = [Class::new(plan, &mut lift_storage, ElementOrder::Natural).unwrap()];
     interpolate_classes_parallel(
         &mut output,
         &mut lifts,

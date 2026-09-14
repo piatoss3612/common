@@ -8,6 +8,7 @@ pub(super) use std::{vec, vec::Vec};
 
 mod arithmetic;
 mod batch;
+mod batch_inversion;
 mod constants;
 mod encoding;
 mod kernels;

@@ -7,10 +7,10 @@
 
 use super::{
     AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, PastaCurve,
-    PreparedAffinePoint, ProjectivePoint, batch, check_length, check_scratch, glv_decompose,
+    PreparedAffinePoint, ProjectivePoint, batch, check_length, check_scratch,
     table_entry::check_entry,
 };
-use crate::field::PastaField;
+use crate::field::{CanonicalUint, PastaField};
 use core::marker::PhantomData;
 
 pub(super) const MAX_DIGITS: usize = 132;
@@ -36,7 +36,15 @@ impl<C: PastaCurve> EisensteinScalar<C> {
     /// The scalar must satisfy [`PastaField`]'s reduced-residue invariant.
     /// Violations remain memory-safe but can cause panics or incorrect results.
     pub fn new(scalar: &PastaField<C::Scalar>) -> Self {
-        let (a, b) = glv_decompose::<C>(scalar);
+        Self::from_canonical(scalar.to_canonical_uint())
+    }
+
+    /// Recodes a canonical scalar integer into signed Eisenstein digits.
+    ///
+    /// The caller must establish that `scalar` is below `C::Scalar`'s modulus;
+    /// [`CanonicalUint`] alone does not establish that bound.
+    fn from_canonical(scalar: CanonicalUint) -> Self {
+        let (a, b) = super::glv::decompose_canonical::<C>(scalar);
         let (digits, len) = recode(a, b);
         Self {
             digits,
@@ -169,7 +177,8 @@ pub(super) fn representatives<C: PastaCurve>(base: &ProjectivePoint<C>) -> [Proj
 /// `(1,0), (1,-1), (2,-1), (1,-2), (3,0), (3,-1), (1,-3), (2,-3)`.
 /// Each entry supplies six points by applying [`AffinePoint::endomorphism`]
 /// zero, one, or two times, with either sign. These 48 points serve as digits
-/// in a doubling ladder over the two halves from [`glv_decompose`].
+/// in a doubling ladder over the two halves from
+/// [`glv_decompose`](super::glv_decompose).
 ///
 /// The default [`AffinePoint`] entries occupy 512 bytes; choose
 /// [`PreparedAffinePoint`] entries for 768 bytes and cheaper rotations.
@@ -360,9 +369,12 @@ pub(super) fn multiply<C: PastaCurve, E: CurveTableEntry<C>>(
     result
 }
 
+/// Multiplies a base using a temporary compact table.
+///
+/// `base` must be nonidentity, and `scalar` must be below `C::Scalar`'s modulus.
 pub(super) fn multiply_once<C: PastaCurve>(
     base: &ProjectivePoint<C>,
-    scalar: &PastaField<C::Scalar>,
+    scalar: CanonicalUint,
 ) -> ProjectivePoint<C> {
     // Keep the input's projective scaling until batch normalization, sharing
     // one inversion across all eight representatives and avoiding a separate
@@ -372,5 +384,8 @@ pub(super) fn multiply_once<C: PastaCurve>(
     let mut entries = [PreparedAffinePoint::from_affine(&AffinePoint::GENERATOR); 8];
     let mut field = [PastaField::ZERO; 8];
     normalize(&points, &mut field, &mut entries);
-    multiply(&entries, EisensteinScalar::<C>::new(scalar).digits())
+    multiply(
+        &entries,
+        EisensteinScalar::<C>::from_canonical(scalar).digits(),
+    )
 }

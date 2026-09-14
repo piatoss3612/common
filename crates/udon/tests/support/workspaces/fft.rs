@@ -1,5 +1,5 @@
 use zakura_udon::{
-    fft::{Class, CosetDomain, InputOrder, Plan, TableRequirements, Tables, TablesMut},
+    fft::{Class, CosetDomain, ElementOrder, Plan, TableRequirements, Tables, TablesMut},
     field::{PastaField, PrimeModulus},
 };
 
@@ -108,7 +108,7 @@ impl<'a, M: PrimeModulus> ClassBuilder<'a, M> {
     pub fn new(plan: Plan<'a, M>, buffer: &'a mut [PastaField<M>], residues: usize) -> Self {
         assert!(residues.is_power_of_two() && residues <= 64 && residues <= buffer.len());
         Self {
-            class: Class::new(plan, buffer, InputOrder::BitReversed).unwrap(),
+            class: Class::new(plan, buffer, ElementOrder::BitReversed).unwrap(),
             residues,
             completed: 0,
         }

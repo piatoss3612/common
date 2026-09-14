@@ -139,15 +139,6 @@ pub fn curve_rhs<M: PrimeModulus>(x: &PastaField<M>) -> PastaField<M> {
     x.square().mul(x).add(&PastaField::from_u64(5))
 }
 
-fn is_reduced<M: PrimeModulus>(value: &PastaField<M>) -> bool {
-    value
-        .montgomery_limbs()
-        .iter()
-        .rev()
-        .cmp(M::MODULUS.iter().rev())
-        .is_lt()
-}
-
 /// A rejected curve operation or multiplication table description.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CurveError {

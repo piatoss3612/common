@@ -326,15 +326,16 @@ is separate from execution scratch and is not a POD serialization format.
 `ExecutionOptions::SERIAL` selects one task without a memory ceiling.
 Use `with_task_budget` for scoped concurrency. `with_max_terms_per_pass` caps
 affine bucket and temporary table staging; it alone does not bound scalar records
-or recoding bytes. By default, `with_chunk_size` completes independent chunk MSMs
-and reuses their temporary buffers, trading repeated collapses for storage
-independent of total input size. `with_memory_limit(bytes)` lets the planner
+or recoding bytes. The default term grain is capped at 8,192; `with_chunk_size`
+can reduce it further. Independent chunk MSMs reuse temporary buffers, trading
+repeated collapses for storage independent of total input size.
+`with_memory_limit(bytes)` lets the planner
 reduce pass size, concurrency, and chunk size and select projective buckets.
 
 `with_streaming_buckets()` instead retains projective buckets for all windows
 while preparing and recoding one chunk at a time. It avoids repeating each
-chunk's weighted collapse, with a larger fixed workspace floor. Bucket updates
-are serial within each job; scalar preparation can use the assigned task budget.
+chunk's weighted collapse, with a larger fixed workspace floor. Each bounded
+deposit owns one window's buckets; different windows can execute concurrently.
 This choice respects the same memory ceiling and supports indexed and retained
 bases. Use `with_booth_width(bits)` with `bits` in `4..=12` and
 `with_accumulation` for controlled comparisons of complete-chunk kernels;
@@ -349,6 +350,13 @@ search contract lives on
 The search is not exhaustive. A `MemoryLimit` error reports the storage needed
 at its stopping point, which may be the metadata alone; it does not establish
 the minimum possible storage. Planning and scratch errors precede writes.
+
+For an application-wide ceiling, use [`msm::run`](../crates/udon/src/curve/msm/run.rs)
+with the [run admission protocol](EXECUTION.md#admission-with-a-progress-reservation).
+It accounts for the complete provision, including idle scratch, retained
+intermediates, and metadata. A task budget does not change an `MsmPlan`'s
+geometry. Scratch is leased per executing task, and each window partial has one
+logical result slot. A configured memory limit does not select a queue policy.
 
 `input.requirements(options)` returns counts for six private `Scratch` slices;
 use `scalars()`, `digits()`, `affine()`, `projective()`, `field()`, and `indices()`.

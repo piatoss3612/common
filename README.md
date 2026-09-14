@@ -80,6 +80,8 @@ Additional traits and utilities needed downstream for Tachyon remain planned.
 
 The [workspace guide](docs/WORKSPACES.md) explains how callers can own reusable
 arithmetic buffers and compose operations on a selected worker pool.
+The [execution guide](docs/EXECUTION.md) describes incremental MSM, FFT, and
+application tasks sharing typed scratch under one capacity ceiling.
 
 ## Testing
 

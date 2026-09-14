@@ -10,7 +10,9 @@
 //! [`fft`] provides power-of-two transforms, cosets, residue expansion, and fused
 //! interpolation with caller-owned tables, buffers, scratch, and execution.
 //! [`exec`] provides scoped fork/join, task budgets, and borrowed work helpers
-//! shared by arithmetic and downstream workloads.
+//! shared by arithmetic and downstream workloads. [`exec::run`] supplies bounded
+//! task claims and typed admission for application schedulers; [`curve::msm::run`]
+//! and [`fft::run`] expose incremental arithmetic with exclusively leased scratch.
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
 //! embedded storage. Their type docs distinguish mathematical invariants from

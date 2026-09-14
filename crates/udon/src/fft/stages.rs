@@ -40,6 +40,145 @@ impl<'a, 'b, M: PrimeModulus, const MODE: u8> core::ops::Deref for Schedule<'_, 
 }
 
 impl<M: PrimeModulus> StageKernel<'_, '_, M> {
+    // Explicit tables also cover bounded, column-major panels. Dispatch once
+    // per stage; the default recurrence path shares transform::Kernel::cross.
+    pub fn columns(
+        &self,
+        values: &mut [PastaField<M>],
+        first: usize,
+        tile: usize,
+        first_block: usize,
+    ) {
+        let rows = self.plan.domain.size() / tile;
+        let guard = Guard::new(values);
+        let mut block = (tile * 2).max(first_block);
+        while block <= self.plan.domain.size() {
+            let table = twiddle_table(self.plan, self.twiddles, self.inverse, block).map(|table| {
+                let description = table.description();
+                let packed = description.storage == TwiddleStorage::StagePacked;
+                DensePowers {
+                    values: table.as_slice(),
+                    stride: if packed { 1 } else { description.size / block },
+                    offset: if packed { block / 2 - 1 } else { 0 },
+                    half: block / 2,
+                    conjugate: description.inverse != self.inverse,
+                }
+            });
+            let root = if self.inverse {
+                PastaField::root_of_unity_inverse(block.ilog2())
+            } else {
+                PastaField::root_of_unity(block.ilog2())
+            }
+            .unwrap();
+            let row_step = root.pow_u64(tile as u64);
+            let distance = block / tile / 2;
+            for (column, lane) in guard.values.chunks_exact_mut(rows).enumerate() {
+                let seed = table.map_or_else(
+                    || root.pow_u64((first + column) as u64),
+                    |powers| powers.at(first + column),
+                );
+                for group in lane.chunks_exact_mut(distance * 2) {
+                    let (left, right) = group.split_at_mut(distance);
+                    let mut power = seed;
+                    for (row, (left, right)) in left.iter_mut().zip(right).enumerate() {
+                        let exponent = row * tile + first + column;
+                        butterfly(left, right, (exponent != 0).then_some(&power));
+                        if row + 1 < distance {
+                            power = table.map_or_else(
+                                || power.mul(&row_step),
+                                |powers| powers.at(exponent + tile),
+                            );
+                        }
+                    }
+                }
+            }
+            if block == self.plan.domain.size() {
+                break;
+            }
+            block *= 2;
+        }
+        if self.inverse && self.scale == InverseScale::Normalized {
+            let factors = Factors::untwist(self.plan.domain);
+            let row_step = self.plan.domain.inverse_shift().pow_u64(tile as u64);
+            for (column, lane) in guard.values.chunks_exact_mut(rows).enumerate() {
+                let mut power = factors.at(first + column);
+                for value in lane {
+                    *value = divide_by_power_of_two(*value, self.plan.domain.domain().log_size());
+                    if power != PastaField::ONE {
+                        *value = value.mul(&power);
+                    }
+                    power = power.mul(&row_step);
+                }
+            }
+        }
+    }
+
+    // A detached tile pair has no executor or child resource requests. The
+    // same provider selection serves complete stages and incremental runs.
+    pub fn pair(
+        &self,
+        left: &mut [PastaField<M>],
+        right: &mut [PastaField<M>],
+        start: usize,
+        block: usize,
+    ) {
+        if self.inverse {
+            Schedule::<_, 3>(self).pair(left, right, start, block);
+        } else if self.dif {
+            Schedule::<_, 1>(self).pair(left, right, start, block);
+        } else {
+            Schedule::<_, 0>(self).pair(left, right, start, block);
+        }
+    }
+
+    // Compatibility entry for an initialized transform. Kernel-local calls use
+    // `run` with a serial executor; whole operations expose bounded run tasks.
+    pub fn drive<E: Executor>(
+        &self,
+        values: &mut [PastaField<M>],
+        first: usize,
+        options: super::ExecutionOptions,
+        executor: &E,
+    ) {
+        let nz = |n| core::num::NonZeroUsize::new(n).unwrap();
+        let mut request = super::TransformRequest::new(if self.inverse {
+            super::Direction::Inverse
+        } else {
+            super::Direction::Forward
+        });
+        request.inverse_scale = self.scale;
+        request.output_order = self.output_order;
+        let mut plan = super::run::FftPlan::new(
+            self.plan,
+            request,
+            nz(options.tile_len),
+            self.codelet,
+            false,
+        )
+        .expect("validated stage request")
+        .with_contiguous_permutation()
+        .resume(
+            first,
+            if self.dif {
+                ElementOrder::Natural
+            } else {
+                ElementOrder::BitReversed
+            },
+        );
+        if let Some(table) = self.twiddles {
+            plan = plan.with_twiddles(table).expect("validated twiddles");
+        }
+        plan.execute(
+            None,
+            values,
+            self.factor,
+            &mut [],
+            nz(options.max_tasks),
+            executor,
+        )
+        .expect("validated stage storage");
+    }
+
     pub fn run<E: Executor>(
         &self,
         values: &mut [PastaField<M>],
@@ -63,15 +202,36 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
             Schedule::<_, 0>(self).run(values, first, tasks, executor);
         }
     }
+}
 
-    pub fn untwist<E: Executor>(&self, values: &mut [PastaField<M>], tasks: usize, executor: &E) {
-        debug_assert!(self.inverse);
-        if self.scale == InverseScale::Normalized {
-            Schedule::<_, 2>(self).untwist(values, tasks, executor);
-        } else {
-            Schedule::<_, 3>(self).untwist(values, tasks, executor);
-        }
+pub(super) fn twiddle_table<'a, M: PrimeModulus>(
+    plan: Plan<'a, M>,
+    explicit: Option<TwiddleTable<'a, M>>,
+    inverse: bool,
+    block: usize,
+) -> Option<TwiddleTable<'a, M>> {
+    if let Some(table) = explicit {
+        return (table.description().size >= block).then_some(table);
     }
+    let (direct, opposite) = if inverse {
+        (plan.tables.inverse, plan.tables.forward)
+    } else {
+        (plan.tables.forward, plan.tables.inverse)
+    };
+    let (values, direction) = direct
+        .map(|values| (values, inverse))
+        .or_else(|| opposite.map(|values| (values, !inverse)))?;
+    Some(
+        TwiddleTable::bind_trusted(
+            TwiddleDescription {
+                size: plan.domain.size(),
+                inverse: direction,
+                storage: TwiddleStorage::Dense,
+            },
+            values,
+        )
+        .unwrap(),
+    )
 }
 
 // Specialize the provider family at each stage, rather than dispatching among
@@ -148,41 +308,50 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         MODE >= 2
     }
     fn table(&self, block: usize) -> Option<TwiddleTable<'a, M>> {
-        if let Some(table) = self.twiddles {
-            return (table.description().size >= block).then_some(table);
-        }
-        let direct = if self.inverse() {
-            self.plan.tables.inverse
-        } else {
-            self.plan.tables.forward
-        };
-        let opposite = if self.inverse() {
-            self.plan.tables.forward
-        } else {
-            self.plan.tables.inverse
-        };
-        let (values, inverse) = direct
-            .map(|values| (values, self.inverse()))
-            .or_else(|| opposite.map(|values| (values, !self.inverse())))?;
-        Some(
-            // Plan already binds these immutable entries. Adapting the provider
-            // must not repeat linear validation at every butterfly stage.
-            TwiddleTable::bind_trusted(
-                TwiddleDescription {
-                    size: self.plan.domain.size(),
-                    inverse,
-                    storage: TwiddleStorage::Dense,
-                },
-                values,
-            )
-            .unwrap(),
-        )
+        // Immutable table handles were validated at binding, not per task.
+        twiddle_table(self.plan, self.twiddles, self.inverse(), block)
     }
     fn step(&self, block: usize) -> PastaField<M> {
         if self.inverse() {
             PastaField::root_of_unity_inverse(block.ilog2()).unwrap()
         } else {
             PastaField::root_of_unity(block.ilog2()).unwrap()
+        }
+    }
+
+    fn pair(
+        &self,
+        left: &mut [PastaField<M>],
+        right: &mut [PastaField<M>],
+        start: usize,
+        block: usize,
+    ) {
+        let left = Guard::new(left);
+        let right = Guard::new(right);
+        dispatch_powers!(self, block, pair_with, left.values, right.values, start);
+        // Both guards canonicalize even when an internal assertion unwinds.
+    }
+
+    fn pair_with<P: Powers<M>>(
+        &self,
+        left: &mut [PastaField<M>],
+        right: &mut [PastaField<M>],
+        start: usize,
+        powers: P,
+    ) {
+        let mut power = powers.at(start);
+        let len = left.len();
+        for (offset, (left, right)) in left.iter_mut().zip(right).enumerate() {
+            let index = start + offset;
+            let twiddle = (index != 0).then_some(&power);
+            if Self::DIF {
+                butterfly_dif(left, right, twiddle);
+            } else {
+                butterfly(left, right, twiddle);
+            }
+            if offset + 1 < len {
+                power = powers.next(index + 1, power);
+            }
         }
     }
 
@@ -446,17 +615,6 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
                 factor = factors.next(start + offset + 1, factor);
             }
         }
-    }
-
-    pub fn untwist<E: Executor>(&self, values: &mut [PastaField<M>], tasks: usize, executor: &E) {
-        let chunk = values.len().div_ceil(tasks);
-        for_each_chunk_mut(
-            values,
-            chunk,
-            TaskBudget::new(tasks).unwrap(),
-            executor,
-            |job, values, _| self.finish_region(values, job * chunk, false),
-        );
     }
 
     fn codelets<E: Executor>(

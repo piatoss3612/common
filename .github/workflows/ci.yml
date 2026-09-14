@@ -61,6 +61,8 @@ jobs:
           cargo bench --locked -p zakura-udon --bench curve -- --test
           cargo bench --locked -p zakura-udon --bench curve --features sqrt-table-large -- --test
           cargo bench --locked -p zakura-udon --bench msm -- --test
+      - name: Exercise incremental execution benchmarks
+        run: cargo bench --locked -p zakura-udon --bench execution -- --test
 
   miri:
     name: Unsafe storage checks

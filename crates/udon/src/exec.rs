@@ -55,6 +55,8 @@
 
 use core::num::NonZeroUsize;
 
+pub mod run;
+
 /// Caller-supplied scoped fork/join execution.
 ///
 /// Each job must be invoked exactly once. [`join`](Self::join) must wait until

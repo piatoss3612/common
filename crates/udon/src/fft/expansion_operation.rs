@@ -459,7 +459,7 @@ impl<M: PrimeModulus> PreparedExpansion<'_, M> {
                         output_order: ElementOrder::BitReversed,
                         factor: None,
                     }
-                    .run(first, 2, self.options.transform.max_tasks, executor);
+                    .drive(first, 2, self.options.transform, executor);
                 } else {
                     self.expansion.base.permute(first);
                     self.expansion.base.run(

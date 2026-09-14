@@ -305,27 +305,36 @@ pub(super) fn prepare<C: PastaCurve, X: Executor>(
     executor: &X,
 ) {
     for_each_chunk_mut(records, 256, budget, executor, |chunk, records, _| {
-        for (i, record) in records.iter_mut().enumerate() {
-            let i = chunk * 256 + i;
-            *record = match source {
-                Scalars::Prepared(s) => s.records[i],
-                Scalars::Raw(s) => ScalarStorage::canonical(s[i].to_canonical_uint()),
-                Scalars::Canonical(s) => ScalarStorage::canonical(s[i]),
-                Scalars::Unsigned(s) => ScalarStorage::canonical(CanonicalUint::from_limbs([
-                    s[i] as u64,
-                    (s[i] >> 64) as u64,
-                    0,
-                    0,
-                ])),
-                Scalars::Signed(s) => {
-                    let magnitude = s[i].unsigned_abs();
-                    let mut limbs = [magnitude as u64, (magnitude >> 64) as u64, 0, 0];
-                    if s[i] < 0 {
-                        limbs = subtract_limbs(&C::Scalar::MODULUS, &limbs).0;
-                    }
-                    ScalarStorage::canonical(CanonicalUint::from_limbs(limbs))
-                }
-            };
-        }
+        let start = chunk * 256;
+        prepare_chunk(source.slice(start..start + records.len()), records);
     });
+}
+
+// Both drivers call the same bounded conversion kernel. It has no executor and
+// cannot retain a resource while requesting another one.
+pub(super) fn prepare_chunk<C: PastaCurve>(
+    source: Scalars<'_, C>,
+    records: &mut [ScalarStorage<C>],
+) {
+    for (i, record) in records.iter_mut().enumerate() {
+        *record = match source {
+            Scalars::Prepared(s) => s.records[i],
+            Scalars::Raw(s) => ScalarStorage::canonical(s[i].to_canonical_uint()),
+            Scalars::Canonical(s) => ScalarStorage::canonical(s[i]),
+            Scalars::Unsigned(s) => ScalarStorage::canonical(CanonicalUint::from_limbs([
+                s[i] as u64,
+                (s[i] >> 64) as u64,
+                0,
+                0,
+            ])),
+            Scalars::Signed(s) => {
+                let magnitude = s[i].unsigned_abs();
+                let mut limbs = [magnitude as u64, (magnitude >> 64) as u64, 0, 0];
+                if s[i] < 0 {
+                    limbs = subtract_limbs(&C::Scalar::MODULUS, &limbs).0;
+                }
+                ScalarStorage::canonical(CanonicalUint::from_limbs(limbs))
+            }
+        };
+    }
 }

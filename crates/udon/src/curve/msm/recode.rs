@@ -6,8 +6,11 @@
 //! final chunks. [`window_rows`] can instead extract a window from GLV components
 //! without storing digits; its signed midpoint convention differs from the cache.
 
+use super::run::storage::Storage;
+
 use super::{CurveError, ExecutionOptions, PastaCurve, ScalarStorage, checked_count};
 use crate::curve::{eisenstein, parameters::GlvParameters, scalar::centered_digit};
+#[cfg(test)]
 use crate::exec::{Executor, TaskBudget, for_each_chunk_mut};
 
 pub(super) const CHUNK: usize = 256;
@@ -48,16 +51,6 @@ impl Geometry {
                 11
             })
         }
-    }
-
-    pub fn for_prepared<C: PastaCurve>(
-        records: &[ScalarStorage<C>],
-        options: ExecutionOptions,
-    ) -> Self {
-        if options.window_bits.is_some() || options.joint_tables {
-            return Self::for_len(records.len(), options);
-        }
-        Self::for_shape(records.len(), Shape::of(records), options)
     }
 
     pub const fn for_shape(n: usize, shape: Shape, options: ExecutionOptions) -> Self {
@@ -132,13 +125,6 @@ pub(super) struct Cache<'a> {
     pub digits: &'a [u8],
 }
 
-/// Selects when uncached Booth execution should extract digits in its windows.
-pub(super) fn prefer_direct(terms: usize, geometry: Geometry, budget: TaskBudget) -> bool {
-    // Avoid a separate recoding join for medium rows with many workers. Larger
-    // rows benefit from the compact cache's lower read traffic.
-    (512..4096).contains(&terms) && geometry == Geometry::Booth(8) && budget.get() >= 16
-}
-
 /// Visits both signed GLV digits for each term in `range` at one Booth window.
 ///
 /// Requires a Booth width in `4..=12`, `window < geometry.windows()`, and a range
@@ -147,22 +133,34 @@ pub(super) fn prefer_direct(terms: usize, geometry: Geometry, budget: TaskBudget
 /// overlapping Booth digits. Otherwise `digits` must contain the matching
 /// [`write`] output for all records, even when visiting only a subrange.
 #[inline(always)]
+#[cfg(test)]
 pub(super) fn window_rows<C: PastaCurve, const DIRECT: bool>(
     records: &[ScalarStorage<C>],
     digits: &[u8],
     range: core::ops::Range<usize>,
     geometry: Geometry,
     window: usize,
+    visit: impl FnMut(usize, i16, i16),
+) {
+    window_views::<C, DIRECT>(records, digits, range, geometry, window, visit)
+}
+
+pub(super) fn window_views<C: PastaCurve, const DIRECT: bool>(
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
+    range: core::ops::Range<usize>,
+    geometry: Geometry,
+    window: usize,
     mut visit: impl FnMut(usize, i16, i16),
 ) {
     if !DIRECT {
-        return rows(digits, records.len(), range, geometry, window, visit);
+        return rows_view(digits, records.len(), range, geometry, window, visit);
     }
     let width = geometry.width();
     let shift = window * width;
     let radix = 1_i16 << width;
     for term in range {
-        let digits = records[term].halves.map(|component| {
+        let digits = records.get(term).halves.map(|component| {
             let magnitude = component.unsigned_abs();
             let value = ((magnitude >> shift) as i16) & (radix - 1);
             let overlap = if shift == 0 {
@@ -186,6 +184,7 @@ pub(super) fn window_rows<C: PastaCurve, const DIRECT: bool>(
 /// `digits` must be exactly `geometry.storage_len(records.len())` bytes, so the
 /// final chunk corresponds to the remaining records. Records must contain valid
 /// GLV components. The executor completes all writes before this returns.
+#[cfg(test)]
 pub(super) fn write_parallel<C: PastaCurve, X: Executor>(
     records: &[ScalarStorage<C>],
     geometry: Geometry,
@@ -272,8 +271,20 @@ pub(super) fn write<C: PastaCurve>(
 }
 
 /// Visits contiguous rows once per intersecting chunk, amortizing row lookup.
+#[cfg(test)]
 pub(super) fn rows(
     digits: &[u8],
+    terms: usize,
+    range: core::ops::Range<usize>,
+    geometry: Geometry,
+    window: usize,
+    visit: impl FnMut(usize, i16, i16),
+) {
+    rows_view(digits, terms, range, geometry, window, visit)
+}
+
+pub(super) fn rows_view(
+    digits: impl Storage<u8>,
     terms: usize,
     range: core::ops::Range<usize>,
     geometry: Geometry,
@@ -288,18 +299,21 @@ pub(super) fn rows(
         let len = (terms - start).min(CHUNK);
         let end = range.end.min(start + len);
         let offset = start * stride + 2 * window * len * bytes;
-        let a = &digits[offset..offset + len * bytes];
-        let b = &digits[offset + len * bytes..offset + 2 * len * bytes];
+        let a = digits.slice(offset..offset + len * bytes);
+        let b = digits.slice(offset + len * bytes..offset + 2 * len * bytes);
+        let ca = a.contiguous();
+        let cb = b.contiguous();
         for term in first..end {
             let i = (term - start) * bytes;
-            let read = |row: &[u8]| {
+            let read = |row: _, contiguous: Option<&[u8]>| {
+                let byte = |j| contiguous.map_or_else(|| Storage::get(row, j), |s| s[j]);
                 if bytes == 1 {
-                    i16::from(row[i] as i8)
+                    i16::from(byte(i) as i8)
                 } else {
-                    i16::from_le_bytes([row[i], row[i + 1]])
+                    i16::from_le_bytes([byte(i), byte(i + 1)])
                 }
             };
-            visit(term, read(a), read(b));
+            visit(term, read(a, ca), read(b, cb));
         }
         first = end;
     }

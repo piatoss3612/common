@@ -1,5 +1,5 @@
 use super::execution::Geometry;
-use super::finish::{Factors, InverseFinish};
+use super::finish::InverseFinish;
 use super::{
     BoundTables, CoefficientView, CosetDomain, ExecutionOptions, Executor, FftError, PastaField,
     PrimeModulus, ScratchRequirements, Tables, check_length, check_prefix, reverse,
@@ -49,6 +49,63 @@ impl<M: PrimeModulus> core::fmt::Debug for Plan<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> Plan<'a, M> {
+    // A detached column task has already gathered its complete panel. It
+    // never joins or obtains scratch while executing this bounded kernel.
+    pub(super) fn columns(
+        self,
+        values: &mut [PastaField<M>],
+        first_column: usize,
+        tile_len: usize,
+        inverse: bool,
+        normalized: bool,
+        first: usize,
+    ) {
+        let geometry = Geometry {
+            tile_len,
+            tiles: self.domain.size() / tile_len,
+            columns: values.len() / (self.domain.size() / tile_len),
+            jobs: 1,
+        };
+        let mut run = if normalized {
+            Run::inverse(&[])
+        } else if inverse {
+            Run::inverse_unscaled()
+        } else {
+            Run::forward(2)
+        };
+        run.set_first(first);
+        let finish = if normalized {
+            InverseFinish::select(self.domain, self.tables.inverse_finish.is_some())
+        } else {
+            InverseFinish::ScaledInputs
+        };
+        Kernel {
+            plan: self,
+            run,
+            finish,
+        }
+        .cross(values, first_column, &geometry);
+    }
+    // The complete transform fits the planner's bounded local grain.
+    pub(super) fn local(self, values: &mut [PastaField<M>], inverse: bool, first: usize) {
+        let mut run = if inverse {
+            Run::inverse(&[])
+        } else {
+            Run::forward(first)
+        };
+        run.set_first(first);
+        let finish = if inverse {
+            InverseFinish::select(self.domain, self.tables.inverse_finish.is_some())
+        } else {
+            InverseFinish::ScaledInputs
+        };
+        Kernel {
+            plan: self,
+            run,
+            finish,
+        }
+        .local(values);
+    }
     /// Constructs a plan using the domain retained by its table handle.
     ///
     /// Prepare tables with [`super::TablesMut::prepare`] or check imported
@@ -119,16 +176,19 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         let required = self.check("values", values.len(), options, scratch.len())?;
-        self.scale_coefficients(values, PastaField::ONE);
-        self.permute(values);
-        self.run(
-            values,
+        self.bounded(
             options,
-            executor,
+            super::TransformRequest::new(super::Direction::Forward),
+            false,
+        )?
+        .execute(
+            None,
+            values,
+            None,
             &mut scratch[..required],
-            Run::forward(2),
-        );
-        Ok(())
+            core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
+            executor,
+        )
     }
 
     /// Replaces natural-order evaluations with normalized polynomial coefficients.
@@ -142,15 +202,19 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         let required = self.check("values", values.len(), options, scratch.len())?;
-        self.permute(values);
-        self.run(
-            values,
+        self.bounded(
             options,
-            executor,
+            super::TransformRequest::new(super::Direction::Inverse),
+            false,
+        )?
+        .execute(
+            None,
+            values,
+            None,
             &mut scratch[..required],
-            Run::inverse(&[]),
-        );
-        Ok(())
+            core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
+            executor,
+        )
     }
 
     /// Interpolates evaluations already stored in bit-reversed order.
@@ -168,14 +232,16 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         let required = self.check("values", values.len(), options, scratch.len())?;
-        self.run(
+        let mut request = super::TransformRequest::new(super::Direction::Inverse);
+        request.input_order = super::ElementOrder::BitReversed;
+        self.bounded(options, request, false)?.execute(
+            None,
             values,
-            options,
-            executor,
+            None,
             &mut scratch[..required],
-            Run::inverse(&[]),
-        );
-        Ok(())
+            core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
+            executor,
+        )
     }
 
     /// Preserves the coefficients and writes their transform into `output`.
@@ -197,15 +263,20 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         let input = input.as_slice();
         check_length("input", self.domain.size(), input.len())?;
         let required = self.check("output", output.len(), options, scratch.len())?;
-        let first = self.fill_prefix(input, output, self.domain.shift(), None, extra);
-        self.run(
-            output,
+        self.bounded(
             options,
-            executor,
+            super::TransformRequest::new(super::Direction::Forward),
+            true,
+        )?
+        .with_input_scale(extra)?
+        .execute(
+            Some(input),
+            output,
+            None,
             &mut scratch[..required],
-            Run::forward(first),
-        );
-        Ok(())
+            core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
+            executor,
+        )
     }
 
     /// Preserves the evaluations and writes their interpolation into `output`.
@@ -222,15 +293,19 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     ) -> Result<(), FftError> {
         check_length("input", self.domain.size(), input.len())?;
         let required = self.check("output", output.len(), options, scratch.len())?;
-        self.scatter(input, output);
-        self.run(
-            output,
+        self.bounded(
             options,
-            executor,
+            super::TransformRequest::new(super::Direction::Inverse),
+            true,
+        )?
+        .execute(
+            Some(input),
+            output,
+            None,
             &mut scratch[..required],
-            Run::inverse(&[]),
-        );
-        Ok(())
+            core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
+            executor,
+        )
     }
 
     /// Evaluates a coefficient prefix, treating the remaining coefficients as zero.
@@ -256,19 +331,36 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         let coefficients = coefficients.as_slice();
         let required = self.check("output", output.len(), options, scratch.len())?;
         check_prefix(coefficients.len(), 0, self.domain.size())?;
-        if coefficients.is_empty() {
-            output.fill(PastaField::ZERO);
-            return Ok(());
-        }
-        let first = self.fill_prefix(coefficients, output, self.domain.shift(), None, extra);
-        self.run(
-            output,
-            options,
-            executor,
-            &mut scratch[..required],
-            Run::forward(first),
-        );
-        Ok(())
+        let mut request = super::TransformRequest::new(super::Direction::Forward);
+        request.support = super::InputSupport::Prefix(coefficients.len());
+        self.bounded(options, request, true)?
+            .with_input_scale(extra)?
+            .execute(
+                Some(coefficients),
+                output,
+                None,
+                &mut scratch[..required],
+                core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
+                executor,
+            )
+    }
+
+    fn bounded(
+        self,
+        options: ExecutionOptions,
+        request: super::TransformRequest,
+        separate: bool,
+    ) -> Result<super::run::FftPlan<'a, M>, FftError> {
+        let nz = |n| core::num::NonZeroUsize::new(n).unwrap();
+        super::run::FftPlan::new(
+            self,
+            request,
+            nz(options.tile_len),
+            super::Codelet::Radix2,
+            separate,
+        )?
+        .with_contiguous_permutation()
+        .with_columns(nz(options.columns_per_task), nz(options.max_tasks))
     }
 
     pub(super) fn scatter(self, input: &[PastaField<M>], output: &mut [PastaField<M>]) {
@@ -389,111 +481,46 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         scratch: &mut [PastaField<M>],
         run: Run<'_, '_, M>,
     ) {
-        if values.len() == 1 || run.first > values.len() {
-            let scaled = run.normalized
-                && self.tables.inverse_scales.is_some()
-                && matches!(
-                    InverseFinish::select(self.domain, false),
-                    InverseFinish::ScaledInputs
-                );
-            let factors = if scaled {
-                Factors::normalized(self)
-            } else if run.normalized {
-                Factors::untwist(self.domain)
-            } else {
-                Factors::Identity
-            };
-            let mut factor = factors.at(0);
-            let len = values.len();
-            for (index, value) in values.iter_mut().enumerate() {
-                if run.normalized {
-                    *value = if scaled {
-                        value.mul(&factor)
-                    } else {
-                        let normalized =
-                            divide_by_power_of_two(*value, self.domain.domain().log_size());
-                        if factor == PastaField::ONE {
-                            normalized
-                        } else {
-                            normalized.mul(&factor)
-                        }
-                    };
-                    for lift in run.lifts {
-                        if let Some(coefficient) = lift.values.get(index) {
-                            *value = value.add(coefficient);
-                        }
-                    }
-                    if index + 1 < len {
-                        factor = factors.next(index + 1, factor);
-                    }
-                }
-                if let Some(factor) = run.factor {
-                    *value = value.mul(&factor[index]);
-                }
-            }
-            return;
+        let mut plan = self;
+        if run.inverse && !run.normalized {
+            plan.domain = self.domain.domain().subgroup();
         }
-        let geometry = options.geometry(values.len());
-        let finish = if run.normalized {
-            InverseFinish::select(self.domain, self.tables.inverse_finish.is_some())
+        let mut request = super::TransformRequest::new(if run.inverse {
+            super::Direction::Inverse
         } else {
-            InverseFinish::ScaledInputs
-        };
-        let kernel = Kernel {
-            plan: self,
-            run,
-            finish,
-        };
-        let budget = TaskBudget::new(options.max_tasks).unwrap();
-        if kernel.run.first <= geometry.tile_len {
-            for_each_chunk_mut(values, geometry.tile_len, budget, executor, |_, tile, _| {
-                kernel.local(tile)
-            });
+            super::Direction::Forward
+        });
+        if run.inverse && !run.normalized {
+            request.inverse_scale = super::InverseScale::Unscaled;
         }
-        if geometry.tiles == 1 {
-            return;
-        }
-        let job_len = geometry.tiles * geometry.columns;
-        let mut first_column = 0;
-        while first_column < geometry.tile_len {
-            let count = (geometry.tile_len - first_column).min(geometry.columns * geometry.jobs);
-            let jobs = count.div_ceil(geometry.columns);
-            let work = &mut scratch[..jobs * job_len];
-            // All readers finish before any scatter writer is scheduled. Each
-            // scratch job stores contiguous lanes in column-major order.
-            for_each_chunk_mut(work, job_len, budget, executor, |job, work, _| {
-                let column = first_column + job * geometry.columns;
-                let columns = geometry.columns.min(geometry.tile_len - column);
-                let work = &mut work[..columns * geometry.tiles];
-                // Bounded rectangles reuse adjacent source columns and short
-                // destination spans instead of streaming a full strided lane.
-                for tile_start in (0..geometry.tiles).step_by(8) {
-                    for column_start in (0..columns).step_by(8) {
-                        for tile in tile_start..(tile_start + 8).min(geometry.tiles) {
-                            for offset in column_start..(column_start + 8).min(columns) {
-                                work[offset * geometry.tiles + tile] =
-                                    values[tile * geometry.tile_len + column + offset];
-                            }
-                        }
-                    }
-                }
-                kernel.cross(work, column, &geometry);
-            });
+        plan.bounded(options, request, false)
+            .expect("validated transform geometry")
+            .resume(run.first, super::ElementOrder::BitReversed)
+            .execute(
+                None,
+                values,
+                run.factor,
+                scratch,
+                core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
+                executor,
+            )
+            .expect("validated transform storage");
+        for lift in run.lifts {
             for_each_chunk_mut(
                 values,
-                geometry.tile_len,
-                budget,
+                options.tile_len.min(values.len()),
+                TaskBudget::new(options.max_tasks).unwrap(),
                 executor,
-                |tile, output, _| {
-                    for offset in 0..count {
-                        let job = offset / geometry.columns;
-                        let column = offset % geometry.columns;
-                        output[first_column + offset] =
-                            work[job * job_len + column * geometry.tiles + tile];
+                |chunk, output, _| {
+                    let start = chunk * options.tile_len.min(self.domain.size());
+                    for (value, coefficient) in output
+                        .iter_mut()
+                        .zip(lift.values.get(start..).unwrap_or(&[]))
+                    {
+                        *value = value.add(coefficient);
                     }
                 },
             );
-            first_column += count;
         }
     }
 }

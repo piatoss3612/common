@@ -23,6 +23,7 @@ bento.workspace = true
 criterion = { version = "0.8", features = ["html_reports"] }
 num-bigint = "0.4"
 rayon = "1.12"
+spin = { version = "0.10", default-features = false, features = ["rwlock"] }
 tempfile = "3"
 
 [[bench]]
@@ -43,4 +44,8 @@ harness = false
 
 [[bench]]
 name = "msm"
+harness = false
+
+[[bench]]
+name = "execution"
 harness = false

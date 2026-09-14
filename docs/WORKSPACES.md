@@ -10,6 +10,12 @@ relationships with ordinary `Vec` storage and a caller-selected Rayon pool.
 The examples use deterministic inputs to check arithmetic and capacity reuse;
 allocation policy and application-wide resource limits belong to the caller.
 
+For scheduling across operations with a shared scratch provision, use the
+[incremental run protocol](EXECUTION.md). Its plans separate arithmetic grain
+from worker count, and its task leases let returned scratch serve any compatible
+ready operation. The structured workspace examples below retain their explicit
+nested budget and disjoint-buffer policies.
+
 ## Scoped execution
 
 The [Rayon adapter](../crates/udon/tests/support/workspaces/executor.rs) borrows

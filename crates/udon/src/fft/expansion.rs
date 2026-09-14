@@ -662,7 +662,7 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
                     output_order: ElementOrder::BitReversed,
                     factor,
                 }
-                .run(output, first, self.options.max_tasks, self.executor);
+                .drive(output, first, self.options, self.executor);
                 return;
             }
             let (prefix, tail) = output.split_at_mut(self.coefficients.len());
@@ -698,7 +698,7 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
                 output_order: ElementOrder::BitReversed,
                 factor,
             }
-            .run(output, 2, self.options.max_tasks, self.executor);
+            .drive(output, 2, self.options, self.executor);
             return;
         }
         let first =

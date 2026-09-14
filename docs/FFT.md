@@ -259,6 +259,13 @@ to the FFT task limit, and give concurrent transforms disjoint scratch. The
 separate tiles. Divide budgets between simultaneous application operations;
 copying a budget does not reserve or limit threads.
 
+[`fft::run`](../crates/udon/src/fft/run.rs) exposes bounded transform, expansion,
+and interpolation work to an application scheduler. Each run owns its buffer
+barriers; completed transforms and residue blocks can ready their consumers
+while other operations continue. Tile and column geometry are independent of
+worker count. The [execution guide](EXECUTION.md) explains fragment leases,
+retained snapshots, admission, and integration with MSM and application work.
+
 ## Residue expansion and layouts
 
 [`Expansion`](../crates/udon/src/fft/expansion.rs) accepts a base subgroup plan

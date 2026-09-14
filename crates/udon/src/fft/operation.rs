@@ -1,12 +1,10 @@
 use super::finish::InverseFinish;
-use super::stages::StageKernel;
-use super::transform::Run;
 use super::{
     CoefficientView, ElementOrder, ExecutionOptions, Executor, FftError, InverseScale, PastaField,
     Plan, PowerTable, PrimeModulus, ScratchRequirements, SerialExecutor, TwiddleTable,
     check_domain_size, check_field_count, check_length, min, reverse,
 };
-use crate::exec::{TaskBudget, for_each_chunk_mut};
+use crate::exec::TaskBudget;
 
 /// Mathematical transform direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -568,16 +566,15 @@ pub(super) const fn stage_strategy(max_tasks: usize) -> Strategy {
 // bit-reversed order, this changes the coefficient degree by an amount determined
 // by that trailing-one count. The ratios array stores the corresponding powers
 // of the coset shift, so each region can advance without repeated exponentiation.
-struct CoefficientPowers<M: PrimeModulus> {
+pub(super) struct CoefficientPowers<M: PrimeModulus> {
     shift: PastaField<M>,
-    extra: PastaField<M>,
     ratios: [PastaField<M>; 32],
     order: ElementOrder,
     log_size: u32,
 }
 
 impl<M: PrimeModulus> CoefficientPowers<M> {
-    fn new(domain: super::CosetDomain<M>, order: ElementOrder) -> Self {
+    pub(super) fn new(domain: super::CosetDomain<M>, order: ElementOrder) -> Self {
         let mut ratios = [PastaField::ONE; 32];
         let log_size = domain.domain().log_size();
         if order == ElementOrder::BitReversed && domain.shift() != PastaField::ONE {
@@ -599,13 +596,12 @@ impl<M: PrimeModulus> CoefficientPowers<M> {
         }
         Self {
             shift: domain.shift(),
-            extra: PastaField::ONE,
             ratios,
             order,
             log_size,
         }
     }
-    fn at(&self, index: usize) -> PastaField<M> {
+    pub(super) fn at(&self, index: usize) -> PastaField<M> {
         if self.shift == PastaField::ONE {
             return PastaField::ONE;
         }
@@ -616,7 +612,7 @@ impl<M: PrimeModulus> CoefficientPowers<M> {
         };
         self.shift.pow_u64(degree as u64)
     }
-    fn next(&self, index: usize, power: PastaField<M>) -> PastaField<M> {
+    pub(super) fn next(&self, index: usize, power: PastaField<M>) -> PastaField<M> {
         if self.shift == PastaField::ONE {
             return power;
         }
@@ -626,75 +622,6 @@ impl<M: PrimeModulus> CoefficientPowers<M> {
             &self.ratios[index.trailing_ones() as usize]
         })
     }
-}
-
-// Dispatch once per initialization: a supplied table must eliminate power
-// generation, and an inverse must not generate or apply forward coset scales.
-trait CoefficientScaling<M: PrimeModulus>: Sync {
-    type Seed;
-    fn seed(&self, index: usize) -> Self::Seed;
-    fn scale(&self, value: PastaField<M>, degree: usize, seed: &Self::Seed) -> PastaField<M>;
-    fn advance(&self, index: usize, seed: &mut Self::Seed);
-}
-
-impl<M: PrimeModulus> CoefficientScaling<M> for CoefficientPowers<M> {
-    type Seed = PastaField<M>;
-    fn seed(&self, index: usize) -> Self::Seed {
-        if self.extra == PastaField::ONE {
-            self.at(index)
-        } else {
-            self.at(index).mul(&self.extra)
-        }
-    }
-    fn scale(&self, value: PastaField<M>, _: usize, seed: &Self::Seed) -> PastaField<M> {
-        value.mul(seed)
-    }
-    fn advance(&self, index: usize, seed: &mut Self::Seed) {
-        *seed = self.next(index, *seed);
-    }
-}
-
-impl<M: PrimeModulus> CoefficientScaling<M> for &[PastaField<M>] {
-    type Seed = ();
-    fn seed(&self, _: usize) {}
-    fn scale(&self, value: PastaField<M>, degree: usize, _: &()) -> PastaField<M> {
-        value.mul(&self[degree])
-    }
-    fn advance(&self, _: usize, _: &mut ()) {}
-}
-
-struct IdentityScaling;
-
-impl<M: PrimeModulus> CoefficientScaling<M> for PastaField<M> {
-    type Seed = ();
-    fn seed(&self, _: usize) {}
-    fn scale(&self, value: PastaField<M>, _: usize, _: &()) -> PastaField<M> {
-        value.mul(self)
-    }
-    fn advance(&self, _: usize, _: &mut ()) {}
-}
-
-struct ScaledTable<'a, M: PrimeModulus> {
-    values: &'a [PastaField<M>],
-    extra: PastaField<M>,
-}
-
-impl<M: PrimeModulus> CoefficientScaling<M> for ScaledTable<'_, M> {
-    type Seed = ();
-    fn seed(&self, _: usize) {}
-    fn scale(&self, value: PastaField<M>, degree: usize, _: &()) -> PastaField<M> {
-        value.mul(&self.values[degree]).mul(&self.extra)
-    }
-    fn advance(&self, _: usize, _: &mut ()) {}
-}
-
-impl<M: PrimeModulus> CoefficientScaling<M> for IdentityScaling {
-    type Seed = ();
-    fn seed(&self, _: usize) {}
-    fn scale(&self, value: PastaField<M>, _: usize, _: &()) -> PastaField<M> {
-        value
-    }
-    fn advance(&self, _: usize, _: &mut ()) {}
 }
 
 impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
@@ -771,16 +698,6 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         }
         .check(scratch)
     }
-    fn working_order(self) -> ElementOrder {
-        if self.description.request.direction == Direction::Forward
-            && self.description.request.output_order == ElementOrder::BitReversed
-            && self.required.backend == Backend::InPlace
-        {
-            ElementOrder::Natural
-        } else {
-            ElementOrder::BitReversed
-        }
-    }
     /// Executes in place, consuming the input.
     ///
     /// [`InputPolicy::Preserve`] returns [`FftError::InvalidExecution`]. Prefix
@@ -796,18 +713,14 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         if self.description.request.input_policy == InputPolicy::Preserve {
             return Err(FftError::InvalidExecution);
         }
-        let request = self.description.request;
-        if let InputSupport::Prefix(len) = request.support {
-            values[len..].fill(PastaField::ZERO);
-        }
-        if request.direction == Direction::Forward {
-            self.scale_input(values, request.input_order, executor);
-        }
-        if request.input_order != self.working_order() {
-            self.plan.permute(values);
-        }
-        self.run(values, 2, executor, scratch, None);
-        Ok(())
+        self.bounded(false, PastaField::ONE)?.execute(
+            None,
+            values,
+            None,
+            scratch,
+            core::num::NonZeroUsize::new(self.required.max_tasks).unwrap(),
+            executor,
+        )
     }
 
     /// Writes a transform to `output`, preserving the separate input.
@@ -825,9 +738,14 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
     ) -> Result<(), FftError> {
         check_length("input", self.required.input_fields, input.len())?;
         self.check(output.len(), scratch.len())?;
-        let first = self.initialize(input, output, executor, PastaField::ONE);
-        self.run(output, first, executor, scratch, None);
-        Ok(())
+        self.bounded(true, PastaField::ONE)?.execute(
+            Some(input),
+            output,
+            None,
+            scratch,
+            core::num::NonZeroUsize::new(self.required.max_tasks).unwrap(),
+            executor,
+        )
     }
 
     /// Evaluates a coefficient view, folding its scale into initialization.
@@ -846,14 +764,14 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         self.check_coefficients(input, output.len(), scratch.len())?;
-        let first = self.initialize(
-            input.as_slice(),
+        self.bounded(true, input.normalization_factor())?.execute(
+            Some(input.as_slice()),
             output,
+            None,
+            scratch,
+            core::num::NonZeroUsize::new(self.required.max_tasks).unwrap(),
             executor,
-            input.normalization_factor(),
-        );
-        self.run(output, first, executor, scratch, None);
-        Ok(())
+        )
     }
 
     fn check_coefficients(
@@ -896,9 +814,14 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         }
         check_length("input", self.required.input_fields, input.len())?;
         self.check(output.len(), scratch.len())?;
-        let first = self.initialize(input, output, executor, PastaField::ONE);
-        self.run(output, first, executor, scratch, Some(factor.as_slice()));
-        Ok(())
+        self.bounded(true, PastaField::ONE)?.execute(
+            Some(input),
+            output,
+            Some(factor.as_slice()),
+            scratch,
+            core::num::NonZeroUsize::new(self.required.max_tasks).unwrap(),
+            executor,
+        )
     }
 
     /// Evaluates a coefficient view and multiplies the evaluations by `factor`.
@@ -923,251 +846,50 @@ impl<'a, M: PrimeModulus> PreparedOperation<'a, M> {
         if !factor.domain().same_domain(self.plan.domain) || factor.layout() != layout {
             return Err(FftError::InvalidLayout);
         }
-        let first = self.initialize(
-            input.as_slice(),
+        self.bounded(true, input.normalization_factor())?.execute(
+            Some(input.as_slice()),
             output,
+            Some(factor.as_slice()),
+            scratch,
+            core::num::NonZeroUsize::new(self.required.max_tasks).unwrap(),
             executor,
-            input.normalization_factor(),
-        );
-        self.run(output, first, executor, scratch, Some(factor.as_slice()));
-        Ok(())
+        )
     }
 
-    fn scale_input<E: Executor>(
+    fn bounded(
         self,
-        values: &mut [PastaField<M>],
-        order: ElementOrder,
-        executor: &E,
-    ) {
-        if self.plan.domain.shift() == PastaField::ONE && self.forward_scales.is_none() {
-            return;
+        separate: bool,
+        extra: PastaField<M>,
+    ) -> Result<super::run::FftPlan<'a, M>, FftError> {
+        let nz = |n| core::num::NonZeroUsize::new(n).unwrap();
+        let strategy = self.description.strategy;
+        let mut plan = super::run::FftPlan::new(
+            self.plan,
+            self.description.request,
+            nz(strategy.execution.tile_len),
+            strategy.codelet,
+            separate,
+        )?
+        .with_contiguous_permutation();
+        if strategy.initialization == Initialization::Scatter {
+            plan = plan.with_scatter_initialization();
+        }
+        if self.required.backend == Backend::Blocked {
+            plan = plan.with_columns(
+                nz(strategy.execution.columns_per_task),
+                nz(self.required.max_tasks),
+            )?;
+        }
+        if let Some(table) = self.twiddles {
+            plan = plan.with_twiddles(table)?;
         }
         if let Some(table) = self.forward_scales {
-            self.scale_input_with(values, order, executor, table.as_slice());
-        } else {
-            self.scale_input_with(
-                values,
-                order,
-                executor,
-                CoefficientPowers::new(self.plan.domain, order),
-            );
+            plan = plan.with_forward_scales(table)?;
         }
-    }
-
-    fn scale_input_with<E: Executor, S: CoefficientScaling<M>>(
-        self,
-        values: &mut [PastaField<M>],
-        order: ElementOrder,
-        executor: &E,
-        scales: S,
-    ) {
-        let chunk = values.len().div_ceil(self.required.max_tasks);
-        for_each_chunk_mut(
-            values,
-            chunk,
-            TaskBudget::new(self.required.max_tasks).unwrap(),
-            executor,
-            |job, values, _| {
-                let start = job * chunk;
-                let mut seed = scales.seed(start);
-                let count = values.len();
-                for (offset, value) in values.iter_mut().enumerate() {
-                    let index = start + offset;
-                    let degree = if order == ElementOrder::BitReversed {
-                        reverse(index, self.plan.domain.domain().log_size())
-                    } else {
-                        index
-                    };
-                    *value = scales.scale(*value, degree, &seed);
-                    if offset + 1 < count {
-                        scales.advance(index, &mut seed);
-                    }
-                }
-            },
-        );
-    }
-
-    fn initialize<E: Executor>(
-        self,
-        input: &[PastaField<M>],
-        output: &mut [PastaField<M>],
-        executor: &E,
-        extra: PastaField<M>,
-    ) -> usize {
-        let request = self.description.request;
-        // Sparse DIT initialization broadcasts the nonzero support through
-        // identity-only stages, equally for forward and inverse roots.
-        if matches!(request.support, InputSupport::Prefix(_))
-            && self.working_order() == ElementOrder::BitReversed
-        {
-            return self.plan.fill_prefix(
-                input,
-                output,
-                if request.direction == Direction::Forward {
-                    self.plan.domain.shift()
-                } else {
-                    PastaField::ONE
-                },
-                self.forward_scales.map(|t| t.as_slice()),
-                extra,
-            );
+        if self.description.request.direction == Direction::Forward {
+            plan = plan.with_input_scale(extra)?;
         }
-        if request.direction == Direction::Inverse {
-            self.initialize_with(input, output, executor, IdentityScaling);
-        } else if let Some(table) = self.forward_scales {
-            if extra == PastaField::ONE {
-                self.initialize_with(input, output, executor, table.as_slice());
-            } else {
-                self.initialize_with(
-                    input,
-                    output,
-                    executor,
-                    ScaledTable {
-                        values: table.as_slice(),
-                        extra,
-                    },
-                );
-            }
-        } else if self.plan.domain.shift() == PastaField::ONE {
-            if extra == PastaField::ONE {
-                self.initialize_with(input, output, executor, IdentityScaling);
-            } else {
-                self.initialize_with(input, output, executor, extra);
-            }
-        } else {
-            let order = if self.description.strategy.initialization == Initialization::Scatter {
-                request.input_order
-            } else {
-                self.working_order()
-            };
-            let mut powers = CoefficientPowers::new(self.plan.domain, order);
-            powers.extra = extra;
-            self.initialize_with(input, output, executor, powers);
-        }
-        2
-    }
-
-    fn initialize_with<E: Executor, S: CoefficientScaling<M>>(
-        self,
-        input: &[PastaField<M>],
-        output: &mut [PastaField<M>],
-        executor: &E,
-        scales: S,
-    ) {
-        let request = self.description.request;
-        let size = output.len();
-        let log_size = size.ilog2();
-        if self.description.strategy.initialization == Initialization::Scatter {
-            output.fill(PastaField::ZERO);
-            let mut seed = scales.seed(0);
-            for (index, value) in input.iter().enumerate() {
-                let degree = if request.input_order == ElementOrder::Natural {
-                    index
-                } else {
-                    reverse(index, log_size)
-                };
-                let destination = if self.working_order() == ElementOrder::Natural {
-                    degree
-                } else {
-                    reverse(degree, log_size)
-                };
-                output[destination] = scales.scale(*value, degree, &seed);
-                if index + 1 < input.len() {
-                    scales.advance(index, &mut seed);
-                }
-            }
-        } else {
-            let chunk = if self.description.strategy.initialization == Initialization::Blocked {
-                64
-            } else {
-                size.div_ceil(self.required.max_tasks)
-            };
-            for_each_chunk_mut(
-                output,
-                chunk,
-                TaskBudget::new(self.required.max_tasks).unwrap(),
-                executor,
-                |job, output, _| {
-                    let start = job * chunk;
-                    let mut seed = scales.seed(start);
-                    let count = output.len();
-                    for (offset, output) in output.iter_mut().enumerate() {
-                        let index = start + offset;
-                        let degree = if self.working_order() == ElementOrder::Natural {
-                            index
-                        } else {
-                            reverse(index, log_size)
-                        };
-                        let source = if request.input_order == ElementOrder::Natural {
-                            degree
-                        } else {
-                            reverse(degree, log_size)
-                        };
-                        let value = input.get(source).copied().unwrap_or(PastaField::ZERO);
-                        *output = scales.scale(value, degree, &seed);
-                        if offset + 1 < count {
-                            scales.advance(index, &mut seed);
-                        }
-                    }
-                },
-            );
-        }
-    }
-
-    fn run<E: Executor>(
-        self,
-        values: &mut [PastaField<M>],
-        first: usize,
-        executor: &E,
-        scratch: &mut [PastaField<M>],
-        factor: Option<&[PastaField<M>]>,
-    ) {
-        let request = self.description.request;
-        let mut options = self.description.strategy.execution;
-        options.max_tasks = self.required.max_tasks;
-        let scratch = &mut scratch[..self.required.scratch_fields];
-        let kernel = StageKernel {
-            plan: self.plan,
-            inverse: request.direction == Direction::Inverse,
-            dif: self.working_order() == ElementOrder::Natural,
-            scale: request.inverse_scale,
-            codelet: self.description.strategy.codelet,
-            twiddles: self.twiddles,
-            output_order: request.output_order,
-            factor,
-        };
-        match self.required.backend {
-            Backend::InPlace => kernel.run(values, first, self.required.max_tasks, executor),
-            Backend::Blocked => {
-                let fused_factor = factor.filter(|_| request.output_order == ElementOrder::Natural);
-                let mut run = if request.direction == Direction::Forward {
-                    fused_factor.map_or_else(
-                        || Run::forward(first),
-                        |factor| Run::forward_product(first, factor),
-                    )
-                } else if request.inverse_scale == InverseScale::Normalized {
-                    Run::inverse(&[])
-                } else {
-                    Run::inverse_unscaled()
-                };
-                run.set_first(first);
-                self.plan.run(values, options, executor, scratch, run);
-                if request.direction == Direction::Inverse
-                    && request.inverse_scale == InverseScale::Unscaled
-                {
-                    kernel.untwist(values, self.required.max_tasks, executor);
-                }
-                if request.output_order == ElementOrder::BitReversed {
-                    self.plan.permute(values);
-                }
-                if let Some(factor) = factor.filter(|_| fused_factor.is_none()) {
-                    for (value, factor) in values.iter_mut().zip(factor) {
-                        *value = value.mul(factor);
-                    }
-                }
-            }
-            Backend::Auto => unreachable!(),
-        }
+        Ok(plan)
     }
 
     /// Exact scratch for a contiguous batch of full in-place transforms.

@@ -1,5 +1,7 @@
 //! Monomorphic base access and arithmetic for one complete chunk or window.
 
+use super::run::storage::Storage;
+
 use super::{
     Accumulation, Bases, Input, ScalarStorage, buckets,
     recode::{self, Geometry},
@@ -70,6 +72,16 @@ pub(super) fn run<C: PastaCurve>(
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
+    run_view(input, records, digits, task, work)
+}
+
+pub(super) fn run_view<C: PastaCurve>(
+    input: &Input<'_, C>,
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
+    task: Task,
+    work: &mut Work<'_, C>,
+) -> ProjectivePoint<C> {
     match input.bases {
         Bases::Affine(b) => access(input, b, records, digits, task, work, 1),
         Bases::Prepared(b) => access(input, b, records, digits, task, work, 1),
@@ -82,8 +94,8 @@ pub(super) fn run<C: PastaCurve>(
 fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
     input: &Input<'_, C>,
     bases: &[B],
-    records: &[ScalarStorage<C>],
-    digits: &[u8],
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
@@ -92,14 +104,14 @@ fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
     }
     let top = digits
         .chunks_exact(recode::JOINT_STRIDE)
-        .map(|r| usize::from(r[eisenstein::MAX_DIGITS]))
+        .map(|r| usize::from(r.get(eisenstein::MAX_DIGITS)))
         .max()
         .unwrap_or(0);
     let mut sum = ProjectivePoint::IDENTITY;
     for column in (0..top).rev() {
         sum = sum.double();
         for (i, row) in digits.chunks_exact(recode::JOINT_STRIDE).enumerate() {
-            let code = row[column];
+            let code = row.get(column);
             if code != 0 {
                 let j = input
                     .indices
@@ -114,8 +126,8 @@ fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
 fn access<C: PastaCurve, B: Base<C>>(
     input: &Input<'_, C>,
     bases: &[B],
-    records: &[ScalarStorage<C>],
-    digits: &[u8],
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
     task: Task,
     work: &mut Work<'_, C>,
     stride: usize,
@@ -149,8 +161,8 @@ fn access<C: PastaCurve, B: Base<C>>(
 }
 fn execute<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
     view: View<'_, B, INDEXED>,
-    records: &[ScalarStorage<C>],
-    digits: &[u8],
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
@@ -165,7 +177,7 @@ fn execute<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
 }
 fn short<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
     view: View<'_, B, INDEXED>,
-    records: &[ScalarStorage<C>],
+    records: impl Storage<ScalarStorage<C>>,
     bits: u8,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
@@ -210,8 +222,8 @@ fn short<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
 }
 fn joint<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
     view: View<'_, B, INDEXED>,
-    records: &[ScalarStorage<C>],
-    digits: &[u8],
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
     pass: usize,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
@@ -222,7 +234,7 @@ fn joint<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
         let mut active = 0;
         let mut top = 0;
         for i in first..end {
-            let len = usize::from(digits[i * recode::JOINT_STRIDE + eisenstein::MAX_DIGITS]);
+            let len = usize::from(digits.get(i * recode::JOINT_STRIDE + eisenstein::MAX_DIGITS));
             if len != 0
                 && let Some(p) = view.at(i).point(0)
             {
@@ -248,7 +260,7 @@ fn joint<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
         for column in (0..top).rev() {
             partial = partial.double();
             for (i, &term) in work.indices[..active].iter().enumerate() {
-                let code = digits[term * recode::JOINT_STRIDE + column];
+                let code = digits.get(term * recode::JOINT_STRIDE + column);
                 if code != 0 {
                     partial = partial
                         .add_mixed(&eisenstein::digit_point(&tables[8 * i..8 * i + 8], code));
@@ -272,8 +284,8 @@ pub(super) fn collapse_projective<C: PastaCurve>(
 }
 fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
     view: View<'_, B, INDEXED>,
-    records: &[ScalarStorage<C>],
-    digits: &[u8],
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
@@ -282,7 +294,7 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
     if task.accumulation == Accumulation::Projective {
         let sums = &mut work.projective[..buckets];
         sums.fill(ProjectivePoint::IDENTITY);
-        recode::window_rows::<C, DIRECT>(
+        recode::window_views::<C, DIRECT>(
             records,
             digits,
             0..terms,
@@ -319,7 +331,7 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
                     survivors[i].to_projective()
                 };
             }
-            recode::window_rows::<C, DIRECT>(
+            recode::window_views::<C, DIRECT>(
                 records,
                 digits,
                 first..end,
@@ -339,7 +351,7 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
             return collapse_projective(sums);
         }
         cursors.copy_from_slice(lens);
-        recode::window_rows::<C, DIRECT>(
+        recode::window_views::<C, DIRECT>(
             records,
             digits,
             first..end,
@@ -366,7 +378,7 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
             lens[i] = cursors[i];
             cursors[i] = cursor;
         }
-        recode::window_rows::<C, DIRECT>(
+        recode::window_views::<C, DIRECT>(
             records,
             digits,
             first..end,
@@ -401,14 +413,24 @@ pub(super) fn stream<C: PastaCurve>(
     task: Task,
     sums: &mut [ProjectivePoint<C>],
 ) {
+    stream_view(input, terms, digits, task, sums)
+}
+
+pub(super) fn stream_view<C: PastaCurve>(
+    input: &Input<'_, C>,
+    terms: usize,
+    digits: impl Storage<u8>,
+    task: Task,
+    sums: &mut [ProjectivePoint<C>],
+) {
     fn deposit<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
         view: View<'_, B, INDEXED>,
         terms: usize,
-        digits: &[u8],
+        digits: impl Storage<u8>,
         task: Task,
         sums: &mut [ProjectivePoint<C>],
     ) {
-        recode::rows(
+        recode::rows_view(
             digits,
             terms,
             0..terms,

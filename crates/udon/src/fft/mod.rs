@@ -155,6 +155,7 @@ mod layout;
 mod operation;
 mod powers;
 pub mod reference;
+pub mod run;
 mod stages;
 mod tables;
 mod transform;

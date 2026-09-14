@@ -1,28 +1,12 @@
-//! Shared window scheduling and weighted job ranges with reusable metadata.
+//! Contiguous compatibility provisioning over bounded operation runs.
 
 use super::{
     Accumulation, Bases, CurveError, ExecutionOptions, Input, PastaCurve, ProjectivePoint,
     Requirements, ScalarStorage, Scalars, Scratch, check_length, check_scratch, checked_count,
-    kernels::{self, Task, Work},
-    prepared,
-    recode::{self, Geometry},
+    recode::Geometry,
 };
 use crate::exec::{Executor, TaskBudget};
 use core::num::NonZeroUsize;
-
-#[cfg(target_has_atomic = "ptr")]
-mod shared;
-
-// The shared queue retains preparation for the whole batch. Chunked and
-// streaming execution and memory-limited plans use weighted ranges to reuse
-// scratch across sequential jobs. The queue also needs pointer-width atomics.
-const fn shared_windows(options: ExecutionOptions) -> bool {
-    cfg!(target_has_atomic = "ptr")
-        && options.task_budget.get() > 1
-        && options.chunk_size.is_none()
-        && options.memory_limit.is_none()
-        && !options.streaming
-}
 
 macro_rules! size {
     ($e:expr) => {
@@ -63,7 +47,7 @@ impl Requirements {
             indices: max(self.indices, b.indices),
         }
     }
-    const fn plus(self, b: Self) -> Result<Self, CurveError> {
+    pub(super) const fn plus(self, b: Self) -> Result<Self, CurveError> {
         Ok(Self {
             scalars: size!(add(self.scalars, b.scalars)),
             digits: size!(add(self.digits, b.digits)),
@@ -73,7 +57,7 @@ impl Requirements {
             indices: size!(add(self.indices, b.indices)),
         })
     }
-    const fn times<C: PastaCurve>(self, workers: usize) -> Result<Self, CurveError> {
+    pub(super) const fn times<C: PastaCurve>(self, workers: usize) -> Result<Self, CurveError> {
         Ok(Self {
             scalars: size!(checked_count::<ScalarStorage<C>>(self.scalars, workers)),
             digits: size!(checked_count::<u8>(self.digits, workers)),
@@ -93,15 +77,15 @@ impl Requirements {
 /// Initialized opaque metadata for one input in an [`ExecutionPlan`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JobStorage {
-    geometry: Geometry,
-    cap: usize,
-    pass: usize,
-    workers: usize,
+    pub(super) geometry: Geometry,
+    pub(super) cap: usize,
+    pub(super) pass: usize,
+    pub(super) workers: usize,
     budget: TaskBudget,
     streaming: bool,
-    accumulation: Accumulation,
-    work: Requirements,
-    requirements: Requirements,
+    pub(super) accumulation: Accumulation,
+    pub(super) work: Requirements,
+    pub(super) requirements: Requirements,
 }
 impl JobStorage {
     /// Initializer; populated by [`ExecutionPlan::new`].
@@ -133,7 +117,7 @@ impl WorkerStorage {
     };
 }
 
-const fn layout<C: PastaCurve>(
+pub(super) const fn layout<C: PastaCurve>(
     terms: usize,
     geometry: Geometry,
     retained: bool,
@@ -145,10 +129,7 @@ const fn layout<C: PastaCurve>(
     if terms == 0 {
         return Ok(JobStorage::EMPTY);
     }
-    let cap = match options.chunk_size {
-        Some(c) => min(terms, c.get()),
-        None => terms,
-    };
+    let cap = cap(terms, options);
     let pass = match options.max_terms_per_pass {
         Some(c) => min(cap, c.get()),
         None => cap,
@@ -245,10 +226,20 @@ const fn layout<C: PastaCurve>(
     })
 }
 const fn cap(terms: usize, options: ExecutionOptions) -> usize {
-    match options.chunk_size {
-        Some(c) => min(terms, c.get()),
-        None => terms,
+    min(
+        8192,
+        match options.chunk_size {
+            Some(c) => min(terms, c.get()),
+            None => terms,
+        },
+    )
+}
+const fn arithmetic_options(terms: usize, mut options: ExecutionOptions) -> ExecutionOptions {
+    options.task_budget = TaskBudget::SERIAL;
+    if terms >= 4096 && options.window_bits.is_none() && !options.joint_tables {
+        options.window_bits = Some(11);
     }
+    options
 }
 const fn conservative<C: PastaCurve>(
     terms: usize,
@@ -256,7 +247,10 @@ const fn conservative<C: PastaCurve>(
 ) -> Result<JobStorage, CurveError> {
     layout::<C>(
         terms,
-        Geometry::for_len(cap(terms, options), options),
+        Geometry::for_len(
+            cap(terms, options),
+            arithmetic_options(cap(terms, options), options),
+        ),
         false,
         false,
         false,
@@ -308,18 +302,6 @@ pub(super) const fn single_requirements<C: PastaCurve>(
     mut options: ExecutionOptions,
 ) -> Result<Requirements, CurveError> {
     let mut r = size!(conservative::<C>(terms, options)).requirements;
-    if shared_windows(options) && terms != 0 {
-        // The ordinary layout includes one window-result row; shared scheduling
-        // needs a separate row for each worker, even for a single input.
-        let job = size!(conservative::<C>(terms, options));
-        r.projective = size!(add(
-            r.projective,
-            size!(checked_count::<ProjectivePoint<C>>(
-                job.geometry.windows(),
-                job.workers - 1
-            ))
-        ));
-    }
     if let Some(limit) = options.memory_limit {
         while size!(r.bytes::<C>()) > limit {
             options = match smaller(options, cap(terms, options)) {
@@ -346,8 +328,19 @@ fn job<C: PastaCurve>(
         _ => None,
     };
     let geometry = retained.map_or_else(
-        || Geometry::for_len(cap(input.len(), options), options),
-        |s| Geometry::for_shape(cap(input.len(), options), s.shape, options),
+        || {
+            Geometry::for_len(
+                cap(input.len(), options),
+                arithmetic_options(cap(input.len(), options), options),
+            )
+        },
+        |s| {
+            Geometry::for_shape(
+                cap(input.len(), options),
+                s.shape,
+                arithmetic_options(cap(input.len(), options), options),
+            )
+        },
     );
     let cached = retained
         .and_then(|s| s.cached)
@@ -403,10 +396,6 @@ fn requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],
     options: ExecutionOptions,
 ) -> Result<Requirements, CurveError> {
-    #[cfg(target_has_atomic = "ptr")]
-    if shared_windows(options) {
-        return Ok(shared::layout(inputs, options)?.requirements);
-    }
     if let Some((mid, left)) = split(inputs, options.task_budget.get()) {
         let a = requirements(
             &inputs[..mid],
@@ -456,7 +445,7 @@ impl Plan {
     }
 }
 
-fn split_scratch<C: PastaCurve>(
+pub(super) fn split_scratch<C: PastaCurve>(
     scratch: Scratch<'_, C>,
     left: Requirements,
 ) -> (Scratch<'_, C>, Scratch<'_, C>) {
@@ -478,11 +467,6 @@ pub(super) fn execute<C: PastaCurve, X: Executor>(
     executor: &X,
     scratch: Scratch<'_, C>,
 ) {
-    #[cfg(target_has_atomic = "ptr")]
-    if shared_windows(plan.options) {
-        shared::execute(inputs, None, output, plan.options, executor, scratch);
-        return;
-    }
     execute_inputs(inputs, output, plan.options, executor, scratch);
 }
 fn execute_inputs<C: PastaCurve, X: Executor>(
@@ -521,229 +505,17 @@ fn execute_job<C: PastaCurve, X: Executor>(
     executor: &X,
     scratch: Scratch<'_, C>,
 ) -> ProjectivePoint<C> {
-    if job.streaming && !input.is_empty() {
-        return execute_stream(input, job, options, executor, scratch);
-    }
-    let mut result = ProjectivePoint::IDENTITY;
-    if input.is_empty() {
-        return result;
-    }
-    for first in (0..input.len()).step_by(job.cap) {
-        let end = input.len().min(first + job.cap);
-        let n = end - first;
-        let source = input.scalars.slice(first..end);
-        let records = match source {
-            Scalars::Prepared(s) => s.records,
-            _ => {
-                prepared::prepare(
-                    source,
-                    &mut scratch.scalars[..n],
-                    options.task_budget,
-                    executor,
-                );
-                &scratch.scalars[..n]
-            }
-        };
-        // Raw inputs use conservative sizing, but classify only once while
-        // preparing records. Short arithmetic fits the reserved workspace.
-        let geometry = if matches!(source, Scalars::Prepared(_)) {
-            job.geometry
-        } else {
-            let actual = Geometry::for_prepared(records, options);
-            if matches!(actual, Geometry::Short(_)) {
-                actual
-            } else {
-                job.geometry
-            }
-        };
-        let cached = if first == 0 && end == input.len() {
-            match input.scalars {
-                Scalars::Prepared(s) => s.cached.filter(|c| c.geometry == geometry),
-                _ => None,
-            }
-        } else {
-            None
-        };
-        let digits: &[u8] = if let Some(cached) = cached {
-            cached.digits
-        } else if recode::prefer_direct(n, geometry, options.task_budget) {
-            // An empty Booth slice tells the window kernel to extract directly.
-            // Sizing still reserves digit space, so this needs no new layout.
-            &[]
-        } else {
-            let digits = &mut scratch.digits[..geometry.storage_len(n).unwrap()];
-            recode::write_parallel(records, geometry, digits, options.task_budget, executor);
-            digits
-        };
-        let windows = geometry.windows();
-        let (results, projective) = scratch.projective.split_at_mut(job.geometry.windows());
-        let results = &mut results[..windows];
-        let work = Work {
-            affine: scratch.affine,
-            projective,
-            field: scratch.field,
-            indices: scratch.indices,
-        };
-        let task = Task {
-            offset: first,
-            window: 0,
-            pass: job.pass.min(n),
-            geometry,
-            accumulation: job.accumulation,
-        };
-        visit(
-            input,
-            records,
-            digits,
-            task,
-            results,
-            work,
-            job.work,
-            min(job.workers, windows),
+    super::run::MsmPlan::from_job(input.len(), options, job)
+        .execute(
+            *input,
+            // Preparation and streaming deposits use retained storage, so their
+            // concurrency need not stop at the number of window scratch bundles.
+            // The driver clamps temporary leases to the available windows.
+            NonZeroUsize::new(job.budget.get()).unwrap(),
             executor,
-        );
-        let mut partial = ProjectivePoint::IDENTITY;
-        for window in results.iter().rev() {
-            for _ in 0..geometry.width() {
-                partial = partial.double();
-            }
-            partial = partial.add(window);
-        }
-        result = result.add(&partial);
-    }
-    result
-}
-fn execute_stream<C: PastaCurve, X: Executor>(
-    input: &Input<'_, C>,
-    job: JobStorage,
-    options: ExecutionOptions,
-    executor: &X,
-    scratch: Scratch<'_, C>,
-) -> ProjectivePoint<C> {
-    let buckets = &mut scratch.projective[..job.geometry.windows() * job.geometry.buckets()];
-    buckets.fill(ProjectivePoint::IDENTITY);
-    for first in (0..input.len()).step_by(job.cap) {
-        let end = input.len().min(first + job.cap);
-        let n = end - first;
-        let source = input.scalars.slice(first..end);
-        let records = match source {
-            Scalars::Prepared(s) => s.records,
-            _ => {
-                prepared::prepare(
-                    source,
-                    &mut scratch.scalars[..n],
-                    options.task_budget,
-                    executor,
-                );
-                &scratch.scalars[..n]
-            }
-        };
-        let digits = &mut scratch.digits[..job.geometry.storage_len(n).unwrap()];
-        recode::write_parallel(records, job.geometry, digits, options.task_budget, executor);
-        for (window, buckets) in buckets.chunks_exact_mut(job.geometry.buckets()).enumerate() {
-            kernels::stream(
-                input,
-                n,
-                digits,
-                Task {
-                    offset: first,
-                    window,
-                    pass: n,
-                    geometry: job.geometry,
-                    accumulation: Accumulation::Projective,
-                },
-                buckets,
-            );
-        }
-    }
-    let mut result = ProjectivePoint::IDENTITY;
-    for buckets in buckets.chunks_exact(job.geometry.buckets()).rev() {
-        for _ in 0..job.geometry.width() {
-            result = result.double();
-        }
-        result = result.add(&kernels::collapse_projective(buckets));
-    }
-    result
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Scoped recursion splits task results and exclusive workspace together."
-)]
-fn visit<C: PastaCurve, X: Executor>(
-    input: &Input<'_, C>,
-    records: &[ScalarStorage<C>],
-    digits: &[u8],
-    task: Task,
-    results: &mut [ProjectivePoint<C>],
-    mut work: Work<'_, C>,
-    layout: Requirements,
-    workers: usize,
-    executor: &X,
-) {
-    if workers > 1 {
-        let left = workers / 2;
-        let mid = results.len() / workers * left + min(left, results.len() % workers);
-        let (ra, rb) = results.split_at_mut(mid);
-        let (aa, ab) = work.affine.split_at_mut(layout.affine * left);
-        let (pa, pb) = work.projective.split_at_mut(layout.projective * left);
-        let (fa, fb) = work.field.split_at_mut(layout.field * left);
-        let (ia, ib) = work.indices.split_at_mut(layout.indices * left);
-        executor.join(
-            || {
-                visit(
-                    input,
-                    records,
-                    digits,
-                    task,
-                    ra,
-                    Work {
-                        affine: aa,
-                        projective: pa,
-                        field: fa,
-                        indices: ia,
-                    },
-                    layout,
-                    left,
-                    executor,
-                )
-            },
-            || {
-                visit(
-                    input,
-                    records,
-                    digits,
-                    Task {
-                        window: task.window + mid,
-                        ..task
-                    },
-                    rb,
-                    Work {
-                        affine: ab,
-                        projective: pb,
-                        field: fb,
-                        indices: ib,
-                    },
-                    layout,
-                    workers - left,
-                    executor,
-                )
-            },
-        );
-    } else {
-        for (window, result) in results.iter_mut().enumerate() {
-            *result = kernels::run(
-                input,
-                records,
-                digits,
-                Task {
-                    window: task.window + window,
-                    ..task
-                },
-                &mut work,
-            );
-        }
-    }
+            scratch,
+        )
+        .expect("validated synchronous MSM storage")
 }
 
 /// Borrowed reusable plan over immutable inputs and caller-owned metadata.
@@ -877,18 +649,6 @@ impl<'a, 'i, C: PastaCurve> ExecutionPlan<'a, 'i, C> {
     ) -> Result<(), CurveError> {
         check_length("output", self.inputs.len(), output.len())?;
         let scratch = scratch.checked(self.plan.requirements)?;
-        #[cfg(target_has_atomic = "ptr")]
-        if shared_windows(self.plan.options) {
-            shared::execute(
-                self.inputs,
-                Some(self.jobs),
-                output,
-                self.plan.options,
-                executor,
-                scratch,
-            );
-            return Ok(());
-        }
         execute_workers(
             self.inputs,
             self.jobs,
@@ -909,17 +669,6 @@ fn fill_metadata<C: PastaCurve>(
     workers: &mut [WorkerStorage],
     offset: usize,
 ) -> usize {
-    if shared_windows(options) && !inputs.is_empty() {
-        for (input, storage) in inputs.iter().zip(jobs) {
-            *storage = job(input, options).unwrap();
-        }
-        workers[0] = WorkerStorage {
-            begin: offset,
-            end: offset + inputs.len(),
-            requirements: requirements(inputs, options).unwrap(),
-        };
-        return 1;
-    }
     if let Some((mid, left)) = split(inputs, options.task_budget.get()) {
         let (a, b) = jobs.split_at_mut(mid);
         let used = fill_metadata(

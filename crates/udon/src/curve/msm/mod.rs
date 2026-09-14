@@ -62,6 +62,8 @@ mod kernels;
 mod prepared;
 mod recode;
 mod schedule;
+
+pub mod run;
 pub use prepared::{PreparedScalars, ScalarStorage};
 pub use schedule::{ExecutionPlan, JobStorage, WorkerStorage};
 const BOOTH_MIN: usize = 128;

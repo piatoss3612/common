@@ -289,14 +289,23 @@ as MSM bases.
 ladder's check for exceptional affine intermediates, including the decision to
 use complete projective arithmetic.
 
-Grouped scheduling splits contiguous ranges by estimated work and assigns each
-worker its own maximum scratch across sequential jobs. Serial groups reuse
-maximum digit storage rather than summing all rows. Independent output folds
-run within their job's worker. `ExecutionPlan` retains job and worker metadata
-for repeat execution; no scalar-sized task objects or dynamic queue are needed.
-The weight is intentionally coarse; it does not model every cache or occupancy
-effect. The workload harness compared this policy with serial calls and
-caller-scheduled independent MSMs in the same fixed-size pool.
+Grouped execution now uses a
+[shared window queue](../crates/udon/src/curve/msm/schedule/shared.rs) when the
+target supports pointer-width atomics, the task budget exceeds one, and no chunk
+limit, memory ceiling, or streaming mode is set. It retains preparation for the
+whole batch and gives each worker a private result row, allowing workers to
+claim windows across input boundaries. Other configurations use
+[weighted job ranges](../crates/udon/src/curve/msm/schedule.rs) with scratch reused
+across sequential jobs. `ExecutionPlan` retains metadata for either schedule.
+
+The measurements below predate the shared queue and do not establish its timing
+or storage effects. The measured scheduler split contiguous ranges by estimated
+work and assigned each worker its maximum scratch across sequential jobs.
+Serial groups reused maximum digit storage rather than summing all rows, and
+independent output folds ran within their job's worker. The coarse weight did
+not model every cache or occupancy effect. The workload harness compared that
+policy with serial calls and caller-scheduled independent MSMs in the same
+fixed-size pool.
 
 The Pallas lifecycle recheck separates retained data from temporary buffers:
 
@@ -332,9 +341,9 @@ default. At 32,768 terms, explicit streaming width eight takes 137.9 ms with
 with 19,008 bytes, and under 8 KiB takes 382.6 ms with 6,656 bytes. They offer
 different time/storage tradeoffs.
 
-The corrected grouped scheduler preserves a dominant job's internal worker
+The measured weighted scheduler preserved a dominant job's internal worker
 budget when neighboring jobs are too small to justify a separate range. Odd
-budgets divide work in proportion to the available workers. With three workers,
+budgets divided work in proportion to the available workers. With three workers,
 the 1,024-term heterogeneous family measured 1.73 ms with a reused plan, versus
 3.91 ms for serial calls and 3.58 ms for caller-scheduled serial MSMs. The
 8,192-term family measured 9.40, 22.91, and 22.41 ms respectively. A group of 256
@@ -394,7 +403,7 @@ outside timed loops.
 | Mandatory width-eight affine path | Forced widths 4–12 and affine/projective/hybrid backends; budget-dependent widths with sampled measurements and extrapolation limits |
 | Digit preparation overhead | Direct extraction for medium width-eight chunks with large budgets; parallel packed recoding; measured cases and unmeasured boundaries distinguished above |
 | Coupled preparation lifetimes | Rebindable selection, reusable records and optional recoding, compact basis binding, reusable plans |
-| Heterogeneous scheduling and serial tail | Weighted ranges, per-worker maxima, independent folds, retained offsets |
+| Heterogeneous scheduling and serial tail | Shared window queue or weighted ranges according to options and target support; earlier measurements described above |
 | Missing optimization invariants | Direct BigUint reducer/collapse oracle, production layouts and bounds, forced modes, planner partitions, cache and input contracts |
 | Public implementation layout | Private option/count/scratch fields with constructors and accessors; typed initialized storage preserved |
 | Broader FFT convention changes | Deferred as outside MSM scope |

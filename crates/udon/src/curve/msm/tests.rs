@@ -59,6 +59,41 @@ impl Executor for Pool {
     }
 }
 
+/// Measures the widest set of independent leaves exposed by a join tree.
+///
+/// Jobs run sequentially: consecutive joins take a maximum; joined branches add.
+/// This checks the allowance without relying on OS scheduling or worker counts.
+struct JoinWidth(core::sync::atomic::AtomicUsize);
+impl JoinWidth {
+    fn measure<R>(&self, work: impl FnOnce() -> R) -> (R, usize) {
+        use core::sync::atomic::{AtomicUsize, Ordering};
+        struct Restore<'a>(&'a AtomicUsize, usize);
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                self.0.store(self.1, Ordering::Relaxed);
+            }
+        }
+        let _restore = Restore(&self.0, self.0.swap(1, Ordering::Relaxed));
+        let result = work();
+        (result, self.0.load(Ordering::Relaxed))
+    }
+}
+impl Executor for JoinWidth {
+    fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)
+    where
+        L: FnOnce() -> A + Send,
+        R: FnOnce() -> B + Send,
+        A: Send,
+        B: Send,
+    {
+        let ((a, left), (b, right)) =
+            SerialExecutor.join(|| self.measure(left), || self.measure(right));
+        self.0
+            .fetch_max(left + right, core::sync::atomic::Ordering::Relaxed);
+        (a, b)
+    }
+}
+
 fn reference<C: PastaCurve>(input: &Input<'_, C>) -> ProjectivePoint<C> {
     let mut sum = ProjectivePoint::IDENTITY;
     let Scalars::Raw(scalars) = input.scalars else {
@@ -553,13 +588,13 @@ fn doubling_cancellation_identity_and_pass_survivors() {
 }
 
 #[test]
-fn grouped_jobs_and_nested_single_worker() {
+fn grouped_jobs_share_workers_with_side_work_and_reuse_dirty_scratch() {
     let bases = [AffinePoint::<Pallas>::GENERATOR; 700];
     let cached = [PreparedAffinePoint::from_affine(&bases[0]); 700];
     let points = [Point::<Pallas>::IDENTITY; 700];
     let scalars: Vec<_> = field_samples().take(700).collect();
     let indices: Vec<_> = (0..700).map(|i| i as u32 % 13).collect();
-    let jobs = [
+    let mut jobs = [
         Input::new(Bases::Affine(&[]), &[]).unwrap(),
         Input::indexed(Bases::Prepared(&cached), &indices[..700], &scalars).unwrap(),
         Input::new(Bases::Affine(&bases[..17]), &scalars[..17]).unwrap(),
@@ -567,25 +602,59 @@ fn grouped_jobs_and_nested_single_worker() {
         Input::new(Bases::Affine(&bases[..257]), &scalars[..257]).unwrap(),
     ];
     let expected = jobs.map(|input| reference(&input));
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
-        .build()
+    let mut records = vec![ScalarStorage::ZERO; scalars.len()];
+    let prepared =
+        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
+            .unwrap();
+    let mut digits = vec![0; prepared.cache_len(ExecutionOptions::SERIAL).unwrap()];
+    let retained = prepared
+        .cache(ExecutionOptions::SERIAL, &mut digits)
         .unwrap();
-    for tasks in [1, 3, 7, 32, 128] {
-        let options = ExecutionOptions::SERIAL
-            .with_task_budget(TaskBudget::new(tasks).unwrap())
-            .with_max_terms_per_pass(NonZeroUsize::new(63));
-        let r = batch_requirements(&jobs, options).unwrap();
-        let mut buffers = Buffers::new(r);
-        let mut output = [ProjectivePoint::IDENTITY; 5];
-        pool.install(|| {
-            Pool.join(
-                || execute_batch(&jobs, &mut output, options, &Pool, buffers.borrow()).unwrap(),
-                || (),
-            )
-        });
-        assert_eq!(output, expected);
-        buffers.tails(r);
+    jobs[1] = jobs[1].selection().with_prepared_scalars(retained).unwrap();
+    for workers in [1, 2, 4] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        for tasks in [1, 3, 7, 32, 128] {
+            let options = ExecutionOptions::SERIAL
+                .with_task_budget(TaskBudget::new(tasks).unwrap())
+                .with_max_terms_per_pass(NonZeroUsize::new(63));
+            let r = batch_requirements(&jobs, options).unwrap();
+            let mut buffers = Buffers::new(r);
+            let mut output = [ProjectivePoint::IDENTITY; 5];
+            pool.install(|| {
+                Pool.join(
+                    || execute_batch(&jobs, &mut output, options, &Pool, buffers.borrow()).unwrap(),
+                    || (),
+                )
+            });
+            assert_eq!(output, expected);
+            buffers.tails(r);
+            let (j, w) = ExecutionPlan::<Pallas>::storage_len(jobs.len(), options).unwrap();
+            let mut metadata = vec![JobStorage::EMPTY; j + 1];
+            let mut ranges = vec![WorkerStorage::EMPTY; w + 1];
+            let plan = ExecutionPlan::new(&jobs, options, &mut metadata, &mut ranges).unwrap();
+            assert_eq!(plan.requirements(), r);
+            // Dirty scratch checks that workers clear unclaimed result slots.
+            for _ in 0..2 {
+                output.fill(ProjectivePoint::GENERATOR);
+                pool.install(|| plan.execute(&mut output, &Pool, buffers.borrow()).unwrap());
+                assert_eq!(output, expected);
+                buffers.tails(r);
+            }
+            let width = JoinWidth(core::sync::atomic::AtomicUsize::new(1));
+            let (result, peak) =
+                width.measure(|| plan.execute(&mut output, &width, buffers.borrow()));
+            result.unwrap();
+            assert_eq!(output, expected);
+            assert!(
+                peak <= tasks,
+                "{peak} concurrent leaves exceed {tasks} tasks"
+            );
+            assert_eq!(metadata[j], JobStorage::EMPTY);
+            assert_eq!(ranges[w], WorkerStorage::EMPTY);
+        }
     }
 }
 

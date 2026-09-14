@@ -25,6 +25,44 @@ impl Executor for RayonExecutor {
 
 struct DropCount<'a>(&'a AtomicUsize);
 
+#[test]
+fn independent_borrowed_jobs_keep_indices_and_complete_on_panic() {
+    fn check(executor: &impl Executor) {
+        for len in [0, 1, 3, 128] {
+            let mut values = vec![Cell::new(0); len];
+            let mut borrowed: Vec<_> = values.iter_mut().collect();
+            for_each_task_mut(&mut borrowed, executor, |index, value| {
+                value.set(value.get() + index + 1);
+            });
+            assert!(
+                values
+                    .iter()
+                    .enumerate()
+                    .all(|(i, value)| value.get() == i + 1)
+            );
+        }
+        for failing in [0, 7, 16] {
+            let mut values = [0; 17];
+            let panic = catch_unwind(AssertUnwindSafe(|| {
+                for_each_task_mut(&mut values, executor, |index, value| {
+                    *value += 1;
+                    assert_ne!(index, failing, "independent job failure");
+                });
+            }));
+            assert!(panic.is_err());
+            assert_eq!(values, [1; 17]);
+        }
+    }
+    check(&SerialExecutor);
+    for workers in [1, 2, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| check(&RayonExecutor));
+    }
+}
+
 impl Drop for DropCount<'_> {
     fn drop(&mut self) {
         self.0.fetch_add(1, Ordering::SeqCst);

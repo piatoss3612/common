@@ -175,7 +175,7 @@ fn shrinking_batches<C: PastaCurve>() {
                         result
                     },
                     |side| {
-                        assert_eq!(side, TaskBudget::SERIAL);
+                        assert_eq!(side, budget);
                         core::array::from_fn::<_, 2, _>(|i| {
                             fixed[0]
                                 .mul(&side_scalars[2 * i])

@@ -1,4 +1,4 @@
-//! Weighted scoped scheduling with reusable per-job and worker metadata.
+//! Shared window scheduling and weighted job ranges with reusable metadata.
 
 use super::{
     Accumulation, Bases, CurveError, ExecutionOptions, Input, PastaCurve, ProjectivePoint,
@@ -9,6 +9,20 @@ use super::{
 };
 use crate::exec::{Executor, TaskBudget};
 use core::num::NonZeroUsize;
+
+#[cfg(target_has_atomic = "ptr")]
+mod shared;
+
+// The shared queue retains preparation for the whole batch. Chunked and
+// streaming execution and memory-limited plans use weighted ranges to reuse
+// scratch across sequential jobs. The queue also needs pointer-width atomics.
+const fn shared_windows(options: ExecutionOptions) -> bool {
+    cfg!(target_has_atomic = "ptr")
+        && options.task_budget.get() > 1
+        && options.chunk_size.is_none()
+        && options.memory_limit.is_none()
+        && !options.streaming
+}
 
 macro_rules! size {
     ($e:expr) => {
@@ -103,7 +117,7 @@ impl JobStorage {
         requirements: ZERO,
     };
 }
-/// Initialized opaque metadata for a scoped worker's contiguous job range.
+/// Initialized opaque metadata for a scheduled contiguous job range.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkerStorage {
     begin: usize,
@@ -294,6 +308,18 @@ pub(super) const fn single_requirements<C: PastaCurve>(
     mut options: ExecutionOptions,
 ) -> Result<Requirements, CurveError> {
     let mut r = size!(conservative::<C>(terms, options)).requirements;
+    if shared_windows(options) && terms != 0 {
+        // The ordinary layout includes one window-result row; shared scheduling
+        // needs a separate row for each worker, even for a single input.
+        let job = size!(conservative::<C>(terms, options));
+        r.projective = size!(add(
+            r.projective,
+            size!(checked_count::<ProjectivePoint<C>>(
+                job.geometry.windows(),
+                job.workers - 1
+            ))
+        ));
+    }
     if let Some(limit) = options.memory_limit {
         while size!(r.bytes::<C>()) > limit {
             options = match smaller(options, cap(terms, options)) {
@@ -377,6 +403,10 @@ fn requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],
     options: ExecutionOptions,
 ) -> Result<Requirements, CurveError> {
+    #[cfg(target_has_atomic = "ptr")]
+    if shared_windows(options) {
+        return Ok(shared::layout(inputs, options)?.requirements);
+    }
     if let Some((mid, left)) = split(inputs, options.task_budget.get()) {
         let a = requirements(
             &inputs[..mid],
@@ -448,6 +478,11 @@ pub(super) fn execute<C: PastaCurve, X: Executor>(
     executor: &X,
     scratch: Scratch<'_, C>,
 ) {
+    #[cfg(target_has_atomic = "ptr")]
+    if shared_windows(plan.options) {
+        shared::execute(inputs, None, output, plan.options, executor, scratch);
+        return;
+    }
     execute_inputs(inputs, output, plan.options, executor, scratch);
 }
 fn execute_inputs<C: PastaCurve, X: Executor>(
@@ -822,8 +857,8 @@ impl<'a, 'i, C: PastaCurve> ExecutionPlan<'a, 'i, C> {
     }
     /// Number of job ranges in the retained schedule.
     ///
-    /// Each range can also use scoped tasks within a job, so this is not a count
-    /// of tasks or executor threads.
+    /// A range may share scoped tasks across jobs or use tasks within each job.
+    /// This count does not measure task concurrency or executor threads.
     pub const fn worker_ranges(&self) -> usize {
         self.workers.len()
     }
@@ -842,6 +877,18 @@ impl<'a, 'i, C: PastaCurve> ExecutionPlan<'a, 'i, C> {
     ) -> Result<(), CurveError> {
         check_length("output", self.inputs.len(), output.len())?;
         let scratch = scratch.checked(self.plan.requirements)?;
+        #[cfg(target_has_atomic = "ptr")]
+        if shared_windows(self.plan.options) {
+            shared::execute(
+                self.inputs,
+                Some(self.jobs),
+                output,
+                self.plan.options,
+                executor,
+                scratch,
+            );
+            return Ok(());
+        }
         execute_workers(
             self.inputs,
             self.jobs,
@@ -862,6 +909,17 @@ fn fill_metadata<C: PastaCurve>(
     workers: &mut [WorkerStorage],
     offset: usize,
 ) -> usize {
+    if shared_windows(options) && !inputs.is_empty() {
+        for (input, storage) in inputs.iter().zip(jobs) {
+            *storage = job(input, options).unwrap();
+        }
+        workers[0] = WorkerStorage {
+            begin: offset,
+            end: offset + inputs.len(),
+            requirements: requirements(inputs, options).unwrap(),
+        };
+        return 1;
+    }
     if let Some((mid, left)) = split(inputs, options.task_budget.get()) {
         let (a, b) = jobs.split_at_mut(mid);
         let used = fill_metadata(
@@ -973,8 +1031,9 @@ mod tests {
         let input = |n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap();
         let inputs = [input(2), input(1024), input(3), input(17)];
         for budget in [2, 3, 5, 17] {
-            let options =
-                ExecutionOptions::SERIAL.with_task_budget(TaskBudget::new(budget).unwrap());
+            let options = ExecutionOptions::SERIAL
+                .with_task_budget(TaskBudget::new(budget).unwrap())
+                .with_memory_limit(usize::MAX);
             let mut jobs = [JobStorage::EMPTY; 4];
             let mut workers = [WorkerStorage::EMPTY; 4];
             let plan = ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
@@ -983,8 +1042,9 @@ mod tests {
         }
         let inputs = [input(2); 30];
         for budget in [3, 5] {
-            let options =
-                ExecutionOptions::SERIAL.with_task_budget(TaskBudget::new(budget).unwrap());
+            let options = ExecutionOptions::SERIAL
+                .with_task_budget(TaskBudget::new(budget).unwrap())
+                .with_memory_limit(usize::MAX);
             let mut jobs = [JobStorage::EMPTY; 30];
             let mut workers = [WorkerStorage::EMPTY; 5];
             let plan = ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();

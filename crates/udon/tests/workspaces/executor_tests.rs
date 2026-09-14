@@ -64,11 +64,11 @@ fn selected_pool_borrowing_nested_progress_and_cleanup() {
                 &executor,
                 budget,
                 |main| {
-                    assert_eq!(main.get(), threads.saturating_sub(1).max(1));
+                    assert_eq!(main, budget);
                     panic!("main work failed")
                 },
                 |side| {
-                    assert_eq!(side, TaskBudget::SERIAL);
+                    assert_eq!(side, budget);
                     finished.fetch_add(1, Ordering::SeqCst);
                     Guard(&dropped)
                 },

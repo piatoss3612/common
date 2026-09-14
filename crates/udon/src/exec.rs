@@ -4,8 +4,9 @@
 //! the call returns. [`TaskBudget`] divides a concurrency allowance between
 //! outer jobs and their nested work. [`for_each_mut`] schedules separate buffer
 //! owners or borrowed tiles; [`for_each_chunk_mut`] schedules contiguous chunks.
-//! These helpers and [`SerialExecutor`] do not allocate. A caller's executor
-//! and jobs may use their own resources.
+//! [`for_each_task_mut`] exposes independent jobs without dividing their nested
+//! allowances. These helpers and [`SerialExecutor`] do not allocate. A caller's
+//! executor and jobs may use their own resources.
 //!
 //! Jobs can return different types, including values borrowed from their inputs:
 //!
@@ -134,8 +135,11 @@ impl Executor for SerialExecutor {
 /// A nonzero allowance for concurrent work partitions, including nested work.
 ///
 /// This is a copyable planning value, not a reservation of threads or a global
-/// concurrency limiter. Callers must divide it between simultaneous operations
-/// and honor the resulting allowances. Serial execution may use any budget.
+/// concurrency limiter. Divide it between simultaneous operations when their
+/// combined work partitions must fit one allowance. Independent operations with
+/// separate scratch can each use a full budget on a bounded, cooperative pool;
+/// the pool limits executing workers, while each operation plans its own scratch.
+/// Serial execution may use any budget.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TaskBudget(NonZeroUsize);
 
@@ -192,12 +196,75 @@ impl TaskBudget {
     }
 }
 
+/// Exposes each item as an independent scoped job with its original index.
+///
+/// Items may own buffers or borrow disjoint mutable data. Each callback receives
+/// the item's zero-based position in `values`, regardless of execution order.
+/// A cooperative executor can schedule items separately even when their work
+/// takes different amounts of time.
+///
+/// This helper does not allocate or impose a task budget. Callers supply each
+/// job's resources and any nested budget; the executor controls worker
+/// concurrency. Use [`for_each_mut`] to divide one allowance among outer jobs
+/// and their nested work.
+///
+/// On success, every item is visited exactly once, in unspecified order. Empty
+/// input invokes no callbacks.
+///
+/// ```
+/// use zakura_udon::exec::{SerialExecutor, for_each_task_mut};
+///
+/// let mut first = [0; 2];
+/// let mut second = [0; 5];
+/// let mut buffers = [&mut first[..], &mut second[..]];
+/// for_each_task_mut(&mut buffers, &SerialExecutor, |index, buffer| {
+///     buffer.fill(index + 1);
+/// });
+/// assert_eq!(first, [1; 2]);
+/// assert_eq!(second, [2; 5]);
+/// ```
+///
+/// # Panics
+///
+/// A callback panic may leave partial changes. All callbacks are still invoked,
+/// and all jobs finish or unwind before the panic propagates, following
+/// [`Executor::join`]. A second panic during unwinding may abort the process.
+pub fn for_each_task_mut<T, E, F>(values: &mut [T], executor: &E, work: F)
+where
+    T: Send,
+    E: Executor + ?Sized,
+    F: Fn(usize, &mut T) + Sync,
+{
+    fn visit<T, E, F>(values: &mut [T], offset: usize, executor: &E, work: &F)
+    where
+        T: Send,
+        E: Executor + ?Sized,
+        F: Fn(usize, &mut T) + Sync,
+    {
+        match values {
+            [] => (),
+            [value] => work(offset, value),
+            _ => {
+                let mid = values.len() / 2;
+                let (left, right) = values.split_at_mut(mid);
+                executor.join(
+                    || visit(left, offset, executor, work),
+                    || visit(right, offset + mid, executor, work),
+                );
+            }
+        }
+    }
+    visit(values, 0, executor, &work);
+}
+
 /// Applies `work` to each item with its index and nested task allowance.
 ///
 /// Items may own separate buffers, or be mutable references to separate tiles.
 /// Each index is the item's zero-based position in `values`, regardless of
 /// execution order. Scheduling, budget division, empty input, and panic behavior
 /// follow [`for_each_chunk_mut`] with one item per chunk.
+/// Use [`for_each_task_mut`] to expose every item as a separate job without
+/// dividing a combined task budget.
 pub fn for_each_mut<T, E, F>(values: &mut [T], budget: TaskBudget, executor: &E, work: F)
 where
     T: Send,

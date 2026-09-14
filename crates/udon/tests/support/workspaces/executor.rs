@@ -19,9 +19,10 @@ impl Executor for RayonExecutor<'_> {
     }
 }
 
-/// Reserve one allowance for serial side work, giving the remainder to MSM.
+/// Runs both operations with the full task budget and independent scratch.
 ///
-/// A single allowance executes both branches serially, including on unwind.
+/// A serial budget runs both branches through [`SerialExecutor`], including on
+/// unwind. Larger budgets use `executor` to control worker concurrency.
 pub fn with_side_work<E, L, R, A, B>(executor: &E, budget: TaskBudget, left: L, right: R) -> (A, B)
 where
     E: Executor,
@@ -30,8 +31,9 @@ where
     A: Send,
     B: Send,
 {
-    match budget.split_at(budget.get() - 1) {
-        Some((main, side)) => executor.join(|| left(main), || right(side)),
-        None => SerialExecutor.join(|| left(TaskBudget::SERIAL), || right(TaskBudget::SERIAL)),
+    if budget == TaskBudget::SERIAL {
+        SerialExecutor.join(|| left(budget), || right(budget))
+    } else {
+        executor.join(|| left(budget), || right(budget))
     }
 }

@@ -375,8 +375,8 @@ Group borrowed `Input` handles for one curve in a slice, query
 `batch_requirements(&inputs, options)`, then call
 `execute_batch(&inputs, &mut output, options, executor, scratch)`. There is one
 output per input, in input order. Jobs share the task budget, and sequential jobs
-reuse scratch. The [MSM report](MSM_REVIEW_PERFORMANCE.md#preparation-reuse-and-scheduling)
-describes the current scheduling policy and measured workload tradeoffs.
+reuse scratch. The [MSM report](MSM_REVIEW_PERFORMANCE.md#retained-preparation-and-grouped-scheduling)
+distinguishes the current scheduling policy from earlier measured workloads.
 
 For repeated execution of immutable inputs, retain `ExecutionPlan`. Its
 `storage_len(input_count, options)` returns job and worker metadata counts;
@@ -392,11 +392,12 @@ rows too; use selection rebinding and `Input::execute` or `execute_batch` when
 those rows change.
 
 Compose fixed-base products or other work with
-[`Executor::join`](../crates/udon/src/exec.rs), splitting the outer
-`TaskBudget` among simultaneous operations. Pass the MSM branch's budget to its
-`ExecutionOptions`; ordinary fixed-base products need no executor. This uses the
-same scoped execution contract as FFTs and works inside an existing pool,
-including a one-thread pool.
+[`Executor::join`](../crates/udon/src/exec.rs). Choose per-operation budgets and
+account for simultaneous scratch as described under
+[scoped execution](WORKSPACES.md#scoped-execution), then pass the MSM branch's
+budget to its `ExecutionOptions`. Ordinary fixed-base products need no executor.
+This uses the same scoped execution contract as FFTs and works inside an
+existing pool, including a one-thread pool.
 
 ## Validation and performance
 

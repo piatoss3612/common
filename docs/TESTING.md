@@ -82,6 +82,8 @@ worker, to expose nested joins that depend on an idle worker. The
 [execution tests](../crates/udon/src/exec/tests.rs) also exercise borrowed results
 and cleanup after a branch panics. Nested helper tests track the combined task
 allowances of active callbacks, independently of how many threads run them.
+Independent-item helper tests check original indices and completion of every
+callback after one panics.
 
 ## Test roles
 
@@ -95,8 +97,8 @@ allowances of active callbacks, independently of how many threads run them.
   Token snapshots establish expansion structure, not successful compilation or
   runtime semantics.
   The [workspace tests](../crates/udon/tests/workspaces/main.rs) compose MSMs and FFTs
-  to check buffer reuse, divided task budgets, and recovery after incomplete or
-  panicking work.
+  to check buffer reuse, independent and divided task budgets, and recovery after
+  incomplete or panicking work.
 - Compiler tests establish type, diagnostic, constant-evaluation, and dependency
   contracts in separate consumers. Use full builds for assertions deferred to
   code generation; `cargo check` can miss them. Check the relevant diagnostic and

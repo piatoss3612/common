@@ -1,8 +1,9 @@
+#[cfg(test)]
 use core::ops::Range;
 
 use super::{Completion, Kernel, Outcome, Task, TaskError};
 
-/// Exclusive identity storage for a run or admission arena.
+/// Exclusive identity storage for a run.
 ///
 /// Construct a separate value for each simultaneously bound owner. Binding
 /// borrows it exclusively; detached tasks retain shared references obtained
@@ -37,12 +38,14 @@ impl TaskKey<'_> {
 
 /// A compact consecutive range of currently claimable tasks.
 #[derive(Clone, Debug)]
-pub struct ReadyRange<'a> {
+#[cfg(test)]
+pub(crate) struct ReadyRange<'a> {
     identity: Option<&'a Identity>,
     epoch: usize,
     range: Range<usize>,
 }
 
+#[cfg(test)]
 impl<'a> ReadyRange<'a> {
     /// Empty output storage for [`Frontier::ready`].
     pub const EMPTY: Self = Self {
@@ -63,11 +66,6 @@ impl<'a> ReadyRange<'a> {
     /// Number of represented tasks.
     pub fn len(&self) -> usize {
         self.range.len()
-    }
-
-    /// Whether this range represents no work.
-    pub fn is_empty(&self) -> bool {
-        self.range.is_empty()
     }
 }
 
@@ -99,7 +97,7 @@ pub(super) struct Ticket<'a> {
 
 /// Resources returned by a successfully accepted completion.
 #[derive(Debug)]
-pub struct Completed<R, O> {
+pub(crate) struct Completed<R, O> {
     /// The entire owned bundle, including retained input guards and scratch.
     pub resources: R,
     /// Kernel output; absent for cancellation or unwinding.
@@ -111,6 +109,7 @@ pub struct Completed<R, O> {
     /// Reduce or otherwise consume retained partials in this range before
     /// claiming work that reuses their slots. Its length is bounded by the
     /// number of frontier slots.
+    #[cfg(test)]
     pub retired: Range<usize>,
 }
 
@@ -125,7 +124,7 @@ pub struct Completed<R, O> {
 /// Metadata and identity are caller owned. All methods run on the coordinator;
 /// detached tasks can move to scoped workers without borrowing `&mut Frontier`.
 #[derive(Debug)]
-pub struct Frontier<'a> {
+pub(crate) struct Frontier<'a> {
     identity: &'a Identity,
     storage: &'a mut [TaskStorage],
     epoch: usize,
@@ -180,6 +179,7 @@ impl<'a> Frontier<'a> {
     ///
     /// Does not claim work. Repeated calls may report the same tasks; resource
     /// availability and arbitration belong to the application scheduler.
+    #[cfg(test)]
     pub fn ready(&self, output: &mut [ReadyRange<'a>]) -> usize {
         if self.failed {
             return 0;
@@ -304,6 +304,7 @@ impl<'a> Frontier<'a> {
         slot.state = State::Complete;
         self.inflight -= 1;
         self.failed |= completion.outcome != Outcome::Success;
+        #[cfg(test)]
         let start = self.start;
         while self.start < self.total
             && self.storage[self.start % self.storage.len()].state == State::Complete
@@ -315,6 +316,7 @@ impl<'a> Frontier<'a> {
             resources: completion.resources,
             output: completion.output,
             outcome: completion.outcome,
+            #[cfg(test)]
             retired: start..self.start,
         })
     }
@@ -341,6 +343,7 @@ impl<'a> Frontier<'a> {
     }
 
     /// Whether any accepted completion failed or was cancelled.
+    #[cfg(test)]
     pub fn is_failed(&self) -> bool {
         self.failed
     }
@@ -348,15 +351,5 @@ impl<'a> Frontier<'a> {
     /// Number of detached tasks whose completion has not been published.
     pub fn inflight(&self) -> usize {
         self.inflight
-    }
-
-    /// Number of consecutive published completions in this epoch.
-    pub fn retired(&self) -> usize {
-        self.start
-    }
-
-    /// Maximum number of live task indices in this frontier.
-    pub fn capacity(&self) -> usize {
-        self.storage.len()
     }
 }

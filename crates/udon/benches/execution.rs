@@ -1,5 +1,9 @@
 //! Fixed-arena mixed workload. Run with `cargo bench --bench execution`.
 
+#[path = "support/msm.rs"]
+mod bench_msm;
+use bench_msm::MsmBench;
+
 use std::{hint::black_box, num::NonZeroUsize, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
@@ -16,16 +20,9 @@ use zakura_udon::{
     field::{CanonicalUint, Fp, Fq},
 };
 
-#[path = "../tests/support/fft_run.rs"]
-mod fft_run;
-#[path = "../tests/support/mixed_run.rs"]
-#[allow(dead_code)]
-mod mixed_run;
 #[path = "../tests/support/msm_run.rs"]
 #[allow(dead_code)]
 mod msm_run;
-#[path = "../tests/support/run_pool.rs"]
-mod run_pool;
 
 struct Pool;
 impl Executor for Pool {
@@ -175,8 +172,11 @@ fn mixed(c: &mut Criterion) {
             }
             let independent = matches!(mode, Mode::Partition | Mode::Independent);
             let mut first = Buffers::new(rounds.iter().map(|inputs| {
-                msm::batch_requirements(if independent { &inputs[..1] } else { inputs }, options)
-                    .unwrap()
+                bench_msm::batch_requirements(
+                    if independent { &inputs[..1] } else { inputs },
+                    options,
+                )
+                .unwrap()
             }));
             let mut second = Buffers::new(
                 rounds
@@ -237,7 +237,7 @@ fn mixed(c: &mut Criterion) {
                                                 },
                                             );
                                         } else {
-                                            msm::execute_batch(
+                                            bench_msm::execute_batch(
                                                 inputs,
                                                 &mut outputs,
                                                 options,
@@ -299,30 +299,6 @@ fn mixed(c: &mut Criterion) {
                     });
                 })
             });
-        }
-    }
-    group.finish();
-}
-
-fn incremental(c: &mut Criterion) {
-    let mut group = c.benchmark_group("execution/runs/shrinking");
-    group.sample_size(10);
-    group.warm_up_time(Duration::from_millis(300));
-    group.measurement_time(Duration::from_secs(1));
-    for (grain, scratch) in [(2048, 4), (8192, 4), (8192, 7)] {
-        let fixture = mixed_run::Fixture::with_grain(8192, scratch, grain);
-        for threads in [1, 3, 4, 16] {
-            let mut printed = false;
-            group.bench_function(BenchmarkId::new(format!("grain{grain}-scratch{scratch}"), threads), |b| {
-            mixed_run::scoped(&fixture, threads, 16, |driver| {
-                if !printed {
-                    let stats = driver();
-                    eprintln!("incremental/{threads}: {} bytes, {} tasks, {} early consumers, {} rounds, peak {:?}", stats.bytes, stats.tasks, stats.early_consumers, stats.rounds, stats.peak);
-                    printed = true;
-                }
-                b.iter(|| black_box(driver()));
-            });
-        });
         }
     }
     group.finish();
@@ -475,5 +451,5 @@ fn isolated(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, mixed, incremental, isolated);
+criterion_group!(benches, mixed, isolated);
 criterion_main!(benches);

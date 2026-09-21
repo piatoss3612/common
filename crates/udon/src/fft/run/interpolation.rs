@@ -3,21 +3,29 @@ use super::*;
 
 /// A fixed set of inverse transforms and their coefficient-sum dependencies.
 ///
-/// Entry zero is the output class. Every other class may be smaller and use a
-/// different coset. Each transform owns its stage barriers. With `consume`,
-/// equal-domain evaluations merge before the output inverse; other inverses
-/// start independently. Without it, each lift retains its own coefficients.
+/// Each class describes evaluations of one polynomial. Entry zero receives the
+/// coefficient sum. Other classes, called lifts, may be smaller and use different
+/// cosets; their missing higher coefficients contribute zero to the sum.
+///
+/// With `consume`, equal-domain evaluations merge before their representative
+/// inverse, including groups smaller than the output. Other inverses start
+/// independently. Without it, each lift retains its own coefficients. Use
+/// [`Self::execute`] for contiguous buffers or [`InterpolationRun`] for
+/// incremental scheduling.
 #[derive(Clone, Copy, Debug)]
 pub struct InterpolationPlan<'t, M: PrimeModulus, const CLASSES: usize> {
     transforms: [FftPlan<'t, M>; CLASSES],
-    fused: [bool; CLASSES],
+    merge_into: [Option<usize>; CLASSES],
     consume: bool,
 }
 
 impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES> {
-    /// Validates preplanned, in-place, full-support, normalized inverse FFTs
-    /// with natural output. All classes must fit the output; their fragment
+    /// Validates the class transforms and selects whether lifts may be consumed.
+    ///
+    /// Every plan must describe an in-place, full-support, normalized inverse
+    /// FFT with natural output. All classes must fit the output; their fragment
     /// sizes must equal the output tile or their smaller entire class size.
+    ///
     /// Returns [`FftError::InvalidExecution`] for other requests or no classes,
     /// and [`FftError::InvalidLayout`] for a lift larger than the output.
     pub fn new(transforms: [FftPlan<'t, M>; CLASSES], consume: bool) -> Result<Self, FftError> {
@@ -38,53 +46,228 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                 return Err(FftError::InvalidExecution);
             }
         }
-        let fused = core::array::from_fn(|i| {
-            i != 0
-                && consume
-                && transforms[i]
-                    .plan
-                    .domain()
-                    .same_domain(transforms[0].plan.domain())
+        let merge_into = core::array::from_fn(|i| {
+            if consume {
+                (0..i).find(|&target| {
+                    transforms[i]
+                        .plan
+                        .domain()
+                        .same_domain(transforms[target].plan.domain())
+                })
+            } else {
+                None
+            }
         });
         Ok(Self {
             transforms,
-            fused,
+            merge_into,
             consume,
         })
     }
 
-    /// Snapshot fields for one class. Fused lifts do not need snapshots.
-    /// An out-of-range class returns `None`. Working class banks and all idle
-    /// provider and metadata capacity must also be charged to admission.
+    /// Retained scratch field count for one class.
+    ///
+    /// Classes merged into another's evaluations need no scratch; other
+    /// classes use their transform's [`FftPlan::retained_fields`]. An
+    /// out-of-range class returns `None`. Admission must also count working
+    /// class banks and all provisioned provider and metadata capacity.
     pub fn snapshot_fields(&self, class: usize) -> Option<usize> {
         self.transforms.get(class).map(|p| {
-            if self.fused[class] {
+            if self.merge_into[class].is_some() {
                 0
             } else {
                 p.retained_fields()
             }
         })
     }
+
+    /// Interpolates contiguous class buffers and leaves their sum in class zero.
+    ///
+    /// Each value slice must contain exactly its transform's domain size, in
+    /// that plan's input order. Each scratch slice needs at least
+    /// [`Self::snapshot_fields`] entries for its class. Output coefficients are
+    /// normalized and in natural order. With `consume = false`, every lift
+    /// retains its own natural coefficients; otherwise lift contents are
+    /// unspecified. The total task budget covers concurrent classes and their
+    /// inner transforms.
+    ///
+    /// Returns [`FftError::LengthMismatch`] for an incorrect class length or
+    /// [`FftError::ScratchTooSmall`] for insufficient scratch. These checks
+    /// precede mutation. No allocation occurs; a panic leaves canonical fields
+    /// but requires refilling affected evaluations before retrying.
+    ///
+    /// This example adds a constant polynomial to a linear polynomial evaluated
+    /// on a different coset, retaining the constant's coefficients:
+    ///
+    /// ```
+    /// use core::num::NonZeroUsize;
+    /// use zakura_udon::{
+    ///     exec::SerialExecutor,
+    ///     field::Fp,
+    ///     fft::{Codelet, Direction, Domain, Plan, TransformRequest,
+    ///           run::{FftPlan, InterpolationPlan}},
+    /// };
+    ///
+    /// let output_domain = Domain::new(1).unwrap()
+    ///     .coset(Fp::from_u64(7)).unwrap();
+    /// let lift_domain = Domain::new(0).unwrap().subgroup();
+    /// let inverse = |domain| FftPlan::new(
+    ///     Plan::without_tables(domain), TransformRequest::new(Direction::Inverse),
+    ///     NonZeroUsize::new(2).unwrap(), Codelet::Radix2, false,
+    /// ).unwrap();
+    /// let plan = InterpolationPlan::new(
+    ///     [inverse(output_domain), inverse(lift_domain)], false,
+    /// ).unwrap();
+    /// // 1 + x at 7 and -7, plus the constant polynomial 5.
+    /// let mut output = [Fp::from_u64(8), Fp::from_u64(6).neg()];
+    /// let mut lift = [Fp::from_u64(5)];
+    /// plan.execute(
+    ///     [&mut output, &mut lift], [&mut [], &mut []],
+    ///     NonZeroUsize::MIN, &SerialExecutor,
+    /// ).unwrap();
+    /// assert_eq!(output, [Fp::from_u64(6), Fp::ONE]); // 6 + x
+    /// assert_eq!(lift, [Fp::from_u64(5)]);
+    /// ```
+    pub fn execute<E: crate::exec::Executor>(
+        self,
+        mut values: [&mut [PastaField<M>]; CLASSES],
+        mut scratch: [&mut [PastaField<M>]; CLASSES],
+        max_tasks: NonZeroUsize,
+        executor: &E,
+    ) -> Result<(), FftError> {
+        for i in 0..CLASSES {
+            super::super::check_length("class", self.transforms[i].size(), values[i].len())?;
+            super::super::ScratchRequirements {
+                field_elements: self.snapshot_fields(i).unwrap(),
+            }
+            .check(scratch[i].len())?;
+        }
+        // Preserve terminal inverse/add fusion for the contiguous radix-2 path.
+        // Other geometries use the same plan through independently scoped runs.
+        if max_tasks.get() == 1
+            && self.transforms.iter().all(|p| {
+                p.codelet == Codelet::Radix2 && p.twiddles.is_none() && p.columns.is_none()
+            })
+        {
+            let mut buffers = values.into_iter();
+            let mut classes: [_; CLASSES] = core::array::from_fn(|i| {
+                super::super::Class::new(
+                    self.transforms[i].plan,
+                    buffers.next().unwrap(),
+                    self.transforms[i].request.input_order,
+                )
+                .expect("validated class")
+            });
+            let (output, lifts) = classes.split_first_mut().unwrap();
+            let options = super::super::ExecutionOptions::serial();
+            return if self.consume {
+                super::super::interpolate_sum(output, lifts, options, executor, &mut [])
+            } else {
+                super::super::interpolate_classes(output, lifts, options, executor, &mut [])
+            };
+        }
+        for i in 1..CLASSES {
+            if let Some(target) = self.merge_into[i] {
+                let (before, after) = values.split_at_mut(i);
+                let different_order = self.transforms[i].request.input_order
+                    != self.transforms[target].request.input_order;
+                for (index, value) in before[target].iter_mut().enumerate() {
+                    let source = if different_order {
+                        reverse(index, self.transforms[i].size().ilog2())
+                    } else {
+                        index
+                    };
+                    *value = value.add(&after[0][source]);
+                }
+            }
+        }
+        fn visit<M: PrimeModulus, E: crate::exec::Executor>(
+            plans: &[FftPlan<'_, M>],
+            merged: &[Option<usize>],
+            values: &mut [&mut [PastaField<M>]],
+            scratch: &mut [&mut [PastaField<M>]],
+            tasks: NonZeroUsize,
+            executor: &E,
+        ) {
+            if plans.len() == 1 || tasks.get() == 1 {
+                for (((plan, merged), values), scratch) in
+                    plans.iter().zip(merged).zip(values).zip(scratch)
+                {
+                    if merged.is_none() {
+                        plan.execute(None, values, None, scratch, tasks, executor)
+                            .expect("validated interpolation buffers");
+                    }
+                }
+            } else {
+                let mid = plans.len() / 2;
+                let left_tasks = tasks.get() / 2;
+                let (a, b) = values.split_at_mut(mid);
+                let (sa, sb) = scratch.split_at_mut(mid);
+                executor.join(
+                    || {
+                        visit(
+                            &plans[..mid],
+                            &merged[..mid],
+                            a,
+                            sa,
+                            NonZeroUsize::new(left_tasks).unwrap(),
+                            executor,
+                        )
+                    },
+                    || {
+                        visit(
+                            &plans[mid..],
+                            &merged[mid..],
+                            b,
+                            sb,
+                            NonZeroUsize::new(tasks.get() - left_tasks).unwrap(),
+                            executor,
+                        )
+                    },
+                );
+            }
+        }
+        visit(
+            &self.transforms,
+            &self.merge_into,
+            &mut values,
+            &mut scratch,
+            max_tasks,
+            executor,
+        );
+        let (output, lifts) = values.split_first_mut().unwrap();
+        for (i, lift) in lifts.iter().enumerate() {
+            if self.merge_into[i + 1].is_none() {
+                for (out, value) in output.iter_mut().zip(lift.iter()) {
+                    *out = out.add(value);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
-/// A bounded addition from a lift into output class zero.
+/// A bounded evaluation merge or addition into the output coefficient sum.
 #[derive(Clone, Debug)]
 pub struct AdditionRequest<'a> {
+    /// Destination class: an equal-domain representative for evaluation merges,
+    /// or class zero for the final coefficient sum.
+    pub target: usize,
     /// Nonforgeable claim identity in this class's addition frontier.
     pub key: TaskKey<'a>,
-    /// Exclusive output-class range.
+    /// Exclusive range in the [`Self::target`] class's physical bank.
     pub write: Range<usize>,
     /// Shared lift range, relative to the lift's own physical bank.
     pub read: Range<usize>,
     /// Whether this adds evaluations before inversion or coefficients after it.
     pub evaluations: bool,
-    /// Arithmetic and memory-traffic estimates for optional scheduling policy.
-    pub estimate: WorkEstimate,
 }
 
 /// Detached class addition using [`Resources`] like FFT tasks.
-/// `values` names the requested output range, `source` the lift read range;
-/// `pair` and `factor` are empty. Reordered evaluation reads remain shared.
+///
+/// In [`Buffers`], `values` names the requested target range and `source` the
+/// lift read range; `pair` and `factor` are empty. Reordered evaluation reads
+/// remain shared.
 pub struct AdditionKernel<M: PrimeModulus> {
     marker: core::marker::PhantomData<M>,
     start: usize,
@@ -136,7 +319,10 @@ pub struct InterpolationPublished<R> {
     pub error: Option<FftError>,
     /// Normal return, cancellation, or caught unwind.
     pub outcome: Outcome,
-    /// The class whose own normalized coefficients just became available.
+    /// The class whose inverse just produced normalized coefficients.
+    ///
+    /// With consumption enabled, these include any classes merged into its
+    /// evaluations. Class zero's sum is final only when [`Self::complete`] is true.
     pub coefficients: Option<usize>,
     /// A lift whose last read by this interpolation has completed. Other
     /// application consumers must also finish before its bank is recycled.
@@ -147,8 +333,8 @@ pub struct InterpolationPublished<R> {
 
 /// Independent class transforms, bounded merges, and incremental reductions.
 ///
-/// Addition frontiers reserve their output ranges before dispatch. Exclusive
-/// output leases resolve overlap between lifts; dependency-blocked work never
+/// Addition frontiers reserve their target ranges before dispatch. Exclusive
+/// target leases resolve overlap between lifts; dependency-blocked work never
 /// occupies a worker. Different lift sizes and completed classes do not impose
 /// a batch inverse barrier. Admission must cover all retained banks through
 /// their last consumers, plus one compatible task bundle and queue entry.
@@ -161,9 +347,11 @@ pub struct InterpolationRun<'a, 't, M: PrimeModulus, const CLASSES: usize> {
 }
 
 impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, CLASSES> {
-    /// Binds two frontiers per class: transform then addition. Zero frontier
-    /// capacity returns [`TaskError::Storage`]. Metadata is proportional to
-    /// classes times frontier capacity, independent of total stage task count.
+    /// Binds two frontiers per class: transform then addition.
+    ///
+    /// Zero frontier capacity returns [`TaskError::Storage`]. Metadata is
+    /// proportional to classes times frontier capacity, independent of total
+    /// stage task count.
     pub fn new<const TASKS: usize>(
         plan: InterpolationPlan<'t, M, CLASSES>,
         identities: &'a mut [[Identity; 2]; CLASSES],
@@ -176,7 +364,7 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
         let pairs: [_; CLASSES] = core::array::from_fn(|_| {
             let (class, ([transform_id, add_id], [transform_slots, add_slots])) =
                 metadata.next().unwrap();
-            let run = if plan.fused[class] {
+            let run = if plan.merge_into[class].is_some() {
                 FftRun::empty(plan.transforms[class], transform_id, transform_slots)
             } else {
                 FftRun::new(plan.transforms[class], false, transform_id, transform_slots)
@@ -206,16 +394,19 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
         })
     }
 
-    fn merged(&self) -> bool {
+    fn merged(&self, class: usize) -> bool {
         self.plan
-            .fused
+            .merge_into
             .iter()
             .enumerate()
-            .all(|(i, &fused)| !fused || self.additions[i].is_complete())
+            .all(|(i, &target)| target != Some(class) || self.additions[i].is_complete())
     }
 
-    /// Pages one class's transform tasks. Output inversion waits only for
-    /// its same-domain evaluation merges; other inverses start immediately.
+    /// Pages one class's transform tasks.
+    ///
+    /// Each representative waits for its same-domain evaluation merges; other
+    /// inverses start immediately. Classes merged into a representative have
+    /// no transform tasks. An invalid class index produces no requests.
     pub fn ready_transform_from(
         &self,
         class: usize,
@@ -224,8 +415,8 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
     ) -> usize {
         if self.failed
             || class >= CLASSES
-            || self.plan.fused[class]
-            || (class == 0 && !self.merged())
+            || self.plan.merge_into[class].is_some()
+            || !self.merged(class)
         {
             return 0;
         }
@@ -235,9 +426,13 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
     fn addition(&self, class: usize, key: TaskKey<'a>) -> AdditionRequest<'a> {
         let plan = self.plan.transforms[class];
         let start = key.index() * plan.tile;
-        let reversed = self.plan.fused[class]
-            && plan.request.input_order != self.plan.transforms[0].request.input_order;
+        let reversed = self.plan.merge_into[class].is_some()
+            && plan.request.input_order
+                != self.plan.transforms[self.plan.merge_into[class].unwrap_or(0)]
+                    .request
+                    .input_order;
         AdditionRequest {
+            target: self.plan.merge_into[class].unwrap_or(0),
             key,
             write: start..start + plan.tile,
             read: if reversed {
@@ -245,24 +440,17 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
             } else {
                 start..start + plan.tile
             },
-            evaluations: self.plan.fused[class],
-            estimate: WorkEstimate {
-                arithmetic: plan.tile,
-                traffic_bytes: plan
-                    .tile
-                    .saturating_mul(size_of::<PastaField<M>>())
-                    .saturating_mul(3),
-                cache_bytes: plan
-                    .tile
-                    .saturating_mul(size_of::<PastaField<M>>())
-                    .saturating_mul(2),
-            },
+            evaluations: self.plan.merge_into[class].is_some(),
         }
     }
 
-    /// Pages additions whose inputs are ready. Every completed nonfused class
-    /// may reduce as soon as output inversion completes, independently of
-    /// unrelated class inverses. Restart cursors after publication.
+    /// Pages additions whose inputs are ready.
+    ///
+    /// Evaluation merges are ready immediately. Each representative's
+    /// coefficients may join the output sum once both its inverse and the
+    /// output inverse complete, independently of unrelated inverses. Class
+    /// zero and invalid class indices produce no requests. Restart cursors
+    /// after publication.
     pub fn ready_addition_from(
         &self,
         class: usize,
@@ -272,7 +460,7 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
         if self.failed
             || class == 0
             || class >= CLASSES
-            || (!self.plan.fused[class]
+            || (self.plan.merge_into[class].is_none()
                 && (!self.runs[0].is_complete() || !self.runs[class].is_complete()))
         {
             return 0;
@@ -290,7 +478,8 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
     }
 
     /// Claims one transform after its complete resource bundle is available.
-    /// Dependency-blocked output tasks return [`TaskError::Busy`].
+    ///
+    /// A transform waiting for evaluation merges returns [`TaskError::Busy`].
     pub fn try_claim_transform<R: Resources<M>>(
         &mut self,
         class: usize,
@@ -300,10 +489,10 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
         if self.failed {
             return Err(TaskError::Failed);
         }
-        if class >= CLASSES || self.plan.fused[class] {
+        if class >= CLASSES || self.plan.merge_into[class].is_some() {
             return Err(TaskError::Stale);
         }
-        if class == 0 && !self.merged() {
+        if !self.merged(class) {
             return Err(TaskError::Busy);
         }
         let result = self.runs[class].try_claim(request, acquire)?;
@@ -311,8 +500,9 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
         Ok(result)
     }
 
-    /// Claims one bounded addition with the same resource provider as FFT
-    /// tasks. Dependencies return [`TaskError::Busy`] before leasing.
+    /// Claims one bounded addition with the same resource provider as FFT tasks.
+    ///
+    /// Dependencies return [`TaskError::Busy`] before leasing.
     pub fn try_claim_addition<R: Resources<M>>(
         &mut self,
         class: usize,
@@ -326,7 +516,7 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
             return Err(TaskError::Stale);
         }
         self.additions[class].check_key(request.key)?;
-        if !self.plan.fused[class]
+        if self.plan.merge_into[class].is_none()
             && (!self.runs[0].is_complete() || !self.runs[class].is_complete())
         {
             return Err(TaskError::Busy);
@@ -337,21 +527,24 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
             start: actual.write.start,
             len: actual.write.len(),
             size: self.plan.transforms[class].size(),
-            reversed: self.plan.fused[class]
+            reversed: self.plan.merge_into[class].is_some()
                 && self.plan.transforms[class].request.input_order
-                    != self.plan.transforms[0].request.input_order,
+                    != self.plan.transforms[self.plan.merge_into[class].unwrap_or(0)]
+                        .request
+                        .input_order,
         };
         let result = self.additions[class].try_claim(request.key, kernel, acquire)?;
         if result.is_some() {
             self.started[class] = true;
-            if self.plan.fused[class] {
-                self.started[0] = true;
+            if self.plan.merge_into[class].is_some() {
+                self.started[actual.target] = true;
             }
         }
         Ok(result)
     }
 
-    /// Publishes one transform receipt and immediately readies its additions.
+    /// Publishes one transform receipt and updates class dependencies.
+    ///
     /// A foreign class returns the complete receipt intact.
     pub fn complete_transform<R>(
         &mut self,
@@ -377,6 +570,7 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
     }
 
     /// Publishes an addition receipt, releasing the lift after its last read.
+    ///
     /// Failed runs still accept their outstanding receipts for draining.
     pub fn complete_addition<R>(
         &mut self,
@@ -403,8 +597,10 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
         })
     }
 
-    /// Current semantic class state. Consumed lifts do not promise a retained
-    /// polynomial. Output becomes coefficients only when its sum is complete.
+    /// Current semantic class state.
+    ///
+    /// Consumed lifts do not promise a retained polynomial. Output becomes
+    /// coefficients only when its sum is complete.
     /// Unstarted classes remain evaluations; an invalid index returns `None`.
     pub fn state(&self, class: usize) -> Option<ClassState> {
         self.runs.get(class)?;

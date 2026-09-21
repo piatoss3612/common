@@ -26,11 +26,6 @@ impl<C: PastaCurve> AffinePoint<C> {
         marker: PhantomData,
     };
 
-    /// Returns the generator `(-1, 2)`.
-    pub const fn generator() -> Self {
-        Self::GENERATOR
-    }
-
     /// Checks reduced coordinates and the curve equation.
     ///
     /// Returns `None` for invalid coordinates, including `(0, 0)`. This method

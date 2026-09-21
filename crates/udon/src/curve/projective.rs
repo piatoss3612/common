@@ -47,16 +47,6 @@ impl<C: PastaCurve> ProjectivePoint<C> {
     /// The generator `(-1, 2)` with `z = 1`.
     pub const GENERATOR: Self = AffinePoint::GENERATOR.to_projective();
 
-    /// Returns the additive identity.
-    pub const fn identity() -> Self {
-        Self::IDENTITY
-    }
-
-    /// Returns the generator `(-1, 2)` with `z = 1`.
-    pub const fn generator() -> Self {
-        Self::GENERATOR
-    }
-
     /// Lifts a nonidentity affine point with `z = 1`.
     pub const fn from_affine(point: &AffinePoint<C>) -> Self {
         Self {

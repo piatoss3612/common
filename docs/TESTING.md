@@ -52,6 +52,10 @@ as one term. Grouped execution checks varied budgets, unequal jobs, nested
 single-worker execution, and dirty scratch reuse after either scheduling phase
 unwinds.
 
+Udon's [run tests](../crates/udon/tests/execution/main.rs) independently check
+produced MSM source fragments, partition offsets, invalid indices, cached
+inputs, streaming, and stale epochs on both curves.
+
 Compact-table batches check shared preparation, retained scalar digits, and
 same-scalar products against individual multiplication. Synthetic digit
 schedules exercise exact modular exception detection and its projective fallback.
@@ -456,7 +460,7 @@ The [FFT embedding consumer](../crates/udon/tests/fixtures/fft_embedding) owns i
 record schema and build script. It generates both fields' tables through Udon,
 writes them through Bento POD, then runs transforms directly from the embedded
 records in a `no_std` library with stack-owned buffers. The harness runs with
-no Udon features and with `alloc,sqrt-table-large`.
+no Udon features and with `sqrt-table-large`.
 It also injects damage after generation: a truncated record must fail in
 `embed_struct!` during compilation, while unreduced field entries, incorrect
 residue scales, unsupported schema or twiddle-kind metadata, wrong normalization

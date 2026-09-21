@@ -1,6 +1,7 @@
 //! Typed storage and nonblocking bundle acquisition for incremental MSMs.
 
 use spin::{RwLock, RwLockReadGuard as Read, RwLockWriteGuard as Write};
+use std::{vec, vec::Vec};
 use zakura_udon::{
     curve::{
         AffinePoint, PastaCurve, ProjectivePoint,
@@ -263,6 +264,19 @@ pub struct Lease<'a, C: PastaCurve> {
     buckets: Option<Write<'a, Vec<ProjectivePoint<C>>>>,
     output: Option<Write<'a, [ProjectivePoint<C>; 1]>>,
     partials: Partials<'a, C>,
+}
+
+impl<C: PastaCurve> Lease<'_, C> {
+    pub fn preparation(&self) -> (&[ScalarStorage<C>], &[u8]) {
+        (
+            self.write_records
+                .as_ref()
+                .map_or(&[], |guard| &guard[..self.scalars]),
+            self.write_digits
+                .as_ref()
+                .map_or(&[], |guard| &guard[..self.digit_len]),
+        )
+    }
 }
 
 impl<C: PastaCurve> Resources<C> for Lease<'_, C> {

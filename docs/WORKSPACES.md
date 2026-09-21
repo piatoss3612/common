@@ -49,7 +49,7 @@ budget divides work within an operation; it does not cap all concurrent requests
 
 The [MSM workspace](../crates/udon/tests/support/workspaces/msm.rs) holds
 initialized scratch and plan metadata. Its `prepare` method first sizes the
-metadata and constructs an `ExecutionPlan`, then grows scratch to that plan's
+metadata and constructs a `msm::run::BatchPlan`, then grows scratch to that plan's
 requirements. This order matters because metadata counts against a plan's
 memory ceiling and can affect the selected scratch layout. The
 [grouped-job guide](CURVES.md#grouped-jobs-and-other-work) explains planning and
@@ -97,17 +97,17 @@ capacity. These sizes describe the example's chosen lifetimes. Applications
 can release or reuse buffers once their consumers finish; a borrowed residue
 chunk keeps its entire contiguous allocation alive.
 
-The retained inverse uses `InverseScale::Unscaled`. Pass its `CoefficientView`
-into later operations to preserve the normalization factor, as described under
+The retained inverse uses `InverseScale::Unscaled`. Carry its `CoefficientView`'s
+normalization factor into later plans, as described under
 [residue expansion](FFT.md#residue-expansion-and-layouts). Borrowing the view
 keeps the coefficient buffer live while output and scratch remain reusable.
 
 The example's `ClassBuilder` tracks which disjoint residues have been submitted
 before exposing a class to interpolation. Initialized memory does not establish
 producer completion: unwritten entries may contain earlier results. Tracking
-residue identities also rejects duplicate submissions. After a panic, release
-the class handles, refill affected buffers and bind fresh classes according to
-the [class-state contract](FFT.md#fused-class-interpolation).
+residue identities also rejects duplicate submissions. After a panic, refill
+affected buffers before starting interpolation again; see the
+[interpolation contract](FFT.md#fused-class-interpolation).
 
 ## Generating commitment bases
 

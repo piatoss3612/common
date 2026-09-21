@@ -6,12 +6,54 @@ use zakura_udon::{
         run::{Identity, TaskStorage},
     },
     fft::{
-        Codelet, Direction, Domain, ElementOrder, InputSupport, InverseScale, Plan, Strategy,
+        Codelet, Direction, Domain, ElementOrder, InputSupport, InverseScale, Plan,
         TransformRequest,
         run::{FftPlan, FftRun},
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
+
+// Independent contiguous transform handles the physical order and scale explicitly.
+fn reference_transform<M: PrimeModulus>(
+    plan: Plan<'_, M>,
+    request: TransformRequest,
+    input: &[PastaField<M>],
+    output: &mut [PastaField<M>],
+) {
+    output.fill(PastaField::ZERO);
+    output[..input.len()].copy_from_slice(input);
+    let permute = |values: &mut [PastaField<M>]| {
+        let bits = values.len().ilog2();
+        for i in 0..values.len() {
+            let j = i.reverse_bits().wrapping_shr(usize::BITS - bits);
+            if i < j {
+                values.swap(i, j);
+            }
+        }
+    };
+    if request.input_order == ElementOrder::BitReversed {
+        permute(output);
+    }
+    let options = zakura_udon::fft::ExecutionOptions::serial();
+    match request.direction {
+        Direction::Forward => plan
+            .forward(output, options, &SerialExecutor, &mut [])
+            .unwrap(),
+        Direction::Inverse => {
+            plan.inverse(output, options, &SerialExecutor, &mut [])
+                .unwrap();
+            if request.inverse_scale == InverseScale::Unscaled {
+                let size = PastaField::from_u64(output.len() as u64);
+                for value in output.iter_mut() {
+                    *value = value.mul(&size);
+                }
+            }
+        }
+    }
+    if request.output_order == ElementOrder::BitReversed {
+        permute(output);
+    }
+}
 
 fn check<M: PrimeModulus>() {
     for size in [1, 8, 64, 1024] {
@@ -31,12 +73,14 @@ fn check<M: PrimeModulus>() {
                         (1, Codelet::Radix2, false, 1),
                         (8, Codelet::Radix4, true, 3),
                         (32, Codelet::Radix8, false, 4),
+                        (size, Codelet::Radix2, true, 2),
                     ] {
-                        let support = if separate && input_order == ElementOrder::Natural {
-                            InputSupport::Prefix(size / 2)
-                        } else {
-                            InputSupport::Full
-                        };
+                        let support =
+                            if separate && tile != size && input_order == ElementOrder::Natural {
+                                InputSupport::Prefix(size / 2)
+                            } else {
+                                InputSupport::Full
+                            };
                         let request = TransformRequest {
                             input_order,
                             output_order,
@@ -48,16 +92,13 @@ fn check<M: PrimeModulus>() {
                             },
                             ..TransformRequest::new(direction)
                         };
-                        let operation = plan.configure(request, Strategy::serial()).unwrap();
                         let input = if let InputSupport::Prefix(len) = support {
                             &original[..len]
                         } else {
                             &original
                         };
                         let mut expected = vec![PastaField::ZERO; size];
-                        operation
-                            .execute_into(input, &mut expected, &SerialExecutor, &mut [])
-                            .unwrap();
+                        reference_transform(plan, request, input, &mut expected);
                         let product = separate;
                         let factor: Vec<_> = (0..size)
                             .map(|i| PastaField::from_u64((i + 1) as u64))
@@ -126,6 +167,87 @@ fn fragmented_orders_prefixes_cosets_products_and_codelets_match_contiguous() {
     check::<PallasScalar>();
 }
 
+fn fused_scales<M: PrimeModulus>() {
+    use zakura_udon::{
+        exec::run::ReadView,
+        fft::{PowerTable, run::Buffers},
+    };
+
+    struct Source<'a, M: PrimeModulus>(&'a [PastaField<M>], bool);
+    impl<M: PrimeModulus> ReadView<PastaField<M>> for Source<'_, M> {
+        fn len(&self) -> usize {
+            self.0.len()
+        }
+        fn get(&self, index: usize) -> Option<&PastaField<M>> {
+            self.0.get(index)
+        }
+        fn contiguous(&self, range: core::ops::Range<usize>) -> Option<&[PastaField<M>]> {
+            self.1.then(|| &self.0[range])
+        }
+    }
+
+    for size in [1, 64] {
+        let shift = PastaField::<M>::from_u64(7);
+        let plan = Plan::without_tables(Domain::for_size(size).unwrap().coset(shift).unwrap());
+        let original: Vec<_> = (0..size)
+            .map(|i| PastaField::from_u64((i * i + 3) as u64))
+            .collect();
+        let mut scales = vec![PastaField::ZERO; size];
+        let scales = PowerTable::prepare(PastaField::ONE, shift, &mut scales).unwrap();
+        for extra in [PastaField::ONE, PastaField::from_u64(13)] {
+            let scaled: Vec<_> = original.iter().map(|v| v.mul(&extra)).collect();
+            let request = TransformRequest::new(Direction::Forward);
+            let mut expected = vec![PastaField::ZERO; size];
+            reference_transform(plan, request, &scaled, &mut expected);
+            for table in [false, true] {
+                let mut arithmetic = FftPlan::new(
+                    plan,
+                    request,
+                    NonZeroUsize::new(size).unwrap(),
+                    Codelet::Radix2,
+                    true,
+                )
+                .unwrap()
+                .with_input_scale(extra)
+                .unwrap();
+                if table {
+                    arithmetic = arithmetic.with_forward_scales(scales).unwrap();
+                }
+                for contiguous in [false, true] {
+                    let mut id = Identity::new();
+                    let mut slots = [TaskStorage::EMPTY];
+                    let mut run = FftRun::new(arithmetic, false, &mut id, &mut slots).unwrap();
+                    let mut ready = [None];
+                    assert_eq!(run.ready(&mut ready), 1);
+                    let mut values = vec![PastaField::ZERO; size];
+                    let source = Source(&original, contiguous);
+                    let mut task = run
+                        .try_claim(ready[0].take().unwrap(), || {
+                            Some(Buffers {
+                                values: &mut values,
+                                pair: &mut [],
+                                source: &source,
+                                factor: &[],
+                            })
+                        })
+                        .unwrap()
+                        .unwrap();
+                    task.execute().unwrap();
+                    assert_eq!(run.complete(task.finish()).unwrap().error, None);
+                    assert!(run.is_complete());
+                    assert_eq!(values, expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn fused_full_inputs_apply_coset_tables_and_input_scale_once() {
+    fused_scales::<PallasBase>();
+    fused_scales::<PallasScalar>();
+}
+
 fn blocked<M: PrimeModulus>() {
     use super::fft_pipeline::Banks;
     for (size, tile) in [(64, 8), (1024, 32)] {
@@ -148,10 +270,7 @@ fn blocked<M: PrimeModulus>() {
                             ..TransformRequest::new(direction)
                         };
                         let mut expected = vec![PastaField::ZERO; size];
-                        plan.configure(request, Strategy::serial())
-                            .unwrap()
-                            .execute_into(&original, &mut expected, &SerialExecutor, &mut [])
-                            .unwrap();
+                        reference_transform(plan, request, &original, &mut expected);
                         let arithmetic = FftPlan::new(
                             plan,
                             request,
@@ -237,10 +356,7 @@ fn blocked<M: PrimeModulus>() {
                         )
                         .unwrap();
                     let mut expected = original.clone();
-                    plan.configure(request, Strategy::serial())
-                        .unwrap()
-                        .execute(&mut expected, &SerialExecutor, &mut [])
-                        .unwrap();
+                    reference_transform(plan, request, &original, &mut expected);
                     assert_eq!(values, expected);
                 }
             }
@@ -289,15 +405,7 @@ fn sparse_tables<M: PrimeModulus>() {
                                 ..TransformRequest::new(direction)
                             };
                             let mut expected = vec![PastaField::ZERO; size];
-                            plan.configure(request, Strategy::serial())
-                                .unwrap()
-                                .execute_into(
-                                    &original[..prefix],
-                                    &mut expected,
-                                    &SerialExecutor,
-                                    &mut [],
-                                )
-                                .unwrap();
+                            reference_transform(plan, request, &original[..prefix], &mut expected);
                             for (tile, columns) in [(8, 3), (8, 9), (64, 3)] {
                                 let arithmetic =
                                     FftPlan::new(plan, request, nz(tile), Codelet::Radix4, true)
@@ -343,10 +451,7 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
     use core::cell::RefCell;
     use zakura_udon::{
         exec::run::ReadView,
-        fft::{
-            Initialization,
-            run::{Bank, Buffers, WorkKind},
-        },
+        fft::run::{Bank, Buffers, WorkKind},
         field::Fp,
     };
 
@@ -411,7 +516,7 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
     run.ready(&mut ready);
     assert_eq!(ready[0].as_ref().unwrap().kind, WorkKind::Local);
 
-    // The compatibility strategy and direct run driver agree with gather for
+    // The scatter driver agrees with gather for
     // both directions, every physical order, and the single-task fused case.
     for direction in [Direction::Forward, Direction::Inverse] {
         for input_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
@@ -422,18 +527,27 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
                     ..TransformRequest::new(direction)
                 };
                 let mut expected = [Fp::ZERO; 64];
-                plan.configure(request, Strategy::serial())
-                    .unwrap()
-                    .execute_into(&source.values, &mut expected, &SerialExecutor, &mut [])
-                    .unwrap();
+                reference_transform(plan, request, &source.values, &mut expected);
                 for tile in [8, 64] {
-                    let mut strategy = Strategy::serial();
-                    strategy.initialization = Initialization::Scatter;
-                    strategy.execution.tile_len = tile;
-                    plan.configure(request, strategy)
-                        .unwrap()
-                        .execute_into(&source.values, &mut values, &SerialExecutor, &mut [])
-                        .unwrap();
+                    FftPlan::new(
+                        plan,
+                        request,
+                        NonZeroUsize::new(tile).unwrap(),
+                        Codelet::Radix2,
+                        true,
+                    )
+                    .unwrap()
+                    .with_scatter_initialization()
+                    .with_contiguous_permutation()
+                    .execute(
+                        Some(&source.values),
+                        &mut values,
+                        None,
+                        &mut [],
+                        NonZeroUsize::new(1).unwrap(),
+                        &SerialExecutor,
+                    )
+                    .unwrap();
                     assert_eq!(values, expected);
                 }
             }
@@ -558,4 +672,80 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
             source.0.iter().fold(Fp::ZERO, |sum, value| sum.add(value))
         );
     }
+}
+
+#[test]
+fn batch_planning_orders_panels_and_validation() {
+    use zakura_udon::{
+        fft::{FftError, InputPolicy},
+        field::Fp,
+    };
+    let nz = |n| NonZeroUsize::new(n).unwrap();
+    let base = Plan::without_tables(
+        Domain::for_size(64)
+            .unwrap()
+            .coset(Fp::from_u64(7))
+            .unwrap(),
+    );
+    for direction in [Direction::Forward, Direction::Inverse] {
+        for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+            let request = TransformRequest {
+                output_order: order,
+                ..TransformRequest::new(direction)
+            };
+            for columns in [false, true] {
+                let mut plan = FftPlan::new(base, request, nz(8), Codelet::Radix4, false).unwrap();
+                if columns {
+                    plan = plan.with_columns(nz(3), nz(4)).unwrap();
+                }
+                for count in [0, 1, 3, 8] {
+                    let input: Vec<_> = (0..64 * count)
+                        .map(|i| Fp::from_u64((i * i + 1) as u64))
+                        .collect();
+                    let mut expected = input.clone();
+                    for (source, target) in
+                        input.chunks_exact(64).zip(expected.chunks_exact_mut(64))
+                    {
+                        reference_transform(base, request, source, target);
+                    }
+                    for tasks in [1, 3, 7] {
+                        let tasks = nz(tasks);
+                        let required = plan.batch_fields(count, tasks).unwrap();
+                        let mut scratch = vec![Fp::ZERO; required];
+                        let mut values = input.clone();
+                        if required != 0 {
+                            assert!(matches!(
+                                plan.execute_batch(
+                                    &mut values,
+                                    &mut scratch[..required - 1],
+                                    tasks,
+                                    &SerialExecutor
+                                ),
+                                Err(FftError::ScratchTooSmall { .. })
+                            ));
+                            assert_eq!(values, input);
+                        }
+                        plan.execute_batch(&mut values, &mut scratch, tasks, &SerialExecutor)
+                            .unwrap();
+                        assert_eq!(values, expected);
+                    }
+                }
+            }
+        }
+    }
+    let plan = FftPlan::new(
+        base,
+        TransformRequest {
+            input_policy: InputPolicy::Preserve,
+            ..TransformRequest::new(Direction::Forward)
+        },
+        nz(8),
+        Codelet::Radix2,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        plan.execute_batch(&mut [], &mut [], nz(1), &SerialExecutor),
+        Err(FftError::InvalidExecution)
+    );
 }

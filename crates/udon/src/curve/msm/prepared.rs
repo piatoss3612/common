@@ -46,6 +46,10 @@ impl<C: PastaCurve> ScalarStorage<C> {
         marker: PhantomData,
     };
 
+    pub(super) fn field(value: &PastaField<C::Scalar>) -> Self {
+        Self::canonical(value.to_canonical_uint())
+    }
+
     /// Requires an integer strictly below `C`'s scalar modulus.
     fn canonical(integer: CanonicalUint) -> Self {
         let limbs = integer.limbs();
@@ -115,7 +119,10 @@ impl<C: PastaCurve> ScalarStorage<C> {
 ///     Input::new_prepared(Bases::Affine(&opposite), prepared)?,
 /// ];
 /// let options = ExecutionOptions::SERIAL;
-/// let r = batch_requirements(&inputs, options)?;
+/// let mut jobs = [run::JobStorage::EMPTY; 2];
+/// let mut workers = [run::WorkerStorage::EMPTY; 1];
+/// let plan = run::BatchPlan::new(&inputs, options, &mut jobs, &mut workers)?;
+/// let r = plan.requirements();
 /// # let mut records = vec![ScalarStorage::ZERO; r.scalars()];
 /// # let mut digits = vec![0; r.digits()];
 /// # let mut affine = vec![AffinePoint::GENERATOR; r.affine()];
@@ -126,7 +133,7 @@ impl<C: PastaCurve> ScalarStorage<C> {
 /// #     &mut projective, &mut field, &mut indices);
 /// // Allocate and initialize scratch from `r`, as in the `msm` module example.
 /// let mut output = [ProjectivePoint::IDENTITY; 2];
-/// execute_batch(&inputs, &mut output, options, &SerialExecutor, scratch)?;
+/// plan.execute(&mut output, &SerialExecutor, scratch)?;
 /// let expected = bases[0].mul_projective(&Fq::from_u64(3));
 /// assert_eq!(output, [expected, expected.neg()]);
 /// # Ok::<(), zakura_udon::curve::CurveError>(())

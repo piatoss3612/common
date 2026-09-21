@@ -9,8 +9,9 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use zakura_udon::{
     exec::{Executor, SerialExecutor},
     fft::{
-        Class, CosetDomain, Domain, ElementOrder, ExecutionOptions, Expansion, ExpansionOptions,
-        Plan, TableRequirements, Tables, TablesMut, interpolate_classes, reference,
+        Codelet, CosetDomain, Direction, Domain, ExecutionOptions, Expansion, ExpansionOptions,
+        Plan, TableRequirements, Tables, TablesMut, TransformRequest, reference,
+        run::{FftPlan, InterpolationPlan},
     },
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -614,21 +615,28 @@ fn interpolation<M: PrimeModulus>(
         b.iter_batched_ref(
             || input.clone(),
             |[output, a, b]| {
-                let mut output =
-                    Class::new(plans[0], black_box(output), ElementOrder::Natural).unwrap();
-                let mut lifts = [
-                    Class::new(plans[1], black_box(a), ElementOrder::Natural).unwrap(),
-                    Class::new(plans[2], black_box(b), ElementOrder::Natural).unwrap(),
-                ];
-                interpolate_classes(
-                    &mut output,
-                    &mut lifts,
-                    TILED,
-                    &SerialExecutor,
-                    &mut scratch,
-                )
-                .unwrap();
-                black_box(output.values());
+                let nz = |n| std::num::NonZeroUsize::new(n).unwrap();
+                let transforms = plans.map(|plan| {
+                    FftPlan::new(
+                        plan,
+                        TransformRequest::new(Direction::Inverse),
+                        nz(TILED.tile_len),
+                        Codelet::Radix2,
+                        false,
+                    )
+                    .unwrap()
+                    .with_contiguous_permutation()
+                });
+                InterpolationPlan::new(transforms, false)
+                    .unwrap()
+                    .execute(
+                        [black_box(output), black_box(a), black_box(b)],
+                        [&mut [], &mut [], &mut []],
+                        nz(1),
+                        &SerialExecutor,
+                    )
+                    .unwrap();
+                black_box(output);
             },
             BatchSize::PerIteration,
         );

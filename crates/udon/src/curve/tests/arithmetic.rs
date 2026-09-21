@@ -8,9 +8,9 @@ fn group_laws<C: PastaCurve>() {
     let affine = AffinePoint::<C>::GENERATOR;
     let projective = ProjectivePoint::<C>::GENERATOR;
     let identity = Point::<C>::IDENTITY;
-    assert_eq!(generator, Point::generator());
-    assert_eq!(affine, AffinePoint::generator());
-    assert_eq!(projective, ProjectivePoint::generator());
+    assert_eq!(generator, Point::GENERATOR);
+    assert_eq!(affine, AffinePoint::GENERATOR);
+    assert_eq!(projective, ProjectivePoint::GENERATOR);
     assert_eq!(identity, Point::default());
     assert_eq!(ProjectivePoint::<C>::IDENTITY, ProjectivePoint::default());
     assert_eq!(affine.to_point(), generator);

@@ -19,7 +19,7 @@ fn exercise<M: PrimeModulus>() {
     // Reuse dirty prefixes, crossing both odd and empty group boundaries.
     let (a, rest) = values.split_at_mut(3);
     let (b, c) = rest.split_at_mut(4);
-    batch_invert_groups(&mut [&mut [], a, &mut [], b, c, &mut []], &mut scratch).unwrap();
+    batch_invert_groups(&mut [&mut [][..], a, &mut [], b, c, &mut []], &mut scratch).unwrap();
     assert_eq!(values, original);
     assert_eq!(&scratch[values.len()..], &[sentinel; 3]);
 
@@ -44,13 +44,13 @@ fn exercise<M: PrimeModulus>() {
         batch_invert(&mut zeros, &mut scratch).unwrap();
         assert!(zeros.iter().all(PastaField::is_zero));
     }
-    batch_invert_groups::<M>(&mut [], &mut []).unwrap();
+    batch_invert_groups::<M>(&mut [] as &mut [&mut [PastaField<M>]], &mut []).unwrap();
     let mut singleton = [sentinel];
     batch_invert(&mut singleton, &mut scratch).unwrap();
     assert_eq!(singleton[0].mul(&sentinel), PastaField::ONE);
     let mut a = [PastaField::ZERO, sentinel, PastaField::ZERO];
     let mut b = [PastaField::ZERO, sentinel];
-    batch_invert_groups(&mut [&mut a, &mut b], &mut scratch).unwrap();
+    batch_invert_groups(&mut [&mut a[..], &mut b[..]], &mut scratch).unwrap();
     assert_eq!(a, [PastaField::ZERO, singleton[0], PastaField::ZERO]);
     assert_eq!(b, [PastaField::ZERO, singleton[0]]);
 }
@@ -83,8 +83,11 @@ fn group_boundaries<M: PrimeModulus>() {
                 let mut values = original.clone();
                 let tail = scratch[len..].to_vec();
                 let (left, right) = values.split_at_mut(split);
-                batch_invert_groups(&mut [&mut [], left, &mut [], right, &mut []], &mut scratch)
-                    .unwrap();
+                batch_invert_groups(
+                    &mut [&mut [][..], left, &mut [], right, &mut []],
+                    &mut scratch,
+                )
+                .unwrap();
                 assert_eq!(
                     values, expected,
                     "length {len}, zeros {zeros}, split {split}"

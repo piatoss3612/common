@@ -18,19 +18,7 @@ pub enum ClassState {
     Consumed,
 }
 
-/// A borrowed interpolation domain and its initialized working buffer.
-///
-/// Scatter overwrites selected evaluations; unwritten entries retain their
-/// existing values. The caller is responsible for filling the intended complete
-/// evaluation vector. [`interpolate_classes`] and
-/// [`super::interpolate_classes_parallel`] replace each lift with its own
-/// natural-order coefficients; [`super::interpolate_sum`] consumes lift storage
-/// without promising its polynomial contents. The output class contains the
-/// coefficient sum on success. [`Self::state`] identifies the buffer's meaning.
-/// Once interpolation begins, further scatter or interpolation calls return
-/// [`FftError::InvalidClassState`], including after an execution panic. To reuse
-/// storage, release the class, refill its buffer, and bind a new class.
-pub struct Class<'a, M: PrimeModulus> {
+pub(super) struct Class<'a, M: PrimeModulus> {
     pub(super) plan: Plan<'a, M>,
     pub(super) values: &'a mut [PastaField<M>],
     pub(super) order: ElementOrder,
@@ -49,11 +37,6 @@ impl<M: PrimeModulus> core::fmt::Debug for Class<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> Class<'a, M> {
-    /// Binds a fully initialized input buffer after checking its length.
-    ///
-    /// Returns [`FftError::LengthMismatch`] unless the buffer length equals
-    /// the plan's domain size. `order` describes the input's storage order;
-    /// construction does not permute or validate evaluation contents.
     pub fn new(
         plan: Plan<'a, M>,
         values: &'a mut [PastaField<M>],
@@ -67,19 +50,16 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
             state: ClassState::Evaluations,
         })
     }
-    /// Borrows the current values; [`Self::state`] identifies their meaning.
+    #[cfg(test)]
     pub fn values(&self) -> &[PastaField<M>] {
         self.values
     }
-    /// Storage order for the current evaluation or coefficient phase.
-    ///
-    /// Completed coefficients use [`ElementOrder::Natural`]. The value has no
-    /// result-order meaning in [`ClassState::Consumed`].
+    #[cfg(test)]
     pub const fn order(&self) -> ElementOrder {
         self.order
     }
 
-    /// Evaluation, coefficient, or consumed phase of this working buffer.
+    #[cfg(test)]
     pub const fn state(&self) -> ClassState {
         self.state
     }
@@ -92,25 +72,12 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
         }
     }
 
-    /// Writes evaluations at natural positions `start..start + values.len()`.
-    ///
-    /// Maps positions according to [`Self::order`]. This is
-    /// [`Self::scatter_strided`] with stride one, including its range checks
-    /// and errors; repeated writes overwrite rather than add.
+    #[cfg(test)]
     pub fn scatter(&mut self, start: usize, values: &[PastaField<M>]) -> Result<(), FftError> {
         self.scatter_strided(start, 1, values)
     }
 
-    /// Writes natural positions `start + i*stride`, mapping directly to storage.
-    ///
-    /// Here `i` indexes `values`; [`Self::order`] determines the storage position.
-    /// Repeated writes overwrite values. Empty writes accept `start <= size`,
-    /// where `size` is the class's domain size, with nonzero stride.
-    ///
-    /// Returns [`FftError::InvalidLayout`] for zero stride or an out-of-range
-    /// position, [`FftError::SizeOverflow`] for index arithmetic overflow, or
-    /// [`FftError::InvalidClassState`] if interpolation already began. All checks
-    /// precede writes.
+    #[cfg(test)]
     pub fn scatter_strided(
         &mut self,
         start: usize,
@@ -144,16 +111,9 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
     }
 }
 
+#[cfg(test)]
 impl ExecutionOptions {
-    /// Scratch for fused interpolation, given the output and lift domain sizes.
-    ///
-    /// This const query sizes storage without constructing plans or classes.
-    /// Classes reuse scratch in sequence, so the result is the maximum of the
-    /// individual transform requirements. An empty lift slice is accepted.
-    ///
-    /// Returns [`FftError::InvalidClass`] if a lift exceeds the output size.
-    /// Other size limits and errors are those of [`Self::requirements`].
-    pub const fn interpolation_requirements(
+    pub(crate) const fn interpolation_requirements(
         self,
         output_size: usize,
         lift_sizes: &[usize],
@@ -190,19 +150,6 @@ const fn include_lift(
     }
 }
 
-/// Scratch needed to interpolate `output` and add the interpolated `lifts`.
-///
-/// Each lift must be at most the output size. Coset shifts may differ:
-/// each class describes its own polynomial. Classes reuse the same scratch in
-/// sequence, with parallel work within each transform, so the requirement is
-/// the maximum of their individual requirements, independent of class count.
-/// Use [`ExecutionOptions::interpolation_requirements`] to query the same
-/// requirement from sizes in a const context, without constructing classes.
-///
-/// Returns [`FftError::InvalidClass`] for an oversized lift. Other errors are
-/// those of [`Plan::scratch_requirements`]. An empty lift slice is accepted.
-/// Returns [`FftError::InvalidClassState`] if interpolation already began on
-/// any class.
 pub const fn interpolation_scratch<M: PrimeModulus>(
     output: &Class<'_, M>,
     lifts: &[Class<'_, M>],
@@ -234,68 +181,6 @@ pub const fn interpolation_scratch<M: PrimeModulus>(
     Ok(required)
 }
 
-/// Interpolates every class, adding the lift coefficient vectors to `output`.
-///
-/// If `output` initially evaluates a polynomial `p` and each lift evaluates
-/// `q_i`, the output becomes the coefficients of `p + sum(q_i)`. Each lift
-/// retains its own interpolated coefficients. Smaller coefficient vectors are
-/// implicitly zero-padded, with no degree shift or other multiplication.
-///
-/// Every lift must fit in the output domain. Their coset shifts may
-/// differ, and an empty lift slice is accepted. All buffers finish in increasing
-/// degree order, and their [`Class::order`] becomes [`ElementOrder::Natural`].
-/// Interpolation consumes each class's evaluation phase: another interpolation
-/// or scatter returns [`FftError::InvalidClassState`]. This also applies to any
-/// class whose transform began before an execution panic.
-///
-/// Size and execution errors are those of [`interpolation_scratch`]; a shorter
-/// scratch slice returns [`FftError::ScratchTooSmall`]. Validation precedes any
-/// mutation. The module's [working-storage rules](super) cover table validity,
-/// scratch reuse, and buffer state after panics.
-///
-/// Residue expansion can scatter directly into bit-reversed interpolation
-/// storage, avoiding a separate conversion to natural evaluation order:
-///
-/// ```
-/// use zakura_udon::{
-///     exec::SerialExecutor,
-///     field::Fp,
-///     fft::{
-///         Class, Domain, ExecutionOptions, Expansion, ExpansionOptions, ElementOrder, Plan,
-///         interpolate_classes,
-///     },
-/// };
-///
-/// let base = Plan::without_tables(Domain::new(1).unwrap().subgroup());
-/// let extended = Domain::new(2).unwrap().coset(Fp::from_u64(7)).unwrap();
-/// let expansion = Expansion::new(base, extended, None).unwrap();
-/// let coefficients = [Fp::from_u64(3), Fp::from_u64(2)];
-/// let mut evaluations = [Fp::ZERO; 4];
-/// expansion.coefficients(
-///     &coefficients, &mut evaluations, ExpansionOptions::serial(), &SerialExecutor, &mut [],
-/// ).unwrap();
-/// let mut buffer = [Fp::ZERO; 4];
-/// let mut output = Class::new(
-///     Plan::without_tables(extended), &mut buffer, ElementOrder::BitReversed,
-/// ).unwrap();
-/// let layout = expansion.layout();
-/// for (residue, values) in evaluations.chunks_exact(layout.rows()).enumerate() {
-///     output.scatter_strided(residue, layout.residues(), values).unwrap();
-/// }
-/// // The lift evaluates the constant polynomial 5 on a singleton subgroup.
-/// let mut constant = [Fp::from_u64(5)];
-/// let mut lifts = [Class::new(
-///     Plan::without_tables(Domain::new(0).unwrap().subgroup()),
-///     &mut constant, ElementOrder::Natural,
-/// ).unwrap()];
-/// interpolate_classes(
-///     &mut output, &mut lifts, ExecutionOptions::serial(),
-///     &SerialExecutor, &mut [],
-/// ).unwrap();
-/// let expected = [Fp::from_u64(8), Fp::from_u64(2), Fp::ZERO, Fp::ZERO];
-/// assert_eq!(output.values(), &expected);
-/// assert_eq!(lifts[0].values(), &[Fp::from_u64(5)]);
-/// ```
 pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
     output: &mut Class<'_, M>,
     lifts: &mut [Class<'_, M>],

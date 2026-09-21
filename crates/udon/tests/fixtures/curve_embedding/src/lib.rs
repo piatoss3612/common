@@ -8,8 +8,8 @@ use udon::{
         AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve,
         Point, ProjectivePoint, Vesta,
         msm::{
-            Bases, ExecutionOptions, ExecutionPlan, Input, JobStorage, PreparedScalars,
-            Requirements, ScalarStorage, Scratch, Selection, WorkerStorage,
+            Bases, ExecutionOptions, Input, PreparedScalars, ScalarStorage, Scratch, Selection,
+            run::{BatchPlan, JobStorage, WorkerStorage},
         },
     },
     exec::{SerialExecutor, TaskBudget},
@@ -80,13 +80,7 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
     const OPTIONS: ExecutionOptions = ExecutionOptions::SERIAL
         .with_memory_limit(8192)
         .with_max_terms_per_pass(core::num::NonZeroUsize::new(17));
-    // Both sealed curve pairings have the same element sizes. Assert that the
-    // concrete sizing used for these arrays agrees with each instantiation.
-    const R: Requirements = match Input::<Pallas>::requirements_for_len(N, OPTIONS) {
-        Ok(r) => r,
-        Err(_) => panic!("unsupported MSM size"),
-    };
-    assert_eq!(Input::<C>::requirements_for_len(N, OPTIONS).unwrap(), R);
+    // Fixed caller-owned capacity; BatchPlan validates its required prefixes.
     let indices: [u32; N] = core::array::from_fn(|i| (i % 37) as u32);
     let scalars = core::array::from_fn::<_, N, _>(|i| PastaField::from_u64(i as u64 + 1).neg());
     let expected = indices
@@ -95,12 +89,12 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
         .fold(ProjectivePoint::IDENTITY, |sum, (&index, scalar)| {
             sum.add(&record.entries[index as usize].mul_projective(scalar))
         });
-    let mut records = [ScalarStorage::ZERO; R.scalars()];
-    let mut digits = [0; R.digits()];
-    let mut affine = [AffinePoint::GENERATOR; R.affine()];
-    let mut projective = [ProjectivePoint::IDENTITY; R.projective()];
-    let mut field = [PastaField::ZERO; R.field()];
-    let mut working_indices = [0; R.indices()];
+    let mut records = [ScalarStorage::ZERO; 64];
+    let mut digits = [0; 4096];
+    let mut affine = [AffinePoint::GENERATOR; 128];
+    let mut projective = [ProjectivePoint::IDENTITY; 256];
+    let mut field = [PastaField::ZERO; 256];
+    let mut working_indices = [0; 256];
     let mut scratch = Scratch::new(
         &mut records,
         &mut digits,
@@ -115,12 +109,14 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
     ] {
         let selection = Selection::indexed(bases, &indices).unwrap();
         let input = selection.with_scalars(&scalars).unwrap();
-        assert_eq!(
-            input
-                .execute(OPTIONS, &SerialExecutor, scratch.reborrow())
-                .unwrap(),
-            expected
-        );
+        let inputs = [input];
+        let mut jobs = [JobStorage::EMPTY];
+        let mut workers = [WorkerStorage::EMPTY];
+        let plan = BatchPlan::new(&inputs, OPTIONS, &mut jobs, &mut workers).unwrap();
+        let mut output = [ProjectivePoint::IDENTITY];
+        plan.execute(&mut output, &SerialExecutor, scratch.reborrow())
+            .unwrap();
+        assert_eq!(output[0], expected);
     }
     // Embedded compact layouts must support retained preparation and selection
     // rebinding in a consumer without an allocator.
@@ -139,7 +135,7 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
             let expected = row.iter().fold(PastaField::ZERO, |sum, s| sum.add(s));
             let mut jobs = [JobStorage::EMPTY];
             let mut workers = [WorkerStorage::EMPTY];
-            let plan = ExecutionPlan::new(&inputs, OPTIONS, &mut jobs, &mut workers).unwrap();
+            let plan = BatchPlan::new(&inputs, OPTIONS, &mut jobs, &mut workers).unwrap();
             let mut output = [ProjectivePoint::IDENTITY];
             plan.execute(&mut output, &SerialExecutor, scratch.reborrow())
                 .unwrap();
@@ -172,21 +168,12 @@ fn exercise_srs<C: PastaCurve>(record: &record::SrsRecord<C>) {
         );
         step = step.mul(&domain.inverse_root());
     }
-    const R: Requirements =
-        match Input::<Pallas>::requirements_for_len(record::SRS_SIZE, ExecutionOptions::SERIAL) {
-            Ok(r) => r,
-            Err(_) => panic!("unsupported SRS size"),
-        };
-    assert_eq!(
-        Input::<C>::requirements_for_len(record::SRS_SIZE, ExecutionOptions::SERIAL).unwrap(),
-        R
-    );
-    let mut scalars = [ScalarStorage::ZERO; R.scalars()];
-    let mut digits = [0; R.digits()];
-    let mut affine = [AffinePoint::GENERATOR; R.affine()];
-    let mut projective = [ProjectivePoint::IDENTITY; R.projective()];
-    let mut field = [PastaField::ZERO; R.field()];
-    let mut indices = [0; R.indices()];
+    let mut scalars = [ScalarStorage::ZERO; 64];
+    let mut digits = [0; 4096];
+    let mut affine = [AffinePoint::GENERATOR; 128];
+    let mut projective = [ProjectivePoint::IDENTITY; 256];
+    let mut field = [PastaField::ZERO; 256];
+    let mut indices = [0; 256];
     let mut scratch = Scratch::new(
         &mut scalars,
         &mut digits,
@@ -202,20 +189,14 @@ fn exercise_srs<C: PastaCurve>(record: &record::SrsRecord<C>) {
     reference::transform(&mut evaluations, &domain.root());
     let coefficient_input = Input::new(Bases::Prepared(&record.coefficient), &coefficient).unwrap();
     let lagrange_input = Input::new(Bases::Prepared(&record.lagrange), &evaluations).unwrap();
-    let left = coefficient_input
-        .execute(
-            ExecutionOptions::SERIAL,
-            &SerialExecutor,
-            scratch.reborrow(),
-        )
+    let inputs = [coefficient_input, lagrange_input];
+    let mut jobs = [JobStorage::EMPTY; 2];
+    let mut workers = [WorkerStorage::EMPTY];
+    let plan = BatchPlan::new(&inputs, ExecutionOptions::SERIAL, &mut jobs, &mut workers).unwrap();
+    let mut output = [ProjectivePoint::IDENTITY; 2];
+    plan.execute(&mut output, &SerialExecutor, scratch.reborrow())
         .unwrap();
-    let right = lagrange_input
-        .execute(
-            ExecutionOptions::SERIAL,
-            &SerialExecutor,
-            scratch.reborrow(),
-        )
-        .unwrap();
+    let [left, right] = output;
     assert_eq!(
         left, right,
         "coefficient and Lagrange commitments must agree"

@@ -9,7 +9,7 @@ use consumer::Consumer;
 #[ignore = "slow nested Cargo builds; run explicitly with --ignored"]
 fn generated_curve_tables_embed_in_a_downstream_consumer() {
     let consumer = Consumer::new("curve-embedding-consumer", "curve_embedding", "udon", &[]);
-    for features in ["", "alloc,sqrt-table-large"] {
+    for features in ["", "sqrt-table-large"] {
         for (damage, diagnostic) in [
             ("", None),
             (

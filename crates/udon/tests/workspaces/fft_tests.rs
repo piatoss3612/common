@@ -2,13 +2,17 @@ use crate::bridge::{
     executor::RayonExecutor,
     fft::{ClassBuilder, FftWorkspace, OwnedTables},
 };
-use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::{
+    num::NonZeroUsize,
+    panic::{AssertUnwindSafe, catch_unwind},
+};
 use zakura_udon::{
     exec::{Executor, SerialExecutor, TaskBudget, for_each_mut},
     fft::{
-        self, Class, ClassState, Domain, ElementOrder, ExecutionOptions, Expansion, ExpansionOrder,
-        ExpansionStorage, ExpansionStrategy, InterpolationOptions, InverseScale, ResourceBudget,
-        interpolate_classes_parallel, reference,
+        self, Codelet, Direction, Domain, ElementOrder, EvaluationLayout, EvaluationView,
+        ExecutionOptions, Expansion, ExpansionOrder, ExpansionStorage, InputSupport, InverseScale,
+        TransformRequest, reference,
+        run::{ExpansionPlan, FftPlan, InterpolationPlan},
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -43,6 +47,10 @@ fn geometry(budget: TaskBudget) -> ExecutionOptions {
         columns_per_task: 2,
         max_tasks: budget.get(),
     }
+}
+
+fn nz(n: usize) -> NonZeroUsize {
+    NonZeroUsize::new(n).unwrap()
 }
 
 fn pipeline<M: PrimeModulus>() {
@@ -95,55 +103,56 @@ fn pipeline<M: PrimeModulus>() {
         let executor = RayonExecutor(&pool);
         let budget = TaskBudget::new(threads).unwrap();
         let (_, inner) = budget.partition(2).unwrap();
-        let strategy = ExpansionStrategy {
-            transform: geometry(inner),
-            budget: ResourceBudget::for_tasks(inner.get()),
-        };
-        let retained = expansion
-            .configure(
-                ExpansionOrder::Residues,
-                ExpansionStorage::CoefficientWorkspace {
-                    scale: InverseScale::Unscaled,
+        let retained = ExpansionPlan::new(
+            expansion,
+            ExpansionStorage::CoefficientWorkspace {
+                scale: InverseScale::Unscaled,
+            },
+            ExpansionOrder::Residues,
+            InputSupport::Full,
+            ElementOrder::Natural,
+            nz(64),
+            Codelet::Radix2,
+        )
+        .unwrap();
+        let forward = ExpansionPlan::new(
+            expansion,
+            ExpansionStorage::Coefficients,
+            ExpansionOrder::Residues,
+            InputSupport::Full,
+            ElementOrder::Natural,
+            nz(64),
+            Codelet::Radix2,
+        )
+        .unwrap();
+        let transforms = [plans[3], plans[0], plans[1], plans[2]].map(|plan| {
+            FftPlan::new(
+                plan,
+                TransformRequest {
+                    input_order: ElementOrder::BitReversed,
+                    ..TransformRequest::new(Direction::Inverse)
                 },
-                strategy,
+                nz(64),
+                Codelet::Radix2,
+                false,
             )
-            .unwrap();
-        let forward = expansion
-            .configure(
-                ExpansionOrder::Residues,
-                ExpansionStorage::Coefficients,
-                strategy,
-            )
-            .unwrap();
-        let interpolation = InterpolationOptions {
-            transform: geometry(inner),
-            max_class_tasks: 2,
-            max_tasks: inner.get(),
-        };
+            .unwrap()
+            .with_contiguous_permutation()
+        });
+        let interpolation = InterpolationPlan::new(transforms, false).unwrap();
         let scratch = retained
-            .requirements()
-            .scratch_fields
-            .max(forward.requirements().scratch_fields)
-            .max(
-                interpolation
-                    .requirements(output_size, &class_sizes[..3])
-                    .unwrap()
-                    .scratch_fields,
-            )
+            .scratch_fields(nz(inner.get()))
+            .unwrap()
+            .max(forward.scratch_fields(nz(inner.get())).unwrap())
             .max(
                 geometry(inner)
                     .requirements(output_size)
                     .unwrap()
                     .field_elements,
             );
-        assert_eq!(retained.requirements().coefficient_fields, N);
+        assert_eq!(retained.coefficient_fields(), N);
         let mut workspaces: [_; 2] = core::array::from_fn(|_| {
-            FftWorkspace::<M>::new(
-                retained.requirements().coefficient_fields,
-                output_size,
-                class_sizes.iter().sum(),
-                scratch,
-            )
+            FftWorkspace::<M>::new(N, output_size, class_sizes.iter().sum(), scratch)
         });
         let capacities = workspaces.each_ref().map(FftWorkspace::capacities);
         for (expansion_cases, class_cases) in expansion_cases.iter().zip(&class_cases) {
@@ -155,13 +164,16 @@ fn pipeline<M: PrimeModulus>() {
                     assert_eq!(allowance, inner);
                     let (original, input, expected) = &expansion_cases[index];
                     let view = retained
-                        .execute_with_workspace(
+                        .execute(
                             input,
                             &mut work.output,
                             &mut work.coefficients,
-                            &executor,
+                            None,
                             &mut work.scratch,
+                            nz(inner.get()),
+                            &executor,
                         )
+                        .unwrap()
                         .unwrap();
                     assert_eq!(
                         view.normalization_factor(),
@@ -170,7 +182,12 @@ fn pipeline<M: PrimeModulus>() {
                     for (stored, coefficient) in view.as_slice().iter().zip(original) {
                         assert_eq!(*stored, coefficient.mul(&PastaField::from_u64(N as u64)));
                     }
-                    let output = retained.view(&work.output).unwrap();
+                    let output = EvaluationView::bind(
+                        &work.output,
+                        plans[3].domain(),
+                        EvaluationLayout::Residues(expansion.layout()),
+                    )
+                    .unwrap();
                     for (row, value) in expected.iter().enumerate() {
                         assert_eq!(output.get(row), Some(value));
                     }
@@ -178,7 +195,17 @@ fn pipeline<M: PrimeModulus>() {
                     // Carry the scale with the coefficients into another expansion
                     // and into a normal forward-prefix transform.
                     forward
-                        .execute_coefficients(view, &mut work.product, &executor, &mut work.scratch)
+                        .with_coefficient_scale(view.normalization_factor())
+                        .unwrap()
+                        .execute(
+                            view.as_slice(),
+                            &mut work.product,
+                            &mut [],
+                            None,
+                            &mut work.scratch,
+                            nz(inner.get()),
+                            &executor,
+                        )
                         .unwrap();
                     assert_eq!(work.output, work.product);
                     plans[3]
@@ -192,16 +219,32 @@ fn pipeline<M: PrimeModulus>() {
                         .unwrap();
                     assert_eq!(&work.product, expected);
                     let (prefix, short) = &products[index];
-                    forward
-                        .execute_product_into(
-                            prefix.as_slice(),
-                            output,
-                            &mut work.product,
-                            &executor,
-                            &mut work.scratch,
-                        )
-                        .unwrap();
-                    let product = forward.view(&work.product).unwrap();
+                    ExpansionPlan::new(
+                        expansion,
+                        ExpansionStorage::Coefficients,
+                        ExpansionOrder::Residues,
+                        InputSupport::Prefix(prefix.len()),
+                        ElementOrder::Natural,
+                        nz(64),
+                        Codelet::Radix2,
+                    )
+                    .unwrap()
+                    .execute(
+                        prefix,
+                        &mut work.product,
+                        &mut [],
+                        Some(&work.output),
+                        &mut work.scratch,
+                        nz(inner.get()),
+                        &executor,
+                    )
+                    .unwrap();
+                    let product = EvaluationView::bind(
+                        &work.product,
+                        plans[3].domain(),
+                        EvaluationLayout::Residues(expansion.layout()),
+                    )
+                    .unwrap();
                     for row in 0..output_size {
                         assert_eq!(product.get(row), Some(&short[row].mul(&expected[row])));
                     }
@@ -233,21 +276,19 @@ fn pipeline<M: PrimeModulus>() {
                             builder.submit(residue, &values).unwrap();
                         }
                     }
-                    let [a, b, c, mut output] = builders.map(|builder| builder.finish().unwrap());
-                    let mut lifts = [a, b, c];
-                    interpolate_classes_parallel(
-                        &mut output,
-                        &mut lifts,
-                        interpolation,
-                        &executor,
-                        &mut work.scratch,
-                    )
-                    .unwrap();
-                    assert_eq!(output.state(), ClassState::Coefficients);
-                    for (lift, (polynomial, _)) in lifts.iter().zip(class_cases) {
-                        assert_eq!(lift.values(), polynomial);
+                    let [a, b, c, output] = builders.map(|builder| builder.finish().unwrap());
+                    interpolation
+                        .execute(
+                            [output, a, b, c],
+                            [&mut [], &mut [], &mut [], &mut []],
+                            nz(inner.get()),
+                            &executor,
+                        )
+                        .unwrap();
+                    for (lift, (polynomial, _)) in [a, b, c].iter().zip(class_cases) {
+                        assert_eq!(*lift, polynomial);
                     }
-                    for (i, value) in output.values().iter().enumerate() {
+                    for (i, value) in output.iter().enumerate() {
                         let expected = class_cases
                             .iter()
                             .filter_map(|(polynomial, _)| polynomial.get(i))
@@ -309,59 +350,41 @@ fn incomplete_producers_and_panics_require_refill() {
         }
     }
     let mut lift_storage = [PastaField::ONE; 16];
-    let options = InterpolationOptions {
-        transform: ExecutionOptions {
-            tile_len: 2,
-            columns_per_task: 1,
-            max_tasks: 2,
-        },
-        max_class_tasks: 1,
-        max_tasks: 2,
-    };
-    let mut scratch =
-        vec![PastaField::ZERO; options.requirements(16, &[16]).unwrap().scratch_fields];
-    {
-        storage.fill(PastaField::ONE);
-        let mut output = Class::new(plan, &mut storage, ElementOrder::Natural).unwrap();
-        let mut lifts = [Class::new(plan, &mut lift_storage, ElementOrder::Natural).unwrap()];
-        assert!(
-            catch_unwind(AssertUnwindSafe(|| {
-                interpolate_classes_parallel(
-                    &mut output,
-                    &mut lifts,
-                    options,
+    let transform = FftPlan::new(
+        plan,
+        TransformRequest::new(Direction::Inverse),
+        nz(2),
+        Codelet::Radix2,
+        false,
+    )
+    .unwrap()
+    .with_contiguous_permutation();
+    let interpolation = InterpolationPlan::new([transform; 2], false).unwrap();
+    storage.fill(PastaField::ONE);
+    assert!(
+        catch_unwind(AssertUnwindSafe(|| {
+            interpolation
+                .execute(
+                    [&mut storage, &mut lift_storage],
+                    [&mut [], &mut []],
+                    nz(2),
                     &PanicExecutor,
-                    &mut scratch,
                 )
                 .unwrap();
-            }))
-            .is_err()
-        );
-        assert_eq!(output.state(), ClassState::Consumed);
-        assert!(output.scatter(0, &[PastaField::ONE]).is_err());
-        assert!(
-            interpolate_classes_parallel(
-                &mut output,
-                &mut lifts,
-                options,
-                &SerialExecutor,
-                &mut scratch
-            )
-            .is_err()
-        );
-    }
+        }))
+        .is_err()
+    );
+    // After an unwind, the owner refills evaluations before reusing either bank.
     storage.fill(PastaField::ONE);
     lift_storage.fill(PastaField::ONE);
-    let mut output = Class::new(plan, &mut storage, ElementOrder::Natural).unwrap();
-    let mut lifts = [Class::new(plan, &mut lift_storage, ElementOrder::Natural).unwrap()];
-    interpolate_classes_parallel(
-        &mut output,
-        &mut lifts,
-        options,
-        &SerialExecutor,
-        &mut scratch,
-    )
-    .unwrap();
-    assert_eq!(output.values()[0], PastaField::from_u64(2));
-    assert!(output.values()[1..].iter().all(PastaField::is_zero));
+    interpolation
+        .execute(
+            [&mut storage, &mut lift_storage],
+            [&mut [], &mut []],
+            nz(2),
+            &SerialExecutor,
+        )
+        .unwrap();
+    assert_eq!(storage[0], PastaField::from_u64(2));
+    assert!(storage[1..].iter().all(PastaField::is_zero));
 }

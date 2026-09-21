@@ -1,13 +1,19 @@
-//! A fixed-pool application driver shared by integration tests and benchmarks.
+//! A fixed-pool application driver for internal scheduler tests.
+//!
+//! Application kernels use Udon's private frontier here to exercise the same
+//! failure and publication paths as arithmetic tasks. Downstream schedulers own
+//! their application-task state alongside the public arithmetic runs.
 //!
 //! Seven rotating lanes arbitrate two MSMs, two FFTs, application work, immediate
 //! MSM consumers, and the round challenge fence. Every dispatch first obtains
 //! all actual guards and an admission permit. There is no per-operation worker
 //! allowance, queue growth, or blocking acquisition in the coordinator.
 
-use super::{fft_run, msm_run, run_pool};
+use super::{admission::*, fft_run, msm_run, run_pool};
+use crate::exec::run::frontier::ReadyRange;
 use spin::{RwLock, RwLockWriteGuard};
 use std::num::NonZeroUsize;
+use std::{vec, vec::Vec};
 use zakura_udon::{
     curve::{
         AffinePoint, Pallas, ProjectivePoint,
@@ -19,10 +25,7 @@ use zakura_udon::{
             },
         },
     },
-    exec::run::{
-        Admission, ArenaLayout, BlockClass, Completion, Frontier, Identity, Kernel, Outcome,
-        Profile, ReadyRange, Resources, SegmentStorage, Task, TaskPermit, TaskStorage,
-    },
+    exec::run::{Completion, Frontier, Identity, Kernel, Outcome, Task, TaskStorage},
     fft::{
         Codelet, Direction, Domain, Plan, TransformRequest,
         run::{Buffers as FftBuffers, FftKernel, FftPlan, FftRun, Resources as FftResources},
@@ -310,7 +313,7 @@ fn scoped_impl<const CHECK: bool, O>(
             + size_of::<[Option<zakura_udon::curve::msm::run::Request<'_>>; FRONTIER]>()
             + size_of::<[Option<zakura_udon::fft::run::Request<'_>>; FRONTIER]>()
             + size_of::<ReadyRange<'_>>()
-            + size_of::<Option<zakura_udon::exec::run::Segment<'_>>>()
+            + size_of::<Option<Segment<'_>>>()
             + size_of_val(fixture)
             + fixture.rounds.capacity() * size_of::<[MsmPlan<Pallas>; 2]>()
             + fixture.fft_plans.capacity() * size_of::<[FftPlan<'_, PallasBase>; 2]>()

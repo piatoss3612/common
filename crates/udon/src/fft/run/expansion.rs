@@ -2,13 +2,17 @@ use super::super::{Expansion, ExpansionOrder, ExpansionScaleNormalization, Expan
 use super::*;
 
 /// Worker-independent expansion geometry and input liveness.
+///
+/// Use [`Self::execute`] for preserved input, [`Self::execute_disposable`] to
+/// reuse an evaluation buffer for coefficients, or [`ExpansionRun`] for
+/// incremental scheduling. Output layouts follow [`ExpansionOrder`].
 #[derive(Clone, Copy, Debug)]
 pub struct ExpansionPlan<'t, M: PrimeModulus> {
-    expansion: Expansion<'t, M>,
-    storage: ExpansionStorage,
-    order: ExpansionOrder,
-    support: InputSupport,
-    input_order: ElementOrder,
+    pub(super) expansion: Expansion<'t, M>,
+    pub(super) storage: ExpansionStorage,
+    pub(super) order: ExpansionOrder,
+    pub(super) support: InputSupport,
+    pub(super) input_order: ElementOrder,
     tile: NonZeroUsize,
     codelet: Codelet,
     coefficient_scale: PastaField<M>,
@@ -17,9 +21,10 @@ pub struct ExpansionPlan<'t, M: PrimeModulus> {
 impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
     /// Validates an expansion without binding working storage.
     ///
-    /// Coefficients accept a natural prefix. Other storage modes accept full
-    /// base evaluations in either order. Invalid support or tile geometry
-    /// follows [`FftPlan::new`]; a prefix for evaluation input returns
+    /// Coefficients accept a natural prefix or full input in either order.
+    /// Other storage modes accept full base evaluations in either order.
+    /// Validation of support and tile geometry follows [`FftPlan::new`]; a
+    /// prefix for evaluation input returns
     /// [`FftError::InvalidExecution`]. The expansion's tables remain borrowed.
     pub fn new(
         expansion: Expansion<'t, M>,
@@ -50,9 +55,12 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         Ok(result)
     }
 
-    /// Normalization factor for a preserved coefficient view. Evaluation
-    /// storage modes derive this from their inverse scale and reject this
-    /// override with [`FftError::InvalidExecution`].
+    /// Multiplies preserved coefficients by a common normalization factor.
+    ///
+    /// For a [`super::super::CoefficientView`], pass its `normalization_factor()`
+    /// to recover ordinary polynomial evaluations. Evaluation storage modes
+    /// derive this from their inverse scale and reject this override with
+    /// [`FftError::InvalidExecution`].
     pub fn with_coefficient_scale(mut self, scale: PastaField<M>) -> Result<Self, FftError> {
         if self.storage != ExpansionStorage::Coefficients {
             return Err(FftError::InvalidExecution);
@@ -85,9 +93,11 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         }
     }
 
-    /// Snapshot capacity per retained transform slot, shared between its
-    /// inverse and successive residues. Charge all provisioned slots and
-    /// metadata, even while idle; coefficients remain live through consumers.
+    /// Snapshot field count per retained transform slot.
+    ///
+    /// The inverse and successive residues reuse that bank. Charge all
+    /// provisioned slots and metadata, even while idle; coefficients remain live
+    /// through consumers.
     pub fn snapshot_fields(&self) -> usize {
         let residue = self
             .transform(0, self.storage == ExpansionStorage::ReuseOutput)
@@ -111,7 +121,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         }
     }
 
-    fn inverse(&self) -> Result<FftPlan<'t, M>, FftError> {
+    pub(super) fn inverse(&self) -> Result<FftPlan<'t, M>, FftError> {
         let scale = match self.storage {
             ExpansionStorage::CoefficientWorkspace { scale }
             | ExpansionStorage::DisposableInput { scale } => scale,
@@ -130,7 +140,11 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         )
     }
 
-    fn transform(&self, block: usize, in_place: bool) -> Result<FftPlan<'t, M>, FftError> {
+    pub(super) fn transform(
+        &self,
+        block: usize,
+        in_place: bool,
+    ) -> Result<FftPlan<'t, M>, FftError> {
         let residue = if self.order == ExpansionOrder::BitReversed {
             reverse(block, self.residues().ilog2())
         } else {
@@ -252,8 +266,10 @@ pub struct ExpansionRun<'a, 't, M: PrimeModulus, const SLOTS: usize> {
 }
 
 impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS> {
-    /// Binds fixed metadata, returning [`TaskError::Storage`] for zero slots
-    /// or frontier capacity. `product` requests factors in physical output
+    /// Binds fixed metadata for incremental expansion.
+    ///
+    /// Returns [`TaskError::Storage`] for zero slots or frontier capacity.
+    /// `product` requests factors in physical output
     /// residue order. All banks and queue capacity must be admitted together
     /// through the last coefficient and residue consumer before dispatch.
     pub fn new<const TASKS: usize>(

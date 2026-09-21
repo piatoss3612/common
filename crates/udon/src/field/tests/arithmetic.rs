@@ -4,8 +4,8 @@ fn check_arithmetic<M: PrimeModulus>() {
     let p = modulus::<M>();
     let values = samples::<M>(64);
     assert_value(PastaField::<M>::default(), &BigUint::from(0u8));
-    assert_eq!(PastaField::<M>::zero(), PastaField::ZERO);
-    assert_eq!(PastaField::<M>::one(), PastaField::ONE);
+    assert_eq!(PastaField::<M>::ZERO, PastaField::ZERO);
+    assert_eq!(PastaField::<M>::ONE, PastaField::ONE);
     for (a, x) in &values {
         assert_eq!(a.is_zero(), x == &BigUint::from(0u8));
         assert_value(a.neg(), &(&p - x));

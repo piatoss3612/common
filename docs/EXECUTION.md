@@ -7,10 +7,12 @@ any compatible ready task, without changing arithmetic plans or redistributing
 per-operation budgets. The target library remains `no_std`, allocation-free,
 and safe Rust. The application supplies synchronization and storage.
 
-The executable [mixed driver](../crates/udon/tests/support/mixed_run.rs) combines
-two unequal MSMs, two unequal FFTs, application work, immediate result consumers,
+The internal [mixed-driver fixture](../crates/udon/tests/support/mixed_run.rs)
+combines two unequal MSMs, two unequal FFTs, application work, immediate consumers,
 and round-challenge fences. It repeats eleven shrinking rounds without growing
-its provision. The [execution tests](../crates/udon/tests/execution/main.rs)
+its provision. It uses a private frontier for application work; downstream
+schedulers supply their own application-task state. The
+[execution tests](../crates/udon/tests/execution)
 check independent arithmetic results, one-scratch progress, small dispatch
 queues, scoped borrows, cancellation, and failure draining. The
 [performance report](EXECUTION_PERFORMANCE.md) records measurements and limits.
@@ -25,11 +27,12 @@ queues, scoped borrows, cancellation, and failure draining. The
 | Application scheduler | Admission, ready-work selection, priorities, fairness, dispatch, wakeups | Shared by all work kinds |
 
 [`exec::run`](../crates/udon/src/exec/run/mod.rs) contains the common task and
-admission protocol. [`curve::msm::run`](../crates/udon/src/curve/msm/run.rs) and
+completion protocol. [`curve::msm::run`](../crates/udon/src/curve/msm/run.rs) and
 [`fft::run`](../crates/udon/src/fft/run.rs) supply arithmetic plans and runs.
-Application work implements `Kernel<R>` for an owned resource bundle `R` and
-uses the same `Frontier`, `Task`, and `Completion` types. No task receives an
-executor or waits for a child task.
+Arithmetic runs use private frontiers over caller-owned `TaskStorage`, with
+public `Task` and `Completion` envelopes. Applications own the dependency and
+admission policy for their kernels. No arithmetic task receives an executor or
+waits for a child task.
 
 ## Dispatch and ownership
 
@@ -48,8 +51,8 @@ The coordinator performs this sequence:
    newly ready work. Release retained blocks only after their final consumers.
 
 The application must treat resource acquisition and admission accounting as one
-coordinator transaction. `Admission` counts compatible blocks; it cannot create
-references or establish that a particular block contains a particular result.
+coordinator transaction. Counting compatible blocks cannot create references or
+establish that a particular block contains a particular result.
 Arithmetic resource traits validate lengths before writing. Matching logical
 slots to the requested data is the provider's arithmetic-correctness contract.
 Incorrect data does not permit a Rust memory-safety violation.
@@ -90,12 +93,11 @@ storage cannot be rebound while accessible tickets still borrow it.
 
 ## Bounded readiness and retained results
 
-`Frontier` represents a task range with caller-owned ring metadata. It exposes
-only the next `capacity()` indices and stores one state per live index, even
-when the phase has millions of tasks. Ready ranges encode consecutive indices;
-claimed or completed indices split them. Enumeration scans at most the fixed
-frontier capacity. Successive dependency phases reuse that storage with checked
-epochs, rejecting old keys.
+Each arithmetic run represents its task range with caller-owned ring metadata.
+Its private frontier stores one state per live index even when a phase contains
+millions of tasks. Ready request enumeration scans at most the fixed frontier
+capacity. Successive dependency phases reuse that storage with checked epochs,
+rejecting old keys.
 
 Completion can arrive out of order. Consecutive completed indices retire in
 order before their slots are reused. The window includes space for the earliest
@@ -131,8 +133,36 @@ transformed last so other residue readers cannot lose their input.
 `InterpolationRun<CLASSES>` exposes independent inverse transforms and bounded
 coefficient additions. A completed lift can reduce once the output inverse is
 ready, and its last read releases that lift independently of unrelated inverses.
-Same-domain consuming interpolation merges evaluations before the output
-inverse. These are real data dependencies, as are round-challenge fences.
+Same-domain consuming interpolation merges evaluations before their
+representative inverse, including groups smaller than the output. These are
+data dependencies, as are round-challenge fences.
+
+### Inputs published by application tasks
+
+`ProducedInput` binds base storage and a logical term count without borrowing
+unfinished scalar or index rows. `MsmRun::new_produced` and
+`new_produced_partition` expose arithmetic requests normally. The provider
+declines a claim until the request's whole source range is available, then
+leases immutable fragments through `Resources::with_source` and `SourceBuffers`.
+This lets a field kernel publish one fragment and release its recoding tasks
+while other field kernels still own disjoint writable fragments.
+
+Source views use request-local indices: element zero corresponds to
+`Request::offset`, and preparation requires `Request::terms` raw field scalars.
+Indexed preparation and windows also require that many base indices. Kernels
+validate lengths and indices before writing; matching each fragment to its
+logical range remains the provider's responsibility. Keep published values
+unchanged through their last consumer. A source may cross several fragments;
+`ReadView::contiguous_prefix` exposes the first contiguous part of a range so
+the kernel can recode each part directly into retained scalar and digit banks.
+Preparation writes those retained banks in place. Publication only transfers
+their ownership; it need not copy the prepared data under a scheduler lock.
+
+Borrowed inputs and existing `Resources` implementations keep their signatures
+and behavior. `new_partition` binds a range of an existing borrowed input, with
+global scalar and base-index offsets. Partial ranges discard a whole-input
+digit cache while preserving reusable scalar records. Completed produced runs
+can rebind to a new input and range; stale requests still fail their epoch check.
 
 ## Admission with a progress reservation
 
@@ -141,7 +171,8 @@ operation-retained intermediates, and task-leased scratch. A task's result can
 move from an exclusive write lease to retained shared input; completion alone
 does not free it while consumers remain.
 
-`ArenaLayout<N>` charges every provisioned block, including idle capacity,
+The [test fixture's admission policy](../crates/udon/tests/support/admission.rs)
+charges every provisioned block, including idle capacity,
 padding, lease metadata, retained handoff banks, run/frontier state, envelopes,
 and bounded queues. Classes distinguish exact types and capacities: bytes of
 `Fp` storage cannot satisfy an `Fq` lease. Inputs, external final outputs, and
@@ -157,7 +188,7 @@ For every admitted pipeline segment `i`, declare:
 - `T_i`: the componentwise maximum complete temporary bundle of any one task
   needed to reach that frontier.
 
-`Admission` admits another segment only when, componentwise,
+That fixture admits another segment only when, componentwise,
 
 ```text
 sum(R_i) + max(T_i) <= arena capacity
@@ -180,12 +211,9 @@ lease while waiting for another can deadlock; workers repeatedly retrying one
 blocked request can livelock or starve compatible work. The complete-bundle
 transaction and fair enumeration avoid those scheduler-induced failures.
 
-The implementation accepts additional application-defined capacity classes.
-For example, bandwidth-heavy kernels can require a bandwidth token, and a
-cache-sensitive batch can reserve a limited number of cache tokens. Request
-`WorkEstimate` values supply arithmetic, traffic, and active-set hints. These
-are estimates, not measured hardware reservations. The scheduler chooses and
-calibrates such policies; the default driver does not enforce bandwidth limits.
+Applications may account for additional capacity classes or prioritize work by
+measured arithmetic and traffic costs. These scheduling policies belong to the
+application; Udon requests describe work kinds and required resources.
 
 ## Choosing arithmetic grain
 
@@ -211,37 +239,37 @@ tasks and each remaining cross-tile stage has about `N/(2t)` paired tasks.
 Traffic and publication costs can dominate the arithmetic saved by concurrency.
 
 The default MSM grain is capped at 8,192 terms. Automatic full-width geometry
-uses width 11 at grains of at least 4,096. Small geometries stay fused. These
+uses width 11 at grains of at least 4,096. Preparation fragments contain at most
+256 terms. `MsmPlan::with_grain` reduces the term grain while retaining the
+original recoder and window width; constructing a new plan for a shorter input
+can instead select a different geometry. Independent partition runs can expose
+more window tasks, with the extra collapse work shown above. These
 choices reflect the measured cases in the performance report, not a universal
 minimum grain. Explicit widths, grains, accumulation modes, and FFT columns
 remain available for application measurements. Algorithm selection should be
 made with the retained and temporary provision together; oversubscribing a
 smaller, more expensive kernel need not improve throughput.
 
-## Synchronous compatibility and migration
+## Synchronous execution and integration
 
-Existing synchronous signatures and caller-owned storage remain available.
-MSM execution and FFT transforms use the same bounded kernels and run state
-through structured drivers over `Executor::join`. The MSM driver owns disjoint
-scratch bundles explicitly and can execute successive ready windows with a
-bundle inside a joined branch. It publishes that group's receipts after join.
-Preparation and streaming deposits can use the full structured task allowance;
-their retained buffers do not require a temporary window scratch bundle.
-Setting `with_memory_limit(usize::MAX)` no longer selects a separate MSM queue
-policy or duplicates logical window results per worker.
+`MsmPlan`, `BatchPlan`, `FftPlan`, `ExpansionPlan`, and `InterpolationPlan`
+provide synchronous execution over caller-owned storage and `Executor::join`.
+These drivers divide an explicit total task allowance and reuse the bounded
+arithmetic kernels. The MSM driver owns disjoint scratch bundles and can execute
+successive ready windows with one bundle inside a joined branch. Preparation
+and streaming deposits can use the full structured task allowance without a
+temporary window scratch bundle.
 
-The existing synchronous batch and interpolation helpers still partition their
-borrowed scratch and nested task allowances; their structured return contract
-cannot expose a partially completed batch to its caller. Use the run interfaces
-for application-wide priorities, immediate consumer dispatch, or one shared
-scratch bank across heterogeneous operations. Their frontiers and provision
-replace static inner budget shares. The old `TaskBudget` helpers remain useful
-for callers deliberately choosing structured partitioning.
+The synchronous return contract waits for the complete operation. Use the run
+interfaces for application-wide priorities, immediate consumer dispatch, or one
+shared scratch bank across heterogeneous operations. `TaskBudget` helpers remain
+available for structured partitioning. Admission and queue policy belong to the
+application in either case.
 
 An application can migrate one operation at a time: keep its existing immutable
 tables, preplan the round shapes, provision retained banks and typed task
-scratch, and bind runs to caller-owned identities/frontiers. Then route their
-requests and application kernels through one coordinator. Keep each scratch
+scratch, and bind runs to caller-owned identities and task metadata. Then route
+their requests and application kernels through one coordinator. Keep each scratch
 provider and admission segment alive until its last consumer returns. Rebind
 completed MSM and FFT run metadata for the next preplanned shape; no worker
 change requires plan reconstruction. The reference pool and providers are test

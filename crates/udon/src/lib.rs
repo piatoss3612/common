@@ -34,9 +34,7 @@
 //! # Features
 //!
 //! Curves and FFTs are always available without feature flags. All current APIs
-//! work without an allocator. The additive `alloc` feature is reserved for future
-//! allocating APIs and currently changes no behavior. Enabling it does not
-//! cause curve or FFT setup or execution to allocate.
+//! work without an allocator.
 //!
 //! By default, [`field::PastaField::sqrt`] uses small tables of roots of unity.
 //! Enabling `sqrt-table-large` selects a larger table algorithm that reduces
@@ -74,3 +72,12 @@ extern crate std;
 
 #[cfg(test)]
 mod test_support;
+
+#[cfg(test)]
+extern crate self as zakura_udon;
+#[cfg(test)]
+#[path = "../tests/execution/frontier.rs"]
+mod frontier_tests;
+#[cfg(test)]
+#[path = "../tests/execution/mixed.rs"]
+mod mixed_tests;

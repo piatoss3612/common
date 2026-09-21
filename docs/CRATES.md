@@ -48,8 +48,8 @@ code; artifact formats and their generators belong with the data's owner.
 
 Keep curve and FFT artifact schemas and execution runtimes downstream: Udon
 borrows caller tables, buffers, scratch, and, for parallel FFTs, an executor.
-Future allocating APIs must require the crate's `alloc` feature. See the
-[curve guide](CURVES.md) and [FFT guide](FFT.md) for preparation workflows and
+Udon APIs do not allocate. See the [curve guide](CURVES.md) and
+[FFT guide](FFT.md) for preparation workflows and
 [crate docs](../crates/udon/src/lib.rs) for feature definitions.
 
 As arithmetic grows, distinguish memory validity, mathematical invariants, and

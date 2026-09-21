@@ -1,5 +1,8 @@
 //! Bounded MSM preparation, window, and reduction tasks.
 //!
+//! [`BatchPlan`] drives contiguous input batches on a caller's scoped executor.
+//! For application-controlled scheduling, use the incremental types below.
+//!
 //! [`MsmPlan`] fixes legal term subdivisions independently of worker count.
 //! [`MsmRun`] binds one invocation and incrementally exposes [`Request`]s. The
 //! application acquires the requested typed leases, claims a task, executes it
@@ -10,8 +13,8 @@
 use core::{marker::PhantomData, num::NonZeroUsize};
 
 use super::{
-    CurveError, ExecutionOptions, Input, PastaCurve, ProjectivePoint, Requirements, ScalarStorage,
-    Scalars, Scratch, check_scratch, kernels, prepared,
+    Bases, CurveError, ExecutionOptions, Input, PastaCurve, ProjectivePoint, Requirements,
+    ScalarStorage, Scalars, Scratch, check_scratch, kernels, prepared,
     recode::{self, Geometry, Shape},
     schedule,
 };
@@ -19,14 +22,76 @@ use crate::exec::{
     TaskBudget,
     run::{
         Completion, Frontier, Identity, Kernel, Outcome, ReadView, Task, TaskError, TaskKey,
-        TaskStorage, WorkEstimate,
+        TaskStorage,
     },
 };
 
 mod chunks;
 mod driver;
 pub(super) mod storage;
+pub use super::schedule::{BatchPlan, JobStorage, WorkerStorage};
 pub use chunks::{ChunkRequest, ParallelMsmRun};
+
+/// Base metadata for scalar rows supplied by producer tasks after binding.
+///
+/// Each claimed task leases its own source range through [`SourceBuffers`].
+/// This avoids borrowing a complete scalar or index array while producers
+/// still own disjoint writable fragments. The provider keeps requests ready
+/// by declining acquisition until their complete source range is published.
+#[derive(Clone, Copy, Debug)]
+pub struct ProducedInput<'i, C: PastaCurve> {
+    bases: Bases<'i, C>,
+    terms: usize,
+    indexed: bool,
+}
+impl<'i, C: PastaCurve> ProducedInput<'i, C> {
+    /// Selects every base in storage order; producers supply field scalars.
+    pub fn dense(bases: Bases<'i, C>) -> Self {
+        Self {
+            bases,
+            terms: bases.len(),
+            indexed: false,
+        }
+    }
+    /// Producers supply field scalars and indices for `terms` selected bases.
+    /// Indices are checked by each consuming kernel before arithmetic writes.
+    pub fn indexed(bases: Bases<'i, C>, terms: usize) -> Self {
+        Self {
+            bases,
+            terms,
+            indexed: true,
+        }
+    }
+    /// Number of logical terms, independent of source storage availability.
+    pub fn len(&self) -> usize {
+        self.terms
+    }
+    /// Whether this input contributes no terms.
+    pub fn is_empty(&self) -> bool {
+        self.terms == 0
+    }
+    fn metadata(self) -> Input<'i, C> {
+        Input {
+            bases: self.bases,
+            scalars: Scalars::Raw(&[]),
+            indices: None,
+        }
+    }
+}
+
+/// Published source fragments local to a claimed request's term range.
+///
+/// Preparation reads `Request::terms` scalars starting at logical index zero.
+/// Indexed preparation and windows read that many indices. Other tasks need
+/// neither source. Scalar residues and base records obey [`Input`]'s arithmetic
+/// invariants. Published sources must remain unchanged until their consumers
+/// release them; lengths and index bounds are checked before writes.
+pub struct SourceBuffers<'a, C: PastaCurve> {
+    /// Raw field scalars, possibly spanning several producer fragments.
+    pub scalars: &'a dyn ReadView<crate::field::PastaField<C::Scalar>>,
+    /// Base indices for an indexed produced input.
+    pub indices: &'a dyn ReadView<u32>,
+}
 
 /// Arithmetic and storage requirements for bounded MSM tasks.
 ///
@@ -198,6 +263,35 @@ impl<C: PastaCurve> MsmPlan<C> {
         self.cap
     }
 
+    /// Maximum terms written by one preparation request. Providers can reserve
+    /// disjoint retained fragments of this size before binding an input.
+    pub fn preparation_terms(&self) -> usize {
+        self.cap.min(recode::CHUNK)
+    }
+
+    /// Reduces the term grain while preserving this plan's recoding geometry.
+    ///
+    /// Unlike replanning a shorter input, this keeps its window width and
+    /// kernel family. Independent partitions can therefore add scheduling
+    /// slack without implicitly selecting a different recoder. Extra window
+    /// collapses and retained slots still belong in the caller's cost model.
+    pub fn with_grain(mut self, grain: NonZeroUsize) -> Result<Self, CurveError> {
+        self.cap = self.cap.min(grain.get());
+        self.options.chunk_size = NonZeroUsize::new(self.cap.max(1));
+        self.job = schedule::layout::<C>(
+            self.cap,
+            self.job.geometry,
+            false,
+            false,
+            false,
+            self.options,
+        )?;
+        self.retained.scalars = self.cap;
+        self.retained.digits = self.job.geometry.storage_len(self.cap)?;
+        self.retained_for_slots(NonZeroUsize::MIN)?;
+        Ok(self)
+    }
+
     /// Number of ordinary window tasks per full-width chunk.
     pub fn windows(&self) -> usize {
         if self.terms == 0 {
@@ -278,8 +372,6 @@ pub struct Request<'a> {
     pub write_partial: bool,
     /// Number of shared logical partials read by a reduction task.
     pub read_partials: usize,
-    /// Optional scheduling estimates.
-    pub estimate: WorkEstimate,
 }
 
 /// Borrowed views obtained from an owned task resource bundle.
@@ -308,6 +400,24 @@ pub struct Buffers<'a, C: PastaCurve> {
 pub trait Resources<C: PastaCurve> {
     /// Borrows all disjoint mutable and shared views for this bounded kernel.
     fn buffers(&mut self) -> Buffers<'_, C>;
+
+    /// Borrows source fragments together with disjoint arithmetic destinations.
+    /// Existing borrowed inputs do not need sources and use this default.
+    fn with_source<O>(
+        &mut self,
+        use_buffers: impl FnOnce(Buffers<'_, C>, SourceBuffers<'_, C>) -> O,
+    ) -> O
+    where
+        Self: Sized,
+    {
+        use_buffers(
+            self.buffers(),
+            SourceBuffers {
+                scalars: &[],
+                indices: &[],
+            },
+        )
+    }
 }
 
 impl<C: PastaCurve> Resources<C> for Buffers<'_, C> {
@@ -326,19 +436,25 @@ impl<C: PastaCurve> Resources<C> for Buffers<'_, C> {
 /// Detached arithmetic for one request; constructed only by [`MsmRun`].
 pub struct MsmKernel<'i, C: PastaCurve> {
     input: Input<'i, C>,
+    produced: Option<ProducedInput<'i, C>>,
     plan: MsmPlan<C>,
     kind: WorkKind,
     offset: usize,
     terms: usize,
     window: usize,
     geometry: Geometry,
+    first_chunk: bool,
 }
 
 /// Opaque kernel output, published through [`MsmRun::complete`].
 pub struct MsmOutput<C: PastaCurve>(Result<(Shape, ProjectivePoint<C>), CurveError>);
 
 impl<C: PastaCurve> MsmKernel<'_, C> {
-    fn run(&self, buffers: Buffers<'_, C>) -> Result<(Shape, ProjectivePoint<C>), CurveError> {
+    fn run(
+        &self,
+        buffers: Buffers<'_, C>,
+        source: SourceBuffers<'_, C>,
+    ) -> Result<(Shape, ProjectivePoint<C>), CurveError> {
         let Buffers {
             records: buffers_records,
             digits,
@@ -350,19 +466,62 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
         let geometry = self.geometry;
         let mut shape = Shape { bits: 0, weight: 0 };
         let mut result = ProjectivePoint::IDENTITY;
+        if let Some(input) = self.produced {
+            if self.kind == WorkKind::Prepare {
+                check_scratch("source scalars", self.terms, source.scalars.len())?;
+            }
+            if input.indexed && matches!(self.kind, WorkKind::Prepare | WorkKind::Window) {
+                check_scratch("source indices", self.terms, source.indices.len())?;
+                for position in 0..self.terms {
+                    let index = *source.indices.get(position).expect("invalid source view");
+                    if u64::from(index) >= input.bases.len() as u64 {
+                        return Err(CurveError::BaseIndexOutOfBounds {
+                            position: self.offset + position,
+                            index,
+                            bases: input.bases.len(),
+                        });
+                    }
+                }
+            }
+        }
         match self.kind {
             WorkKind::Prepare => {
-                let source = self
-                    .input
-                    .scalars
-                    .slice(self.offset..self.offset + self.terms);
-                let records = match source {
-                    Scalars::Prepared(s) => s.records,
-                    _ => {
-                        check_scratch("scalars", self.terms, scratch.scalars.len())?;
-                        let records = &mut scratch.scalars[..self.terms];
-                        prepared::prepare_chunk(source, records);
-                        records
+                let records = if self.produced.is_some() {
+                    check_scratch("scalars", self.terms, scratch.scalars.len())?;
+                    let records = &mut scratch.scalars[..self.terms];
+                    let mut first = 0;
+                    while first < self.terms {
+                        if let Some(values) = source
+                            .scalars
+                            .contiguous_prefix(first..self.terms)
+                            .filter(|s| !s.is_empty())
+                        {
+                            prepared::prepare_chunk(
+                                Scalars::Raw(values),
+                                &mut records[first..first + values.len()],
+                            );
+                            first += values.len();
+                        } else {
+                            records[first] = ScalarStorage::field(
+                                source.scalars.get(first).expect("invalid source view"),
+                            );
+                            first += 1;
+                        }
+                    }
+                    records as &[_]
+                } else {
+                    let source = self
+                        .input
+                        .scalars
+                        .slice(self.offset..self.offset + self.terms);
+                    match source {
+                        Scalars::Prepared(s) => s.records,
+                        _ => {
+                            check_scratch("scalars", self.terms, scratch.scalars.len())?;
+                            let records = &mut scratch.scalars[..self.terms];
+                            prepared::prepare_chunk(source, records);
+                            records
+                        }
                     }
                 };
                 shape = Shape::of(records);
@@ -396,10 +555,24 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                 if self.plan.options.streaming {
                     check_scratch("projective", geometry.buckets(), buckets.len())?;
                     let buckets = &mut buckets[..geometry.buckets()];
-                    if self.offset == 0 {
+                    if self.first_chunk {
                         buckets.fill(ProjectivePoint::IDENTITY);
                     }
-                    if let Some(digits) = digits.contiguous(0..digit_len) {
+                    if let Some(input) = self.produced {
+                        kernels::stream_selected(
+                            &kernels::Selection {
+                                bases: input.bases,
+                                indices: input.indexed.then_some(kernels::Indices::Fragment {
+                                    view: source.indices,
+                                    offset: self.offset,
+                                }),
+                            },
+                            self.terms,
+                            storage::Fragmented::new(digits, digit_len),
+                            task,
+                            buckets,
+                        );
+                    } else if let Some(digits) = digits.contiguous(0..digit_len) {
                         kernels::stream(&self.input, self.terms, digits, task, buckets);
                     } else {
                         kernels::stream_view(
@@ -419,20 +592,36 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                         field: scratch.field,
                         indices: scratch.indices,
                     };
-                    output[0] = match (
-                        records.contiguous(0..self.terms),
-                        digits.contiguous(0..digit_len),
-                    ) {
-                        (Some(records), Some(digits)) => {
-                            kernels::run(&self.input, records, digits, task, work)
-                        }
-                        _ => kernels::run_view(
-                            &self.input,
+                    output[0] = if let Some(input) = self.produced {
+                        kernels::run_selected(
+                            &kernels::Selection {
+                                bases: input.bases,
+                                indices: input.indexed.then_some(kernels::Indices::Fragment {
+                                    view: source.indices,
+                                    offset: self.offset,
+                                }),
+                            },
                             storage::Fragmented::new(records, self.terms),
                             storage::Fragmented::new(digits, digit_len),
                             task,
                             work,
-                        ),
+                        )
+                    } else {
+                        match (
+                            records.contiguous(0..self.terms),
+                            digits.contiguous(0..digit_len),
+                        ) {
+                            (Some(records), Some(digits)) => {
+                                kernels::run(&self.input, records, digits, task, work)
+                            }
+                            _ => kernels::run_view(
+                                &self.input,
+                                storage::Fragmented::new(records, self.terms),
+                                storage::Fragmented::new(digits, digit_len),
+                                task,
+                                work,
+                            ),
+                        }
                     };
                 }
             }
@@ -461,7 +650,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
 impl<C: PastaCurve, R: Resources<C>> Kernel<R> for MsmKernel<'_, C> {
     type Output = MsmOutput<C>;
     fn execute(&mut self, resources: &mut R) -> Self::Output {
-        MsmOutput(self.run(resources.buffers()))
+        resources.with_source(|buffers, source| MsmOutput(self.run(buffers, source)))
     }
 }
 
@@ -487,10 +676,12 @@ pub struct Published<C: PastaCurve, R> {
 /// remains retained through the final collapse.
 pub struct MsmRun<'a, 'i, C: PastaCurve> {
     input: Input<'i, C>,
+    produced: Option<ProducedInput<'i, C>>,
     plan: MsmPlan<C>,
     frontier: Frontier<'a>,
     kind: WorkKind,
     offset: usize,
+    start: usize,
     end: usize,
     geometry: Geometry,
     shape: Shape,
@@ -515,13 +706,65 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         Self::bind_range(plan, input, 0..input.len(), identity, storage)
     }
 
-    fn bind_range(
+    /// Binds an independently scheduled partition of a validated input.
+    ///
+    /// The plan describes the full input and fixes geometry; `range` selects
+    /// the terms contributed by this run. Partition results can be reduced
+    /// outside the scheduler. Each live partition needs its own retained
+    /// storage and metadata. Invalid or reversed ranges return `Storage`.
+    pub fn new_partition(
         plan: MsmPlan<C>,
         input: Input<'i, C>,
         range: core::ops::Range<usize>,
         identity: &'a mut Identity,
         storage: &'a mut [TaskStorage],
     ) -> Result<Self, TaskError> {
+        if input.len() != plan.terms || range.start > range.end || range.end > input.len() {
+            return Err(TaskError::Storage);
+        }
+        Self::bind_range(plan, input, range, identity, storage)
+    }
+
+    /// Binds source metadata before producer tasks have filled scalar rows.
+    /// Source availability is enforced by the provider at `try_claim`.
+    pub fn new_produced(
+        plan: MsmPlan<C>,
+        input: ProducedInput<'i, C>,
+        identity: &'a mut Identity,
+        storage: &'a mut [TaskStorage],
+    ) -> Result<Self, TaskError> {
+        Self::new_produced_partition(plan, input, 0..input.len(), identity, storage)
+    }
+
+    /// Binds an independent partition whose sources arrive from producers.
+    /// Sizing, range, and metadata errors precede all resource acquisition.
+    pub fn new_produced_partition(
+        plan: MsmPlan<C>,
+        input: ProducedInput<'i, C>,
+        range: core::ops::Range<usize>,
+        identity: &'a mut Identity,
+        storage: &'a mut [TaskStorage],
+    ) -> Result<Self, TaskError> {
+        if input.len() != plan.terms || range.start > range.end || range.end > input.len() {
+            return Err(TaskError::Storage);
+        }
+        let mut run = Self::bind_range(plan, input.metadata(), range, identity, storage)?;
+        run.produced = Some(input);
+        Ok(run)
+    }
+
+    fn bind_range(
+        plan: MsmPlan<C>,
+        mut input: Input<'i, C>,
+        range: core::ops::Range<usize>,
+        identity: &'a mut Identity,
+        storage: &'a mut [TaskStorage],
+    ) -> Result<Self, TaskError> {
+        if range != (0..input.len())
+            && let Scalars::Prepared(ref mut prepared) = input.scalars
+        {
+            prepared.cached = None;
+        }
         let complete = range.is_empty();
         let frontier = Frontier::new(
             identity,
@@ -530,10 +773,12 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         )?;
         Ok(Self {
             input,
+            produced: None,
             plan,
             frontier,
             kind: WorkKind::Prepare,
             offset: range.start,
+            start: range.start,
             end: range.end,
             geometry: plan.initial_geometry(input),
             shape: Shape { bits: 0, weight: 0 },
@@ -622,11 +867,6 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
                 } else {
                     0
                 },
-                estimate: WorkEstimate {
-                    arithmetic: terms,
-                    traffic_bytes: terms.saturating_mul(size_of::<ScalarStorage<C>>()),
-                    cache_bytes: self.plan.temporary().bytes::<C>().unwrap(),
-                },
             });
             written += 1;
         }
@@ -663,18 +903,22 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         };
         Ok(MsmKernel {
             input: self.input,
+            produced: self.produced,
             plan: self.plan,
             kind: self.kind,
             offset: self.offset + start,
             terms,
             window: request.key.index(),
             geometry: self.geometry,
+            first_chunk: self.offset == self.start,
         })
     }
 
     /// Publishes completion, returns owned leases, and readies local successors.
-    /// Failed or foreign receipts follow [`Frontier::complete`]. Resource
-    /// validation failure poisons the run and publishes no arithmetic result.
+    ///
+    /// Failed or foreign receipts follow the [`crate::exec::run`] completion
+    /// protocol. Resource validation failure poisons the run and publishes no
+    /// arithmetic result.
     #[expect(
         clippy::result_large_err,
         reason = "return owned receipts without allocation"
@@ -796,10 +1040,35 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         self.rebind_range(plan, input, 0..input.len())
     }
 
+    /// Reuses completed metadata for another produced scalar row.
+    /// The old row's consumers must have released their source leases.
+    pub fn rebind_produced(
+        &mut self,
+        plan: MsmPlan<C>,
+        input: ProducedInput<'i, C>,
+    ) -> Result<(), TaskError> {
+        self.rebind_produced_partition(plan, input, 0..input.len())
+    }
+
+    /// Reuses a completed partition while preserving stale-key detection.
+    pub fn rebind_produced_partition(
+        &mut self,
+        plan: MsmPlan<C>,
+        input: ProducedInput<'i, C>,
+        range: core::ops::Range<usize>,
+    ) -> Result<(), TaskError> {
+        if input.len() != plan.terms || range.start > range.end || range.end > input.len() {
+            return Err(TaskError::Storage);
+        }
+        self.rebind_range(plan, input.metadata(), range)?;
+        self.produced = Some(input);
+        Ok(())
+    }
+
     fn rebind_range(
         &mut self,
         plan: MsmPlan<C>,
-        input: Input<'i, C>,
+        mut input: Input<'i, C>,
         range: core::ops::Range<usize>,
     ) -> Result<(), TaskError> {
         if self.failed {
@@ -809,13 +1078,20 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
             return Err(TaskError::Busy);
         }
         let complete = range.is_empty();
+        if range != (0..input.len())
+            && let Scalars::Prepared(ref mut prepared) = input.scalars
+        {
+            prepared.cached = None;
+        }
         self.frontier
             .restart(range.len().min(plan.cap).div_ceil(recode::CHUNK))?;
         self.input = input;
+        self.produced = None;
         self.plan = plan;
         self.geometry = plan.initial_geometry(input);
         self.shape = Shape { bits: 0, weight: 0 };
         self.offset = range.start;
+        self.start = range.start;
         self.end = range.end;
         self.kind = WorkKind::Prepare;
         self.result = ProjectivePoint::IDENTITY;

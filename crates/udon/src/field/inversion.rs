@@ -84,8 +84,8 @@ impl<M: PrimeModulus> PastaField<M> {
     fn invert_safegcd(&self) -> Self {
         let mut f = M::MODULUS_SIGNED62;
         let mut g = to_signed62(&self.canonical_limbs());
-        let mut d = Self::zero();
-        let mut e = Self::one();
+        let mut d = Self::ZERO;
+        let mut e = Self::ONE;
         let mut delta = 1i64;
         let mut completed_batches = 0;
 

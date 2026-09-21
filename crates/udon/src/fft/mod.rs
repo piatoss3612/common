@@ -2,7 +2,7 @@
 //!
 //! [`Plan`] transforms coefficients and evaluations in place. [`Expansion`]
 //! evaluates a base polynomial on a larger coset without constructing a full
-//! zero-padded transform. [`interpolate_classes`] combines interpolations from
+//! zero-padded transform. [`run::InterpolationPlan`] combines interpolations from
 //! several domains into one coefficient vector.
 //!
 //! Setup and execution never allocate. Tables may be prepared into mutable
@@ -11,9 +11,9 @@
 //! settings need no scratch. The scoped [`Executor`] lets callers supply parallel
 //! execution without requiring a particular runtime or an allocator in Udon.
 //! An executor's own allocations are outside Udon's storage requirements.
-//! [`Plan::configure`] fixes order, normalization, backend, and total resource
-//! budgets for repeated transforms. [`Expansion::configure`] additionally fixes
-//! coefficient storage and residue ordering. Both have const sizing descriptions.
+//! [`run::FftPlan`] fixes order, normalization, and transform geometry.
+//! [`run::ExpansionPlan`] additionally fixes coefficient storage and residue
+//! ordering. Their drivers execute synchronously or expose incremental tasks.
 //!
 //! Field arithmetic is variable-time, with no constant-time guarantee for
 //! secret inputs. Field buffers and table contents must satisfy
@@ -48,16 +48,17 @@
 //!
 //! ```
 //! use zakura_udon::{
+//!     exec::SerialExecutor,
 //!     field::Fp,
-//!     fft::{Domain, Plan},
+//!     fft::{Domain, ExecutionOptions, Plan},
 //! };
 //!
 //! let domain = Domain::new(2).unwrap().subgroup();
 //! let plan = Plan::without_tables(domain);
 //! let original = [Fp::ONE, Fp::from_u64(2), Fp::ZERO, Fp::ZERO];
 //! let mut values = original;
-//! plan.forward_serial(&mut values).unwrap();
-//! plan.inverse_serial(&mut values).unwrap();
+//! plan.forward(&mut values, ExecutionOptions::serial(), &SerialExecutor, &mut []).unwrap();
+//! plan.inverse(&mut values, ExecutionOptions::serial(), &SerialExecutor, &mut []).unwrap();
 //! assert_eq!(values, original);
 //! ```
 //!
@@ -106,41 +107,45 @@
 //! interpolation. Expansion reverses both residue blocks and their inner rows:
 //!
 //! ```
+//! use core::num::NonZeroUsize;
 //! use zakura_udon::{
 //!     field::Fp,
 //!     exec::SerialExecutor,
-//!     fft::{Direction, Domain, Expansion, ExpansionOrder, ExpansionStorage,
-//!         ExpansionStrategy, ElementOrder, Plan, Strategy, TransformRequest},
+//!     fft::{Codelet, Direction, Domain, Expansion, ExpansionOrder, ExpansionStorage,
+//!         ElementOrder, InputSupport, Plan, TransformRequest,
+//!         run::{ExpansionPlan, FftPlan}},
 //! };
 //!
+//! let tasks = NonZeroUsize::new(1).unwrap();
+//! let tile = NonZeroUsize::new(4).unwrap();
 //! let base = Plan::without_tables(Domain::new(2).unwrap().subgroup());
 //! let extended = Domain::new(3).unwrap().coset(Fp::from_u64(7)).unwrap();
-//! let expansion = Expansion::new(base, extended, None).unwrap().configure(
-//!     ExpansionOrder::BitReversed,
-//!     ExpansionStorage::Coefficients,
-//!     ExpansionStrategy::serial(),
+//! let expansion = ExpansionPlan::new(
+//!     Expansion::new(base, extended, None).unwrap(),
+//!     ExpansionStorage::Coefficients, ExpansionOrder::BitReversed,
+//!     InputSupport::Prefix(2), ElementOrder::Natural, tile, Codelet::Radix2,
 //! ).unwrap();
 //! let coefficients = [Fp::ONE, Fp::from_u64(2)];
 //! let mut factor = [Fp::ZERO; 8];
-//! expansion.execute_into(&coefficients, &mut factor, &SerialExecutor, &mut []).unwrap();
+//! expansion.execute(&coefficients, &mut factor, &mut [], None,
+//!     &mut [], tasks, &SerialExecutor).unwrap();
 //! let mut product = [Fp::ZERO; 8];
-//! expansion.execute_product_into(
-//!     &coefficients, expansion.view(&factor).unwrap(), &mut product,
-//!     &SerialExecutor, &mut [],
-//! ).unwrap();
-//! let inverse = Plan::without_tables(extended).configure(
+//! expansion.execute(&coefficients, &mut product, &mut [], Some(&factor),
+//!     &mut [], tasks, &SerialExecutor).unwrap();
+//! let inverse = FftPlan::new(Plan::without_tables(extended),
 //!     TransformRequest {
 //!         input_order: ElementOrder::BitReversed,
 //!         ..TransformRequest::new(Direction::Inverse)
-//!     },
-//!     Strategy::serial(),
+//!     }, tile, Codelet::Radix2, false,
 //! ).unwrap();
-//! inverse.execute(&mut product, &SerialExecutor, &mut []).unwrap();
+//! inverse.execute(None, &mut product, None, &mut [], tasks, &SerialExecutor).unwrap();
 //! assert_eq!(&product[..3], &[Fp::ONE, Fp::from_u64(4), Fp::from_u64(4)]);
 //! assert!(product[3..].iter().all(|value| *value == Fp::ZERO));
 //! ```
 
-use crate::exec::{Executor, SerialExecutor};
+use crate::exec::Executor;
+#[cfg(test)]
+use crate::exec::SerialExecutor;
 use crate::field::{PastaField, PrimeModulus};
 
 mod domain;
@@ -163,24 +168,30 @@ mod transform;
 pub use domain::{CosetDomain, Domain};
 pub use execution::{ExecutionOptions, ScratchRequirements};
 pub use expansion::{Expansion, ExpansionOptions};
-pub use expansion_operation::{
-    ExpansionDescription, ExpansionOrder, ExpansionRequirements, ExpansionStorage,
-    ExpansionStrategy, PreparedExpansion, Residue,
-};
-pub use expansion_scales::{ExpansionScaleArtifact, ExpansionScaleNormalization, ExpansionScales};
-pub use interpolation::{Class, ClassState, interpolate_classes, interpolation_scratch};
-pub use interpolation_parallel::{
-    InterpolationOptions, InterpolationRequirements, interpolate_classes_parallel, interpolate_sum,
-};
+pub use expansion_operation::{ExpansionOrder, ExpansionStorage, Residue};
+#[cfg(test)]
+#[path = "tests/expansion_api.rs"]
+mod expansion_api;
+#[cfg(test)]
+use expansion_api::ExpansionStrategy;
+pub use expansion_scales::{ExpansionScaleNormalization, ExpansionScales};
+pub use interpolation::ClassState;
+use interpolation::{Class, interpolate_classes, interpolation_scratch};
+use interpolation_parallel::interpolate_sum;
+#[cfg(test)]
+use interpolation_parallel::{InterpolationOptions, interpolate_classes_parallel};
 pub use layout::{
-    CoefficientTiles, CoefficientView, ElementOrder, EvaluationLayout, EvaluationView,
-    InverseScale, ResidueLayout, ResidueView,
+    CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, InverseScale, ResidueLayout,
 };
-pub use operation::{
-    Backend, Codelet, Direction, Initialization, InputPolicy, InputSupport, OperationDescription,
-    OperationRequirements, PreparedOperation, ResourceBudget, Strategy, TransformRequest,
+pub use operation::{Codelet, Direction, InputPolicy, InputSupport, TransformRequest};
+#[cfg(test)]
+#[path = "tests/operation_api.rs"]
+mod operation_api;
+#[cfg(test)]
+use operation_api::{
+    Backend, Initialization, OperationDescription, OperationRequirements, ResourceBudget, Strategy,
 };
-pub use powers::{PowerTable, TwiddleArtifact, TwiddleDescription, TwiddleStorage, TwiddleTable};
+pub use powers::{PowerTable, TwiddleDescription, TwiddleStorage, TwiddleTable};
 pub use tables::{BoundTables, TableRequirements, Tables, TablesMut};
 pub use transform::Plan;
 

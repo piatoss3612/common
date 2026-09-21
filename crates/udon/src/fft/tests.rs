@@ -127,8 +127,6 @@ fn small_transforms<M: PrimeModulus>() {
     assert_debug::<TablesMut<'_, M>>();
     assert_debug::<Expansion<'_, M>>();
     assert_debug::<Class<'_, M>>();
-    assert_debug::<ResidueView<'_, M>>();
-    assert_debug::<CoefficientTiles<'_, M>>();
 
     const OPTIONS: [ExecutionOptions; 3] = [
         ExecutionOptions::serial(),
@@ -1169,10 +1167,6 @@ fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
             ResidueLayout::new(size, count),
             Err(FftError::InvalidLayout)
         );
-        assert!(matches!(
-            CoefficientTiles::new(&vec![Fp::ZERO; size], count),
-            Err(FftError::InvalidLayout)
-        ));
     }
     for residues in [1, 2, 4, 8] {
         let layout = ResidueLayout::new(32, residues).unwrap();
@@ -1182,22 +1176,29 @@ fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
         layout.copy_from_natural(&input, &mut stored).unwrap();
         layout.copy_to_natural(&stored, &mut natural).unwrap();
         assert_eq!(input, natural);
-        let view = ResidueView::new(&stored, layout).unwrap();
+        let view = EvaluationView::bind(
+            &stored,
+            Domain::for_size(32).unwrap().subgroup(),
+            EvaluationLayout::Residues(layout),
+        )
+        .unwrap();
         for (row, expected) in input.iter().enumerate() {
             assert_eq!(view.get(row), Some(expected));
             assert_eq!(layout.natural_row(layout.index(row).unwrap()), Some(row));
-            assert_eq!(view.get_extended_row(row * 4, 128), Some(expected));
-            assert_eq!(view.get_extended_row(row * 4 + 1, 128), None);
+            assert_eq!(
+                view.get_extended_row(row * 4, Domain::for_size(128).unwrap().subgroup()),
+                Some(expected)
+            );
+            assert_eq!(
+                view.get_extended_row(row * 4 + 1, Domain::for_size(128).unwrap().subgroup()),
+                None
+            );
         }
         assert_eq!(view.get(32), None);
-        assert_eq!(view.get_extended_row(0, 16), None);
-        assert_eq!(view.get_extended_row(0, 127), None);
-        let tiles = CoefficientTiles::new(&natural, 8).unwrap();
-        assert_eq!(tiles.tile_count(), 4);
-        for tile in 0..4 {
-            assert_eq!(tiles.tile(tile), Some(&input[tile * 8..(tile + 1) * 8]));
-        }
-        assert_eq!(tiles.tile(4), None);
+        assert_eq!(
+            view.get_extended_row(0, Domain::for_size(16).unwrap().subgroup()),
+            None
+        );
         for (input_len, output_len) in [(31, 32), (33, 32), (32, 31), (32, 33)] {
             let source = vec![Fp::ONE; input_len];
             let mut destination = vec![Fp::ZERO; output_len];

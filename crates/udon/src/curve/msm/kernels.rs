@@ -1,6 +1,7 @@
 //! Monomorphic base access and arithmetic for one complete chunk or window.
 
 use super::run::storage::Storage;
+use crate::exec::run::ReadView;
 
 use super::{
     Accumulation, Bases, Input, ScalarStorage, buckets,
@@ -47,9 +48,32 @@ impl<C: PastaCurve> Base<C> for Point<C> {
         self.as_affine().map(|p| p.rotated(rotation))
     }
 }
+#[derive(Clone, Copy)]
+pub(super) enum Indices<'a> {
+    Slice(&'a [u32]),
+    Fragment {
+        view: &'a dyn ReadView<u32>,
+        offset: usize,
+    },
+}
+impl Indices<'_> {
+    #[inline]
+    fn get(self, index: usize) -> u32 {
+        match self {
+            Self::Slice(values) => values[index],
+            Self::Fragment { view, offset } => {
+                *view.get(index - offset).expect("validated index fragment")
+            }
+        }
+    }
+}
+pub(super) struct Selection<'a, C: PastaCurve> {
+    pub bases: Bases<'a, C>,
+    pub indices: Option<Indices<'a>>,
+}
 struct View<'a, B, const INDEXED: bool> {
     bases: &'a [B],
-    indices: &'a [u32],
+    indices: Indices<'a>,
     offset: usize,
     stride: usize,
 }
@@ -57,7 +81,11 @@ impl<B: Copy, const INDEXED: bool> View<'_, B, INDEXED> {
     #[inline]
     fn index(&self, term: usize) -> usize {
         let i = self.offset + term;
-        if INDEXED { self.indices[i] as usize } else { i }
+        if INDEXED {
+            self.indices.get(i) as usize
+        } else {
+            i
+        }
     }
     #[inline]
     fn at(&self, term: usize) -> B {
@@ -82,6 +110,25 @@ pub(super) fn run_view<C: PastaCurve>(
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
+    run_selected(
+        &Selection {
+            bases: input.bases,
+            indices: input.indices.map(Indices::Slice),
+        },
+        records,
+        digits,
+        task,
+        work,
+    )
+}
+
+pub(super) fn run_selected<C: PastaCurve>(
+    input: &Selection<'_, C>,
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
+    task: Task,
+    work: &mut Work<'_, C>,
+) -> ProjectivePoint<C> {
     match input.bases {
         Bases::Affine(b) => access(input, b, records, digits, task, work, 1),
         Bases::Prepared(b) => access(input, b, records, digits, task, work, 1),
@@ -92,7 +139,7 @@ pub(super) fn run_view<C: PastaCurve>(
 }
 
 fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
-    input: &Input<'_, C>,
+    input: &Selection<'_, C>,
     bases: &[B],
     records: impl Storage<ScalarStorage<C>>,
     digits: impl Storage<u8>,
@@ -113,9 +160,9 @@ fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
         for (i, row) in digits.chunks_exact(recode::JOINT_STRIDE).enumerate() {
             let code = row.get(column);
             if code != 0 {
-                let j = input
-                    .indices
-                    .map_or(task.offset + i, |indices| indices[task.offset + i] as usize);
+                let j = input.indices.map_or(task.offset + i, |indices| {
+                    indices.get(task.offset + i) as usize
+                });
                 sum = sum.add_mixed(&eisenstein::digit_point(&bases[8 * j..8 * j + 8], code));
             }
         }
@@ -124,7 +171,7 @@ fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
 }
 
 fn access<C: PastaCurve, B: Base<C>>(
-    input: &Input<'_, C>,
+    input: &Selection<'_, C>,
     bases: &[B],
     records: impl Storage<ScalarStorage<C>>,
     digits: impl Storage<u8>,
@@ -148,7 +195,7 @@ fn access<C: PastaCurve, B: Base<C>>(
         None => execute(
             View::<_, false> {
                 bases,
-                indices: &[],
+                indices: Indices::Slice(&[]),
                 offset: task.offset,
                 stride,
             },
@@ -423,6 +470,25 @@ pub(super) fn stream_view<C: PastaCurve>(
     task: Task,
     sums: &mut [ProjectivePoint<C>],
 ) {
+    stream_selected(
+        &Selection {
+            bases: input.bases,
+            indices: input.indices.map(Indices::Slice),
+        },
+        terms,
+        digits,
+        task,
+        sums,
+    )
+}
+
+pub(super) fn stream_selected<C: PastaCurve>(
+    input: &Selection<'_, C>,
+    terms: usize,
+    digits: impl Storage<u8>,
+    task: Task,
+    sums: &mut [ProjectivePoint<C>],
+) {
     fn deposit<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
         view: View<'_, B, INDEXED>,
         terms: usize,
@@ -466,7 +532,7 @@ pub(super) fn stream_view<C: PastaCurve>(
                 None => deposit(
                     View::<_, false> {
                         bases: $bases,
-                        indices: &[],
+                        indices: Indices::Slice(&[]),
                         offset: task.offset,
                         stride: $stride,
                     },

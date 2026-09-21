@@ -60,7 +60,6 @@ publish = false
 [workspace]
 
 [features]
-alloc = ["{alias}/alloc"]
 sqrt-table-large = ["{alias}/sqrt-table-large"]
 {extra_features}
 [dependencies]

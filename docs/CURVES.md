@@ -184,8 +184,8 @@ describes when shared preparation and same-scalar multiplication pay off.
 ### Expanded tables
 
 `FixedBaseTable<C>` stores shifted multiples to avoid all doublings during
-multiplication. The `PallasFixedBase` and `VestaFixedBase` aliases select the
-curve and accept an optional entry type.
+multiplication. Select the curve with `FixedBaseTable<Pallas>` or
+`FixedBaseTable<Vesta>`, and optionally specify a prepared entry type.
 
 `FixedBaseDescription { window_bits: w }` accepts widths `2..=8`, with width 4
 as the default. The two GLV halves share `ceil(128 / w)` windows, each storing
@@ -212,7 +212,7 @@ fewer additions during execution.
 use udon::{
     curve::{
         CurveTableRequirements, FixedBaseDescription, PallasAffine,
-        PallasFixedBase, PallasProjective,
+        FixedBaseTable, Pallas, PallasProjective,
     },
     field::{Fp, Fq},
 };
@@ -226,7 +226,7 @@ let base = PallasAffine::GENERATOR;
 let mut entries = [base; REQUIRED.table_entries];
 let mut projective = [PallasProjective::IDENTITY; REQUIRED.projective_scratch];
 let mut field = [Fp::ZERO; REQUIRED.field_scratch];
-let table = PallasFixedBase::prepare(
+let table = FixedBaseTable::<Pallas>::prepare(
     DESCRIPTION,
     &base,
     &mut entries,
@@ -239,7 +239,7 @@ assert_eq!(table.mul(&scalar), base.mul_projective(&scalar));
 
 To cache endomorphism coordinates, initialize `entries` with
 `PreparedAffinePoint::from_affine(&base)` and select
-`PallasFixedBase::<PreparedAffinePoint<Pallas>>` instead. Preparation uses the
+`FixedBaseTable::<Pallas, PreparedAffinePoint<Pallas>>` instead. Preparation uses the
 same scratch lengths for either entry type.
 
 ### Preparation, binding, and stored formats
@@ -358,46 +358,42 @@ intermediates, and metadata. A task budget does not change an `MsmPlan`'s
 geometry. Scratch is leased per executing task, and each window partial has one
 logical result slot. A configured memory limit does not select a queue policy.
 
-`input.requirements(options)` returns counts for six private `Scratch` slices;
-use `scalars()`, `digits()`, `affine()`, `projective()`, `field()`, and `indices()`.
-`Requirements::bytes::<C>()` computes their total with checked arithmetic.
-The const `Input::<C>::requirements_for_len(terms, options)` query supports static
-arrays for unprepared scalars with ordinary, cached affine, or identity-capable
-bases. Use `input.requirements(options)` for retained scalars or compact tables;
-their memory planning can select a different layout. Prepared-input queries
-can omit record scratch and, when cache reuse is possible, recoding scratch.
-Obtain counts from the API rather than copying formulas.
+`msm::run::BatchPlan::requirements()` returns counts for six private `Scratch`
+slices: `scalars()`, `digits()`, `affine()`, `projective()`, `field()`, and
+`indices()`. `Requirements::bytes::<C>()` computes their total with checked
+arithmetic. Planning uses the actual inputs, so retained scalar records,
+compatible digit caches, and compact tables can reduce the required storage.
+Obtain counts from the plan rather than copying formulas.
 
 Construct scratch with `Scratch::new(records, digits, affine, projective, field,
 indices)`. Initialize records with `ScalarStorage::ZERO`, affine entries with
 the generator, and other entries with zero or identity. Buffers can be reused
 without clearing through `scratch.reborrow()`. Execution overwrites every value
 it uses and leaves tails beyond the required prefixes untouched. The
-[module example](../crates/udon/src/curve/msm/mod.rs)
-executes two signed scalar rows using static arrays, cached bases, and one
-validated selection. Base preparation and scratch survive both scalar borrows.
+[module example](../crates/udon/src/curve/msm/mod.rs) executes two signed scalar
+rows with cached bases and one validated selection. The
+[workspace example](WORKSPACES.md#owning-an-msm-workspace) retains scratch across
+changing inputs, and the
+[embedding fixture](../crates/udon/tests/fixtures/curve_embedding) uses fixed
+arrays without allocation.
 
 ### Grouped jobs and other work
 
-Group borrowed `Input` handles for one curve in a slice, query
-`batch_requirements(&inputs, options)`, then call
-`execute_batch(&inputs, &mut output, options, executor, scratch)`. There is one
-output per input, in input order. Jobs share the task budget, and sequential jobs
-reuse scratch. The [MSM report](MSM_REVIEW_PERFORMANCE.md#retained-preparation-and-grouped-scheduling)
-distinguishes the current scheduling policy from earlier measured workloads.
+Use `msm::run::BatchPlan` for one or more borrowed `Input` handles on the same
+curve. Its `storage_len(input_count, options)` returns job and worker metadata
+counts; initialize those slices with `JobStorage::EMPTY` and
+`WorkerStorage::EMPTY`, then call `BatchPlan::new`. Planning validates resource
+limits before modifying metadata. Use the plan's `requirements()` to size its
+execution scratch; metadata counts against the memory ceiling. Its
+`temporary_bytes()` includes reserved metadata prefixes.
 
-For repeated execution of immutable inputs, retain `ExecutionPlan`. Its
-`storage_len(input_count, options)` returns job and worker metadata counts;
-initialize those slices with `JobStorage::EMPTY` and `WorkerStorage::EMPTY`, then
-call `ExecutionPlan::new`. Planning validates resource limits before modifying
-metadata. Use the plan's `requirements()` to size its execution scratch: metadata
-accounting may lead it to choose a different layout from `batch_requirements`.
-Its `temporary_bytes()` includes reserved metadata prefixes. `execute` reuses the
-retained schedule with new output buffers or dirty scratch. Ordinary
-`Input::execute` needs no metadata buffer. Selection rebinding and scalar
-preparation remain optional independent capabilities. A plan borrows its scalar
-rows too; use selection rebinding and `Input::execute` or `execute_batch` when
-those rows change.
+`plan.execute(&mut output, executor, scratch)` writes one output per input in
+input order. Jobs share the task budget, and sequential jobs reuse scratch.
+Retain the plan to reuse its schedule with new outputs or dirty scratch. A plan
+borrows its scalar rows; rebuild it when those rows change. Selection rebinding
+and retained scalar preparation remain independent capabilities. The
+[MSM report](MSM_REVIEW_PERFORMANCE.md#retained-preparation-and-grouped-scheduling)
+records measured scheduling tradeoffs.
 
 Compose fixed-base products or other work with
 [`Executor::join`](../crates/udon/src/exec.rs). Choose per-operation budgets and

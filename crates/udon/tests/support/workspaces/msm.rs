@@ -1,10 +1,8 @@
+use zakura_udon::curve::msm::run::{BatchPlan, JobStorage, WorkerStorage};
 use zakura_udon::{
     curve::{
         AffinePoint, CurveError, PastaCurve, ProjectivePoint,
-        msm::{
-            ExecutionOptions, ExecutionPlan, Input, JobStorage, Requirements, ScalarStorage,
-            Scratch, WorkerStorage,
-        },
+        msm::{ExecutionOptions, Input, Requirements, ScalarStorage, Scratch},
     },
     exec::Executor,
     field::PastaField,
@@ -44,10 +42,10 @@ impl<C: PastaCurve> MsmWorkspace<C> {
         inputs: &'a [Input<'i, C>],
         options: ExecutionOptions,
     ) -> Result<MsmRun<'a, 'i, C>, CurveError> {
-        let (jobs, workers) = ExecutionPlan::<C>::storage_len(inputs.len(), options)?;
+        let (jobs, workers) = BatchPlan::<C>::storage_len(inputs.len(), options)?;
         self.jobs.resize(jobs, JobStorage::EMPTY);
         self.workers.resize(workers, WorkerStorage::EMPTY);
-        let plan = ExecutionPlan::new(inputs, options, &mut self.jobs, &mut self.workers)?;
+        let plan = BatchPlan::new(inputs, options, &mut self.jobs, &mut self.workers)?;
         // The schedule accounts for reserved metadata before choosing a layout
         // under a memory limit. A separately sized Input need not choose it.
         let required = plan.requirements();
@@ -103,7 +101,7 @@ impl<C: PastaCurve> MsmWorkspace<C> {
 }
 
 pub struct MsmRun<'a, 'i, C: PastaCurve> {
-    plan: ExecutionPlan<'a, 'i, C>,
+    plan: BatchPlan<'a, 'i, C>,
     scratch: Scratch<'a, C>,
 }
 

@@ -2,13 +2,13 @@
 //!
 //! These records describe a 16-point subgroup and expansion to the 64-point
 //! coset shifted by `zeta`. The generator and consumer must agree on those
-//! parameters. This owner serializes Udon's semantic descriptors into a concrete
+//! parameters. This owner records those semantics in its own
 //! POD header; POD embedding itself checks only the target layout.
 
 use udon::{
     fft::{
-        CosetDomain, ExpansionScaleArtifact, ExpansionScaleNormalization, FftError,
-        TableRequirements, Tables, TablesMut, TwiddleArtifact, TwiddleDescription, TwiddleStorage,
+        CosetDomain, FftError, TableRequirements, Tables, TablesMut, TwiddleDescription,
+        TwiddleStorage,
     },
     field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -32,10 +32,11 @@ const REQUIREMENTS: TableRequirements = match TableRequirements::for_size(SIZE) 
 /// Metadata for this owner's FFT table records.
 ///
 /// [`Self::schema_version`] must be 2 for this record layout; [`Self::version`]
-/// identifies Udon's semantic descriptors. The owner assigns `twiddle_kind = 2`
-/// to stage-packed tables, `inverse = 0` to forward roots, and `normalization = 1`
-/// to scales for unscaled inverse output. Other flag values are unsupported.
-/// `modulus` and the Montgomery-encoded `shift` store limbs least significant first.
+/// identifies this owner's arithmetic conventions. The owner assigns
+/// `twiddle_kind = 2` to stage-packed tables, `inverse = 0` to forward roots, and
+/// `normalization = 1` to scales for unscaled inverse output. Other flag values
+/// are unsupported. `modulus` and the Montgomery-encoded `shift` store limbs
+/// least significant first.
 #[repr(C)]
 #[derive(Clone, Copy, bento::Pod)]
 pub struct Header {
@@ -54,12 +55,11 @@ pub struct Header {
 
 impl Header {
     fn new<M: PrimeModulus>() -> Self {
-        let artifact = TwiddleArtifact::for_field::<M>(TWIDDLES);
         Self {
-            modulus: artifact.modulus,
+            modulus: M::MODULUS,
             shift: PastaField::<M>::zeta().montgomery_limbs(),
-            version: u64::from(artifact.version),
-            montgomery_bits: u64::from(artifact.montgomery_bits),
+            version: 1,
+            montgomery_bits: 256,
             base_size: SIZE as u64,
             extended_size: EXTENDED_SIZE as u64,
             twiddle_size: TWIDDLES.size as u64,
@@ -70,14 +70,14 @@ impl Header {
         }
     }
 
-    /// Checks the owner's schema and Udon metadata against the intended domains.
+    /// Checks schema and arithmetic metadata against the intended domains.
     ///
     /// Returns [`FftError::InvalidTables`] for unsupported encodings or metadata
     /// inconsistent with field `M`, [`TWIDDLES`], or the expansion from [`SIZE`]
     /// to `extended`. Table entries require separate mathematical validation.
     pub fn validate<M: PrimeModulus>(self, extended: CosetDomain<M>) -> Result<(), FftError> {
-        // Reject unknown encodings before converting the owner's integer flags
-        // into Udon's semantic types. Integrity checks would be another layer.
+        // Reject unknown encodings before checking the field and domain.
+        // Transport integrity belongs to the owner as a separate check.
         if self.schema_version != 2
             || self.twiddle_kind != 2
             || self.inverse != 0
@@ -88,26 +88,16 @@ impl Header {
         {
             return Err(FftError::InvalidTables);
         }
-        let version = u32::try_from(self.version).map_err(|_| FftError::InvalidTables)?;
-        let montgomery_bits =
-            u32::try_from(self.montgomery_bits).map_err(|_| FftError::InvalidTables)?;
-        TwiddleArtifact {
-            version,
-            modulus: self.modulus,
-            montgomery_bits,
-            twiddles: TWIDDLES,
+        if self.version != 1
+            || self.montgomery_bits != 256
+            || self.modulus != M::MODULUS
+            || self.shift != extended.shift().montgomery_limbs()
+            || self.extended_size != extended.size() as u64
+        {
+            return Err(FftError::InvalidTables);
         }
-        .validate::<M>()?;
-        ExpansionScaleArtifact {
-            version,
-            modulus: self.modulus,
-            montgomery_bits,
-            base_size: SIZE,
-            extended_size: EXTENDED_SIZE,
-            shift: self.shift,
-            normalization: ExpansionScaleNormalization::UnscaledInverse,
-        }
-        .validate(SIZE, extended, ExpansionScaleNormalization::UnscaledInverse)
+        TWIDDLES.requirements()?;
+        Ok(())
     }
 }
 

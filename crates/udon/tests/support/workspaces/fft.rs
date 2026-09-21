@@ -1,5 +1,5 @@
 use zakura_udon::{
-    fft::{Class, CosetDomain, ElementOrder, Plan, TableRequirements, Tables, TablesMut},
+    fft::{CosetDomain, Plan, TableRequirements, Tables, TablesMut},
     field::{PastaField, PrimeModulus},
 };
 
@@ -96,10 +96,10 @@ impl<M: PrimeModulus> FftWorkspace<M> {
 /// Collects disjoint residues before allowing class interpolation.
 ///
 /// Tracks up to 64 residue identities to reject duplicate submissions and
-/// consumption of a partially filled class. Udon's [`Class`] leaves producer
-/// completion to its caller.
+/// consumption of a partially filled class. Producer completion belongs to the
+/// caller.
 pub struct ClassBuilder<'a, M: PrimeModulus> {
-    class: Class<'a, M>,
+    values: &'a mut [PastaField<M>],
     residues: usize,
     completed: u64,
 }
@@ -107,32 +107,36 @@ pub struct ClassBuilder<'a, M: PrimeModulus> {
 impl<'a, M: PrimeModulus> ClassBuilder<'a, M> {
     pub fn new(plan: Plan<'a, M>, buffer: &'a mut [PastaField<M>], residues: usize) -> Self {
         assert!(residues.is_power_of_two() && residues <= 64 && residues <= buffer.len());
+        assert_eq!(plan.domain().size(), buffer.len());
         Self {
-            class: Class::new(plan, buffer, ElementOrder::BitReversed).unwrap(),
+            values: buffer,
             residues,
             completed: 0,
         }
     }
 
     pub fn submit(&mut self, residue: usize, values: &[PastaField<M>]) -> Result<(), &'static str> {
-        if residue >= self.residues || values.len() != self.class.values().len() / self.residues {
+        if residue >= self.residues || values.len() != self.values.len() / self.residues {
             return Err("invalid producer range");
         }
         let bit = 1u64 << residue;
         if self.completed & bit != 0 {
             return Err("duplicate producer range");
         }
-        self.class
-            .scatter_strided(residue, self.residues, values)
-            .unwrap();
+        let bits = self.values.len().ilog2();
+        for (i, value) in values.iter().enumerate() {
+            let natural = residue + i * self.residues;
+            let row = natural.reverse_bits().wrapping_shr(usize::BITS - bits);
+            self.values[row] = *value;
+        }
         self.completed |= bit;
         Ok(())
     }
 
-    pub fn finish(self) -> Result<Class<'a, M>, &'static str> {
+    pub fn finish(self) -> Result<&'a mut [PastaField<M>], &'static str> {
         if self.completed.count_ones() as usize != self.residues {
             return Err("unfinished producers");
         }
-        Ok(self.class)
+        Ok(self.values)
     }
 }

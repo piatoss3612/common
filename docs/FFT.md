@@ -2,9 +2,7 @@
 
 Udon's [`fft` module](../crates/udon/src/fft/mod.rs) provides power-of-two field FFTs
 for both Pasta fields. Transforms are always available, including in `no_std`
-builds without an allocator. See the
-[crate feature documentation](../crates/udon/src/lib.rs) for the reserved `alloc`
-feature.
+builds without an allocator. No feature flag is required.
 
 The caller owns all mutable buffers, optional tables, and parallel execution.
 A plan borrows tables and keeps the domain constants needed for execution.
@@ -47,12 +45,10 @@ Its output needs the full domain size and the queried scratch, including for
 empty input. The `Plan` documentation defines
 buffer lengths, scratch requirements, and errors for each transform method.
 
-`forward_serial` and `inverse_serial` provide the common in-place case without
-executor, options, or scratch arguments. `inverse_scaled` selects
-`InverseScale::Normalized` or `Unscaled`: the latter returns `n * c[i]` and
-**still removes `shift^i`**. `inverse_prefix` declares a natural prefix of
-evaluations with an omitted zero suffix. Its support describes evaluation
-positions, independently of the polynomial's degree.
+For explicit input support, order, and normalization, use `run::FftPlan` with
+a `TransformRequest`. `InverseScale::Unscaled` returns `n * c[i]` and still
+removes `shift^i`. An inverse prefix declares natural evaluation positions
+with an omitted zero suffix, independently of the polynomial's degree.
 
 [`EvaluationView`](../crates/udon/src/fft/layout.rs) binds a slice to a coset and
 an `EvaluationLayout`: natural rows, bit-reversed rows, or residue-major rows.
@@ -68,63 +64,43 @@ its inverse also takes the inverse size. This is useful as an independent
 schedule or for a downstream value type. Its trait contracts define the
 algebraic laws that a custom implementation must satisfy.
 
-## Prepared operations and budgets
+## Transform plans and task budgets
 
-[`Plan::configure`](../crates/udon/src/fft/operation.rs) fixes a
-`TransformRequest` and `Strategy` for repeated execution. The request specifies
+[`run::FftPlan`](../crates/udon/src/fft/run.rs) fixes a `TransformRequest`, tile
+size, codelet, and whether execution uses a separate input. The request selects
 direction, full or prefix support, input and output order, inverse scaling, and
-input preservation. A prefix requires natural input order. `execute_into`
-preserves its separate input; `execute` requires `InputPolicy::Disposable` and
-overwrites the full in-place buffer, including a prefix's unused tail.
+input preservation. A prefix requires natural input order. In-place execution
+requires `InputPolicy::Disposable` and overwrites the complete buffer, including
+a prefix's unused tail.
 
-The same `OperationDescription` drives const sizing and runtime configuration.
-Its [executable example](../crates/udon/src/fft/operation.rs) prepares an operation
-under a zero-scratch budget and executes with arrays sized by the const query.
+`retained_fields()` reports initialized scratch fields for synchronous execution.
+The application accounts separately for inputs, outputs, borrowed tables, and
+executor resources. Tile geometry is independent of worker count. Pass a nonzero
+total task allowance to `execute`; the driver divides it across scoped work.
+No setup or execution allocation occurs.
 
-`ResourceBudget` caps initialized temporary fields, retained table bytes, and
-total tasks. Requirements exclude input/output storage, fixed stack frames, and
-executor resources. Borrowed table slices are conservatively counted separately
-even if their storage aliases. `OperationRequirements` reports scratch in field
-elements, including the size and count of blocked column jobs' partitions.
-Configuration and attaching tables to prepared operations reject strategies
-that exceed a ceiling before execution.
+The default stage path supports radix-2/4/8 codelets. `with_columns` selects
+column panels and a retained panel count. Natural-order in-place permutation
+normally retains a snapshot; `with_contiguous_permutation` uses bounded index
+swaps on the contiguous bank instead. Separate-output initialization gathers
+destination tiles by default; `with_scatter_initialization` selects consecutive
+input tiles. Forward coset scaling generates powers by recurrence or borrows a
+`PowerTable` through `with_forward_scales`.
 
-The configured operation can omit inverse-normalization tables before checking
-the byte ceiling; [`Plan::configure`](../crates/udon/src/fft/operation.rs) defines
-which tables it retains for each request and strategy. For example, a plan with
-only inverse-normalization tables can configure a subgroup inverse under a
-zero-byte table budget. The original plan remains reusable with all its tables.
+Natural coefficients to bit-reversed evaluations use decimation in frequency
+(DIF). A matching inverse using decimation in time (DIT) accepts those evaluations
+directly. Equally ordered pointwise products preserve this composition.
+`execute` accepts an optional factor slice in the output's physical order;
+the caller establishes its domain and layout. `EvaluationView` provides checked
+domain and layout bindings when constructing these pipelines. The
+[module example](../crates/udon/src/fft/mod.rs) demonstrates a product followed
+by interpolation without an intervening scatter.
 
-| Backend | Scratch | Execution |
-| --- | --- | --- |
-| `InPlace` | Zero | Stage barriers and disjoint butterfly pairs; supports parallel work and radix-2/4/8 codelets |
-| `Blocked` | Queried rectangular partitions | Local transforms and column jobs in caller scratch |
-
-`Strategy::serial()` selects the stage backend with radix 2. `Strategy::budgeted`
-uses deterministic geometry and `Backend::Auto`, selecting blocked execution
-when its geometry, order, codelet, and scratch ceiling permit, otherwise the
-stage backend. `Auto` does not measure timings. Low-level geometry remains
-available through `ExecutionOptions`; larger codelets are explicit stage-backend
-choices. Separate-output initialization can scatter from the input, gather
-consecutive destination regions, or gather in bounded tiles.
-Forward coset scaling computes a starting power for each region and advances by
-recurrence, or borrows a `PowerTable` containing `shift^i` for coefficient degree
-`i`.
-
-With the stage backend, natural coefficients to bit-reversed evaluations use
-decimation in frequency (DIF). A matching inverse using decimation in time (DIT)
-accepts those evaluations directly and returns natural coefficients. Equally
-ordered pointwise products preserve this composition. `execute_product_into`
-validates a domain-bound factor and writes the pointwise product in the requested
-output order. The [module example](../crates/udon/src/fft/mod.rs) demonstrates the
-complete product and interpolation pipeline without an intervening scatter.
-
-`execute_batch` transforms a polynomial-major buffer containing consecutive
-full-domain polynomials in place. It requires disposable, full-support input.
-`batch_requirements(count)` reserves independent scratch partitions and divides
-the total task budget between polynomials and their transforms. Empty batches
-need no scratch. This layout lets independent small transforms be the parallel
-unit while retaining one borrowed set of tables.
+`execute_batch` transforms consecutive full-domain polynomials in place. It
+requires disposable, full-support input. `batch_fields(count, tasks)` sizes
+independent scratch partitions under the same total task allowance passed to
+execution. Empty batches need no scratch. Small polynomials can be scheduled
+independently while sharing one borrowed set of tables.
 
 ## Optional tables and downstream storage
 
@@ -159,7 +135,7 @@ cause wrong results or panics; these APIs remain memory safe. An explicit
 storage layout; artifact metadata identifies the field and conventions; checked
 binding establishes the mathematical contents. These are separate checks.
 
-Prepared stage operations additionally accept
+Transform plans additionally accept
 [`TwiddleTable`](../crates/udon/src/fft/powers.rs) through `with_twiddles`.
 `TwiddleDescription::requirements` sizes each representation; `prepare` and
 `bind` produce handles from native generation or checked imports. For table
@@ -175,9 +151,8 @@ All table domains use the nested canonical Pasta roots. A larger table serves
 a smaller transform through the canonical root stride. A smaller table serves
 local stages while larger stages regenerate their powers. Forward and inverse
 transforms can share either root orientation. A table describes subgroup powers
-independently of the transform's coset shift. Explicit blocked execution
-uses `Tables`; attaching an alternate provider to an automatically
-selected blocked operation selects the stage backend instead.
+independently of the transform's coset shift. Column panels can also use the
+explicit twiddle provider.
 
 `PowerTable` describes entry `i` as `first * step^i`, including deliberate scaling.
 Forward coefficient tables use `first = 1`, `step = shift`, and exactly the
@@ -200,13 +175,10 @@ shows the complete build-to-runtime path for both fields:
    from the embedded record, and executes with stack-owned buffers.
 
 The owner chooses filenames, dimensions, format versions, and integrity checks.
-Udon's `TwiddleArtifact` and `ExpansionScaleArtifact` describe mathematical
-semantics: version, field modulus, canonical root dimensions and orientation,
-Montgomery radix, and applicable shift, layout, and normalization. They are Rust
-descriptors, not a serialization format. The fixture's owner-defined header
-stores these alongside stage-packed twiddles and pre-normalized residue scales.
-Its schema version identifies the owner's record layout separately from Udon's
-semantic versions; the consumer checks both before binding the tables.
+The fixture's header records the field modulus, Montgomery radix, domain sizes,
+root orientation, scale normalization, shift, and layout. Its consumer validates
+that metadata before binding the tables. These conventions belong to the
+artifact owner's schema; Udon supplies mathematical table handles.
 Consumers check semantic compatibility and mathematical entries separately from
 Bento's target-layout checks and the owner's transport-integrity policy.
 Native build-time and runtime preparation produce identical borrowed handles;
@@ -282,12 +254,11 @@ For natural extended row `j`, its storage index is
 (j % r) * n + j / r.
 ```
 
-[`ResidueLayout` and `ResidueView`](../crates/udon/src/fft/layout.rs) provide
+[`ResidueLayout` and `EvaluationView`](../crates/udon/src/fft/layout.rs) provide
 checked index conversion, residue slices, and lookup at rows of a still larger
 domain with the same shift. Such lookup rejects rows outside the smaller
 domain. Copy helpers convert between natural and residue order into distinct
-caller buffers. `CoefficientTiles` instead borrows contiguous coefficient
-ranges; its tiles are not residue classes.
+caller buffers. Ordinary slice ranges provide coefficient tiles.
 
 `Expansion::coefficients` accepts any prefix fitting the base domain. An optional
 table holds exactly `extended_size` residue scales; `prepare_scales` fills caller
@@ -373,15 +344,15 @@ monic degree-`t` polynomial vanishing on those selected points. Then
 `S(X) = (X^n - 1) / H(X)` vanishes on every other base point, and `p = q * S`
 for a polynomial `q` of degree less than `t`. Precompute the extended-domain
 evaluations of `S` and pass the short coefficients of `q` to `short_product`.
-This uses coefficient support; `inverse_prefix` instead describes evaluation
-positions and does not recover `q`. Consumers of `p`'s coefficients still need
-the full product.
+This uses coefficient support; an inverse `TransformRequest` prefix instead
+describes evaluation positions and does not recover `q`. Consumers of `p`'s
+coefficients still need the full product.
 
-[`Expansion::configure`](../crates/udon/src/fft/expansion_operation.rs) adds
-explicit liveness and persistent ordering. `ExpansionDescription::requirements`
-and the configured operation report transform scratch and coefficient workspace
-separately; the resource ceiling covers their sum. `ExpansionStrategy` divides
-one total task budget across concurrent residues and within-transform work.
+[`run::ExpansionPlan`](../crates/udon/src/fft/run/expansion.rs) fixes liveness,
+input support, ordering, tile size, and codelet. `coefficient_fields()` reports
+separate coefficient workspace; `scratch_fields(tasks)` reports synchronous
+transform scratch. The caller accounts for both. Execution divides one total
+task allowance across concurrent residues and their transforms.
 
 | Storage policy | Input | Additional coefficient fields | Scheduling dependency |
 | --- | --- | --- | --- |
@@ -390,32 +361,22 @@ one total task budget across concurrent residues and within-transform work.
 | `CoefficientWorkspace` | Immutable base evaluations | `base_size` | All residues independent after one inverse |
 | `DisposableInput` | Mutable base evaluations | Zero | Input becomes coefficient storage; all residues independent after one inverse |
 
-Use `execute_into` for the first two policies, `execute_with_workspace` for a
-separate coefficient buffer, and `execute_disposable` to consume the input.
-The latter two policies require an explicit `scale: InverseScale` field and return
-a [`CoefficientView`](../crates/udon/src/fft/layout.rs) borrowing only the retained
-buffer. `Normalized` retains polynomial coefficients `c[i]`; `Unscaled` retains
-`n * c[i]`, where `n` is the source base size. Both use increasing degree order
-and reduced Montgomery representations. The view's `normalization_factor`
-recovers `c[i]`; output and scratch can be reused while the view is live.
+Use `execute` for immutable input, supplying a coefficient buffer for
+`CoefficientWorkspace`, or `execute_disposable` to consume mutable input.
+The two policies retaining coefficients select an explicit `InverseScale` and
+return a [`CoefficientView`](../crates/udon/src/fft/layout.rs) borrowing only that
+buffer. `Normalized` retains `c[i]`; `Unscaled` retains `n * c[i]`, where `n` is
+the source base size. Both use increasing degree order and reduced Montgomery
+representations. The view's `normalization_factor()` recovers `c[i]`; output and
+scratch can be reused while the view is live.
 
-Pass the view itself to a coefficient consumer such as `Plan::forward_prefix`
-or `Expansion::coefficients` to apply normalization during output initialization.
-Passing `view.as_slice()` loses the scale information because ordinary slices
-are treated as normalized. The view's executable example shows a smaller
-expansion feeding a larger transform without copying or normalizing the retained
-buffer. Prepared transforms and expansions with `ExpansionStorage::Coefficients`
-provide `execute_coefficients` for this purpose. Prepared transforms require a
-forward request with natural input order and the configured full or prefix length.
-
-For the two policies that retain coefficients, scale tables must match the chosen
-inverse scale: `Normalized` requires `Coefficients` tables, and `Unscaled`
-requires `UnscaledInverse` tables. [`Expansion::configure`](../crates/udon/src/fft/expansion_operation.rs)
-rejects mismatches, including for singleton domains. Without residue tables,
-either scale is supported. These restrictions concern the retained coefficient
-output; consuming a view follows the table rules above. The extra coefficient
-buffer removes a scheduling dependency; its latency benefit depends on the
-workload and target.
+Pass the view directly to `Plan::forward_prefix` or `Expansion::coefficients`.
+For run plans consuming coefficient slices, attach its normalization factor
+with `FftPlan::with_input_scale` or `ExpansionPlan::with_coefficient_scale`.
+Passing only `view.as_slice()` loses the scale information. Scale tables use the
+conventions above; initialization accounts for their normalization and the
+retained coefficient scale. The extra coefficient buffer removes a scheduling
+dependency; its latency benefit depends on the workload and target.
 
 `ExpansionOrder::Residues` uses `ResidueLayout`. `ExpansionOrder::BitReversed`
 reverses both the residue blocks and their inner row order. For `r=2^a` residues
@@ -426,9 +387,9 @@ bit_reverse_(a+b)(s + 2^a*k) = 2^b * bit_reverse_a(s) + bit_reverse_b(k).
 ```
 
 The resulting vector is already in the input order of a full inverse DIT.
-`PreparedExpansion::view` returns a domain-bound view with the correct complete
-layout. Its `execute_product_into` validates the factor's domain and order and
-writes their pointwise product in that layout.
+Bind an `EvaluationView` with the selected layout for checked row lookup.
+The optional factor slice passed to execution must use that same physical
+layout and coset; the caller establishes those semantics.
 
 For bounded-memory consumers, `Expansion::residue(s, order)` borrows a descriptor
 that evaluates a coefficient prefix into one reusable base-sized output. Its
@@ -440,56 +401,34 @@ contiguous output, so choose storage according to the consumer's access pattern.
 
 ## Fused class interpolation
 
-[`Class`](../crates/udon/src/fft/interpolation.rs) pairs a plan with a borrowed,
-initialized evaluation buffer. It accepts natural or bit-reversed input order.
-`scatter` and `scatter_strided` write natural evaluation positions directly to
-the requested storage order, checking the requested natural positions before
-writing. Unwritten entries retain their prior values; callers own completeness
-and accumulation.
+[`run::InterpolationPlan`](../crates/udon/src/fft/run/interpolation.rs) combines
+full-support, normalized inverse `FftPlan`s with natural coefficient output.
+Entry zero is the output; other classes may be smaller and have different
+nonzero coset shifts. Every class tile must match the output tile or its own
+smaller size. Each input may use natural or bit-reversed order.
 
-For nested domains with the same shift, derive scatter positions in natural row
-order. Suppose an extended domain has `r` residues of `n` rows each. A window
-in residue `s` starting at inner offset `k` starts at natural row `s + r*k`
-and advances with stride `r`. A subdomain smaller by a factor `d` contains only
-extended rows divisible by `d`. When `d` divides both `r` and `s`, scatter that
-window into the smaller class with start `s/d + (r/d)*k` and stride `r/d`.
-`Class` then maps those positions into its declared storage order.
+`execute` accepts arrays of mutable class buffers and scratch slices plus one
+total task allowance. `snapshot_fields(class)` sizes each scratch slice.
+The output becomes the coefficient sum, with smaller vectors implicitly
+zero-padded. Without `consume`, lifts retain their individual coefficients.
+With `consume`, equal-domain evaluation vectors merge before one inverse per
+distinct domain, including groups smaller than the output. Lift contents are
+then unspecified. The serial radix-2 path retains fused inverse/addition kernels;
+parallel execution schedules independent inverses and coefficient additions.
 
-`interpolate_classes` interpolates one output class and any number of lift
-classes no larger than the output. Classes may have different nonzero coset
-shifts. The result is the sum of their coefficient
-vectors, with smaller vectors implicitly zero-padded to the output length.
-The function's executable example combines residue scatter with a lift on a
-different domain.
+Applications own producer completeness and scatter. For nested domains with the
+same shift, derive scatter positions in natural row order. If an extended domain
+has `r` residues of `n` rows, a window in residue `s` starting at inner offset `k`
+starts at natural row `s + r*k` and advances by `r`. A subdomain smaller by `d`
+contains extended rows divisible by `d`. When `d` divides `r` and `s`, its window
+starts at `s/d + (r/d)*k` with stride `r/d`. Map each resulting index into the
+selected element order before writing. The
+[workspace fixture](../crates/udon/tests/support/workspaces/fft.rs) checks producer
+completion before exposing its buffers to interpolation.
 
-All class buffers are overwritten with natural-order coefficients. A class
-tracks whether interpolation has begun and rejects subsequent interpolation or
-scatter with `FftError::InvalidClassState`, including after a transform panic.
-To reuse storage, release the class, refill its buffer with evaluations, and
-construct a new class. Classes share one scratch buffer in sequence, with
-parallel work inside each transform.
-`interpolation_scratch` returns the maximum individual requirement, independent
-of the number of classes, and validates all class sizes before execution.
-The const query `options.interpolation_requirements(output_size, lift_sizes)`
-provides the same size and execution checks from domain sizes, so arrays can be
-declared before constructing classes. The bound query additionally checks that
-every class still contains evaluations.
-
-[`interpolate_classes_parallel`](../crates/udon/src/fft/interpolation_parallel.rs)
-uses `InterpolationOptions` to partition a total task budget across classes and
-within their inverses. Each concurrent class worker gets a separate caller-owned
-scratch partition; an addition pass follows the independent inverses. Its const
-and bound queries return the same partition geometry. Lifts retain their own
-coefficient vectors, as with sequential fused interpolation.
-
-`interpolate_sum` offers a distinct destructive contract. It combines
-equal-domain evaluation vectors before one inverse per distinct domain, mapping
-different storage orders during addition. It shares one scratch region and
-promises only the output's coefficient sum. All lifts become
-`ClassState::Consumed`; individual lift coefficients are unavailable afterward.
-`Class::state` distinguishes evaluations, successful coefficient output, and
-consumed storage. A panic can leave classes in different phases, and every class
-whose evaluations were consumed rejects reuse.
+Validation precedes mutation. A panic can leave partial results; refill affected
+buffers with evaluations before retrying. `InterpolationRun` additionally tracks
+class phases through `ClassState` while tasks and consumers complete.
 
 For correctness coverage and performance commands, see the
 [testing guide](TESTING.md) and [strategy measurements](FFT_PERFORMANCE.md).

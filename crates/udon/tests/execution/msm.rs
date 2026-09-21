@@ -21,6 +21,349 @@ use zakura_udon::{
     field::{CanonicalUint, PastaField},
 };
 
+use zakura_udon::{
+    curve::msm::run::{Buffers, ProducedInput, Resources, SourceBuffers},
+    exec::run::{ReadView, TaskError},
+};
+
+struct Fragments<'a, T>(&'a [T]);
+impl<T> ReadView<T> for Fragments<'_, T> {
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+    fn get(&self, index: usize) -> Option<&T> {
+        self.0.get(index)
+    }
+    fn contiguous_prefix(&self, range: core::ops::Range<usize>) -> Option<&[T]> {
+        // Producer fragments deliberately straddle recoder boundaries.
+        if range.end > self.len() || range.start > range.end {
+            return None;
+        }
+        self.0
+            .get(range.start..range.end.min((range.start / 13 + 1) * 13))
+    }
+}
+struct ProducedLease<'a, C: PastaCurve> {
+    arithmetic: super::msm_run::Lease<'a, C>,
+    scalars: Fragments<'a, PastaField<C::Scalar>>,
+    indices: Fragments<'a, u32>,
+}
+impl<C: PastaCurve> Resources<C> for ProducedLease<'_, C> {
+    fn buffers(&mut self) -> Buffers<'_, C> {
+        self.arithmetic.buffers()
+    }
+    fn with_source<O>(
+        &mut self,
+        use_buffers: impl FnOnce(Buffers<'_, C>, SourceBuffers<'_, C>) -> O,
+    ) -> O {
+        use_buffers(
+            self.arithmetic.buffers(),
+            SourceBuffers {
+                scalars: &self.scalars,
+                indices: &self.indices,
+            },
+        )
+    }
+}
+
+fn produced<C: PastaCurve>() {
+    const TERMS: usize = 701;
+    let bases: Vec<_> = (1..=TERMS)
+        .map(|i| {
+            *ladder::<C>(PastaField::from_u64(i as u64))
+                .to_point()
+                .as_affine()
+                .unwrap()
+        })
+        .collect();
+    let scalars: Vec<_> = (0..TERMS)
+        .map(|i| {
+            PastaField::<C::Scalar>::from_u64(i as u64 + 7)
+                .invert()
+                .unwrap()
+        })
+        .collect();
+    let indices: Vec<_> = (0..TERMS).map(|i| (i * 11 % TERMS) as u32).collect();
+    for indexed in [false, true] {
+        for streaming in [false, true] {
+            let options = if streaming {
+                ExecutionOptions::SERIAL
+                    .with_streaming_buckets()
+                    .with_chunk_size(NonZeroUsize::new(512).unwrap())
+            } else {
+                ExecutionOptions::SERIAL
+            };
+            let original =
+                MsmPlan::<C>::new(TERMS, options, NonZeroUsize::new(TERMS).unwrap()).unwrap();
+            let plan = original
+                .with_grain(NonZeroUsize::new(512).unwrap())
+                .unwrap();
+            assert_eq!(plan.windows(), original.windows());
+            assert_eq!(plan.preparation_terms(), 256);
+            let input = if indexed {
+                ProducedInput::indexed(Bases::Affine(&bases), TERMS)
+            } else {
+                ProducedInput::dense(Bases::Affine(&bases))
+            };
+            let range = 17..619;
+            let expected = ladder::<C>(range.clone().fold(PastaField::ZERO, |sum, i| {
+                sum.add(&scalars[i].mul(&PastaField::from_u64(if indexed {
+                    indices[i] as u64 + 1
+                } else {
+                    i as u64 + 1
+                })))
+            }));
+            let arena = Arena::new(plan);
+            let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
+            let mut identity = Identity::new();
+            let mut slots = [const { TaskStorage::EMPTY }; 3];
+            let mut run = MsmRun::new_produced_partition(
+                plan,
+                input,
+                range.clone(),
+                &mut identity,
+                &mut slots,
+            )
+            .unwrap();
+            let mut ready = [None; 3];
+            run.ready(&mut ready);
+            let old_request = ready[0].unwrap();
+            for repetition in 0..2 {
+                if repetition != 0 {
+                    run.rebind_produced_partition(plan, input, range.clone())
+                        .unwrap();
+                    assert!(matches!(
+                        run.try_claim(old_request, || None::<ProducedLease<'_, C>>),
+                        Err(TaskError::Stale)
+                    ));
+                }
+                let mut first_ready = false;
+                let mut completed_later_preparation = false;
+                while run.result().is_none() {
+                    let count = run.ready(&mut ready);
+                    let mut progress = false;
+                    for request in ready[..count].iter().flatten().rev() {
+                        if request.kind == WorkKind::Prepare
+                            && request.offset == range.start
+                            && !first_ready
+                        {
+                            assert!(
+                                run.try_claim(*request, || None::<ProducedLease<'_, C>>)
+                                    .unwrap()
+                                    .is_none()
+                            );
+                            continue;
+                        }
+                        let source_range = request.offset..request.offset + request.terms;
+                        let mut task = run
+                            .try_claim(*request, || {
+                                Some(ProducedLease {
+                                    arithmetic: arena.acquire(*request, &work)?,
+                                    scalars: Fragments(&scalars[source_range.clone()]),
+                                    indices: Fragments(if indexed {
+                                        &indices[source_range]
+                                    } else {
+                                        &[]
+                                    }),
+                                })
+                            })
+                            .unwrap()
+                            .unwrap();
+                        task.execute().unwrap();
+                        let published = run.complete(task.finish()).unwrap();
+                        assert_eq!(published.error, None);
+                        drop(published);
+                        if request.kind == WorkKind::Prepare && !first_ready {
+                            completed_later_preparation = true;
+                        }
+                        progress = true;
+                    }
+                    if !first_ready {
+                        first_ready = true;
+                    } else {
+                        assert!(progress);
+                    }
+                }
+                assert!(
+                    completed_later_preparation,
+                    "indexed={indexed} streaming={streaming} repetition={repetition} grain={}",
+                    plan.grain()
+                );
+                assert_eq!(run.result(), Some(expected));
+                assert!(!run.is_failed());
+                assert_eq!(run.inflight(), 0);
+            }
+        }
+    }
+}
+
+#[test]
+fn produced_fragments_wait_for_sources_and_rebind_partition_epochs() {
+    produced::<Pallas>();
+    produced::<Vesta>();
+}
+
+#[test]
+fn invalid_produced_sources_preserve_destinations_and_drain_admitted_tasks() {
+    use zakura_udon::curve::CurveError;
+
+    let bases = [AffinePoint::<Pallas>::GENERATOR; 513];
+    let scalars = [PastaField::from_u64(7); 256];
+    let indices = [0; 256];
+    let mut invalid_indices = indices;
+    invalid_indices[19] = bases.len() as u32;
+    let plan = MsmPlan::new(
+        513,
+        ExecutionOptions::SERIAL,
+        NonZeroUsize::new(513).unwrap(),
+    )
+    .unwrap();
+    for invalid in 0..3 {
+        let arena = Arena::new(plan);
+        let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
+        let mut identity = Identity::new();
+        let mut slots = [const { TaskStorage::EMPTY }; 2];
+        let mut run = MsmRun::new_produced_partition(
+            plan,
+            ProducedInput::indexed(Bases::Affine(&bases), 513),
+            1..513,
+            &mut identity,
+            &mut slots,
+        )
+        .unwrap();
+        let mut ready = [None; 2];
+        assert_eq!(run.ready(&mut ready), 2);
+        let first = ready[0].unwrap();
+        let second = ready[1].unwrap();
+        let mut pending = run
+            .try_claim(first, || {
+                Some(ProducedLease {
+                    arithmetic: arena.acquire(first, &work)?,
+                    scalars: Fragments(&scalars),
+                    indices: Fragments(&indices),
+                })
+            })
+            .unwrap()
+            .unwrap();
+        let mut bad = run
+            .try_claim(second, || {
+                Some(ProducedLease {
+                    arithmetic: arena.acquire(second, &work)?,
+                    scalars: Fragments(if invalid == 0 {
+                        &scalars[..255]
+                    } else {
+                        &scalars
+                    }),
+                    indices: Fragments(match invalid {
+                        1 => &indices[..255],
+                        2 => &invalid_indices,
+                        _ => &indices,
+                    }),
+                })
+            })
+            .unwrap()
+            .unwrap();
+        bad.execute().unwrap();
+        let published = run.complete(bad.finish()).unwrap();
+        match invalid {
+            0 | 1 => assert!(matches!(
+                published.error,
+                Some(CurveError::ScratchTooSmall { .. })
+            )),
+            _ => assert_eq!(
+                published.error,
+                Some(CurveError::BaseIndexOutOfBounds {
+                    position: second.offset + 19,
+                    index: bases.len() as u32,
+                    bases: bases.len(),
+                })
+            ),
+        }
+        let (records, digits) = published.resources.arithmetic.preparation();
+        assert!(records.iter().all(|v| *v == ScalarStorage::ZERO));
+        assert!(digits.iter().all(|v| *v == 0));
+        drop(published);
+        assert!(run.is_failed());
+        assert_eq!(run.ready(&mut ready), 0);
+        assert_eq!(run.inflight(), 1);
+        pending.execute().unwrap();
+        drop(run.complete(pending.finish()).unwrap());
+        assert_eq!(run.inflight(), 0);
+        assert_eq!(run.result(), None);
+        assert!(arena.acquire(first, &work).is_some());
+        assert!(arena.acquire(second, &work).is_some());
+    }
+}
+
+#[test]
+fn cached_borrowed_partitions_preserve_global_scalar_and_index_offsets() {
+    let bases: Vec<_> = (1..=701)
+        .map(|i| {
+            *ladder::<Vesta>(PastaField::from_u64(i))
+                .to_point()
+                .as_affine()
+                .unwrap()
+        })
+        .collect();
+    let scalars: Vec<_> = (0..bases.len())
+        .map(|i| PastaField::from_u64(i as u64 + 3).invert().unwrap())
+        .collect();
+    let indices: Vec<_> = (0..bases.len())
+        .map(|i| (i * 11 % bases.len()) as u32)
+        .collect();
+    let mut records = vec![ScalarStorage::ZERO; scalars.len()];
+    let prepared =
+        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
+            .unwrap();
+    let mut digits = vec![0; prepared.cache_len(ExecutionOptions::SERIAL).unwrap()];
+    let cached = prepared
+        .cache(ExecutionOptions::SERIAL, &mut digits)
+        .unwrap();
+    let input = Selection::indexed(Bases::Affine(&bases), &indices)
+        .unwrap()
+        .with_prepared_scalars(cached)
+        .unwrap();
+    let original = MsmPlan::new(
+        input.len(),
+        ExecutionOptions::SERIAL,
+        NonZeroUsize::new(input.len()).unwrap(),
+    )
+    .unwrap();
+    for plan in [
+        original,
+        original
+            .with_grain(NonZeroUsize::new(256).unwrap())
+            .unwrap(),
+    ] {
+        for range in [0..0, 17..619, 619..701] {
+            let expected = ladder::<Vesta>(range.clone().fold(PastaField::ZERO, |sum, i| {
+                sum.add(&scalars[i].mul(&PastaField::from_u64(indices[i] as u64 + 1)))
+            }));
+            let arena = Arena::new(plan);
+            let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
+            let mut identity = Identity::new();
+            let mut slots = [const { TaskStorage::EMPTY }; 3];
+            let mut run =
+                MsmRun::new_partition(plan, input, range, &mut identity, &mut slots).unwrap();
+            while run.result().is_none() {
+                let mut ready = [None; 3];
+                let count = run.ready(&mut ready);
+                assert_ne!(count, 0);
+                for request in ready[..count].iter().flatten().rev() {
+                    let mut task = run
+                        .try_claim(*request, || arena.acquire(*request, &work))
+                        .unwrap()
+                        .unwrap();
+                    task.execute().unwrap();
+                    let published = run.complete(task.finish()).unwrap();
+                    assert_eq!(published.error, None);
+                }
+            }
+            assert_eq!(run.result(), Some(expected));
+        }
+    }
+}
+
 fn check<C: PastaCurve>() {
     const TERMS: usize = 385;
     let bases = vec![AffinePoint::<C>::GENERATOR; TERMS];

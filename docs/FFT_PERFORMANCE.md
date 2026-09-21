@@ -2,15 +2,21 @@
 
 FFT strategy selection depends on the caller's memory, ordering, and concurrency
 constraints. These September 12, 2026 measurements compare the explicit choices
-in the [prepared-strategy suite](../crates/udon/benches/fft_strategies.rs).
+in the earlier version of the
+[strategy suite](../crates/udon/benches/fft_strategies.rs).
 They do not select runtime defaults. See the [FFT guide](FFT.md) for operation
-contracts and const resource queries.
+contracts and resource queries.
 
 The original strategy comparisons were collected before the removal of
 experimental backends and table representations. This report retains
 measurements for the remaining strategies. The
 [upgrade refinements](#measured-upgrade-refinements) record a later comparison
-against revision `d0c00ac`; rerun the commands below to measure another revision.
+against revision `d0c00ac`.
+
+The current suite uses the `fft::run` plans, whose drivers and scratch counts
+differ from the measured versions. It also constructs interpolation plans
+outside timing. The tables below retain the historical results; use the
+commands below to measure the current implementation.
 
 ## Method
 
@@ -30,7 +36,7 @@ separately into allocated buffers.
 
 Parallel cases use a persistent four-worker Rayon pool, entered outside the
 timed loop. Expansion, batch, and class inputs are restored outside timing.
-Class timings include binding the restored buffers to their class descriptors.
+The reported class timings include binding restored buffers to class descriptors.
 The total task budget includes both outer jobs and inner transforms. Blocked
 geometry uses 1,024-element local transforms and 32 columns per job. Reported
 table and temporary bytes exclude input/output buffers, fixed stack frames,
@@ -38,11 +44,12 @@ and executor resources. Each Pasta field occupies 32 bytes.
 
 The suite also covers both fields, subgroup and order-three shifts, lengths
 2,048, 16,384, and 1,048,576, and one or four tasks. The measurements below
-cover selected cases, not every combination. Reproduce them with:
+cover selected cases, not every combination. Run the corresponding current cases
+with:
 
 ```console
 cargo bench --locked -p zakura-udon --bench fft_strategies -- 'Fp/(strategies/2048/generic_7/tasks_1|expansion_strategies/tasks_4|class_strategies/tasks_4|strategy_preparation)'
-cargo bench --locked -p zakura-udon --bench fft_strategies -- 'Fp/(strategies/1048576/generic_7/tasks_4/(InPlace|Blocked|DIF)|batch_strategies/tasks_4)|Fq/strategies/2048/generic_7/tasks_1'
+cargo bench --locked -p zakura-udon --bench fft_strategies -- 'Fp/(strategies/1048576/generic_7/tasks_4/(columns_(false|true)|DIF)|batch_strategies/tasks_4)|Fq/strategies/2048/generic_7/tasks_1'
 ```
 
 Criterion retains local samples under `target/criterion`. A downstream tuner

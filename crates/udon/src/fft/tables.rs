@@ -115,6 +115,7 @@ impl<'a, M: PrimeModulus> Tables<'a, M> {
             tables: self,
         })
     }
+    #[cfg(test)]
     pub(super) fn retained_bytes(self) -> Result<usize, FftError> {
         let mut bytes = 0usize;
         for table in [

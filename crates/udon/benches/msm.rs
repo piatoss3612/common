@@ -1,3 +1,7 @@
+#[path = "support/msm.rs"]
+mod bench_msm;
+use bench_msm::MsmBench;
+
 use std::{
     hint::black_box,
     num::NonZeroUsize,
@@ -10,8 +14,7 @@ use zakura_udon::{
         AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve,
         Point, PreparedAffinePoint, ProjectivePoint, Vesta,
         msm::{
-            self, Bases, ExecutionOptions, Input, PreparedScalars, Requirements, ScalarStorage,
-            Scratch,
+            Bases, ExecutionOptions, Input, PreparedScalars, Requirements, ScalarStorage, Scratch,
         },
     },
     exec::{Executor, SerialExecutor, TaskBudget},
@@ -329,9 +332,9 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                         .with_task_budget(TaskBudget::new(tasks).unwrap())
                         .with_max_terms_per_pass(maximum);
                     let mut buffers =
-                        Buffers::new(msm::batch_requirements(&jobs, options).unwrap());
+                        Buffers::new(bench_msm::batch_requirements(&jobs, options).unwrap());
                     let mut output = vec![ProjectivePoint::IDENTITY; jobs.len()];
-                    msm::execute_batch(
+                    bench_msm::execute_batch(
                         &jobs,
                         &mut output,
                         options,
@@ -345,7 +348,7 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                     group.bench_with_input(BenchmarkId::new(case, n), &jobs, |b, jobs| {
                         if tasks == 1 {
                             b.iter(|| {
-                                msm::execute_batch(
+                                bench_msm::execute_batch(
                                     black_box(jobs),
                                     &mut output,
                                     options,
@@ -358,7 +361,7 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                         } else {
                             pool.install(|| {
                                 b.iter(|| {
-                                    msm::execute_batch(
+                                    bench_msm::execute_batch(
                                         black_box(jobs),
                                         &mut output,
                                         options,

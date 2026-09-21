@@ -106,7 +106,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
     /// use zakura_udon::{
     ///     curve::{
     ///         FixedBaseDescription, CurveTableRequirements, PallasAffine,
-    ///         PallasFixedBase, PallasProjective,
+    ///         FixedBaseTable, Pallas, PallasProjective,
     ///     },
     ///     field::{Fp, Fq},
     /// };
@@ -119,7 +119,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
     /// let mut entries = [base; REQUIRED.table_entries];
     /// let mut projective = [PallasProjective::IDENTITY; REQUIRED.projective_scratch];
     /// let mut field = [Fp::ZERO; REQUIRED.field_scratch];
-    /// let table = PallasFixedBase::prepare(
+    /// let table = FixedBaseTable::<Pallas>::prepare(
     ///     DESCRIPTION, &base, &mut entries, &mut projective, &mut field,
     /// ).unwrap();
     /// let scalar = Fq::from_u64(42);

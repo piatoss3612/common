@@ -116,9 +116,9 @@ impl Default for ExpansionOptions {
 /// For base size `n` and extended size `r*n`, residue `s` contains the extended
 /// domain's natural rows `s + r*k`, for `0 <= s < r` and `0 <= k < n`. Direct
 /// methods store each residue contiguously, as described by [`Self::layout`];
-/// use [`super::ResidueView`] for lookup by natural row. [`Self::configure`] also
-/// supports bit-reversed output. The ratio `r` can be any supported power of
-/// two, including one.
+/// use [`EvaluationView`] for lookup by natural row.
+/// [`super::run::ExpansionPlan`] also supports bit-reversed output. The ratio
+/// `r` can be any supported power of two, including one.
 ///
 /// Residues use their output as working storage, avoiding a full zero-padded
 /// FFT. [`ExpansionOptions`] controls execution across and within residues;
@@ -131,7 +131,7 @@ impl Default for ExpansionOptions {
 /// use zakura_udon::{
 ///     exec::SerialExecutor,
 ///     field::Fp,
-///     fft::{Domain, Expansion, ExpansionOptions, Plan, ResidueView},
+///     fft::{Domain, Expansion, ExpansionOptions, Plan, EvaluationLayout, EvaluationView},
 /// };
 ///
 /// let base = Plan::without_tables(Domain::new(1).unwrap().subgroup());
@@ -143,7 +143,9 @@ impl Default for ExpansionOptions {
 ///     &coefficients, &mut output, ExpansionOptions::serial(),
 ///     &SerialExecutor, &mut [],
 /// ).unwrap();
-/// let view = ResidueView::new(&output, expansion.layout()).unwrap();
+/// let view = EvaluationView::bind(
+///     &output, extended, EvaluationLayout::Residues(expansion.layout()),
+/// ).unwrap();
 /// for row in 0..extended.size() {
 ///     let root_power = extended.domain().root().pow_u64(row as u64);
 ///     let point = extended.shift().mul(&root_power);
@@ -209,8 +211,8 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// [`CoefficientView`](super::CoefficientView) can use either convention;
     /// initialization accounts for the view's source base size and any factor
     /// already present in the table. [`Self::evaluations`] accepts either
-    /// convention. Prepared expansions that retain coefficients additionally
-    /// require the scale compatibility described by [`Self::configure`].
+    /// convention. [`super::run::ExpansionPlan`] also accounts for the retained
+    /// coefficient scale during residue initialization.
     ///
     /// Table contents follow [`ExpansionScales`]' preparation and binding
     /// contract. Attachment does not rescan entries.
@@ -227,8 +229,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Layout used by direct expansion methods and their factor inputs.
     ///
-    /// [`Self::configure`] can select a different order, reported by
-    /// [`super::PreparedExpansion::layout`].
+    /// [`super::run::ExpansionPlan`] can instead select
+    /// [`ExpansionOrder::BitReversed`]; bind those results with
+    /// [`EvaluationLayout::BitReversed`].
     pub const fn layout(self) -> ResidueLayout {
         self.layout
     }

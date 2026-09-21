@@ -209,16 +209,20 @@ pub fn batch_invert<M: PrimeModulus>(
 /// perform no inversion. No allocation is performed. Arithmetic is
 /// variable-time, including the locations of zeros.
 ///
+/// Each group's [`AsMut::as_mut`] must expose the same slice throughout the
+/// call. Arrays, mutable slices, and vectors satisfy this requirement. A custom
+/// implementation that changes its view can produce incorrect results or panic.
+///
 /// # Errors
 ///
 /// Returns [`BatchInversionError::SizeOverflow`] if the combined length
 /// overflows, or [`BatchInversionError::ScratchTooSmall`] if scratch is too
 /// short. All lengths are checked before changing inputs or scratch.
 pub fn batch_invert_groups<M: PrimeModulus>(
-    groups: &mut [&mut [PastaField<M>]],
+    groups: &mut [impl AsMut<[PastaField<M>]>],
     scratch: &mut [PastaField<M>],
 ) -> Result<(), BatchInversionError> {
-    let required = combined_len(groups.iter().map(|group| group.len()))?;
+    let required = combined_len(groups.iter_mut().map(|group| group.as_mut().len()))?;
     if scratch.len() < required {
         return Err(BatchInversionError::ScratchTooSmall {
             required,
@@ -229,8 +233,8 @@ pub fn batch_invert_groups<M: PrimeModulus>(
     // Parity follows the concatenated input, including zeros and empty groups.
     let mut products = NonzeroInversionLanes::new();
     for (index, (value, prefix)) in groups
-        .iter()
-        .flat_map(|group| group.iter())
+        .iter_mut()
+        .flat_map(|group| group.as_mut().iter_mut())
         .zip(scratch.iter_mut())
         .enumerate()
     {
@@ -245,7 +249,7 @@ pub fn batch_invert_groups<M: PrimeModulus>(
     };
     for (value, (index, prefix)) in groups
         .iter_mut()
-        .flat_map(|group| group.iter_mut())
+        .flat_map(|group| group.as_mut().iter_mut())
         .rev()
         .zip(scratch.iter().enumerate().rev())
     {

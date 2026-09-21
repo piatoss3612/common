@@ -22,9 +22,10 @@ use crate::field::fft::{
 ///
 /// Plans can be shared across executions with independent mutable buffers.
 /// Every full input and output slice must contain exactly `n` fields.
-/// [`Self::forward_prefix`] and [`Self::inverse_prefix`] accept shorter inputs.
+/// [`Self::forward_prefix`] accepts shorter coefficient inputs.
+/// [`super::run::FftPlan`] also supports evaluation prefixes for inverse transforms.
 /// Scratch for direct transforms must meet [`Self::scratch_requirements`];
-/// [`Self::configure`] provides separate requirements for prepared operations.
+/// [`super::run::FftPlan::retained_fields`] sizes its configured transforms.
 /// Incorrect buffer lengths return
 /// [`FftError::LengthMismatch`]; insufficient scratch returns
 /// [`FftError::ScratchTooSmall`]. Invalid execution options or storage overflow
@@ -220,7 +221,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     /// Interpolates evaluations already stored in bit-reversed order.
     ///
     /// This avoids a permutation when a caller scatters evaluations directly
-    /// into their working positions with [`super::Class::scatter`]. Evaluation
+    /// into their working positions. Evaluation
     /// row `j` must be stored at the reversal of its low `log2(n)` bits, where
     /// `n` is the domain size. Output coefficients are in increasing degree
     /// order, with the same normalization, lengths, and errors as [`Self::inverse`].

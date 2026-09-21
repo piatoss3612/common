@@ -1,3 +1,9 @@
+//! Application capacity accounting used by scheduler tests.
+//!
+//! Permits track compatible block counts; the fixture's resource provider owns
+//! actual storage and leases. Admission and acquisition must succeed together
+//! before a task is dispatched.
+
 use core::array;
 
 /// Counts of compatible, initialized blocks in application-defined classes.
@@ -147,7 +153,7 @@ impl<const N: usize> SegmentStorage<N> {
 /// A nonforgeable token for an admitted segment.
 #[derive(Debug)]
 pub struct Segment<'a> {
-    owner: &'a super::Identity,
+    owner: &'a zakura_udon::exec::run::Identity,
     slot: usize,
     generation: usize,
 }
@@ -179,7 +185,7 @@ pub struct TaskPermit<'a, const N: usize> {
 /// rolling back acquired guards if accounting fails.
 #[derive(Debug)]
 pub struct Admission<'a, const N: usize> {
-    identity: &'a super::Identity,
+    identity: &'a zakura_udon::exec::run::Identity,
     slots: &'a mut [SegmentStorage<N>],
     capacity: Resources<N>,
     used: Resources<N>,
@@ -192,7 +198,7 @@ impl<'a, const N: usize> Admission<'a, N> {
     /// Obtain `capacity` from a checked [`ArenaLayout`]. Outstanding tokens keep
     /// the identity borrowed, preventing rebinding that arena before they end.
     pub fn new(
-        identity: &'a mut super::Identity,
+        identity: &'a mut zakura_udon::exec::run::Identity,
         slots: &'a mut [SegmentStorage<N>],
         capacity: Resources<N>,
     ) -> Self {

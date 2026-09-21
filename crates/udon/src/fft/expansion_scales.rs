@@ -168,68 +168,6 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
     pub const fn as_slice(self) -> &'a [PastaField<M>] {
         self.values
     }
-    /// Semantic metadata for downstream serialization or cache validation.
-    pub const fn artifact(self) -> ExpansionScaleArtifact {
-        ExpansionScaleArtifact {
-            version: 1,
-            modulus: M::MODULUS,
-            montgomery_bits: 256,
-            base_size: self.base_size,
-            extended_size: self.extended.size(),
-            shift: self.extended.shift().montgomery_limbs(),
-            normalization: self.normalization,
-        }
-    }
-}
-
-/// Semantic metadata for downstream residue-table artifacts.
-///
-/// The owner chooses a byte format, framing, integrity checks, and persistence.
-/// Version one uses the canonical roots from [`Domain`], residue-major powers,
-/// and four Montgomery limbs per field, least significant first.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExpansionScaleArtifact {
-    /// Semantic format version, currently one.
-    pub version: u32,
-    /// Field modulus, in increasing limb significance.
-    pub modulus: [u64; 4],
-    /// Montgomery radix exponent, currently 256.
-    pub montgomery_bits: u32,
-    /// Coefficient count per residue.
-    pub base_size: usize,
-    /// Complete extended domain size.
-    pub extended_size: usize,
-    /// Canonical Montgomery representation of the extended coset shift.
-    pub shift: [u64; 4],
-    /// Normalization encoded in every residue's initial value.
-    pub normalization: ExpansionScaleNormalization,
-}
-
-impl ExpansionScaleArtifact {
-    /// Checks imported metadata against the intended operation.
-    ///
-    /// Returns [`FftError::InvalidTables`] for any metadata mismatch, or the size
-    /// errors from [`ExpansionScales::requirements`]. Validate table entries
-    /// separately with [`ExpansionScales::bind`] when binding decoded storage.
-    pub fn validate<M: PrimeModulus>(
-        self,
-        base_size: usize,
-        extended: CosetDomain<M>,
-        normalization: ExpansionScaleNormalization,
-    ) -> Result<(), FftError> {
-        if self.version != 1
-            || self.modulus != M::MODULUS
-            || self.montgomery_bits != 256
-            || self.base_size != base_size
-            || self.extended_size != extended.size()
-            || self.shift != extended.shift().montgomery_limbs()
-            || self.normalization != normalization
-        {
-            return Err(FftError::InvalidTables);
-        }
-        ExpansionScales::<M>::requirements(base_size, extended.size())?;
-        Ok(())
-    }
 }
 
 fn visit_scales<M: PrimeModulus>(

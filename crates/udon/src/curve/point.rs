@@ -23,16 +23,6 @@ impl<C: PastaCurve> Point<C> {
     /// The generator `(-1, 2)`.
     pub const GENERATOR: Self = AffinePoint::GENERATOR.to_point();
 
-    /// Returns the additive identity.
-    pub const fn identity() -> Self {
-        Self::IDENTITY
-    }
-
-    /// Returns the generator `(-1, 2)`.
-    pub const fn generator() -> Self {
-        Self::GENERATOR
-    }
-
     /// Constructs identity for `(0, 0)` or a checked nonidentity point.
     ///
     /// Returns `None` for other coordinates rejected by [`AffinePoint::from_xy`],

@@ -47,9 +47,9 @@ impl<'a, M: PrimeModulus> Work for Job<'a, M> {
 }
 
 fn check<M: PrimeModulus>() {
-    const CLASSES: usize = 5;
-    let sizes = [64, 8, 64, 32, 64];
-    let shifts = [7, 11, 7, 13, 7];
+    const CLASSES: usize = 7;
+    let sizes = [64, 8, 64, 32, 64, 32, 8];
+    let shifts = [7, 11, 7, 13, 7, 13, 11];
     for consume in [false, true] {
         for tile in [8, 64] {
             for flip in [false, true] {
@@ -116,6 +116,41 @@ fn check<M: PrimeModulus>() {
                     }
                     banks.write(i, &evaluations);
                 }
+                for codelet in [Codelet::Radix2, Codelet::Radix4] {
+                    for tasks in [1, 3] {
+                        let transforms = core::array::from_fn(|i| {
+                            FftPlan::new(
+                                plans[i],
+                                TransformRequest {
+                                    input_order: orders[i],
+                                    ..TransformRequest::new(Direction::Inverse)
+                                },
+                                NonZeroUsize::new(tile).unwrap(),
+                                codelet,
+                                false,
+                            )
+                            .unwrap()
+                        });
+                        let contiguous = InterpolationPlan::new(transforms, consume).unwrap();
+                        let mut values: [_; CLASSES] =
+                            core::array::from_fn(|i| banks.read(i)[..sizes[i]].to_vec());
+                        let mut scratch: [_; CLASSES] = core::array::from_fn(|i| {
+                            vec![PastaField::ZERO; contiguous.snapshot_fields(i).unwrap()]
+                        });
+                        contiguous
+                            .execute(
+                                values.each_mut().map(Vec::as_mut_slice),
+                                scratch.each_mut().map(Vec::as_mut_slice),
+                                NonZeroUsize::new(tasks).unwrap(),
+                                &SerialExecutor,
+                            )
+                            .unwrap();
+                        assert_eq!(values[0], expected);
+                        if !consume {
+                            assert_eq!(&values[1..], &coefficients[1..]);
+                        }
+                    }
+                }
                 let mut ids = core::array::from_fn(|_| core::array::from_fn(|_| Identity::new()));
                 let mut slots =
                     [const { [const { [const { TaskStorage::EMPTY }; 3] }; 2] }; CLASSES];
@@ -160,11 +195,11 @@ fn check<M: PrimeModulus>() {
                                     pair: None,
                                     read: Some((Bank::Input, add.read.clone())),
                                     factor: None,
-                                    estimate: add.estimate,
                                 };
+                                let target = add.target;
                                 if let Some(task) = run
                                     .try_claim_addition(class, add, || {
-                                        banks.acquire(&request, class, 0, CLASSES, 0)
+                                        banks.acquire(&request, class, target, CLASSES, target)
                                     })
                                     .unwrap()
                                 {

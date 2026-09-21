@@ -491,10 +491,10 @@ fn scratch_can_be_reused_after_executor_unwind() {
         buffers.tails(r);
     }
     let inputs = [input, input];
-    let (j, w) = ExecutionPlan::<Pallas>::storage_len(inputs.len(), options).unwrap();
+    let (j, w) = BatchPlan::<Pallas>::storage_len(inputs.len(), options).unwrap();
     let mut jobs = vec![JobStorage::EMPTY; j];
     let mut workers = vec![WorkerStorage::EMPTY; w];
-    let plan = ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+    let plan = BatchPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
     let mut planned_buffers = Buffers::new(plan.requirements());
     let mut output = [ProjectivePoint::IDENTITY; 2];
     for at in [0, 2] {
@@ -631,10 +631,10 @@ fn grouped_jobs_share_workers_with_side_work_and_reuse_dirty_scratch() {
             });
             assert_eq!(output, expected);
             buffers.tails(r);
-            let (j, w) = ExecutionPlan::<Pallas>::storage_len(jobs.len(), options).unwrap();
+            let (j, w) = BatchPlan::<Pallas>::storage_len(jobs.len(), options).unwrap();
             let mut metadata = vec![JobStorage::EMPTY; j + 1];
             let mut ranges = vec![WorkerStorage::EMPTY; w + 1];
-            let plan = ExecutionPlan::new(&jobs, options, &mut metadata, &mut ranges).unwrap();
+            let plan = BatchPlan::new(&jobs, options, &mut metadata, &mut ranges).unwrap();
             assert_eq!(plan.requirements(), r);
             // Dirty scratch checks that workers clear unclaimed result slots.
             for _ in 0..2 {
@@ -1081,10 +1081,10 @@ fn memory_ceiling_and_reusable_weighted_plans() {
             assert!(r.bytes::<C>().unwrap() <= limit);
             let conservative = Input::<C>::requirements_for_len(1025, options).unwrap();
             assert!(conservative.bytes::<C>().unwrap() <= limit);
-            let (j, w) = ExecutionPlan::<C>::storage_len(inputs.len(), options).unwrap();
+            let (j, w) = BatchPlan::<C>::storage_len(inputs.len(), options).unwrap();
             let mut jobs = vec![JobStorage::EMPTY; j + 1];
             let mut workers = vec![WorkerStorage::EMPTY; w + 1];
-            let plan = ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+            let plan = BatchPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
             assert!(plan.temporary_bytes() <= limit);
             assert!(plan.worker_ranges() <= tasks);
             let r = plan.requirements();
@@ -1103,7 +1103,7 @@ fn memory_ceiling_and_reusable_weighted_plans() {
     let mut jobs = [JobStorage::EMPTY; 6];
     let mut workers = [WorkerStorage::EMPTY; 1];
     assert!(matches!(
-        ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers),
+        BatchPlan::new(&inputs, options, &mut jobs, &mut workers),
         Err(CurveError::MemoryLimit { .. })
     ));
     assert!(jobs.iter().all(|j| *j == JobStorage::EMPTY));

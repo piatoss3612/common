@@ -11,8 +11,6 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-# Reserved for allocating APIs; curve and FFT operations never require it.
-alloc = []
 # Selects larger square-root tables; see the crate-level feature documentation.
 sqrt-table-large = []
 

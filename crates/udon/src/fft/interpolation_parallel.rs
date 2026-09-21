@@ -1,38 +1,31 @@
 use super::transform::Run;
 use super::{
     Class, ClassState, ElementOrder, ExecutionOptions, Executor, FftError, PastaField,
-    PrimeModulus, ScratchRequirements, check_field_count, interpolation_scratch, min,
+    PrimeModulus, interpolation_scratch,
 };
+#[cfg(test)]
+use super::{ScratchRequirements, check_field_count, min};
+#[cfg(test)]
 use crate::exec::TaskBudget;
 
-/// Optional concurrency across interpolation classes with caller-owned scratch.
-///
-/// Classes, including the output class, can run independently using separate
-/// scratch partitions. [`super::interpolate_classes`] reuses one scratch region
-/// across classes and permits parallel work within each transform.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InterpolationOptions {
-    /// Transform geometry; its task count is capped by each class's share.
     pub transform: ExecutionOptions,
-    /// Nonzero maximum number of classes executing concurrently.
     pub max_class_tasks: usize,
-    /// Nonzero total task ceiling, across and within class transforms.
     pub max_tasks: usize,
 }
 
-/// Equal-capacity scratch partitions for concurrent classes.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InterpolationRequirements {
-    /// Total fields in the caller's scratch slice.
     pub scratch_fields: usize,
-    /// Capacity reserved per class worker, reused for its assigned transforms.
     pub per_worker_scratch_fields: usize,
-    /// Concurrent class workers, including the output class.
     pub scratch_partitions: usize,
-    /// Maximum tasks within any one transform.
     pub transform_tasks: usize,
 }
 
+#[cfg(test)]
 impl InterpolationOptions {
     const fn geometry(self, count: usize) -> Result<(ExecutionOptions, usize), FftError> {
         let budget = match TaskBudget::new(self.max_tasks) {
@@ -48,16 +41,6 @@ impl InterpolationOptions {
         Ok((options, jobs))
     }
 
-    /// Const sizing for the output plus all lifts.
-    ///
-    /// A lift can have any supported size up to the output size. Each partition
-    /// reserves the largest transform requirement; no additional coefficient
-    /// buffer is needed. An empty lift slice is accepted.
-    ///
-    /// Returns [`FftError::InvalidExecution`] for zero class or total task limits.
-    /// Size and transform-option errors follow
-    /// [`ExecutionOptions::interpolation_requirements`]. Overflow of the total
-    /// scratch capacity or class count returns [`FftError::SizeOverflow`].
     pub const fn requirements(
         self,
         output_size: usize,
@@ -99,11 +82,6 @@ impl InterpolationOptions {
         }
     }
 
-    /// Checks class phases and computes the same partitions as the const query.
-    ///
-    /// Sizing errors follow [`Self::requirements`]. Classes must still contain
-    /// evaluations, as checked by [`interpolation_scratch`], otherwise this
-    /// returns [`FftError::InvalidClassState`].
     pub const fn scratch<M: PrimeModulus>(
         self,
         output: &Class<'_, M>,
@@ -151,6 +129,7 @@ fn inverse<M: PrimeModulus, E: Executor>(
     class.state = ClassState::Coefficients;
 }
 
+#[cfg(test)]
 fn lifts_parallel<M: PrimeModulus, E: Executor>(
     lifts: &mut [Class<'_, M>],
     jobs: usize,
@@ -174,18 +153,7 @@ fn lifts_parallel<M: PrimeModulus, E: Executor>(
     }
 }
 
-/// Interpolates classes concurrently and adds their coefficients to `output`.
-///
-/// The polynomial sum, accepted class sizes and shifts, and output ordering
-/// follow [`super::interpolate_classes`]. Every lift retains its own normalized,
-/// natural-order coefficients. All classes enter [`ClassState::Coefficients`]
-/// on success and cannot be scattered into or interpolated again.
-///
-/// Scratch must contain at least the fields reported by
-/// [`InterpolationOptions::scratch`], otherwise this returns
-/// [`FftError::ScratchTooSmall`]. Other errors follow that query. All checks
-/// precede mutation. The module's [working-storage rules](super) apply to panics;
-/// any class whose inverse began has left its evaluation phase.
+#[cfg(test)]
 pub fn interpolate_classes_parallel<M: PrimeModulus, E: Executor>(
     output: &mut Class<'_, M>,
     lifts: &mut [Class<'_, M>],
@@ -247,19 +215,6 @@ fn merge_evaluations<M: PrimeModulus>(output: &mut Class<'_, M>, lift: &mut Clas
     }
 }
 
-/// Interpolates a coefficient sum while consuming every lift's working storage.
-///
-/// The polynomial sum and accepted classes follow [`super::interpolate_classes`].
-/// On success `output` contains natural-order coefficients in
-/// [`ClassState::Coefficients`], and every lift enters [`ClassState::Consumed`]
-/// without a promised polynomial result. No class can be scattered into or
-/// interpolated again. Consuming lifts permits combining equal-domain evaluations
-/// before interpolation.
-///
-/// Scratch and errors follow [`interpolation_scratch`], with
-/// [`FftError::ScratchTooSmall`] for a shorter scratch slice. All checks precede
-/// mutation. The module's [working-storage rules](super) cover panics; classes
-/// whose evaluation storage was consumed cannot be retried.
 pub fn interpolate_sum<M: PrimeModulus, E: Executor>(
     output: &mut Class<'_, M>,
     lifts: &mut [Class<'_, M>],

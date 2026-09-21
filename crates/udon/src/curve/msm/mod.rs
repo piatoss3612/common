@@ -1,48 +1,51 @@
 //! Variable-time multiscalar multiplication with caller-owned storage.
 //!
-//! [`Input::execute`] is the convenience entry point. [`Selection`] retains
-//! validated base mappings across scalar rows. For prepared MSM, cache each base
+//! [`run::BatchPlan`] plans and executes contiguous inputs, retaining scheduling
+//! metadata for repeated execution of the same immutable scalar rows and bases.
+//! [`Selection`] retains validated base mappings across scalar rows. For
+//! prepared MSM, cache each base
 //! with [`PreparedAffinePoint::from_affine`] and select [`Bases::Prepared`].
 //! [`PreparedScalars`] retains classification and GLV data for one scalar row
 //! across base sets and execution policies.
 //! [`Bases::Compact`] consumes ordinary embedded or prepared compact tables.
-//! [`ExecutionPlan`] retains scheduling metadata for repeated execution of the
-//! same immutable inputs, including their scalar rows.
+//! For incremental task scheduling, use [`run::MsmPlan`] and [`run::MsmRun`].
 //!
 //! All runtime operations are allocation-free and variable-time, with no
 //! constant-time guarantee for secret bases, scalars, or indices. Resource
 //! limits are explicit; see [`ExecutionOptions::with_memory_limit`].
 //!
-//! Reuse cached bases, validated indices, and scratch across two signed scalar
-//! rows. Each row below sums to three copies of the generator:
+//! Reuse cached bases and validated indices across two signed scalar rows.
+//! Rebuild the batch plan when its immutable scalar inputs change:
 //!
 //! ```
 //! use zakura_udon::{
-//!     curve::{AffinePoint, Pallas, PreparedAffinePoint, ProjectivePoint, msm::*},
+//!     curve::{AffinePoint, Pallas, PreparedAffinePoint, ProjectivePoint, msm::*,
+//!         msm::run::{BatchPlan, JobStorage, WorkerStorage}},
 //!     exec::SerialExecutor,
 //!     field::PastaField,
-//! };
-//! const OPTIONS: ExecutionOptions = ExecutionOptions::SERIAL.with_memory_limit(8192);
-//! const R: Requirements = match Input::<Pallas>::requirements_for_len(3, OPTIONS) {
-//!     Ok(r) => r,
-//!     Err(_) => panic!("unsupported size"),
 //! };
 //! let bases = [AffinePoint::<Pallas>::GENERATOR; 2];
 //! let prepared = bases.map(|base| PreparedAffinePoint::from_affine(&base));
 //! let indices = [0, 1, 0];
 //! let selection = Selection::indexed(Bases::Prepared(&prepared), &indices)?;
-//! let mut records = [ScalarStorage::ZERO; R.scalars()];
-//! let mut digits = [0; R.digits()];
-//! let mut affine = [AffinePoint::GENERATOR; R.affine()];
-//! let mut projective = [ProjectivePoint::IDENTITY; R.projective()];
-//! let mut field = [PastaField::ZERO; R.field()];
-//! let mut indices_scratch = [0; R.indices()];
-//! let mut scratch = Scratch::new(&mut records, &mut digits, &mut affine,
-//!     &mut projective, &mut field, &mut indices_scratch);
+//! let mut jobs = [JobStorage::EMPTY; 1];
+//! let mut workers = [WorkerStorage::EMPTY; 1];
 //! for row in [[1_i128, -1, 3], [0, 2, 1]] {
-//!     let input = selection.with_signed(&row)?;
-//!     let sum = input.execute(OPTIONS, &SerialExecutor, scratch.reborrow())?;
-//!     assert_eq!(sum, bases[0].mul_projective(&PastaField::from_u64(3)));
+//!     let inputs = [selection.with_signed(&row)?];
+//!     let plan = BatchPlan::new(&inputs, ExecutionOptions::SERIAL,
+//!         &mut jobs, &mut workers)?;
+//!     let r = plan.requirements();
+//!     let mut records = vec![ScalarStorage::ZERO; r.scalars()];
+//!     let mut digits = vec![0; r.digits()];
+//!     let mut affine = vec![AffinePoint::GENERATOR; r.affine()];
+//!     let mut projective = vec![ProjectivePoint::IDENTITY; r.projective()];
+//!     let mut field = vec![PastaField::ZERO; r.field()];
+//!     let mut indices_scratch = vec![0; r.indices()];
+//!     let scratch = Scratch::new(&mut records, &mut digits, &mut affine,
+//!         &mut projective, &mut field, &mut indices_scratch);
+//!     let mut output = [ProjectivePoint::IDENTITY];
+//!     plan.execute(&mut output, &SerialExecutor, scratch)?;
+//!     assert_eq!(output[0], bases[0].mul_projective(&PastaField::from_u64(3)));
 //! }
 //! # Ok::<(), zakura_udon::curve::CurveError>(())
 //! ```
@@ -51,8 +54,10 @@ use super::{
     AffinePoint, CurveError, EisensteinTableBatch, PastaCurve, Point, PreparedAffinePoint,
     ProjectivePoint, check_length, check_scratch, checked_count,
 };
+#[cfg(test)]
+use crate::exec::Executor;
 use crate::{
-    exec::{Executor, TaskBudget},
+    exec::TaskBudget,
     field::{CanonicalUint, PastaField},
 };
 use core::num::NonZeroUsize;
@@ -65,7 +70,8 @@ mod schedule;
 
 pub mod run;
 pub use prepared::{PreparedScalars, ScalarStorage};
-pub use schedule::{ExecutionPlan, JobStorage, WorkerStorage};
+#[cfg(test)]
+use run::{BatchPlan, JobStorage, WorkerStorage};
 const BOOTH_MIN: usize = 128;
 #[cfg(test)]
 mod tests;
@@ -361,7 +367,8 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     /// Returns [`CurveError::SizeOverflow`] if sizing exceeds slice limits, or
     /// [`CurveError::MemoryLimit`] under the
     /// [memory policy](ExecutionOptions::with_memory_limit).
-    pub const fn requirements_for_len(
+    #[cfg(test)]
+    pub(crate) const fn requirements_for_len(
         terms: usize,
         options: ExecutionOptions,
     ) -> Result<Requirements, CurveError> {
@@ -370,7 +377,11 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     /// Scratch counts for this input, accounting for retained preparation.
     ///
     /// Errors and memory accounting match [`batch_requirements`].
-    pub fn requirements(&self, options: ExecutionOptions) -> Result<Requirements, CurveError> {
+    #[cfg(test)]
+    pub(crate) fn requirements(
+        &self,
+        options: ExecutionOptions,
+    ) -> Result<Requirements, CurveError> {
         batch_requirements(core::slice::from_ref(self), options)
     }
     /// Computes the sum with caller-owned scratch and execution resources.
@@ -383,7 +394,8 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     /// [`CurveError::ScratchTooSmall`]. Returned errors precede all writes.
     /// An executor panic may leave scratch partially written; scoped work must
     /// finish unwinding before reuse, as required by [`Executor`].
-    pub fn execute<X: Executor>(
+    #[cfg(test)]
+    pub(crate) fn execute<X: Executor>(
         &self,
         options: ExecutionOptions,
         executor: &X,
@@ -463,7 +475,7 @@ impl ExecutionOptions {
     /// Bounds the typed temporary buffer capacity required by a plan, in bytes.
     ///
     /// Counts the required [`Scratch`] prefixes, intermediate results, and any
-    /// [`ExecutionPlan`] metadata prefixes reserved by its sizing query. Excludes
+    /// [`run::BatchPlan`] metadata prefixes reserved by its sizing query. Excludes
     /// surplus buffer tails, inputs, outputs, retained preparation, fixed stack
     /// frames, and executor resources. This is not a process memory limit.
     ///
@@ -554,8 +566,8 @@ impl Default for ExecutionOptions {
 
 /// Element counts for initialized, typed caller-owned temporary buffers.
 ///
-/// Obtain these counts from [`Input::requirements`], [`batch_requirements`], or
-/// [`ExecutionPlan::requirements`] for the execution being sized.
+/// Obtain these counts from [`run::MsmPlan::requirements`] or
+/// [`run::BatchPlan::requirements`] for the execution being sized.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Requirements {
     scalars: usize,
@@ -593,7 +605,7 @@ impl Requirements {
     /// Checked total bytes in these buffers for curve `C`.
     ///
     /// Counts only the required prefixes of the six [`Scratch`] buffers, using
-    /// `C`'s element sizes. [`ExecutionPlan::temporary_bytes`] also counts metadata.
+    /// `C`'s element sizes. [`run::BatchPlan::temporary_bytes`] also counts metadata.
     /// Returns [`CurveError::SizeOverflow`] if the byte count overflows `usize`.
     pub const fn bytes<C: PastaCurve>(&self) -> Result<usize, CurveError> {
         let counts = [
@@ -629,8 +641,9 @@ impl Requirements {
 }
 /// Initialized caller-owned buffers whose contents may be reused between executions.
 ///
-/// Execution overwrites each value before using it. See [`Input::execute`] for
-/// sizing, untouched tails, and reuse after an executor panic.
+/// Execution overwrites each value before using it. See
+/// [`run::BatchPlan::execute`] for sizing, untouched tails, and reuse after an
+/// executor panic.
 #[derive(Debug)]
 pub struct Scratch<'a, C: PastaCurve> {
     scalars: &'a mut [ScalarStorage<C>],
@@ -700,8 +713,9 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
 /// [`CurveError::MemoryLimit`] if the
 /// [memory policy](ExecutionOptions::with_memory_limit) finds no fitting layout.
 /// Reusable plan metadata is excluded; size a retained plan with
-/// [`ExecutionPlan::requirements`] instead.
-pub fn batch_requirements<C: PastaCurve>(
+/// [`run::BatchPlan::requirements`] instead.
+#[cfg(test)]
+pub(crate) fn batch_requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],
     options: ExecutionOptions,
 ) -> Result<Requirements, CurveError> {
@@ -714,7 +728,8 @@ pub fn batch_requirements<C: PastaCurve>(
 /// sizing and scratch errors match [`Input::execute`]. All returned errors
 /// precede writes. An executor panic may partially write output and scratch;
 /// reuse after unwinding follows [`Input::execute`].
-pub fn execute_batch<C: PastaCurve, X: Executor>(
+#[cfg(test)]
+pub(crate) fn execute_batch<C: PastaCurve, X: Executor>(
     inputs: &[Input<'_, C>],
     output: &mut [ProjectivePoint<C>],
     options: ExecutionOptions,

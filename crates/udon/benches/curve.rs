@@ -8,7 +8,7 @@ use zakura_udon::{
     curve::{
         AffinePoint, CurveError, CurveTableEntry, EisensteinTable, FixedBaseDescription,
         FixedBaseTable, Pallas, PastaCurve, Point, PreparedAffinePoint, ProjectivePoint, Vesta,
-        batch_normalize, curve_rhs, glv_decompose,
+        batch_normalize, glv_decompose,
     },
     field::{CanonicalUint, PastaField, PrimeModulus},
 };
@@ -295,7 +295,7 @@ fn coordinates_and_encoding<C: PastaCurve>(
     let (&x, &y) = affine.coordinates();
     let unreduced: PastaField<C::Base> = *bento::AlignedBytes([0xff; 32]).as_value();
     let mut group = criterion.benchmark_group(format!("{name}/coordinates"));
-    bench(&mut group, "curve_rhs", &x, curve_rhs);
+
     // Invalid stored residues must be rejected before curve arithmetic.
     for (case, coordinates, expected) in [
         ("valid", (x, y), Some(affine.to_point())),
@@ -336,7 +336,14 @@ fn coordinates_and_encoding<C: PastaCurve>(
     let noncanonical = CanonicalUint::from_limbs(C::Base::MODULUS).to_le_bytes();
     let nonsquare_x = values::<C::Base>()
         .into_iter()
-        .find(|x| !x.is_zero() && curve_rhs(x).sqrt().is_none())
+        .find(|x| {
+            !x.is_zero()
+                && x.square()
+                    .mul(x)
+                    .add(&PastaField::from_u64(5))
+                    .sqrt()
+                    .is_none()
+        })
         .unwrap();
     let mut group = criterion.benchmark_group(format!("{name}/encoding"));
     bench(&mut group, "affine_to_bytes", affine, |point| {

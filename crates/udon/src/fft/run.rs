@@ -1,4 +1,9 @@
-//! Incremental transforms over exclusively leased field fragments.
+//! Transform plans for scoped execution or incremental task scheduling.
+//!
+//! [`FftPlan::execute`], [`ExpansionPlan::execute`], and
+//! [`InterpolationPlan::execute`] drive contiguous buffers on a caller's
+//! [`Executor`](crate::exec::Executor). Their corresponding run types expose
+//! individual tasks over exclusively leased field fragments.
 //!
 //! Tasks operate on local tiles, pairs of tiles, or explicitly sized column
 //! panels. Stage barriers belong to a single run, so a small transform does not
@@ -10,8 +15,7 @@ use core::{num::NonZeroUsize, ops::Range};
 
 use super::{
     Codelet, Direction, Domain, ElementOrder, FftError, InputPolicy, InputSupport, InverseScale,
-    OperationDescription, PastaField, Plan, PrimeModulus, Strategy, TransformRequest, TwiddleTable,
-    reverse,
+    PastaField, Plan, PrimeModulus, TransformRequest, TwiddleTable, reverse,
     stages::{StageKernel, twiddle_table},
 };
 use crate::{
@@ -19,7 +23,7 @@ use crate::{
         SerialExecutor,
         run::{
             Completion, Frontier, Identity, Kernel, Outcome, ReadView, Task, TaskError, TaskKey,
-            TaskStorage, WorkEstimate,
+            TaskStorage,
         },
     },
     field::fft::normalize,
@@ -34,8 +38,13 @@ pub use interpolation::{
     AdditionKernel, AdditionRequest, InterpolationPlan, InterpolationPublished, InterpolationRun,
 };
 mod driver;
+mod expansion_driver;
 
 /// Worker-independent tile geometry and transform semantics.
+///
+/// Use [`Self::execute`] for one contiguous transform, [`Self::execute_batch`]
+/// for consecutive polynomials, or [`FftRun`] for incremental scheduling.
+/// Plans borrow tables and can be reused with new working buffers.
 #[derive(Clone, Copy, Debug)]
 pub struct FftPlan<'t, M: PrimeModulus> {
     plan: Plan<'t, M>,
@@ -56,10 +65,15 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Validates the mathematical request and power-of-two tile size.
     ///
     /// `separate` selects a preserved input view. Otherwise the input initially
-    /// occupies the writable fragments and must permit disposal. `tile` limits
-    /// local transforms and half the fields in a paired stage task. Invalid
-    /// requests follow [`OperationDescription::requirements`]. No storage is
-    /// bound or modified. Tables in `plan` remain borrowed across runs.
+    /// occupies the writable fragments and must permit disposal. `tile` must
+    /// be a power of two and is clamped to the domain size. It limits local
+    /// transforms and half the fields in a paired stage task.
+    ///
+    /// Prefix lengths may range from zero through the domain size; larger
+    /// prefixes return [`FftError::InvalidPrefix`]. A bit-reversed prefix,
+    /// unscaled forward transform, non-power-of-two tile, or preserved input
+    /// without separate output returns [`FftError::InvalidExecution`]. No
+    /// storage is bound or modified. Tables in `plan` remain borrowed across runs.
     pub fn new(
         plan: Plan<'t, M>,
         request: TransformRequest,
@@ -67,14 +81,21 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         codelet: Codelet,
         separate: bool,
     ) -> Result<Self, FftError> {
-        OperationDescription {
-            size: plan.domain().size(),
-            request,
-            strategy: Strategy::serial(),
+        let size = plan.domain().size();
+        let input = request.input_len(size);
+        if input > size {
+            return Err(FftError::InvalidPrefix {
+                min: 0,
+                max: size,
+                actual: input,
+            });
         }
-        .requirements(0)?;
         if !tile.get().is_power_of_two()
             || (!separate && request.input_policy == InputPolicy::Preserve)
+            || (matches!(request.support, InputSupport::Prefix(_))
+                && request.input_order == ElementOrder::BitReversed)
+            || (request.direction == Direction::Forward
+                && request.inverse_scale == InverseScale::Unscaled)
         {
             return Err(FftError::InvalidExecution);
         }
@@ -100,16 +121,18 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         self
     }
 
-    /// Selects an already bound dense or stage-packed twiddle table. Either
-    /// direction supplies both transform directions. A smaller table covers
-    /// local stages; larger stages compute their powers.
-    /// Without this override, tasks use `plan`'s tables or computed recurrence.
+    /// Selects an already bound dense or stage-packed twiddle table.
+    ///
+    /// Either root direction supplies both transform directions. A smaller table
+    /// covers local stages; larger stages compute their powers. Without this
+    /// override, tasks use `plan`'s tables or computed recurrence.
     pub fn with_twiddles(mut self, table: TwiddleTable<'t, M>) -> Result<Self, FftError> {
         self.twiddles = Some(table);
         Ok(self)
     }
 
     /// Multiplies forward coefficients by a common factor before transforming.
+    ///
     /// This supports retained unscaled inverse coefficients without a separate
     /// normalization pass. Inverse transforms return
     /// [`FftError::InvalidExecution`].
@@ -122,9 +145,11 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     }
 
     /// Borrows validated forward coset powers without rescanning them.
+    ///
     /// The table must start at one, use this domain's shift, and contain exactly
-    /// the transform size. Errors match
-    /// [`super::PreparedOperation::with_forward_scales`].
+    /// the transform size. An inverse transform or incompatible table seeds
+    /// return [`FftError::InvalidTables`]; a wrong length returns
+    /// [`FftError::LengthMismatch`].
     pub fn with_forward_scales(
         mut self,
         table: super::PowerTable<'t, M>,
@@ -140,13 +165,16 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         Ok(self)
     }
 
-    /// Selects bounded column panels after local transforms. `columns` is
-    /// clamped to the local tile; a final panel may be shorter. `panels` bounds retained
-    /// results, independently of worker count. Each task gathers and transforms
-    /// `columns * fragments()` fields. A band scatters only after its readers
-    /// finish; other runs remain independently schedulable throughout.
+    /// Selects bounded column panels after local transforms.
     ///
-    /// Returns [`FftError::InvalidExecution`] for invalid column geometry.
+    /// `columns` is clamped to the local tile; a final panel may be shorter.
+    /// `panels` bounds retained results, independently of worker count, and is
+    /// clamped to the number of panels in that tile. Each task gathers and
+    /// transforms at most `columns * fragments()` fields. A band scatters only
+    /// after its readers finish; other runs remain independently schedulable.
+    ///
+    /// Returns [`FftError::SizeOverflow`] if the retained field count overflows
+    /// `usize` or its field slice would exceed `isize::MAX` bytes.
     /// A single-fragment transform keeps its local kernel without panels.
     pub fn with_columns(
         mut self,
@@ -166,11 +194,11 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         Ok(self)
     }
 
-    /// Converts physical order with bounded index-swap tasks that lease the
-    /// whole contiguous values bank exclusively. This avoids a full retained
-    /// snapshot, at the cost of serializing permutation tasks for this run.
-    /// Other phases still use bounded fragment leases. The structured driver
-    /// uses this policy to preserve existing contiguous scratch requirements.
+    /// Converts physical order by swapping indices within a contiguous bank.
+    ///
+    /// Each task leases the whole values bank exclusively. This avoids a full
+    /// retained snapshot, at the cost of serializing permutation tasks for this run.
+    /// Other phases still use bounded fragment leases.
     pub fn with_contiguous_permutation(mut self) -> Self {
         self.contiguous_permutation = true;
         self
@@ -204,11 +232,12 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         self.plan.domain().size()
     }
 
-    /// Additional retained fields for physical order conversion.
+    /// Additional fields for order conversion and column-panel results.
     ///
-    /// This snapshot is shared by all reorder phases in this run. Charge the
-    /// full provisioned capacity plus run, guard, and frontier metadata. The
-    /// writable transform itself also counts when it is an intermediate.
+    /// These phases reuse the same storage. [`Self::execute`] requires at least
+    /// this many scratch entries. Incremental scheduling must retain this bank
+    /// across tasks; admission also counts the full provisioned capacity, run,
+    /// guard, and frontier metadata, and any intermediate transform values.
     pub fn retained_fields(&self) -> usize {
         if self.fragments() == 1 {
             return 0;
@@ -389,8 +418,6 @@ pub struct Request<'a> {
     pub read: Option<(Bank, Range<usize>)>,
     /// Shared terminal product input in requested physical output order.
     pub factor: Option<Range<usize>>,
-    /// Optional arithmetic and bandwidth estimates.
-    pub estimate: WorkEstimate,
 }
 
 /// Shared source access, indexed relative to the start of the requested range.
@@ -483,22 +510,28 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
         )?;
         match self.kind {
             WorkKind::Fused => {
-                if plan.sparse() {
-                    if let Some(input) = source.contiguous(0..source.len()) {
-                        plan.plan.fill_prefix(
-                            input,
-                            values,
-                            if plan.inverse() {
-                                PastaField::ONE
-                            } else {
-                                plan.plan.domain().shift()
-                            },
-                            plan.forward_scales,
-                            plan.input_scale,
-                        );
-                    } else {
-                        self.initialize_prefix(values, source);
-                    }
+                // Full inputs also benefit from visiting coefficients in
+                // degree order: copy, scaling, and bit reversal share a pass.
+                let input = (plan.separate
+                    && plan.resume.is_none()
+                    && plan.request.input_order == ElementOrder::Natural
+                    && plan.native_input() == ElementOrder::BitReversed)
+                    .then(|| source.contiguous(0..source.len()))
+                    .flatten();
+                if let Some(input) = input {
+                    plan.plan.fill_prefix(
+                        input,
+                        values,
+                        if plan.inverse() {
+                            PastaField::ONE
+                        } else {
+                            plan.plan.domain().shift()
+                        },
+                        plan.forward_scales,
+                        plan.input_scale,
+                    );
+                } else if plan.sparse() {
+                    self.initialize_prefix(values, source);
                 } else if plan.separate && plan.scatter_input {
                     self.initialize_scatter(values, source);
                 } else if plan.separate {
@@ -524,7 +557,8 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                         plan.plan.permute(values);
                     }
                 }
-                if plan.twist() && !plan.twist_before_permute() && !plan.sparse() {
+                if plan.twist() && !plan.twist_before_permute() && !plan.sparse() && input.is_none()
+                {
                     self.twist(values, plan.native_input());
                 }
                 if plan.first() <= plan.size()
@@ -987,25 +1021,6 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
             },
             factor: (matches!(self.kind, WorkKind::Finish | WorkKind::Fused) && self.product)
                 .then_some(range.clone()),
-            estimate: WorkEstimate {
-                arithmetic: if matches!(self.kind, WorkKind::Local | WorkKind::Fused) {
-                    tile.saturating_mul(tile.ilog2() as usize)
-                } else if self.kind == WorkKind::Column {
-                    range
-                        .len()
-                        .saturating_mul(self.plan.fragments().ilog2() as usize)
-                } else {
-                    tile
-                },
-                traffic_bytes: range
-                    .len()
-                    .saturating_mul(size_of::<PastaField<M>>())
-                    .saturating_mul(if self.kind == WorkKind::Pair { 4 } else { 2 }),
-                cache_bytes: range
-                    .len()
-                    .saturating_mul(size_of::<PastaField<M>>())
-                    .saturating_mul(2),
-            },
         }
     }
 

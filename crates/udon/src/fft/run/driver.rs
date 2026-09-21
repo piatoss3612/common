@@ -61,19 +61,30 @@ fn dispatch<'a, 't, 'b, M: PrimeModulus, E: Executor>(
 }
 
 impl<M: PrimeModulus> FftPlan<'_, M> {
-    /// Executes this run with contiguous buffers and the caller's scoped pool.
+    /// Transforms contiguous buffers using the caller's scoped executor.
     ///
-    /// `input` is `Some` exactly for a separate-output plan; otherwise values
-    /// contain the disposable input. `factor`, when present, contains the full
-    /// output-order product input. `scratch` must contain
-    /// [`Self::retained_fields`] fields. Length and scratch
-    /// errors are returned before mutation. This driver does not allocate.
+    /// `values` must contain exactly [`Self::size`] fields. `input` is `Some`
+    /// exactly when [`Self::new`] selected separate output; its length must
+    /// match the request's full domain or prefix. Otherwise `values` initially
+    /// holds the disposable input. Input uses the request's input order;
+    /// positions beyond a declared prefix are treated as zero.
+    ///
+    /// The result uses the requested output order and inverse scale. `factor`,
+    /// when present, must have exactly [`Self::size`] entries in that output
+    /// order and is multiplied pointwise after the transform's scaling.
+    /// `scratch` needs at least [`Self::retained_fields`] entries.
+    ///
+    /// Returns [`FftError::InvalidExecution`] for an incompatible `input`
+    /// presence, [`FftError::LengthMismatch`] for input, output, or factor
+    /// lengths, or [`FftError::ScratchTooSmall`] for insufficient scratch.
+    /// These checks precede mutation. This driver does not allocate.
     ///
     /// The task limit bounds detached envelopes in each structured join. It
     /// neither changes arithmetic grain nor assigns workers to this operation.
     /// All kernels use the same run protocol as application scheduling, but
     /// structured joins return their receipts together. A panic leaves working
-    /// values canonical and waits for all joined tasks before propagating.
+    /// values canonical and waits for all joined tasks before propagating;
+    /// refill the input before retrying an in-place transform.
     pub fn execute<E: Executor>(
         self,
         input: Option<&[PastaField<M>]>,
@@ -274,6 +285,100 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                 }
             }
         }
+        Ok(())
+    }
+}
+
+impl<M: PrimeModulus> FftPlan<'_, M> {
+    /// Scratch fields for a polynomial-major batch of full in-place transforms.
+    ///
+    /// Partitions the task budget across polynomials and within each transform.
+    /// Separate inputs, preserved inputs, and prefixes return
+    /// [`FftError::InvalidExecution`], including for an empty batch.
+    /// An empty batch otherwise needs no scratch. Returns
+    /// [`FftError::SizeOverflow`] if the scratch count overflows `usize` or its
+    /// field slice would exceed `isize::MAX` bytes.
+    pub fn batch_fields(self, count: usize, max_tasks: NonZeroUsize) -> Result<usize, FftError> {
+        let (plan, jobs, _) = self.batch_geometry(count, max_tasks)?;
+        super::super::check_field_count(
+            plan.retained_fields()
+                .checked_mul(jobs)
+                .ok_or(FftError::SizeOverflow)?,
+        )
+    }
+
+    fn batch_geometry(
+        mut self,
+        count: usize,
+        max_tasks: NonZeroUsize,
+    ) -> Result<(Self, usize, NonZeroUsize), FftError> {
+        if self.separate
+            || self.request.support != InputSupport::Full
+            || self.request.input_policy == InputPolicy::Preserve
+        {
+            return Err(FftError::InvalidExecution);
+        }
+        let jobs = count.min(max_tasks.get());
+        let inner = NonZeroUsize::new(max_tasks.get() / jobs.max(1)).unwrap();
+        if let Some((columns, tasks)) = self.columns {
+            self.columns = Some((columns, tasks.min(inner.get())));
+        }
+        Ok((self, jobs, inner))
+    }
+
+    /// Executes consecutive full-domain polynomials in place without allocating.
+    ///
+    /// Each consecutive [`Self::size`]-element block holds one polynomial and
+    /// follows the order and scaling contract of [`Self::execute`]. Scratch
+    /// must meet [`Self::batch_fields`] for this polynomial count and the same
+    /// `max_tasks`. Empty batches are accepted when the plan supports batching.
+    ///
+    /// Returns [`FftError::InvalidLayout`] if `values.len()` is not a multiple
+    /// of [`Self::size`], or [`FftError::ScratchTooSmall`] for insufficient
+    /// scratch. Plan and size errors follow [`Self::batch_fields`]. All
+    /// validation precedes writes; panic behavior follows [`Self::execute`].
+    pub fn execute_batch<E: Executor>(
+        self,
+        values: &mut [PastaField<M>],
+        scratch: &mut [PastaField<M>],
+        max_tasks: NonZeroUsize,
+        executor: &E,
+    ) -> Result<(), FftError> {
+        if !values.len().is_multiple_of(self.size()) {
+            return Err(FftError::InvalidLayout);
+        }
+        let count = values.len() / self.size();
+        let fields = self.batch_fields(count, max_tasks)?;
+        super::super::ScratchRequirements {
+            field_elements: fields,
+        }
+        .check(scratch.len())?;
+        let (plan, jobs, inner) = self.batch_geometry(count, max_tasks)?;
+        fn visit<M: PrimeModulus, E: Executor>(
+            plan: FftPlan<'_, M>,
+            values: &mut [PastaField<M>],
+            scratch: &mut [PastaField<M>],
+            jobs: usize,
+            inner: NonZeroUsize,
+            executor: &E,
+        ) {
+            if jobs <= 1 {
+                for values in values.chunks_exact_mut(plan.size()) {
+                    plan.execute(None, values, None, scratch, inner, executor)
+                        .expect("validated batch buffers");
+                }
+            } else {
+                let left_jobs = jobs / 2;
+                let count = values.len() / plan.size();
+                let (left, right) = values.split_at_mut(count / 2 * plan.size());
+                let (a, b) = scratch.split_at_mut(left_jobs * plan.retained_fields());
+                executor.join(
+                    || visit(plan, left, a, left_jobs, inner, executor),
+                    || visit(plan, right, b, jobs - left_jobs, inner, executor),
+                );
+            }
+        }
+        visit(plan, values, &mut scratch[..fields], jobs, inner, executor);
         Ok(())
     }
 }

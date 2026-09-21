@@ -6,12 +6,10 @@
 //! borrow the frontier. A worker executes one kernel and returns its
 //! [`Completion`] before selecting more work.
 //!
-//! [`Admission`] checks bounded pipeline segments against typed block capacity.
-//! It accounts for resources; it does not create references to storage. Actual
-//! exclusive or shared access must come from safe borrowed fragments or the
-//! application's lease provider. Acquire the complete bundle before dispatch,
-//! including dispatch and completion queue capacity. A kernel must not wait for
-//! additional scarce resources or submit children and wait for them.
+//! The application owns capacity accounting and actual storage leases. Acquire
+//! the complete resource bundle before dispatch, including queue capacity.
+//! A kernel must not wait for additional scarce resources or submit children
+//! and wait for them.
 //!
 //! Dropping or forgetting a task does not publish completion. Its frontier and
 //! accounting remain occupied until the application drains or abandons that
@@ -19,59 +17,12 @@
 //! return its failed completion. An in-place failed result must be refilled
 //! before reuse. No destructor is responsible for establishing memory safety.
 //!
-//! Application work uses the same envelope, including scoped mutable borrows:
-//!
-//! ```
-//! use zakura_udon::exec::run::{Frontier, Identity, Kernel, TaskStorage};
-//! struct Increment;
-//! impl Kernel<&mut u64> for Increment {
-//!     type Output = ();
-//!     fn execute(&mut self, value: &mut &mut u64) { **value += 1; }
-//! }
-//! let mut value = 7;
-//! let mut identity = Identity::new();
-//! let mut slots = [TaskStorage::EMPTY];
-//! let mut run = Frontier::new(&mut identity, &mut slots, 1).unwrap();
-//! let key = run.tasks().next().unwrap();
-//! let mut task = run.try_claim(key, Increment, || Some(&mut value))
-//!     .unwrap().unwrap();
-//! std::thread::scope(|scope| scope.spawn(|| task.execute().unwrap()).join().unwrap());
-//! let completed = run.complete(task.finish()).unwrap();
-//! assert_eq!(*completed.resources, 8);
-//! assert!(run.is_complete());
-//! ```
-//!
-//! The task's lease prevents access through the original owner, even while
-//! suspended in a queue:
-//!
-//! ```compile_fail
-//! use zakura_udon::exec::run::{Frontier, Identity, Kernel, TaskStorage};
-//! struct Increment;
-//! impl Kernel<&mut u64> for Increment {
-//!     type Output = ();
-//!     fn execute(&mut self, value: &mut &mut u64) { **value += 1; }
-//! }
-//! let mut value = 7;
-//! let mut identity = Identity::new();
-//! let mut slots = [TaskStorage::EMPTY];
-//! let mut run = Frontier::new(&mut identity, &mut slots, 1).unwrap();
-//! let key = run.tasks().next().unwrap();
-//! let mut task = run.try_claim(key, Increment, || Some(&mut value))
-//!     .unwrap().unwrap();
-//! value = 9; // Still exclusively borrowed by the detached task.
-//! task.execute().unwrap();
-//! ```
-
-mod admission;
-mod frontier;
+pub(crate) mod frontier;
 mod task;
 pub(crate) use task::Reserved;
 
-pub use admission::{
-    Admission, ArenaLayout, BlockClass, Profile, ResourceError, Resources, Segment, SegmentStorage,
-    TaskPermit,
-};
-pub use frontier::{Completed, Frontier, Identity, ReadyRange, TaskKey, TaskStorage};
+pub(crate) use frontier::Frontier;
+pub use frontier::{Identity, TaskKey, TaskStorage};
 pub use task::{Completion, Kernel, Outcome, PublishError, Task, TaskError};
 
 /// Shared indexed access to safely fragmented retained storage.
@@ -90,6 +41,14 @@ pub trait ReadView<T> {
     /// A returned slice must contain exactly the requested logical elements.
     fn contiguous(&self, _range: core::ops::Range<usize>) -> Option<&[T]> {
         None
+    }
+    /// Returns a nonempty contiguous prefix of a nonempty requested range.
+    ///
+    /// Providers may stop at their next fragment boundary. `None` permits an
+    /// indexed fallback. A slice must start at `range.start`, contain at most
+    /// `range.len()` elements, and preserve the view's logical indexing.
+    fn contiguous_prefix(&self, range: core::ops::Range<usize>) -> Option<&[T]> {
+        self.contiguous(range)
     }
     /// Whether the view contains no elements.
     fn is_empty(&self) -> bool {
@@ -119,18 +78,4 @@ impl<T> ReadView<T> for &[T] {
     fn contiguous(&self, range: core::ops::Range<usize>) -> Option<&[T]> {
         <[T]>::get(self, range)
     }
-}
-
-/// Estimates supplied to optional application scheduling policies.
-///
-/// These are hints, not hardware reservations or timing guarantees. A scheduler
-/// may translate them into additional bandwidth or cache admission tokens.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct WorkEstimate {
-    /// Estimated arithmetic work in kernel-defined units.
-    pub arithmetic: usize,
-    /// Estimated bytes transferred between the kernel and its storage.
-    pub traffic_bytes: usize,
-    /// Estimated actively reused working set.
-    pub cache_bytes: usize,
 }

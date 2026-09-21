@@ -17,10 +17,10 @@ fn check<M: PrimeModulus>() {
     const SLOTS: usize = 3;
     for size in [8, 64] {
         let base = Plan::without_tables(Domain::<M>::for_size(size).unwrap().subgroup());
-        for residues in [1, 2, 8] {
+        for (residues, shift) in [1, 2, 8].into_iter().flat_map(|n| [(n, 1), (n, 7)]) {
             let domain = Domain::for_size(size * residues)
                 .unwrap()
-                .coset(PastaField::from_u64(7))
+                .coset(PastaField::from_u64(shift))
                 .unwrap();
             let expansion = Expansion::new(base, domain, None).unwrap();
             for storage in [
@@ -117,6 +117,53 @@ fn check<M: PrimeModulus>() {
                             {
                                 *v = v.mul(f);
                             }
+                        }
+                        // Synchronous execution shares the planned semantics and storage modes.
+                        for tasks in [1, 3, 4] {
+                            let tasks = NonZeroUsize::new(tasks).unwrap();
+                            let mut output = vec![PastaField::ZERO; expected.len()];
+                            let mut scratch =
+                                vec![PastaField::ZERO; plan.scratch_fields(tasks).unwrap()];
+                            let mut workspace = vec![PastaField::ZERO; plan.coefficient_fields()];
+                            let mut disposable = input[..count].to_vec();
+                            let factors = factor.repeat(residues);
+                            let view =
+                                if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
+                                    Some(
+                                        plan.execute_disposable(
+                                            &mut disposable,
+                                            &mut output,
+                                            Some(&factors),
+                                            &mut scratch,
+                                            tasks,
+                                            &SerialExecutor,
+                                        )
+                                        .unwrap(),
+                                    )
+                                } else {
+                                    plan.execute(
+                                        &input[..count],
+                                        &mut output,
+                                        &mut workspace,
+                                        Some(&factors),
+                                        &mut scratch,
+                                        tasks,
+                                        &SerialExecutor,
+                                    )
+                                    .unwrap()
+                                };
+                            if let Some(view) = view {
+                                let normalized: Vec<_> = view
+                                    .as_slice()
+                                    .iter()
+                                    .map(|c| c.mul(&view.normalization_factor()))
+                                    .collect();
+                                assert_eq!(normalized, coefficients);
+                            }
+                            assert_eq!(
+                                output, expected,
+                                "contiguous size={size}, residues={residues}, shift={shift}, storage={storage:?}, order={order:?}, input={input_order:?}"
+                            );
                         }
                         let mut ids = core::array::from_fn(|_| Identity::new());
                         let mut metadata = [const { [const { TaskStorage::EMPTY }; 3] }; SLOTS];

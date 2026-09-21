@@ -2,6 +2,7 @@
 
 use core::ops::Range;
 use spin::{RwLock, RwLockReadGuard as Read, RwLockWriteGuard as Write};
+use std::{vec, vec::Vec};
 use zakura_udon::{
     exec::run::ReadView,
     fft::run::{Bank, Buffers, FftPlan, Request, Resources},

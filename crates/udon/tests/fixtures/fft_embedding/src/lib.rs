@@ -6,9 +6,9 @@
 use udon::{
     exec::SerialExecutor,
     fft::{
-        Direction, Domain, ExecutionOptions, Expansion, ExpansionOptions,
-        ExpansionScaleNormalization, ExpansionScales, ResidueView, Strategy, Tables,
-        TransformRequest, TwiddleTable,
+        Codelet, Direction, Domain, EvaluationLayout, EvaluationView, ExecutionOptions, Expansion,
+        ExpansionOptions, ExpansionScaleNormalization, ExpansionScales, Tables, TransformRequest,
+        TwiddleTable, run::FftPlan,
     },
     field::{PastaField, PrimeModulus},
 };
@@ -94,14 +94,24 @@ fn exercise_field<M: PrimeModulus>(
     )
     .unwrap();
     assert_eq!(recovered, coefficients);
-    plan.configure(
+    FftPlan::new(
+        plan,
         TransformRequest::new(Direction::Forward),
-        Strategy::serial(),
+        core::num::NonZeroUsize::new(record::SIZE).unwrap(),
+        Codelet::Radix2,
+        true,
     )
     .unwrap()
     .with_twiddles(twiddles)
     .unwrap()
-    .execute_into(&coefficients, &mut recovered, &SerialExecutor, &mut [])
+    .execute(
+        Some(&coefficients),
+        &mut recovered,
+        None,
+        &mut [],
+        core::num::NonZeroUsize::new(1).unwrap(),
+        &SerialExecutor,
+    )
     .unwrap();
     assert_eq!(recovered, evaluations);
     let scales = ExpansionScales::bind(
@@ -142,7 +152,12 @@ fn exercise_field<M: PrimeModulus>(
             &mut scratch,
         )
         .unwrap();
-    let view = ResidueView::new(&output, expansion.layout()).unwrap();
+    let view = EvaluationView::bind(
+        &output,
+        extended,
+        EvaluationLayout::Residues(expansion.layout()),
+    )
+    .unwrap();
     let mut point = extended.shift();
     for row in 0..extended.size() {
         let expected = coefficients

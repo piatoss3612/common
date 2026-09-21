@@ -74,7 +74,7 @@ impl Requirements {
     }
 }
 
-/// Initialized opaque metadata for one input in an [`ExecutionPlan`].
+/// Initialized opaque metadata for one input in a [`BatchPlan`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct JobStorage {
     pub(super) geometry: Geometry,
@@ -88,7 +88,7 @@ pub struct JobStorage {
     pub(super) requirements: Requirements,
 }
 impl JobStorage {
-    /// Initializer; populated by [`ExecutionPlan::new`].
+    /// Initializer; populated by [`BatchPlan::new`].
     pub const EMPTY: Self = Self {
         geometry: Geometry::Joint,
         cap: 0,
@@ -109,7 +109,7 @@ pub struct WorkerStorage {
     requirements: Requirements,
 }
 impl WorkerStorage {
-    /// Initializer; populated by [`ExecutionPlan::new`].
+    /// Initializer; populated by [`BatchPlan::new`].
     pub const EMPTY: Self = Self {
         begin: 0,
         end: 0,
@@ -241,6 +241,7 @@ const fn arithmetic_options(terms: usize, mut options: ExecutionOptions) -> Exec
     }
     options
 }
+#[cfg(test)]
 const fn conservative<C: PastaCurve>(
     terms: usize,
     options: ExecutionOptions,
@@ -297,6 +298,7 @@ const fn smaller(mut options: ExecutionOptions, n: usize) -> Option<ExecutionOpt
     Some(options)
 }
 
+#[cfg(test)]
 pub(super) const fn single_requirements<C: PastaCurve>(
     terms: usize,
     mut options: ExecutionOptions,
@@ -460,6 +462,7 @@ pub(super) fn split_scratch<C: PastaCurve>(
         Scratch::new(sb, db, ab, pb, fb, ib),
     )
 }
+#[cfg(test)]
 pub(super) fn execute<C: PastaCurve, X: Executor>(
     plan: &Plan,
     inputs: &[Input<'_, C>],
@@ -469,6 +472,7 @@ pub(super) fn execute<C: PastaCurve, X: Executor>(
 ) {
     execute_inputs(inputs, output, plan.options, executor, scratch);
 }
+#[cfg(test)]
 fn execute_inputs<C: PastaCurve, X: Executor>(
     inputs: &[Input<'_, C>],
     output: &mut [ProjectivePoint<C>],
@@ -522,21 +526,21 @@ fn execute_job<C: PastaCurve, X: Executor>(
 ///
 /// The plan borrows both bases and scalar rows through its inputs. To execute
 /// changing scalar rows over retained bases, rebind a [`super::Selection`] and
-/// use [`super::Input::execute`] or [`super::execute_batch`].
+/// build a new plan for the rebound inputs.
 ///
 /// Different output buffers and previously used scratch may be supplied on every
 /// execution, including concurrent calls with separate buffers. The
 /// [memory ceiling](ExecutionOptions::with_memory_limit) includes metadata
 /// prefixes reserved by [`Self::storage_len`] and scratch from
 /// [`Self::requirements`].
-pub struct ExecutionPlan<'a, 'i, C: PastaCurve> {
+pub struct BatchPlan<'a, 'i, C: PastaCurve> {
     inputs: &'a [Input<'i, C>],
     jobs: &'a [JobStorage],
     workers: &'a [WorkerStorage],
     plan: Plan,
     temporary_bytes: usize,
 }
-impl<'a, 'i, C: PastaCurve> ExecutionPlan<'a, 'i, C> {
+impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     /// Returns required metadata counts as `(job entries, worker entries)`.
     ///
     /// Supply initialized [`JobStorage`] and [`WorkerStorage`] slices with at
@@ -615,8 +619,7 @@ impl<'a, 'i, C: PastaCurve> ExecutionPlan<'a, 'i, C> {
     }
     /// Execution scratch counts, excluding the separately borrowed metadata.
     ///
-    /// Use these counts for [`Self::execute`]. The metadata's share of the memory
-    /// ceiling can make this layout differ from [`super::batch_requirements`].
+    /// Use these counts for [`Self::execute`].
     pub const fn requirements(&self) -> Requirements {
         self.plan.requirements
     }
@@ -638,9 +641,10 @@ impl<'a, 'i, C: PastaCurve> ExecutionPlan<'a, 'i, C> {
     ///
     /// Returns [`CurveError::LengthMismatch`] unless the output length equals the
     /// input count, or [`CurveError::ScratchTooSmall`] if scratch is shorter than
-    /// [`Self::requirements`]. All returned errors precede writes. An executor
-    /// panic may partially write output and scratch; reuse after unwinding
-    /// follows [`Input::execute`].
+    /// [`Self::requirements`]. Unused scratch tails remain untouched. All
+    /// returned errors precede writes. An executor panic may partially write
+    /// output and scratch; reuse after unwinding
+    /// requires all scoped work to finish unwinding before buffers are reused.
     pub fn execute<X: Executor>(
         &self,
         output: &mut [ProjectivePoint<C>],
@@ -785,7 +789,7 @@ mod tests {
                 .with_memory_limit(usize::MAX);
             let mut jobs = [JobStorage::EMPTY; 4];
             let mut workers = [WorkerStorage::EMPTY; 4];
-            let plan = ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+            let plan = BatchPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
             assert_eq!(plan.worker_ranges(), 1);
             assert_eq!(plan.jobs[1].budget.get(), budget);
         }
@@ -796,7 +800,7 @@ mod tests {
                 .with_memory_limit(usize::MAX);
             let mut jobs = [JobStorage::EMPTY; 30];
             let mut workers = [WorkerStorage::EMPTY; 5];
-            let plan = ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+            let plan = BatchPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
             assert_eq!(plan.worker_ranges(), budget);
             for worker in plan.workers {
                 assert_eq!(worker.end - worker.begin, inputs.len() / budget);
@@ -828,19 +832,18 @@ mod tests {
                             .with_max_terms_per_pass(NonZeroUsize::new(pass))
                             .with_memory_limit(limit);
                         let (j, w) =
-                            ExecutionPlan::<Pallas>::storage_len(inputs.len(), options).unwrap();
+                            BatchPlan::<Pallas>::storage_len(inputs.len(), options).unwrap();
                         let mut jobs = vec![JobStorage::EMPTY; j];
                         let mut workers = vec![WorkerStorage::EMPTY; w];
-                        let plan =
-                            match ExecutionPlan::new(&inputs, options, &mut jobs, &mut workers) {
-                                Ok(p) => p,
-                                Err(CurveError::MemoryLimit { .. }) => {
-                                    assert!(jobs.iter().all(|j| *j == JobStorage::EMPTY));
-                                    assert!(workers.iter().all(|w| *w == WorkerStorage::EMPTY));
-                                    continue;
-                                }
-                                Err(e) => panic!("{e:?}"),
-                            };
+                        let plan = match BatchPlan::new(&inputs, options, &mut jobs, &mut workers) {
+                            Ok(p) => p,
+                            Err(CurveError::MemoryLimit { .. }) => {
+                                assert!(jobs.iter().all(|j| *j == JobStorage::EMPTY));
+                                assert!(workers.iter().all(|w| *w == WorkerStorage::EMPTY));
+                                continue;
+                            }
+                            Err(e) => panic!("{e:?}"),
+                        };
                         let mut visits = vec![0; inputs.len()];
                         let mut live_budget = 0;
                         let mut scratch = super::super::tests::Buffers::new(plan.requirements());

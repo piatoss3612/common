@@ -52,10 +52,6 @@ fn expansions<M: PrimeModulus>() {
                             &mut scale_values,
                         )
                         .unwrap();
-                        scales
-                            .artifact()
-                            .validate(base.domain().size(), domain, normalization)
-                            .unwrap();
                         expansion.with_scales(scales).unwrap()
                     } else {
                         expansion
@@ -71,7 +67,12 @@ fn expansions<M: PrimeModulus>() {
                             &mut [],
                         )
                         .unwrap();
-                    let legacy = ResidueView::new(&legacy, expansion.layout()).unwrap();
+                    let legacy = EvaluationView::bind(
+                        &legacy,
+                        domain,
+                        EvaluationLayout::Residues(expansion.layout()),
+                    )
+                    .unwrap();
                     for (row, value) in expected.iter().enumerate() {
                         assert_eq!(legacy.get(row), Some(value));
                     }
@@ -575,22 +576,13 @@ fn expansion_metadata_storage_errors_and_panics() {
         }
     }
     let mut scales = vec![Fp::ZERO; domain.size()];
-    let table = ExpansionScales::prepare(
+    ExpansionScales::prepare(
         base.domain().size(),
         domain,
         ExpansionScaleNormalization::UnscaledInverse,
         &mut scales,
     )
     .unwrap();
-    let artifact = table.artifact();
-    assert_eq!(
-        artifact.validate(
-            base.domain().size(),
-            domain,
-            ExpansionScaleNormalization::Coefficients
-        ),
-        Err(FftError::InvalidTables)
-    );
     let mut other_values = vec![Fp::ZERO; domain.size()];
     assert!(
         expansion

@@ -289,18 +289,13 @@ as MSM bases.
 ladder's check for exceptional affine intermediates, including the decision to
 use complete projective arithmetic.
 
-Grouped execution now uses a
-[shared window queue](../crates/udon/src/curve/msm/schedule/shared.rs) when the
-target supports pointer-width atomics, the task budget exceeds one, and no chunk
-limit, memory ceiling, or streaming mode is set. It retains preparation for the
-whole batch and gives each worker a private result row, allowing workers to
-claim windows across input boundaries. Other configurations use
-[weighted job ranges](../crates/udon/src/curve/msm/schedule.rs) with scratch reused
-across sequential jobs. `ExecutionPlan` retains metadata for either schedule.
+Current batch planning and scratch reuse are described in the
+[grouped-job guide](CURVES.md#grouped-jobs-and-other-work); incremental scheduling
+is described in the [execution guide](EXECUTION.md).
 
-The measurements below predate the shared queue and do not establish its timing
-or storage effects. The measured scheduler split contiguous ranges by estimated
-work and assigned each worker its maximum scratch across sequential jobs.
+The measurements below describe an earlier scheduler. It split contiguous
+ranges by estimated work and assigned each worker its maximum scratch across
+sequential jobs.
 Serial groups reused maximum digit storage rather than summing all rows, and
 independent output folds ran within their job's worker. The coarse weight did
 not model every cache or occupancy effect. The workload harness compared that
@@ -403,7 +398,7 @@ outside timed loops.
 | Mandatory width-eight affine path | Forced widths 4–12 and affine/projective/hybrid backends; budget-dependent widths with sampled measurements and extrapolation limits |
 | Digit preparation overhead | Direct extraction for medium width-eight chunks with large budgets; parallel packed recoding; measured cases and unmeasured boundaries distinguished above |
 | Coupled preparation lifetimes | Rebindable selection, reusable records and optional recoding, compact basis binding, reusable plans |
-| Heterogeneous scheduling and serial tail | Shared window queue or weighted ranges according to options and target support; earlier measurements described above |
+| Heterogeneous scheduling and serial tail | Measured contiguous weighted ranges; current scheduling is documented in the execution guide |
 | Missing optimization invariants | Direct BigUint reducer/collapse oracle, production layouts and bounds, forced modes, planner partitions, cache and input contracts |
 | Public implementation layout | Private option/count/scratch fields with constructors and accessors; typed initialized storage preserved |
 | Broader FFT convention changes | Deferred as outside MSM scope |
@@ -446,24 +441,24 @@ change; the typed storage implementation introduces no new unsafe code.
   memory bound; use `with_memory_limit` or `with_chunk_size` for that requirement.
 - Replace public requirement fields with `scalars()`, `digits()`, `affine()`,
   `projective()`, `field()`, and `indices()`; use `bytes::<C>()` for checked totals.
-  Use `input.requirements(options)` for retained scalars and compact tables;
-  the const length-only query sizes unprepared scalars with ordinary bases.
+  Size execution buffers from the constructed `msm::run::BatchPlan`'s
+  `requirements()` so retained scalars and compact tables are accounted for.
 - Construct six-slice `Scratch::new` with a new initialized `ScalarStorage::ZERO`
   buffer before the digit and arithmetic slices. Use `reborrow()` for reuse.
 - Prepare scalars into `ScalarStorage` entries. The returned handle releases the
   original coefficient borrow. Call `cache_len` and `cache` only when retaining
   a particular recoding is useful; reuse conditions are documented on
   [`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs).
-- Retain `Selection` for repeated indexed rows and `ExecutionPlan` for immutable
-  input batches. Initialize plan metadata with `JobStorage::EMPTY` and
-  `WorkerStorage::EMPTY`. Its `temporary_bytes()` includes metadata; ordinary
-  single-input execution needs no metadata buffer.
+- Retain `Selection` for repeated indexed rows and `msm::run::BatchPlan` for
+  immutable input batches, including batches with one input. Initialize plan
+  metadata with `msm::run::JobStorage::EMPTY` and `msm::run::WorkerStorage::EMPTY`.
+  Its `temporary_bytes()` includes metadata.
 - Existing compact POD tables and field/point formats are unchanged. Bind them
   through `EisensteinTableBatch` and select `Bases::Compact` or
   `Bases::CompactPrepared`. Scalar records and plans are ephemeral, not POD.
 
-See the [curve guide](CURVES.md#multiscalar-multiplication) for contracts and an
-executable static-buffer example, and the
+See the [curve guide](CURVES.md#multiscalar-multiplication) for contracts and
+buffer-sizing examples, and the
 [testing guide](TESTING.md#internal-msm-experiments) for the retained internal
 controls and phase experiments. Measurements in this report span implementation
 stages; they are not measurements of one identical working-tree snapshot.

@@ -27,9 +27,9 @@ pub enum InverseScale {
 
 /// Coefficients in increasing degree order, with an explicit mathematical scale.
 ///
-/// The [`PreparedExpansion`](super::PreparedExpansion) methods
-/// [`execute_with_workspace`](super::PreparedExpansion::execute_with_workspace)
-/// and [`execute_disposable`](super::PreparedExpansion::execute_disposable)
+/// The [`ExpansionPlan`](super::run::ExpansionPlan) methods
+/// [`execute`](super::run::ExpansionPlan::execute)
+/// and [`execute_disposable`](super::run::ExpansionPlan::execute_disposable)
 /// return views of the retained coefficient buffer. For source base size `n`
 /// and polynomial coefficients `c[i]`, [`InverseScale::Normalized`] stores
 /// `c[i]` and [`InverseScale::Unscaled`] stores `n * c[i]`. Both use reduced
@@ -51,22 +51,23 @@ pub enum InverseScale {
 ///
 /// ```
 /// use zakura_udon::{exec::SerialExecutor, field::Fp, fft::{
-///     Domain, ExecutionOptions, Expansion, ExpansionOrder, ExpansionStorage,
-///     ExpansionStrategy, InverseScale, Plan,
+///     Codelet, Domain, ElementOrder, ExecutionOptions, Expansion, ExpansionOrder,
+///     ExpansionStorage, InputSupport, InverseScale, Plan, run::ExpansionPlan,
 /// }};
 ///
 /// let base = Plan::without_tables(Domain::new(1)?.subgroup());
 /// let expansion = Expansion::new(base, base.domain(), None)?;
-/// let operation = expansion.configure(
-///     ExpansionOrder::Residues,
+/// let tasks = core::num::NonZeroUsize::new(1).unwrap();
+/// let operation = ExpansionPlan::new(expansion,
 ///     ExpansionStorage::DisposableInput { scale: InverseScale::Unscaled },
-///     ExpansionStrategy::serial(),
+///     ExpansionOrder::Residues, InputSupport::Full, ElementOrder::Natural,
+///     core::num::NonZeroUsize::new(2).unwrap(), Codelet::Radix2,
 /// )?;
 /// // Evaluations of 1 + x at the two subgroup points.
 /// let mut input = [Fp::from_u64(2), Fp::ZERO];
 /// let mut expanded = [Fp::ZERO; 2];
 /// let retained = operation.execute_disposable(
-///     &mut input, &mut expanded, &SerialExecutor, &mut [],
+///     &mut input, &mut expanded, None, &mut [], tasks, &SerialExecutor,
 /// )?;
 /// let next = Plan::without_tables(Domain::new(2)?.subgroup());
 /// let mut output = [Fp::ZERO; 4];
@@ -287,7 +288,7 @@ impl<'a, M: PrimeModulus> EvaluationView<'a, M> {
 /// For `r` residues in `n` evaluations, natural row `s + r*k` is stored at
 /// `s*(n/r) + k`, where `0 <= s < r` and `0 <= k < n/r`. Thus each residue
 /// occupies one contiguous slice of `n/r` values. This differs from
-/// [`CoefficientTiles`], which preserves natural coefficient order.
+/// contiguous coefficient slices, which preserve natural coefficient order.
 ///
 /// This descriptor checks dimensions only; it carries no field, root, or shift.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -371,109 +372,5 @@ impl ResidueLayout {
             *value = input[self.index(row).unwrap()];
         }
         Ok(())
-    }
-}
-
-/// An immutable view of field evaluations with a checked layout length.
-///
-/// Construction checks storage dimensions, not the evaluation domain or field
-/// contents. Natural rows are mapped through [`ResidueLayout`].
-#[derive(Clone, Copy)]
-pub struct ResidueView<'a, M: PrimeModulus> {
-    values: &'a [PastaField<M>],
-    layout: ResidueLayout,
-}
-
-impl<M: PrimeModulus> core::fmt::Debug for ResidueView<'_, M> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("ResidueView")
-            .field("values", &self.values)
-            .field("layout", &self.layout)
-            .finish()
-    }
-}
-
-impl<'a, M: PrimeModulus> ResidueView<'a, M> {
-    /// Binds a layout after checking the slice length.
-    ///
-    /// Returns [`FftError::LengthMismatch`] unless `values.len() == layout.size()`.
-    pub fn new(values: &'a [PastaField<M>], layout: ResidueLayout) -> Result<Self, FftError> {
-        check_length("values", layout.size(), values.len())?;
-        Ok(Self { values, layout })
-    }
-    /// The layout of the borrowed values.
-    pub const fn layout(self) -> ResidueLayout {
-        self.layout
-    }
-    /// Values in storage order.
-    pub const fn as_slice(self) -> &'a [PastaField<M>] {
-        self.values
-    }
-    /// An evaluation selected by its natural row, or `None` out of range.
-    pub fn get(self, row: usize) -> Option<&'a PastaField<M>> {
-        self.values.get(self.layout.index(row)?)
-    }
-    /// An evaluation selected by a compatible larger domain's row.
-    ///
-    /// Uses [`ResidueLayout::index_at_extended_row`], including its unchecked
-    /// shift and root assumptions and its `None` cases.
-    pub fn get_extended_row(self, row: usize, extended_size: usize) -> Option<&'a PastaField<M>> {
-        self.values
-            .get(self.layout.index_at_extended_row(row, extended_size)?)
-    }
-    /// Borrows a whole residue in increasing natural-row order.
-    ///
-    /// Returns `None` if `residue >= self.layout().residues()`.
-    pub fn residue(self, residue: usize) -> Option<&'a [PastaField<M>]> {
-        if residue >= self.layout.residues() {
-            return None;
-        }
-        let start = residue * self.layout.rows();
-        Some(&self.values[start..start + self.layout.rows()])
-    }
-}
-
-/// Natural-order coefficients viewed as consecutive, equally sized tiles.
-#[derive(Clone, Copy)]
-pub struct CoefficientTiles<'a, M: PrimeModulus> {
-    values: &'a [PastaField<M>],
-    tile_len: usize,
-}
-
-impl<M: PrimeModulus> core::fmt::Debug for CoefficientTiles<'_, M> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CoefficientTiles")
-            .field("values", &self.values)
-            .field("tile_len", &self.tile_len)
-            .finish()
-    }
-}
-
-impl<'a, M: PrimeModulus> CoefficientTiles<'a, M> {
-    /// Checks that both lengths are nonzero powers of two and tiles fit exactly.
-    ///
-    /// Returns [`FftError::InvalidLayout`] if either length is zero or not a
-    /// power of two, or if `tile_len > values.len()`.
-    pub fn new(values: &'a [PastaField<M>], tile_len: usize) -> Result<Self, FftError> {
-        if !values.len().is_power_of_two() || !tile_len.is_power_of_two() || tile_len > values.len()
-        {
-            return Err(FftError::InvalidLayout);
-        }
-        Ok(Self { values, tile_len })
-    }
-    /// Number of tiles.
-    pub const fn tile_count(self) -> usize {
-        self.values.len() / self.tile_len
-    }
-    /// All coefficients, in natural order.
-    pub const fn as_slice(self) -> &'a [PastaField<M>] {
-        self.values
-    }
-    /// A consecutive coefficient tile, or `None` out of range.
-    pub fn tile(self, index: usize) -> Option<&'a [PastaField<M>]> {
-        if index >= self.tile_count() {
-            return None;
-        }
-        Some(&self.values[index * self.tile_len..(index + 1) * self.tile_len])
     }
 }

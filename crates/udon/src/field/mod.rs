@@ -109,7 +109,7 @@ impl<M: PrimeModulus> fmt::Debug for PastaField<M> {
 
 impl<M: PrimeModulus> Default for PastaField<M> {
     fn default() -> Self {
-        Self::zero()
+        Self::ZERO
     }
 }
 
@@ -132,16 +132,6 @@ impl<M: PrimeModulus> PastaField<M> {
             limbs,
             marker: PhantomData,
         }
-    }
-
-    /// Returns the additive identity.
-    pub const fn zero() -> Self {
-        Self::ZERO
-    }
-
-    /// Returns the multiplicative identity.
-    pub const fn one() -> Self {
-        Self::ONE
     }
 
     /// Embeds an unsigned 64-bit integer; every such integer is below both moduli.
@@ -296,11 +286,11 @@ impl<M: PrimeModulus> crate::field::algorithms::Field for PastaField<M> {
     #[cfg(any(test, not(feature = "sqrt-table-large")))]
     #[inline(always)]
     fn zero() -> Self {
-        Self::zero()
+        Self::ZERO
     }
     #[inline(always)]
     fn one() -> Self {
-        Self::one()
+        Self::ONE
     }
     #[cfg(any(test, not(feature = "sqrt-table-large")))]
     #[inline(always)]

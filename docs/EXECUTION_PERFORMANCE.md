@@ -53,8 +53,8 @@ rejects both before timing. The `usize::MAX` batch configuration has the same
 storage as the uncapped batch after migration.
 
 Eight width-11 scratch bundles exceeded the run ceiling and were rejected by
-`ArenaLayout`; seven fit. Earlier eight-bundle timings with width-10 geometry
-are not results for the final configuration.
+the fixture's arena accounting; seven fit. Earlier eight-bundle timings with
+width-10 geometry are not results for the final configuration.
 
 | Successive trial | Synchronous partition | Incremental runs | Time reduction |
 | --- | --- | --- | --- |
@@ -147,6 +147,10 @@ samples, and a one-second measurement target. Criterion may extend that target
 for longer iterations. The CSV preserves reported estimates and confidence
 interval endpoints in microseconds. CI uses `-- --test` to exercise arithmetic
 and admissibility without asserting machine-specific timings.
+
+These commands and the control below reproduce the historical revisions used
+for this report. The incremental mixed driver now lives in the test fixtures;
+the current public MSM batch entry point is `msm::run::BatchPlan`.
 
 To repeat the independent control, copy `measurements/execution-control.rs`
 from this guide's directory to `crates/udon/benches/execution_control.rs` in

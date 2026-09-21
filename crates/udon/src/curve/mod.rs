@@ -127,15 +127,11 @@ pub type VestaAffine = AffinePoint<Vesta>;
 pub type VestaPoint = Point<Vesta>;
 /// A Jacobian Vesta point.
 pub type VestaProjective = ProjectivePoint<Vesta>;
-/// A borrowed table for repeated multiplication of one Pallas base.
-pub type PallasFixedBase<'a, E = PallasAffine> = FixedBaseTable<'a, Pallas, E>;
-/// A borrowed table for repeated multiplication of one Vesta base.
-pub type VestaFixedBase<'a, E = VestaAffine> = FixedBaseTable<'a, Vesta, E>;
 
 /// Returns `x³ + 5`, the right-hand side of both Pasta curve equations.
 ///
 /// `x` must satisfy [`PastaField`]'s reduced-residue invariant.
-pub fn curve_rhs<M: PrimeModulus>(x: &PastaField<M>) -> PastaField<M> {
+fn curve_rhs<M: PrimeModulus>(x: &PastaField<M>) -> PastaField<M> {
     x.square().mul(x).add(&PastaField::from_u64(5))
 }
 

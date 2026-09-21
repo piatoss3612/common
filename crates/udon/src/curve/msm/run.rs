@@ -13,17 +13,14 @@
 use core::{marker::PhantomData, num::NonZeroUsize};
 
 use super::{
-    Bases, CurveError, ExecutionOptions, Input, PastaCurve, ProjectivePoint, Requirements,
+    ArithmeticOptions, Bases, CurveError, Input, PastaCurve, ProjectivePoint, Requirements,
     ScalarStorage, Scalars, Scratch, check_scratch, kernels, prepared,
     recode::{self, Geometry, Shape},
     schedule,
 };
-use crate::exec::{
-    TaskBudget,
-    run::{
-        Completion, Frontier, Identity, Kernel, Outcome, ReadView, Task, TaskError, TaskKey,
-        TaskStorage,
-    },
+use crate::exec::run::{
+    Completion, Frontier, Identity, Kernel, Outcome, ReadView, Task, TaskError, TaskKey,
+    TaskStorage,
 };
 
 mod chunks;
@@ -104,7 +101,11 @@ pub struct SourceBuffers<'a, C: PastaCurve> {
 pub struct MsmPlan<C: PastaCurve> {
     terms: usize,
     cap: usize,
-    options: ExecutionOptions,
+    options: ArithmeticOptions,
+    // Large incremental grains keep their planned Booth geometry. Batch
+    // execution can specialize after preparation unless memory adaptation
+    // already resolved a narrower width. This is independent of the request.
+    specialize_short: bool,
     job: schedule::JobStorage,
     retained: Requirements,
     marker: PhantomData<C>,
@@ -113,27 +114,29 @@ pub struct MsmPlan<C: PastaCurve> {
 impl<C: PastaCurve> MsmPlan<C> {
     /// Plans bounded tasks without binding inputs or allocating storage.
     ///
-    /// The existing accumulation, width, joint, pass, and streaming options
-    /// apply. `task_budget` does not affect this plan. The effective grain is
-    /// the smaller of `grain`, the optional chunk cap, and the term count.
-    /// A memory limit checks retained storage plus one complete task's scratch;
-    /// application admission must additionally charge run and queue metadata.
-    /// Returns sizing errors before binding or writing any storage.
+    /// The effective grain is the smaller of `grain`, the arithmetic chunk cap,
+    /// and the term count. Scheduling capacity and memory admission belong to
+    /// the caller. Use [`Self::retained_for_slots`] and [`Self::temporary`] to
+    /// size retained chunks and each simultaneous scratch bundle separately;
+    /// also account for metadata, queues, unused provider capacity, and alignment.
+    /// Returns [`CurveError::SizeOverflow`] for unrepresentable storage counts
+    /// or bytes, before binding or writing any storage.
     pub fn new(
         terms: usize,
-        mut options: ExecutionOptions,
+        mut options: ArithmeticOptions,
         grain: NonZeroUsize,
     ) -> Result<Self, CurveError> {
-        options.task_budget = TaskBudget::SERIAL;
-        let cap = terms
-            .min(grain.get())
-            .min(options.chunk_size.map_or(usize::MAX, NonZeroUsize::get));
+        let cap = terms.min(grain.get()).min(options.chunk_cap());
         options.chunk_size = NonZeroUsize::new(cap.max(1));
-        if cap >= 4096 && options.window_bits.is_none() && !options.joint_tables {
-            options.window_bits = Some(11);
-        }
-        let geometry = Geometry::for_len(cap, options);
-        let job = schedule::layout::<C>(cap, geometry, false, false, false, options)?;
+        let geometry = Geometry::for_plan(cap, options);
+        let job = schedule::layout::<C>(
+            cap,
+            geometry,
+            false,
+            false,
+            false,
+            schedule::Options::new(super::BatchOptions::new(options)),
+        )?;
         let retained = Requirements {
             scalars: cap,
             digits: geometry.storage_len(cap)?,
@@ -142,7 +145,7 @@ impl<C: PastaCurve> MsmPlan<C> {
             } else {
                 geometry
                     .windows()
-                    .checked_mul(if options.streaming {
+                    .checked_mul(if options.streaming() {
                         geometry.buckets() + 1
                     } else {
                         1
@@ -151,27 +154,17 @@ impl<C: PastaCurve> MsmPlan<C> {
             },
             ..Requirements::default()
         };
-        let temporary = if options.streaming {
+        let temporary = if options.streaming() {
             Requirements::default()
         } else {
             job.work
         };
-        let bytes = retained
-            .bytes::<C>()?
-            .checked_add(temporary.bytes::<C>()?)
-            .ok_or(CurveError::SizeOverflow)?;
-        if let Some(limit) = options.memory_limit
-            && bytes > limit
-        {
-            return Err(CurveError::MemoryLimit {
-                limit,
-                required: bytes,
-            });
-        }
+        retained.plus(temporary)?.times::<C>(1)?.bytes::<C>()?;
         Ok(Self {
             terms,
             cap,
             options,
+            specialize_short: cap < 4096,
             job,
             retained,
             marker: PhantomData,
@@ -180,8 +173,9 @@ impl<C: PastaCurve> MsmPlan<C> {
 
     pub(super) fn from_job(
         terms: usize,
-        options: ExecutionOptions,
+        options: ArithmeticOptions,
         job: schedule::JobStorage,
+        specialize_short: bool,
     ) -> Self {
         let retained = Requirements {
             scalars: job.requirements.scalars,
@@ -190,7 +184,7 @@ impl<C: PastaCurve> MsmPlan<C> {
                 0
             } else {
                 job.geometry.windows()
-                    + if options.streaming {
+                    + if options.streaming() {
                         job.work.projective
                     } else {
                         0
@@ -202,56 +196,43 @@ impl<C: PastaCurve> MsmPlan<C> {
             terms,
             cap: job.cap,
             options,
+            specialize_short,
             job,
             retained,
             marker: PhantomData,
         }
     }
 
-    /// Maximum operation-retained typed storage, excluding run metadata.
+    /// Upper bounds on typed storage retained by one active term chunk.
+    ///
+    /// Prepared inputs can reuse their scalar records or matching digit cache.
+    /// These counts provision a chunk without assuming that reuse and exclude
+    /// run metadata and executing tasks' temporary scratch.
     pub fn retained(&self) -> Requirements {
         self.retained
     }
 
-    /// Retained arithmetic storage for `slots` independent term chunks.
+    /// Upper bounds on retained storage for `slots` independent term chunks.
     ///
     /// Each slot owns preparation and one partial per window. The shared
-    /// temporary bundle is unchanged. Metadata, idle provider capacity, and
-    /// alignment still belong in application admission accounting. Streaming
+    /// temporary bundles are counted separately, once per simultaneous lease.
+    /// Metadata, queues, idle provider capacity, and alignment still belong in
+    /// application admission accounting. Streaming
     /// uses [`MsmRun`] with one complete set of retained window buckets.
-    /// Returns sizing or memory-limit errors including all requested slots.
+    /// Returns [`CurveError::SizeOverflow`] if the requested slice counts or
+    /// their total bytes are unrepresentable. This does not enforce a ceiling.
     pub fn retained_for_slots(&self, slots: NonZeroUsize) -> Result<Requirements, CurveError> {
-        let mut r = self.retained;
-        r.scalars = r
-            .scalars
-            .checked_mul(slots.get())
-            .ok_or(CurveError::SizeOverflow)?;
-        r.digits = r
-            .digits
-            .checked_mul(slots.get())
-            .ok_or(CurveError::SizeOverflow)?;
-        r.projective = r
-            .projective
-            .checked_mul(slots.get())
-            .ok_or(CurveError::SizeOverflow)?;
-        let bytes = r
-            .bytes::<C>()?
-            .checked_add(self.temporary().bytes::<C>()?)
-            .ok_or(CurveError::SizeOverflow)?;
-        if let Some(limit) = self.options.memory_limit
-            && bytes > limit
-        {
-            return Err(CurveError::MemoryLimit {
-                limit,
-                required: bytes,
-            });
-        }
+        let r = self.retained.times::<C>(slots.get())?;
+        r.bytes::<C>()?;
         Ok(r)
     }
 
-    /// Largest single executing task's temporary arithmetic bundle.
+    /// Upper bounds on one executing task's temporary arithmetic bundle.
+    ///
+    /// Each simultaneously executing task needs its own bundle. These counts
+    /// exclude retained chunks and metadata; they do not bound total admission.
     pub fn temporary(&self) -> Requirements {
-        if self.options.streaming {
+        if self.options.streaming() {
             Requirements::default()
         } else {
             self.job.work
@@ -284,7 +265,7 @@ impl<C: PastaCurve> MsmPlan<C> {
             false,
             false,
             false,
-            self.options,
+            schedule::Options::new(super::BatchOptions::new(self.options)),
         )?;
         self.retained.scalars = self.cap;
         self.retained.digits = self.job.geometry.storage_len(self.cap)?;
@@ -304,7 +285,7 @@ impl<C: PastaCurve> MsmPlan<C> {
     // Reusing scalar records is independent of digit geometry. A digit cache
     // remains valid only for the complete, unsplit input and selected geometry.
     fn cached<'i>(&self, input: Input<'i, C>, geometry: Geometry) -> Option<&'i [u8]> {
-        if self.options.streaming || input.len() > self.cap {
+        if self.options.streaming() || input.len() > self.cap {
             return None;
         }
         match input.scalars {
@@ -317,7 +298,8 @@ impl<C: PastaCurve> MsmPlan<C> {
     }
 
     fn initial_geometry(&self, input: Input<'_, C>) -> Geometry {
-        if !self.options.streaming
+        if !self.options.streaming()
+            && self.specialize_short
             && let Scalars::Prepared(s) = input.scalars
         {
             let actual = Geometry::for_shape(input.len(), s.shape, self.options);
@@ -374,7 +356,12 @@ pub struct Request<'a> {
     pub read_partials: usize,
 }
 
-/// Borrowed views obtained from an owned task resource bundle.
+/// Transient kernel views obtained from an owned task resource bundle.
+///
+/// The direct [`Resources`] implementation supports local task execution.
+/// Erased [`ReadView`] references need not be `Sync`. For worker dispatch, own
+/// typed borrowed slices or movable guards and construct these views on the
+/// worker in [`Resources::buffers`].
 pub struct Buffers<'a, C: PastaCurve> {
     /// Shared prepared scalar records; empty for a preparation task.
     pub records: &'a dyn ReadView<ScalarStorage<C>>,
@@ -552,7 +539,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                     accumulation: self.plan.job.accumulation,
                 };
                 let digit_len = geometry.storage_len(self.terms)?;
-                if self.plan.options.streaming {
+                if self.plan.options.streaming() {
                     check_scratch("projective", geometry.buckets(), buckets.len())?;
                     let buckets = &mut buckets[..geometry.buckets()];
                     if self.first_chunk {
@@ -692,8 +679,8 @@ pub struct MsmRun<'a, 'i, C: PastaCurve> {
 
 impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
     /// Binds an input and exclusive run metadata without touching arithmetic
-    /// buffers. Returns an error if its term count differs from the plan or no
-    /// frontier storage is supplied.
+    /// buffers. Returns [`TaskError::InvalidRequest`] if its term count differs
+    /// from the plan, or [`TaskError::Storage`] if no frontier storage is supplied.
     pub fn new(
         plan: MsmPlan<C>,
         input: Input<'i, C>,
@@ -701,7 +688,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         storage: &'a mut [TaskStorage],
     ) -> Result<Self, TaskError> {
         if input.len() != plan.terms {
-            return Err(TaskError::Storage);
+            return Err(TaskError::InvalidRequest);
         }
         Self::bind_range(plan, input, 0..input.len(), identity, storage)
     }
@@ -711,7 +698,9 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
     /// The plan describes the full input and fixes geometry; `range` selects
     /// the terms contributed by this run. Partition results can be reduced
     /// outside the scheduler. Each live partition needs its own retained
-    /// storage and metadata. Invalid or reversed ranges return `Storage`.
+    /// storage and metadata. A mismatched input length or invalid/reversed range
+    /// returns [`TaskError::InvalidRequest`]; an empty frontier returns
+    /// [`TaskError::Storage`].
     pub fn new_partition(
         plan: MsmPlan<C>,
         input: Input<'i, C>,
@@ -720,13 +709,14 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         storage: &'a mut [TaskStorage],
     ) -> Result<Self, TaskError> {
         if input.len() != plan.terms || range.start > range.end || range.end > input.len() {
-            return Err(TaskError::Storage);
+            return Err(TaskError::InvalidRequest);
         }
         Self::bind_range(plan, input, range, identity, storage)
     }
 
     /// Binds source metadata before producer tasks have filled scalar rows.
     /// Source availability is enforced by the provider at `try_claim`.
+    /// Length and storage errors match [`Self::new`].
     pub fn new_produced(
         plan: MsmPlan<C>,
         input: ProducedInput<'i, C>,
@@ -737,7 +727,8 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
     }
 
     /// Binds an independent partition whose sources arrive from producers.
-    /// Sizing, range, and metadata errors precede all resource acquisition.
+    /// Length, range, and storage errors match [`Self::new_partition`] and
+    /// precede all resource acquisition.
     pub fn new_produced_partition(
         plan: MsmPlan<C>,
         input: ProducedInput<'i, C>,
@@ -746,7 +737,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         storage: &'a mut [TaskStorage],
     ) -> Result<Self, TaskError> {
         if input.len() != plan.terms || range.start > range.end || range.end > input.len() {
-            return Err(TaskError::Storage);
+            return Err(TaskError::InvalidRequest);
         }
         let mut run = Self::bind_range(plan, input.metadata(), range, identity, storage)?;
         run.produced = Some(input);
@@ -841,7 +832,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
                         read_digits = self.geometry.storage_len(terms).unwrap();
                     }
                     scratch = self.plan.temporary();
-                    if self.plan.options.streaming {
+                    if self.plan.options.streaming() {
                         buckets = self.geometry.buckets();
                     }
                 }
@@ -861,7 +852,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
                 read_digits,
                 buckets,
                 write_partial: self.kind == WorkKind::Collapse
-                    || (self.kind == WorkKind::Window && !self.plan.options.streaming),
+                    || (self.kind == WorkKind::Window && !self.plan.options.streaming()),
                 read_partials: if self.kind == WorkKind::Reduce {
                     self.geometry.windows()
                 } else {
@@ -949,7 +940,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         if !self.failed && self.frontier.is_complete() {
             let total = match self.kind {
                 WorkKind::Prepare => {
-                    if !self.plan.options.streaming {
+                    if !self.plan.options.streaming() && self.plan.specialize_short {
                         let actual = Geometry::for_shape(
                             self.plan.cap.min(self.end - self.offset),
                             self.shape,
@@ -962,7 +953,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
                     self.kind = WorkKind::Window;
                     self.geometry.windows()
                 }
-                WorkKind::Window if !self.plan.options.streaming => {
+                WorkKind::Window if !self.plan.options.streaming() => {
                     self.kind = WorkKind::Reduce;
                     1
                 }
@@ -985,7 +976,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
                     1
                 }
                 WorkKind::Reduce => {
-                    if !self.plan.options.streaming && self.end - self.offset > self.plan.cap {
+                    if !self.plan.options.streaming() && self.end - self.offset > self.plan.cap {
                         self.offset += self.plan.cap;
                         self.geometry = self.plan.initial_geometry(self.input);
                         self.kind = WorkKind::Prepare;
@@ -1032,16 +1023,18 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
     /// epochs so old task keys remain stale. Consumers must release retained
     /// buffers before the application reuses their storage. Returns
     /// [`TaskError::Busy`] before completion, [`TaskError::Failed`] on failure,
-    /// or [`TaskError::Storage`] for a mismatched input length.
+    /// or [`TaskError::InvalidRequest`] for a mismatched input length.
+    /// Epoch overflow returns [`TaskError::Overflow`].
     pub fn rebind(&mut self, plan: MsmPlan<C>, input: Input<'i, C>) -> Result<(), TaskError> {
         if input.len() != plan.terms {
-            return Err(TaskError::Storage);
+            return Err(TaskError::InvalidRequest);
         }
         self.rebind_range(plan, input, 0..input.len())
     }
 
     /// Reuses completed metadata for another produced scalar row.
     /// The old row's consumers must have released their source leases.
+    /// Errors match [`Self::rebind`].
     pub fn rebind_produced(
         &mut self,
         plan: MsmPlan<C>,
@@ -1051,6 +1044,8 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
     }
 
     /// Reuses a completed partition while preserving stale-key detection.
+    /// Errors match [`Self::rebind`]; invalid or reversed ranges also return
+    /// [`TaskError::InvalidRequest`].
     pub fn rebind_produced_partition(
         &mut self,
         plan: MsmPlan<C>,
@@ -1058,7 +1053,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         range: core::ops::Range<usize>,
     ) -> Result<(), TaskError> {
         if input.len() != plan.terms || range.start > range.end || range.end > input.len() {
-            return Err(TaskError::Storage);
+            return Err(TaskError::InvalidRequest);
         }
         self.rebind_range(plan, input.metadata(), range)?;
         self.produced = Some(input);

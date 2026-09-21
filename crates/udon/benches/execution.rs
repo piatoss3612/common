@@ -10,7 +10,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use zakura_udon::{
     curve::{
         AffinePoint, Pallas, ProjectivePoint,
-        msm::{self, Bases, ExecutionOptions, Input, Requirements, ScalarStorage, Scratch},
+        msm::{self, Bases, BatchOptions, Input, Requirements, ScalarStorage, Scratch},
     },
     exec::{Executor, TaskBudget},
     fft::{
@@ -164,7 +164,7 @@ fn mixed(c: &mut Criterion) {
                 threads
             };
             let mut options =
-                ExecutionOptions::SERIAL.with_task_budget(TaskBudget::new(tasks).unwrap());
+                BatchOptions::default().with_task_budget(TaskBudget::new(tasks).unwrap());
             if matches!(mode, Mode::UnlimitedCap) {
                 options = options.with_memory_limit(usize::MAX);
             } else if matches!(mode, Mode::Capped) {
@@ -322,8 +322,8 @@ fn isolated(c: &mut Criterion) {
                 .collect();
             let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
             let options =
-                ExecutionOptions::SERIAL.with_task_budget(TaskBudget::new(threads).unwrap());
-            let plan = msm::run::MsmPlan::new(terms, options, nz(8192)).unwrap();
+                BatchOptions::default().with_task_budget(TaskBudget::new(threads).unwrap());
+            let plan = msm::run::MsmPlan::new(terms, options.arithmetic(), nz(8192)).unwrap();
             let mut synchronous =
                 Buffers::new(core::iter::once(input.requirements(options).unwrap()));
             let mut bounded =
@@ -373,7 +373,6 @@ fn isolated(c: &mut Criterion) {
                         TransformRequest::new(direction),
                         nz(1024),
                         Codelet::Radix2,
-                        false,
                     )
                     .unwrap()
                     .with_contiguous_permutation();

@@ -56,10 +56,16 @@ impl Runner {
     ) -> FftPlan<'t, M> {
         let mut operation = FftPlan::new(
             plan,
-            request,
+            zakura_udon::fft::TransformRequest {
+                input_storage: if separate {
+                    zakura_udon::fft::InputStorage::Preserve
+                } else {
+                    zakura_udon::fft::InputStorage::InPlace
+                },
+                ..request
+            },
             nz(1024.min(plan.domain().size() / 2).max(1)),
             codelet,
-            separate,
         )
         .unwrap()
         .with_contiguous_permutation();
@@ -192,8 +198,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                                 true,
                                 Codelet::Radix2,
                             )
-                            .with_twiddles(table)
-                            .unwrap(),
+                            .with_twiddles(table),
                     );
                 }
             }

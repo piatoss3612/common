@@ -1,4 +1,6 @@
 use super::*;
+use crate::fft::run::ExpansionPlan;
+use core::num::NonZeroUsize;
 
 fn imports<M: PrimeModulus>() {
     let subgroup = Domain::<M>::new(4).unwrap();
@@ -27,7 +29,13 @@ fn imports<M: PrimeModulus>() {
     let plan = twiddles.bind(other).unwrap().plan();
     let coefficients = inputs(other.size());
     let mut output = coefficients.clone();
-    plan.forward_serial(&mut output).unwrap();
+    plan.forward(
+        &mut output,
+        ExecutionOptions::serial(),
+        &SerialExecutor,
+        &mut [],
+    )
+    .unwrap();
     assert_eq!(output, direct(&coefficients, other));
 
     let invalid: &PastaField<M> = bento::AlignedBytes([0xff; 32]).as_value();
@@ -352,26 +360,42 @@ fn retained_with_base_tables<M: PrimeModulus>() {
             for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
                 let mut retained = vec![PastaField::ONE; domain.size()];
                 let view = {
-                    let operation = expansion
-                        .configure(
-                            order,
-                            ExpansionStorage::CoefficientWorkspace { scale },
-                            ExpansionStrategy::serial(),
-                        )
-                        .unwrap();
+                    let operation = ExpansionPlan::new(
+                        expansion,
+                        ExpansionStorage::CoefficientWorkspace { scale },
+                        order,
+                        InputSupport::Full,
+                        ElementOrder::Natural,
+                        NonZeroUsize::new(domain.size()).unwrap(),
+                        Codelet::Radix2,
+                    )
+                    .unwrap();
+                    let layout = if order == ExpansionOrder::Residues {
+                        EvaluationLayout::Residues(expansion.layout())
+                    } else {
+                        EvaluationLayout::BitReversed
+                    };
                     let mut output = vec![PastaField::ONE; extended.size()];
                     let mut scratch = [PastaField::ONE];
                     let view = operation
-                        .execute_with_workspace(
+                        .execute(
                             &evaluations,
                             &mut output,
                             &mut retained,
-                            &SerialExecutor,
+                            None,
                             &mut scratch,
+                            NonZeroUsize::MIN,
+                            &SerialExecutor,
                         )
+                        .unwrap()
                         .unwrap();
                     for (row, value) in expected.iter().enumerate() {
-                        assert_eq!(operation.view(&output).unwrap().get(row), Some(value));
+                        assert_eq!(
+                            EvaluationView::bind(&output, extended, layout)
+                                .unwrap()
+                                .get(row),
+                            Some(value)
+                        );
                     }
                     assert_eq!(scratch, [PastaField::ONE]);
                     // Output and scratch can be reused while the view lives.
@@ -430,9 +454,25 @@ fn reused_cosets<M: PrimeModulus>() {
                 );
                 let coefficients = inputs(domain.size());
                 let mut output = coefficients.clone();
-                rebound.plan().forward_serial(&mut output).unwrap();
+                rebound
+                    .plan()
+                    .forward(
+                        &mut output,
+                        ExecutionOptions::serial(),
+                        &SerialExecutor,
+                        &mut [],
+                    )
+                    .unwrap();
                 assert_eq!(output, direct(&coefficients, domain));
-                rebound.plan().inverse_serial(&mut output).unwrap();
+                rebound
+                    .plan()
+                    .inverse(
+                        &mut output,
+                        ExecutionOptions::serial(),
+                        &SerialExecutor,
+                        &mut [],
+                    )
+                    .unwrap();
                 assert_eq!(output, coefficients);
             }
             assert!(matches!(

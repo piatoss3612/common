@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 
 use bento::{AlignedBytes, bytes_of, bytes_of_slice};
 use zakura_udon::{
-    STORED_FORM, StoredForm,
+    STORED_FORM,
     curve::{
         AffinePoint, EisensteinTable, Pallas, PallasAffine, PastaCurve, PreparedAffinePoint, Vesta,
         VestaAffine,
@@ -149,18 +149,11 @@ fn field_arrays_and_nested_records_round_trip() {
 }
 
 #[test]
-fn descriptors_agree_across_supported_pointer_widths() {
-    assert_eq!(StoredForm::ALL, &[StoredForm::MontU64x4]);
-    assert_eq!(StoredForm::ACTIVE.descriptor(), "mont-u64x4");
-    assert_eq!(STORED_FORM, stored_form!());
-    assert_eq!(STORED_FORM, StoredForm::ACTIVE.descriptor());
-    assert_eq!(
-        concat!("values-", stored_form!(), ".bin"),
-        "values-mont-u64x4.bin"
-    );
-    for width in ["32", "64"] {
-        assert_eq!(StoredForm::for_target(width), StoredForm::ACTIVE);
-    }
+fn producer_and_consumer_filenames_agree() {
+    let generated = format!("values-{STORED_FORM}.bin");
+    const EMBEDDED: &str = concat!("values-", stored_form!(), ".bin");
+    assert_eq!(generated, EMBEDDED);
+    assert_eq!(EMBEDDED, "values-mont-u64x4.bin");
 }
 
 #[repr(C)]

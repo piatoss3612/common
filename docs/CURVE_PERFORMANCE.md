@@ -1,35 +1,30 @@
 # Curve multiplication performance
 
-The September 12, 2026 GLV implementation reduces ordinary full-width scalar
-multiplication latency by about half on the measured target. Expanded tables
-use approximately half the former storage and preparation time, with a modest
-increase in multiplication latency at the same window width. The
-[curve guide](CURVES.md) describes the APIs, storage contracts, and migration.
-The later [arithmetic follow-up](MSM_ARITHMETIC_PERFORMANCE.md) measures inversion
-endpoints, cheaper projective formulas, reusable scalar vectors, and broader
-MSM distributions against the completed MSM implementation. The subsequent
-[MSM review remediation](MSM_REVIEW_PERFORMANCE.md) covers memory policy,
-preparation lifetimes, scheduling, and workload measurements.
+Choose retained tables, scalar preparation, and MSM geometry according to the
+reuse and memory budget of the application. The [curve guide](CURVES.md)
+explains the workflows; API rustdoc owns their sizing and validation contracts.
+This report records tuning evidence and how to repeat the relevant measurements.
 
 ## Method
 
-Measurements used Rust 1.91.0, LLVM 21.1.2, and `aarch64-apple-darwin` with the
-default features. The baseline is Udon revision
-`96aead50d8fff5c24561e4fa096249bb2cabd4fd`. The
-[Criterion harness](../crates/udon/benches/curve.rs) preserves the ordinary and
-affine expanded-table benchmark names and inputs across the comparison.
-Each run used 20 samples, one second of warmup, and one second of measurement.
-Timing runs were sequential, without concurrent builds or tests.
+The retained-table and compact-batch measurements below were collected on
+September 12, 2026 with Rust 1.91.0, LLVM 21.1.2, `aarch64-apple-darwin`, and
+default features. They measured a working GLV implementation based on revision
+`96aead50d8fff5c24561e4fa096249bb2cabd4fd`; its exact candidate revision and CPU
+model were not recorded. Subsequent arithmetic and scheduling changes mean
+these timings are evidence of storage/reuse tradeoffs, not current latency
+estimates. The MSM comparisons below identify their separate provenance.
 
-Multiplication times cover the entire deterministic corpus of 32 full-width
-scalars acting on the same base. Preparation times cover one table filled into
-existing buffers. Inputs and outputs pass through optimization barriers;
-allocation and fixture checks are outside timing. These are local
-microbenchmarks, not application speedups or constant-time measurements. No
-x86-64 runtime measurements were available.
+The [curve harness](../crates/udon/benches/curve.rs) measures a deterministic
+corpus of 32 full-width scalars acting on the same base. Preparation fills one
+already allocated table. The table measurements used 20 samples, one second of
+warmup, and one second of measurement. Allocation and fixture checks were
+outside timing; inputs and outputs passed through optimization barriers.
+Timing runs were sequential without concurrent builds or tests. No x86-64
+runtime measurements were available, and none of these timings establishes
+constant-time behavior.
 
-Local Criterion snapshots use `before-glv` and `glv`; the ordinary post-change
-comparison is in `new`. Repeat with each implementation and separate snapshots:
+Measure the current implementation with:
 
 ```console
 cargo bench --locked -p zakura-udon --bench curve -- 'scalar_mul/corpus' --save-baseline candidate --sample-size 20 --measurement-time 1 --warm-up-time 1
@@ -38,20 +33,10 @@ cargo bench --locked -p zakura-udon --bench curve -- '(fixed_base(_cached)?/w(3|
 
 ## Ordinary multiplication
 
-Times are microseconds for 32 products, with 95% confidence intervals.
-
-| Curve | Input | Before | GLV |
-| --- | --- | ---: | ---: |
-| Pallas | Affine | 1,027.80 [1,017.22, 1,035.22] | 508.26 [507.25, 509.53] |
-| Pallas | Projective | 1,193.61 [1,185.35, 1,203.53] | 509.22 [507.70, 510.65] |
-| Vesta | Affine | 1,014.09 [1,006.36, 1,021.06] | 509.57 [507.77, 511.26] |
-| Vesta | Projective | 1,188.25 [1,181.79, 1,197.24] | 510.24 [508.22, 511.91] |
-
 GLV uses an eight-entry cached table on the stack, normalizes its representatives
 with one inversion, and runs a joint Eisenstein doubling ladder over two signed
 halves. Preparing from projective coordinates avoids a separate base inversion.
-The measured cost is about 15.9 microseconds per product. Scalars fitting `u64`
-retain the binary ladder; this corpus does not measure those inputs.
+Scalars fitting `u64` retain the binary ladder.
 
 The current setup's local arrays hold eight projective points (768 bytes), eight
 cached affine entries (768 bytes), and eight field scratch elements (256 bytes).
@@ -87,19 +72,6 @@ Similar storage budgets favor larger affine windows in these measurements:
 | --- | ---: | ---: | ---: |
 | Affine width 4 / cached width 3 | 16,448 / 16,608 | 223.06 / 276.54 | 227.61 / 280.45 |
 | Affine width 8 / cached width 7 | 131,136 / 116,832 | 118.54 / 134.99 | 119.84 / 135.68 |
-
-The old full-scalar affine layout had the following costs:
-
-| Width | Entry bytes | Pallas prepare | Pallas multiply | Vesta prepare | Vesta multiply |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 4 | 32,832 | 172.46 | 208.07 | 163.18 | 210.19 |
-| 8 | 262,208 | 907.51 | 109.39 | 921.41 | 110.55 |
-
-Sharing shifted multiples between the GLV halves approximately halves entries
-and preparation work. At the same width, the number of additions stays similar,
-while decomposition and endomorphism lookups add work: affine multiplication
-was about 7–9% slower here. This change makes the storage and preparation tradeoff
-explicit; it does not establish a speedup for every retained-table workload.
 
 ## Compact-table batches and scalar reuse
 
@@ -147,75 +119,110 @@ for every scalar or executor budget.
 
 ## Multiscalar multiplication
 
-The MSM harness uses deterministic full-width scalars and generator
-multiples spanning all four field limbs. Its `short` corpus uses `137 * i`,
-representing small public coefficients. Each time below covers one dense sum
-with affine bases and `SerialExecutor`, including recoding, scratch
-initialization, and scheduling. Input construction, including length and index
-validation, and allocation are outside timing. Execution's scratch checks are
-included. The sample settings match the compact batch measurements above;
-values are Criterion point estimates in microseconds.
+The [MSM harness](../crates/udon/benches/msm.rs) separates full-width, short,
+sparse, repeated-base, cancellation, and reused-scalar workloads. Fixture checks
+use scalar inner products over known generator multiples before timing.
+Length/index validation, allocation, and pool entry are outside timing;
+execution scratch checks, recoding, initialization, and arithmetic are included.
+See the [testing guide](TESTING.md#msm-and-compact-table-batch-benchmarks) for
+cache-pressure cases and preparation timing boundaries.
 
-| Terms | Pallas full | Vesta full | Pallas short | Vesta short |
-| --- | ---: | ---: | ---: | ---: |
-| 31 | 196.55 | 199.15 | 23.61 | 23.91 |
-| 32 | 203.47 | 205.18 | 21.73 | 21.97 |
-| 64 | 396.45 | 399.46 | 37.56 | 37.80 |
-| 128 | 783.55 | 792.88 | 75.48 | 75.75 |
-| 256 | 1,176.21 | 1,190.20 | 122.08 | 122.08 |
-| 1,024 | 3,668.88 | 3,780.77 | 341.21 | 349.08 |
-| 4,096 | 13,338.72 | 13,528.70 | 1,247.32 | 1,323.64 |
+Automatic choices depend on input size, scalar shape, and available scratch.
+Explicit kernel families, widths, and non-automatic accumulation choices remain
+requirements when batch planning adapts memory use. Measure those choices with
+the intended pass cap and concurrency; a task allowance is not a worker count.
 
-Full-width sums below 128 terms use joint Eisenstein Strauss, sharing table
-preparation and doubling steps across terms. From 128 terms, signed width-eight
-Booth windows group digits of the two GLV halves into buckets for summation.
-An intermediate signed width-four tier was slower on the measured full-width
-inputs, supporting the direct transition to Booth. For sums below 128 terms
-whose scalars all fit 128 bits, bit interleaving avoids table preparation; from
-32 terms, four-bit projective buckets improve that short-scalar path. These
-measurements predate the follow-up's dispatch for small dense 128-bit inputs;
-see the [dispatch comparison](MSM_ARITHMETIC_PERFORMANCE.md#broader-corpus-and-dispatch).
-The `short` timings above cover coefficients of the form `137 * i`, a small subset
-of 128-bit scalars. The Booth reducer skips empty high buckets.
+### Arithmetic and bucket reduction
 
-### Grouped execution and working storage
+The [nonzero inversion helper](../crates/udon/src/field/batch.rs) uses two
+independent multiplication lanes. Seeding each lane directly and omitting its
+unused final update gives `3(n - 1)` field multiplications for `n >= 2`
+denominators, excluding the inversion. A singleton uses field inversion
+alone. The [endpoint experiment](TESTING.md#internal-msm-experiments) compares
+schedules on identical operands; a fixed work saving need not materially
+improve a large batch.
 
-The grouped fixtures use cached bases. `ipa` contains two indexed sums of `n`
-terms; `commitments` contains dense sums of `n`, `n/2`, `n/4`, and 17 terms.
-A persistent Rayon pool supplies the four-worker executor. Pool entry is
-outside timing, while both scoped execution phases are included. These
-uncapped batch times are microseconds for all results:
+[Projective addition](../crates/udon/src/curve/projective.rs) uses unscaled
+differences and fused `mul_sub_product`; doubling uses half-scaled Jacobian
+coordinates. The local comments derive those formulas. Equal, inverse, and
+identity branches remain complete. Independent affine integer references and
+field-halving boundary checks establish their arithmetic behavior separately
+from timings.
 
-| Jobs | n | Pallas serial | Pallas four workers | Vesta serial | Vesta four workers |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| ipa | 128 | 1,537.27 | 473.94 | 1,582.19 | 471.29 |
-| ipa | 1,024 | 7,158.25 | 2,031.93 | 7,189.49 | 2,016.87 |
-| commitments | 128 | 1,567.96 | 785.41 | 1,559.98 | 780.36 |
-| commitments | 1,024 | 7,192.93 | 2,980.99 | 7,229.43 | 2,928.17 |
+The [affine bucket reducer](../crates/udon/src/curve/msm/buckets.rs) recovers
+inverses while adding and compacting point pairs, sharing an inversion across
+one level. Its chord attempt falls back to complete reduction on a zero
+product before changing points or lengths. The fallback also preserves odd
+survivors when every pair cancels. Pair workspace is two field elements
+(64 bytes); this is not a whole-MSM storage bound.
 
-The scheduler shares reusable working storage across jobs and gives concurrent
-partitions exclusive slices. A pass cap bounds staged terms while retaining
-affine bucket survivors between passes. These byte counts sum the five scratch
-slices on the measured 64-bit target, excluding borrowed inputs, outputs,
-handles, and executor resources. Counts are identical for both curves and
-should be obtained through the sizing APIs.
+The following reducer and width measurements used working candidates based on
+`57b76e7` on September 13, 2026: Apple M4 Max, `aarch64-apple-darwin`, Rust
+1.91.0, LLVM 21.1.2. The temporary harness and raw samples were not retained;
+these summaries are historical evidence, not fresh measurements of every
+current default. Values are median microseconds over three session medians.
+Reducer sessions used seven samples of at least 30 ms, rotating candidate order
+and including point/length resets. At occupancy 17, Pallas/Vesta pairs were:
 
-| Input | Task budget | Uncapped scratch bytes | Cap 512 scratch bytes |
-| --- | ---: | ---: | ---: |
-| One 1,024-term sum | 1 | 404,576 | 236,640 |
-| One 4,096-term sum | 1 | 1,516,640 | 341,088 |
-| One 4,096-term sum | 4 | 5,643,872 | 941,664 |
-| Two 1,024-term ipa sums | 4 | 1,545,408 | 873,664 |
+| Points | Prefix inversion | Complete fused recovery | Chord attempt with fallback |
+| ---: | ---: | ---: | ---: |
+| 128 | 10.813 / 10.810 | 10.694 / 10.699 | 10.322 / 10.357 |
+| 1,024 | 69.403 / 69.133 | 68.255 / 67.970 | 65.936 / 65.658 |
+| 8,192 | 550.489 / 578.325 | 536.986 / 533.446 | 507.259 / 520.251 |
 
-For the last row, capping passes reduced scratch by 43% and changed measured
-four-worker latency from 2,031.93 to 2,104.91 microseconds for Pallas and from
-2,016.87 to 2,098.02 for Vesta, about 4%. Recoded digits still scale with all
-terms, and sizing is independent of scalar values. Concurrent windows need
-more working storage than serial execution; a task budget is an allowance,
-not a requirement to create that many threads.
+These ordinary pairs support fused recovery; they do not measure frequent
+exception fallback. The retained [native controls](TESTING.md#internal-msm-experiments)
+compare production reduction with alternative schedules and expressions, and
+check results before timing.
 
-Run selected cases with the stable names described in the
-[testing guide](TESTING.md#msm-and-compact-table-batch-benchmarks):
+### Width, accumulation, and memory
+
+The width sweep used indexed cached bases, eight deterministic pseudorandom
+254-bit scalar rows, preallocated scratch, and persistent Rayon pools. Such
+scalars exercise full-width arithmetic but are not uniform field samples.
+Seven samples per session lasted at least 10 ms; policy order rotated between
+samples and sessions. Scalar preparation, recoding, and execution were timed;
+base preparation, binding, allocation, pool entry, and independent result checks
+were excluded. At 4,096 terms, Pallas/Vesta times were:
+
+| Workers | Width ten, µs | Width eleven, µs |
+| ---: | ---: | ---: |
+| 1 | 11,085 / 11,071 | 11,631 / 11,653 |
+| 4 | 3,542 / 3,541 | 3,091 / 3,084 |
+| 16 | 1,560 / 1,560 | 1,269 / 1,260 |
+
+Width eleven uses twelve windows instead of thirteen, with 1,024 buckets per
+workspace instead of 512. Twelve tasks divide evenly across four workers;
+fewer windows also reduce input passes. The sweep does not isolate those
+contributions or establish every size/budget crossover. Current
+[plan geometry](../crates/udon/src/curve/msm/recode.rs) selects width eleven for
+automatic Booth plans at grains of at least 4,096, independently of the worker
+allowance. Use explicit widths to measure the tradeoff for a particular driver.
+The [execution report](EXECUTION_PERFORMANCE.md) compares stage and blocked FFTs
+and synchronous and bounded MSM execution under selected worker counts.
+
+Projective buckets retain sums across short passes without repeatedly inverting
+sparse affine levels. Automatic accumulation uses them below a 128-term pass;
+a single small pass can still favor affine. Hybrid accumulation remains an
+explicit alternative. These are replaceable heuristics, not universal occupancy
+thresholds. Scalar shape can also favor short arithmetic, so the `short` corpus
+of coefficients `137 * i` cannot represent every dense 128-bit workload.
+
+A pass cap bounds staging, but does not by itself bound all preparation or
+concurrent window storage. Obtain requirements from the selected plan and use
+the [memory contract](CURVES.md#sizing-and-reusing-scratch) for its accounting
+scope. Streaming Booth retains all windows' projective buckets while recoding
+one chunk at a time. It avoids repeated chunk collapses at the cost of a larger
+fixed bucket floor. Application-wide accounting also includes idle scratch,
+retained preparation, and metadata outside one operation's ceiling.
+
+Retaining scalar records or digits moves preparation outside execution; it does
+not make their storage free. Compare one-shot, prepare-and-execute, and repeated
+execution lifecycles separately. For repeated indices, caller-side coalescing
+may reduce arithmetic, but a fair comparison includes sorting, gathering, and
+scalar summation. Neither reuse nor coalescing benefits every workload.
+
+Run selected current cases with:
 
 ```console
 cargo bench --locked -p zakura-udon --bench msm -- 'msm/dense/affine/(full|short)' --save-baseline msm --sample-size 20 --measurement-time 1 --warm-up-time 0.3
@@ -223,5 +230,7 @@ cargo bench --locked -p zakura-udon --bench msm -- 'msm_batch/' --save-baseline 
 cargo bench --locked -p zakura-udon --bench msm -- 'eisenstein/(prepare_batch|mul|mul_prepared|mul_same_scalar)/' --save-baseline msm --sample-size 20 --measurement-time 1 --warm-up-time 0.3
 ```
 
-These local measurements guide internal dispatch and caller memory choices
-within the [measurement limits](#method) above.
+Unchanged controls in the recorded development runs moved by several percent,
+occasionally around 10%. Build comparable binaries before timing, run them
+sequentially, and repeat controls when interpreting small differences. Measure
+complete application lifecycles before selecting a memory or concurrency policy.

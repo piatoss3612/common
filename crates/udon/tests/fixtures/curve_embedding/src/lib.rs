@@ -8,7 +8,8 @@ use udon::{
         AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve,
         Point, ProjectivePoint, Vesta,
         msm::{
-            Bases, ExecutionOptions, Input, PreparedScalars, ScalarStorage, Scratch, Selection,
+            ArithmeticOptions, Bases, BatchOptions, Input, PreparedScalars, ScalarStorage, Scratch,
+            Selection,
             run::{BatchPlan, JobStorage, WorkerStorage},
         },
     },
@@ -77,9 +78,10 @@ fn exercise_curve<C: PastaCurve>(record: &record::Record<C>) {
 
 fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
     const N: usize = 257;
-    const OPTIONS: ExecutionOptions = ExecutionOptions::SERIAL
-        .with_memory_limit(8192)
-        .with_max_terms_per_pass(core::num::NonZeroUsize::new(17));
+    const OPTIONS: BatchOptions = BatchOptions::new(
+        ArithmeticOptions::DEFAULT.with_max_terms_per_pass(core::num::NonZeroUsize::new(17)),
+    )
+    .with_memory_limit(8192);
     // Fixed caller-owned capacity; BatchPlan validates its required prefixes.
     let indices: [u32; N] = core::array::from_fn(|i| (i % 37) as u32);
     let scalars = core::array::from_fn::<_, N, _>(|i| PastaField::from_u64(i as u64 + 1).neg());
@@ -192,7 +194,7 @@ fn exercise_srs<C: PastaCurve>(record: &record::SrsRecord<C>) {
     let inputs = [coefficient_input, lagrange_input];
     let mut jobs = [JobStorage::EMPTY; 2];
     let mut workers = [WorkerStorage::EMPTY];
-    let plan = BatchPlan::new(&inputs, ExecutionOptions::SERIAL, &mut jobs, &mut workers).unwrap();
+    let plan = BatchPlan::new(&inputs, BatchOptions::default(), &mut jobs, &mut workers).unwrap();
     let mut output = [ProjectivePoint::IDENTITY; 2];
     plan.execute(&mut output, &SerialExecutor, scratch.reborrow())
         .unwrap();

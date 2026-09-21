@@ -3,6 +3,7 @@
 #![forbid(unsafe_code)]
 
 use bento::const_arithmetic::{U256, U320, m255, u256};
+use core::num::NonZeroUsize;
 use udon::curve::{
     AffinePoint, CurveError, CurveTableRequirements, EisensteinScalar, EisensteinTable,
     EisensteinTableBatch, FixedBaseDescription, FixedBaseTable, Pallas, PallasAffine, PastaCurve,
@@ -11,8 +12,10 @@ use udon::curve::{
 };
 use udon::exec::{Executor, SerialExecutor, TaskBudget, for_each_chunk_mut, for_each_mut};
 use udon::fft::{
-    Class, Domain, ElementOrder, ExecutionOptions, Expansion, ExpansionOptions, FftError, Plan,
-    TableRequirements, TablesMut, interpolate_classes,
+    Codelet, Direction, Domain, ElementOrder, EvaluationLayout, ExecutionOptions, Expansion,
+    ExpansionOptions, FftError, Plan, ResidueLayout, TableRequirements, TablesMut,
+    TransformRequest,
+    run::{FftPlan, InterpolationPlan},
 };
 use udon::field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum};
 
@@ -192,17 +195,18 @@ fn table_batch_operations<C: PastaCurve>(
     Ok(())
 }
 
-const MSM_OPTIONS: msm::ExecutionOptions = msm::ExecutionOptions::SERIAL
-    .with_memory_limit(8192)
-    .with_max_terms_per_pass(core::num::NonZeroUsize::new(17));
-const MSM_SCRATCH: msm::Requirements =
-    match msm::Input::<Pallas>::requirements_for_len(257, MSM_OPTIONS) {
-        Ok(r) => r,
-        Err(_) => panic!("unsupported MSM size"),
+const MSM_OPTIONS: msm::BatchOptions = msm::BatchOptions::new(
+    msm::ArithmeticOptions::DEFAULT.with_max_terms_per_pass(core::num::NonZeroUsize::new(17)),
+)
+.with_memory_limit(8192);
+const MSM_METADATA: (usize, usize) =
+    match msm::run::BatchPlan::<Pallas>::storage_len(1, MSM_OPTIONS) {
+        Ok(counts) => counts,
+        Err(_) => panic!("unsupported MSM batch size"),
     };
 const _: () = {
     assert!(matches!(
-        msm::Input::<Pallas>::requirements_for_len(usize::MAX, MSM_OPTIONS),
+        msm::PreparedScalars::<Pallas>::storage_len(usize::MAX),
         Err(CurveError::SizeOverflow)
     ));
     assert!(matches!(
@@ -211,7 +215,7 @@ const _: () = {
     ));
     if usize::BITS == 32 {
         assert!(matches!(
-            msm::Input::<Pallas>::requirements_for_len(1 << 27, MSM_OPTIONS),
+            msm::PreparedScalars::<Pallas>::storage_len(1 << 27),
             Err(CurveError::SizeOverflow)
         ));
         assert!(matches!(
@@ -225,26 +229,26 @@ fn msm_operations<C: PastaCurve>(
     base: &AffinePoint<C>,
     scalar: &PastaField<C::Scalar>,
 ) -> Result<(), CurveError> {
-    assert_eq!(
-        msm::Input::<C>::requirements_for_len(257, MSM_OPTIONS)?,
-        MSM_SCRATCH
-    );
     let points = [base.to_point(), Point::IDENTITY];
     let indices: [u32; 257] = core::array::from_fn(|i| (i % 2) as u32);
     let scalars = [*scalar; 257];
     let selection = msm::Selection::indexed(msm::Bases::Points(&points), &indices)?;
     let input = selection.with_scalars(&scalars)?;
-    let mut records = [msm::ScalarStorage::ZERO; MSM_SCRATCH.scalars()];
-    let mut digits = [0; MSM_SCRATCH.digits()];
-    let mut affine = [AffinePoint::GENERATOR; MSM_SCRATCH.affine()];
-    let mut projective = [ProjectivePoint::IDENTITY; MSM_SCRATCH.projective()];
-    let mut field = [PastaField::ZERO; MSM_SCRATCH.field()];
-    let mut working_indices = [0; MSM_SCRATCH.indices()];
+    let inputs = [input];
+    let mut jobs = [msm::run::JobStorage::EMPTY; MSM_METADATA.0];
+    let mut workers = [msm::run::WorkerStorage::EMPTY; MSM_METADATA.1];
+    let plan = msm::run::BatchPlan::new(&inputs, MSM_OPTIONS, &mut jobs, &mut workers)?;
+    assert!(plan.temporary_bytes() <= 8192);
+    // Fixed caller-owned capacity; execution checks its required prefixes.
+    let mut records = [msm::ScalarStorage::ZERO; 64];
+    let mut digits = [0; 4096];
+    let mut affine = [AffinePoint::GENERATOR; 128];
+    let mut projective = [ProjectivePoint::IDENTITY; 256];
+    let mut field = [PastaField::ZERO; 256];
+    let mut working_indices = [0; 256];
     let mut output = [ProjectivePoint::IDENTITY];
-    msm::execute_batch(
-        &[input],
+    plan.execute(
         &mut output,
-        MSM_OPTIONS,
         &SerialExecutor,
         msm::Scratch::new(
             &mut records,
@@ -318,10 +322,6 @@ const _: () = {
             expansion.evaluation_requirements(1, 1 << 26),
             Err(FftError::SizeOverflow)
         ));
-        assert!(matches!(
-            options.interpolation_requirements(1 << 26, &[]),
-            Err(FftError::SizeOverflow)
-        ));
     } else {
         assert!(TableRequirements::for_size((1u64 << 32) as usize).is_ok());
         assert!(options.requirements((1u64 << 32) as usize).is_ok());
@@ -381,28 +381,38 @@ fn fft_operations<M: PrimeModulus>(values: &mut [PastaField<M>; FFT_SIZE]) -> Re
         &mut scratch,
     )?;
     let mut coefficients = [PastaField::ZERO; EXTENDED_FFT_SIZE];
-    let mut output = Class::new(
-        Plan::without_tables(extended),
-        &mut coefficients,
-        ElementOrder::BitReversed,
-    )?;
-    // Residue-major evaluations scatter directly into interpolation order.
-    for (residue, values) in evaluations.chunks_exact(FFT_SIZE).enumerate() {
-        output.scatter_strided(residue, 2, values)?;
+    // Map residue-major evaluations into the interpolation input's order.
+    let layout = ResidueLayout::new(EXTENDED_FFT_SIZE, 2)?;
+    for (stored, value) in evaluations.iter().enumerate() {
+        let row = layout.natural_row(stored).unwrap();
+        let destination = EvaluationLayout::BitReversed
+            .index(row, EXTENDED_FFT_SIZE)
+            .unwrap();
+        coefficients[destination] = *value;
     }
-    let mut lifts = [Class::new(plan, values, ElementOrder::Natural)?];
-    const INTERPOLATION_SCRATCH: usize =
-        match OPTIONS.interpolation_requirements(EXTENDED_FFT_SIZE, &[FFT_SIZE]) {
-            Ok(required) => required.field_elements,
-            Err(_) => panic!("unsupported interpolation configuration"),
-        };
-    let mut scratch = [PastaField::ZERO; INTERPOLATION_SCRATCH];
-    interpolate_classes(
-        &mut output,
-        &mut lifts,
-        OPTIONS,
+    let inverse = |plan, input_order| {
+        FftPlan::new(
+            plan,
+            TransformRequest {
+                input_order,
+                ..TransformRequest::new(Direction::Inverse)
+            },
+            NonZeroUsize::new(EXTENDED_FFT_SIZE).unwrap(),
+            Codelet::Radix2,
+        )
+    };
+    InterpolationPlan::new(
+        [
+            inverse(Plan::without_tables(extended), ElementOrder::BitReversed)?,
+            inverse(plan, ElementOrder::Natural)?,
+        ],
+        false,
+    )?
+    .execute(
+        [&mut coefficients, values],
+        [&mut [], &mut []],
+        NonZeroUsize::MIN,
         &SerialExecutor,
-        &mut scratch,
     )?;
     values.copy_from_slice(&coefficients[..FFT_SIZE]);
     Ok(())

@@ -37,7 +37,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                 return Err(FftError::InvalidLayout);
             }
             if !plan.inverse()
-                || plan.separate
+                || plan.separate()
                 || plan.request.support != InputSupport::Full
                 || plan.request.inverse_scale != InverseScale::Normalized
                 || plan.request.output_order != ElementOrder::Natural
@@ -113,7 +113,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     /// let lift_domain = Domain::new(0).unwrap().subgroup();
     /// let inverse = |domain| FftPlan::new(
     ///     Plan::without_tables(domain), TransformRequest::new(Direction::Inverse),
-    ///     NonZeroUsize::new(2).unwrap(), Codelet::Radix2, false,
+    ///     NonZeroUsize::new(2).unwrap(), Codelet::Radix2,
     /// ).unwrap();
     /// let plan = InterpolationPlan::new(
     ///     [inverse(output_domain), inverse(lift_domain)], false,

@@ -1,4 +1,10 @@
 use super::*;
+use crate::fft::run::FftPlan;
+use core::num::NonZeroUsize;
+
+fn nz(n: usize) -> NonZeroUsize {
+    NonZeroUsize::new(n).unwrap()
+}
 
 fn ordered<M: PrimeModulus>(values: &[PastaField<M>], order: ElementOrder) -> Vec<PastaField<M>> {
     (0..values.len())
@@ -36,107 +42,69 @@ fn inverse_direct<M: PrimeModulus>(
         .collect()
 }
 
-fn strategy(backend: Backend) -> Strategy {
-    Strategy {
-        backend,
-        execution: ExecutionOptions {
-            tile_len: 4,
-            columns_per_task: 3,
-            max_tasks: 3,
-        },
-        budget: ResourceBudget::for_tasks(3),
-        ..Strategy::serial()
-    }
-}
-
 fn operations<M: PrimeModulus>() {
     for log in 0..=6 {
         for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
             let domain = Domain::<M>::new(log).unwrap().coset(shift).unwrap();
             let plan = Plan::without_tables(domain);
             let input = inputs(domain.size());
-            let expected_forward = direct(&input, domain);
-            let expected_inverse = inverse_direct(&input, domain, true);
-            for backend in [Backend::InPlace, Backend::Blocked] {
+            let forward = direct(&input, domain);
+            let inverse = inverse_direct(&input, domain, true);
+            for columns in [false, true] {
                 for direction in [Direction::Forward, Direction::Inverse] {
                     let expected = if direction == Direction::Forward {
-                        &expected_forward
+                        &forward
                     } else {
-                        &expected_inverse
+                        &inverse
                     };
                     for input_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
                         for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
-                            let request = TransformRequest {
-                                input_order,
-                                output_order,
-                                ..TransformRequest::new(direction)
-                            };
-                            let operation = plan.configure(request, strategy(backend)).unwrap();
-                            let mut scratch =
-                                vec![PastaField::ONE; operation.requirements().scratch_fields + 1];
-                            let original = ordered(&input, input_order);
-                            let mut output = original.clone();
-                            operation
-                                .execute(&mut output, &SerialExecutor, &mut scratch)
-                                .unwrap();
-                            assert_eq!(
-                                output,
-                                ordered(expected, output_order),
-                                "log={log}, backend={backend:?}, request={request:?}"
-                            );
-                            assert_canonical(&scratch);
-                            assert_eq!(scratch.last(), Some(&PastaField::ONE));
-                            for initialization in [
-                                Initialization::Scatter,
-                                Initialization::Gather,
-                                Initialization::Blocked,
-                            ] {
-                                plan.configure(
-                                    request,
-                                    Strategy {
-                                        initialization,
-                                        ..strategy(backend)
-                                    },
-                                )
-                                .unwrap()
-                                .execute_into(&original, &mut output, &SerialExecutor, &mut scratch)
-                                .unwrap();
-                                assert_eq!(output, ordered(expected, output_order));
+                            for codelet in [Codelet::Radix2, Codelet::Radix4, Codelet::Radix8] {
+                                for input_storage in [InputStorage::InPlace, InputStorage::Preserve]
+                                {
+                                    let request = TransformRequest {
+                                        input_storage,
+                                        input_order,
+                                        output_order,
+                                        ..TransformRequest::new(direction)
+                                    };
+                                    let mut operation =
+                                        FftPlan::new(plan, request, nz(4), codelet).unwrap();
+                                    if columns {
+                                        operation = operation.with_columns(nz(3), nz(3)).unwrap();
+                                    }
+                                    let original = ordered(&input, input_order);
+                                    for scatter in [false, true] {
+                                        let operation = if scatter {
+                                            operation.with_scatter_initialization()
+                                        } else {
+                                            operation
+                                        };
+                                        let mut output = original.clone();
+                                        let mut scratch =
+                                            vec![PastaField::ONE; operation.retained_fields() + 1];
+                                        operation
+                                            .execute(
+                                                (input_storage == InputStorage::Preserve)
+                                                    .then_some(original.as_slice()),
+                                                &mut output,
+                                                None,
+                                                &mut scratch,
+                                                nz(3),
+                                                &SerialExecutor,
+                                            )
+                                            .unwrap();
+                                        assert_eq!(
+                                            output,
+                                            ordered(expected, output_order),
+                                            "log={log}, columns={columns}, codelet={codelet:?}, request={request:?}"
+                                        );
+                                        assert_canonical(&scratch);
+                                        assert_eq!(scratch.last(), Some(&PastaField::ONE));
+                                    }
+                                }
                             }
                         }
-                    }
-                }
-            }
-            for codelet in [Codelet::Radix4, Codelet::Radix8] {
-                for direction in [Direction::Forward, Direction::Inverse] {
-                    for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
-                        let request = TransformRequest {
-                            output_order,
-                            ..TransformRequest::new(direction)
-                        };
-                        let operation = plan
-                            .configure(
-                                request,
-                                Strategy {
-                                    codelet,
-                                    ..strategy(Backend::InPlace)
-                                },
-                            )
-                            .unwrap();
-                        let mut output = input.clone();
-                        operation
-                            .execute(&mut output, &SerialExecutor, &mut [])
-                            .unwrap();
-                        let expected = if direction == Direction::Forward {
-                            &expected_forward
-                        } else {
-                            &expected_inverse
-                        };
-                        assert_eq!(
-                            output,
-                            ordered(expected, output_order),
-                            "codelet={codelet:?}, request={request:?}, log={log}"
-                        );
                     }
                 }
             }
@@ -217,7 +185,7 @@ fn prefixes_and_products<M: PrimeModulus>() {
     let values = inputs(domain.size());
     let factors = direct(&values, domain);
     for len in [0, 1, 2, 3, 7, 16, 31, 32] {
-        for backend in [Backend::InPlace, Backend::Blocked] {
+        for columns in [false, true] {
             for direction in [Direction::Forward, Direction::Inverse] {
                 for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
                     for inverse_scale in [InverseScale::Normalized, InverseScale::Unscaled] {
@@ -226,24 +194,6 @@ fn prefixes_and_products<M: PrimeModulus>() {
                         {
                             continue;
                         }
-                        let request = TransformRequest {
-                            support: InputSupport::Prefix(len),
-                            output_order,
-                            inverse_scale,
-                            ..TransformRequest::new(direction)
-                        };
-                        let operation = plan.configure(request, strategy(backend)).unwrap();
-                        let mut output = vec![PastaField::ONE; domain.size()];
-                        let mut scratch =
-                            vec![PastaField::ZERO; operation.requirements().scratch_fields];
-                        operation
-                            .execute_into(
-                                &values[..len],
-                                &mut output,
-                                &SerialExecutor,
-                                &mut scratch,
-                            )
-                            .unwrap();
                         let expected = if direction == Direction::Forward {
                             direct(&values[..len], domain)
                         } else {
@@ -253,32 +203,49 @@ fn prefixes_and_products<M: PrimeModulus>() {
                                 inverse_scale == InverseScale::Normalized,
                             )
                         };
-                        assert_eq!(
-                            output,
-                            ordered(&expected, output_order),
-                            "len={len}, backend={backend:?}, request={request:?}"
-                        );
-                        let mut in_place = values.clone();
-                        operation
-                            .execute(&mut in_place, &SerialExecutor, &mut scratch)
-                            .unwrap();
-                        assert_eq!(in_place, output);
-                        if direction == Direction::Forward {
-                            let layout = if output_order == ElementOrder::Natural {
-                                EvaluationLayout::Natural
-                            } else {
-                                EvaluationLayout::BitReversed
+                        for input_storage in [InputStorage::InPlace, InputStorage::Preserve] {
+                            let request = TransformRequest {
+                                input_storage,
+                                support: InputSupport::Prefix(len),
+                                output_order,
+                                inverse_scale,
+                                ..TransformRequest::new(direction)
                             };
-                            let factor_values = ordered(&factors, output_order);
-                            let factor =
-                                EvaluationView::bind(&factor_values, domain, layout).unwrap();
+                            let mut operation =
+                                FftPlan::new(plan, request, nz(4), Codelet::Radix2).unwrap();
+                            if columns {
+                                operation = operation.with_columns(nz(3), nz(3)).unwrap();
+                            }
+                            let input =
+                                (input_storage == InputStorage::Preserve).then_some(&values[..len]);
+                            let mut scratch =
+                                vec![PastaField::ONE; operation.retained_fields() + 1];
+                            let mut output = values.clone();
                             operation
-                                .execute_product_into(
-                                    &values[..len],
-                                    factor,
+                                .execute(
+                                    input,
                                     &mut output,
-                                    &SerialExecutor,
+                                    None,
                                     &mut scratch,
+                                    nz(3),
+                                    &SerialExecutor,
+                                )
+                                .unwrap();
+                            assert_eq!(
+                                output,
+                                ordered(&expected, output_order),
+                                "len={len}, request={request:?}"
+                            );
+                            let factor = ordered(&factors, output_order);
+                            output.copy_from_slice(&values);
+                            operation
+                                .execute(
+                                    input,
+                                    &mut output,
+                                    Some(&factor),
+                                    &mut scratch,
+                                    nz(3),
+                                    &SerialExecutor,
                                 )
                                 .unwrap();
                             let product: Vec<_> = expected
@@ -287,6 +254,7 @@ fn prefixes_and_products<M: PrimeModulus>() {
                                 .map(|(a, b)| a.mul(b))
                                 .collect();
                             assert_eq!(output, ordered(&product, output_order));
+                            assert_eq!(scratch.last(), Some(&PastaField::ONE));
                         }
                     }
                 }
@@ -319,16 +287,19 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
                 let mut values = vec![PastaField::ZERO; description.requirements().unwrap()];
                 let table = TwiddleTable::prepare(description, &mut values).unwrap();
                 for direction in [Direction::Forward, Direction::Inverse] {
-                    let operation = plan
-                        .configure(TransformRequest::new(direction), strategy(Backend::InPlace))
-                        .unwrap()
-                        .with_twiddles(table)
-                        .unwrap();
+                    let operation = FftPlan::new(
+                        plan,
+                        TransformRequest::new(direction),
+                        nz(4),
+                        Codelet::Radix2,
+                    )
+                    .unwrap()
+                    .with_contiguous_permutation()
+                    .with_twiddles(table);
                     let mut output = input.clone();
-                    let mut scratch =
-                        vec![PastaField::ZERO; operation.requirements().scratch_fields];
+                    let mut scratch = vec![PastaField::ZERO; operation.retained_fields()];
                     operation
-                        .execute(&mut output, executor, &mut scratch)
+                        .execute(None, &mut output, None, &mut scratch, nz(3), executor)
                         .unwrap();
                     let expected = if direction == Direction::Forward {
                         direct(&input, domain)
@@ -352,16 +323,20 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
     }
     let mut scales = vec![PastaField::ZERO; domain.size()];
     let scales = PowerTable::prepare(PastaField::ONE, domain.shift(), &mut scales).unwrap();
-    let operation = plan
-        .configure(
-            TransformRequest::new(Direction::Forward),
-            strategy(Backend::InPlace),
-        )
-        .unwrap()
-        .with_forward_scales(scales)
-        .unwrap();
+    let operation = FftPlan::new(
+        plan,
+        TransformRequest::new(Direction::Forward),
+        nz(4),
+        Codelet::Radix2,
+    )
+    .unwrap()
+    .with_forward_scales(scales)
+    .unwrap()
+    .with_contiguous_permutation();
     let mut output = input.clone();
-    operation.execute(&mut output, &Threads, &mut []).unwrap();
+    operation
+        .execute(None, &mut output, None, &mut [], nz(3), &Threads)
+        .unwrap();
     assert_eq!(output, direct(&input, domain));
 }
 
@@ -413,26 +388,21 @@ fn bound_plan_tables<M: PrimeModulus>() {
                                         inverse_scale,
                                         ..TransformRequest::new(direction)
                                     };
-                                    let operation = plan
-                                        .configure(
-                                            request,
-                                            Strategy {
-                                                codelet,
-                                                backend: Backend::InPlace,
-                                                execution: ExecutionOptions {
-                                                    max_tasks: tasks,
-                                                    ..ExecutionOptions::serial()
-                                                },
-                                                budget: ResourceBudget::for_tasks(tasks),
-                                                ..Strategy::serial()
-                                            },
-                                        )
-                                        .unwrap();
+                                    let operation = FftPlan::new(plan, request, nz(128), codelet)
+                                        .unwrap()
+                                        .with_contiguous_permutation();
                                     let mut output = ordered(&input, input_order);
                                     // Serial joins still exercise every task region, including
                                     // the paired terminal split at size 256.
                                     operation
-                                        .execute(&mut output, &SerialExecutor, &mut [])
+                                        .execute(
+                                            None,
+                                            &mut output,
+                                            None,
+                                            &mut [],
+                                            nz(tasks),
+                                            &SerialExecutor,
+                                        )
                                         .unwrap();
                                     assert_eq!(
                                         output,
@@ -456,235 +426,49 @@ fn bound_plan_table_directions_and_inverse_scales_match_direct_sums() {
 }
 
 #[test]
-fn prepared_validation_and_batch_resources_precede_mutation() {
-    const DESCRIPTION: OperationDescription = OperationDescription {
-        size: 256,
-        request: TransformRequest::new(Direction::Forward),
-        strategy: Strategy::budgeted(ResourceBudget {
-            scratch_fields: 0,
-            table_bytes: 0,
-            max_tasks: 3,
-        }),
-    };
-    const REQUIRED: OperationRequirements = match DESCRIPTION.requirements(0) {
-        Ok(r) => r,
-        Err(_) => panic!("invalid sizing"),
-    };
-    assert_eq!(REQUIRED.backend, Backend::InPlace);
-    assert_eq!(REQUIRED.scratch_fields, 0);
-    let domain = Domain::<PallasBase>::new(8).unwrap().subgroup();
-    let plan = Plan::without_tables(domain);
-    let operation = plan
-        .configure(DESCRIPTION.request, DESCRIPTION.strategy)
-        .unwrap();
-    assert_eq!(operation.requirements(), REQUIRED);
-    let polynomial = inputs(domain.size());
-    let expected = direct(&polynomial, domain);
-    for backend in [Backend::InPlace, Backend::Blocked] {
-        let operation = plan
-            .configure(DESCRIPTION.request, strategy(backend))
-            .unwrap();
-        for count in [0, 1, 2, 5] {
-            let mut batch = polynomial.repeat(count);
-            let mut scratch =
-                vec![Fp::ZERO; operation.batch_requirements(count).unwrap().field_elements];
-            operation
-                .execute_batch(&mut batch, &Threads, &mut scratch)
-                .unwrap();
-            assert_eq!(batch, expected.repeat(count));
-            assert_canonical(&scratch);
-        }
-    }
-    let mut values = polynomial.clone();
-    let preserving = plan
-        .configure(
-            TransformRequest {
-                input_policy: InputPolicy::Preserve,
-                ..DESCRIPTION.request
-            },
-            DESCRIPTION.strategy,
-        )
-        .unwrap();
-    assert_eq!(
-        preserving.execute(&mut values, &SerialExecutor, &mut []),
-        Err(FftError::InvalidExecution)
-    );
-    assert_eq!(values, polynomial);
-    let prefix = plan
-        .configure(
-            TransformRequest {
-                support: InputSupport::Prefix(1),
-                ..DESCRIPTION.request
-            },
-            DESCRIPTION.strategy,
-        )
-        .unwrap();
-    for invalid in [preserving, prefix] {
-        for count in [0, 2] {
-            assert_eq!(
-                invalid.batch_requirements(count),
-                Err(FftError::InvalidExecution)
-            );
-            let mut batch = polynomial.repeat(count);
-            assert_eq!(
-                invalid.execute_batch(&mut batch, &SerialExecutor, &mut []),
-                Err(FftError::InvalidExecution)
-            );
-            assert_eq!(batch, polynomial.repeat(count));
-        }
-    }
-    let blocked = plan
-        .configure(DESCRIPTION.request, strategy(Backend::Blocked))
-        .unwrap();
+fn transform_configuration_and_scratch_are_checked_before_mutation() {
+    let plan = Plan::<PallasBase>::without_tables(Domain::new(4).unwrap().subgroup());
+    let request = TransformRequest::new(Direction::Forward);
     assert!(matches!(
-        blocked.execute(&mut values, &SerialExecutor, &mut []),
+        FftPlan::new(plan, request, nz(3), Codelet::Radix2),
+        Err(FftError::InvalidExecution)
+    ));
+    for request in [
+        TransformRequest {
+            support: InputSupport::Prefix(17),
+            ..request
+        },
+        TransformRequest {
+            support: InputSupport::Prefix(3),
+            input_order: ElementOrder::BitReversed,
+            ..request
+        },
+        TransformRequest {
+            inverse_scale: InverseScale::Unscaled,
+            ..request
+        },
+    ] {
+        assert!(FftPlan::new(plan, request, nz(4), Codelet::Radix2).is_err());
+    }
+    let operation = FftPlan::new(plan, request, nz(4), Codelet::Radix2)
+        .unwrap()
+        .with_columns(nz(3), nz(2))
+        .unwrap();
+    let mut values = inputs(16);
+    let original = values.clone();
+    let mut scratch = vec![Fp::ONE; operation.retained_fields() - 1];
+    let joins = CountJoins::default();
+    assert!(matches!(
+        operation.execute(None, &mut values, None, &mut scratch, nz(3), &joins),
         Err(FftError::ScratchTooSmall { .. })
     ));
-    assert_eq!(values, polynomial);
-    assert!(matches!(
-        plan.configure(
-            DESCRIPTION.request,
-            Strategy {
-                budget: DESCRIPTION.strategy.budget,
-                ..strategy(Backend::Blocked)
-            }
-        ),
-        Err(FftError::ResourceLimit)
-    ));
-    let wrong = domain.domain().coset(Fp::from_u64(7)).unwrap();
-    let factor = EvaluationView::bind(&polynomial, wrong, EvaluationLayout::Natural).unwrap();
-    assert_eq!(
-        operation.execute_product_into(&polynomial, factor, &mut values, &SerialExecutor, &mut []),
-        Err(FftError::InvalidLayout)
-    );
-    assert_eq!(values, polynomial);
+    assert_eq!(values, original);
+    assert!(scratch.iter().all(|v| *v == Fp::ONE));
+    assert_eq!(joins.take(), 0);
 }
 
 #[test]
-fn prepared_table_budgets_and_auto_selection_preserve_blocked_partitions() {
-    let domain = Domain::<PallasBase>::new(6)
-        .unwrap()
-        .coset(Fp::from_u64(7))
-        .unwrap();
-    let prepared = Prepared::new(domain);
-    let plan = Plan::new(prepared.tables().bind(domain).unwrap());
-    let request = TransformRequest::new(Direction::Forward);
-    let table_bytes = 2 * (domain.size() / 2) * core::mem::size_of::<Fp>();
-    let mut selection = strategy(Backend::Auto);
-    selection.budget.table_bytes = table_bytes;
-    selection.budget.scratch_fields = 96;
-    let operation = plan.configure(request, selection).unwrap();
-    let required = operation.requirements();
-    assert_eq!(required.backend, Backend::Blocked);
-    assert_eq!(required.retained_table_bytes, table_bytes);
-    assert_eq!(required.scratch_fields, 96);
-    assert_eq!(required.per_worker_scratch_fields, 48);
-    assert_eq!(required.scratch_partitions, 2);
-    assert_eq!(required.max_tasks, 3);
-
-    let input = inputs(domain.size());
-    let expected = direct(&input, domain);
-    let mut output = input.clone();
-    let mut scratch = vec![Fp::ONE; required.scratch_fields];
-    assert!(matches!(
-        operation.execute(&mut output, &Threads, &mut scratch[..95]),
-        Err(FftError::ScratchTooSmall {
-            required: 96,
-            provided: 95
-        })
-    ));
-    assert_eq!(output, input);
-    assert!(scratch.iter().all(|value| *value == Fp::ONE));
-    operation
-        .execute(&mut output, &Threads, &mut scratch)
-        .unwrap();
-    assert_eq!(output, expected);
-
-    selection.budget.scratch_fields = 95;
-    let fallback = plan.configure(request, selection).unwrap();
-    assert_eq!(fallback.requirements().backend, Backend::InPlace);
-    assert_eq!(fallback.requirements().scratch_fields, 0);
-    assert_eq!(fallback.requirements().per_worker_scratch_fields, 0);
-    assert_eq!(fallback.requirements().scratch_partitions, 0);
-    assert!(matches!(
-        plan.configure(
-            request,
-            Strategy {
-                backend: Backend::Blocked,
-                ..selection
-            }
-        ),
-        Err(FftError::ResourceLimit)
-    ));
-    selection.budget.table_bytes -= 1;
-    assert!(matches!(
-        plan.configure(request, selection),
-        Err(FftError::ResourceLimit)
-    ));
-
-    // The dense provider aliases a plan table; both borrows still count.
-    let dense = TwiddleTable::bind(
-        TwiddleDescription {
-            size: domain.size(),
-            inverse: false,
-            storage: TwiddleStorage::Dense,
-        },
-        &prepared.forward,
-    )
-    .unwrap()
-    .validate()
-    .unwrap();
-    let mut packed = [Fp::ZERO; 7];
-    let local = TwiddleTable::prepare(
-        TwiddleDescription {
-            size: 8,
-            inverse: false,
-            storage: TwiddleStorage::StagePacked,
-        },
-        &mut packed,
-    )
-    .unwrap();
-    let mut scales = vec![Fp::ZERO; domain.size()];
-    let scales = PowerTable::prepare(Fp::ONE, domain.shift(), &mut scales).unwrap();
-    for table in [dense, local] {
-        assert!(matches!(
-            plan.configure(request, strategy(Backend::Blocked))
-                .unwrap()
-                .with_twiddles(table),
-            Err(FftError::InvalidExecution)
-        ));
-        let bytes = table_bytes
-            + core::mem::size_of_val(table.as_slice())
-            + core::mem::size_of_val(scales.as_slice());
-        let mut selection = strategy(Backend::Auto);
-        selection.budget.table_bytes = bytes;
-        let operation = plan
-            .configure(request, selection)
-            .unwrap()
-            .with_twiddles(table)
-            .unwrap()
-            .with_forward_scales(scales)
-            .unwrap();
-        assert_eq!(operation.requirements().backend, Backend::InPlace);
-        assert_eq!(operation.requirements().scratch_fields, 0);
-        assert_eq!(operation.requirements().retained_table_bytes, bytes);
-        let mut output = input.clone();
-        operation.execute(&mut output, &Threads, &mut []).unwrap();
-        assert_eq!(output, expected);
-        selection.budget.table_bytes -= 1;
-        assert!(matches!(
-            plan.configure(request, selection)
-                .unwrap()
-                .with_twiddles(table)
-                .unwrap()
-                .with_forward_scales(scales),
-            Err(FftError::ResourceLimit)
-        ));
-    }
-}
-
-#[test]
-fn prepared_parallel_panics_restore_all_field_buffers() {
+fn parallel_panics_restore_all_field_buffers() {
     let domain = Domain::<PallasScalar>::new(8)
         .unwrap()
         .coset(PastaField::from_u64(7))
@@ -692,42 +476,42 @@ fn prepared_parallel_panics_restore_all_field_buffers() {
     let prepared = Prepared::new(domain);
     for tables in [Tables::default(), prepared.tables()] {
         let plan = Plan::new(tables.bind(domain).unwrap());
-        for backend in [Backend::InPlace, Backend::Blocked] {
+        for columns in [false, true] {
             for codelet in [Codelet::Radix2, Codelet::Radix4, Codelet::Radix8] {
-                if backend != Backend::InPlace && codelet != Codelet::Radix2 {
-                    continue;
-                }
                 for direction in [Direction::Forward, Direction::Inverse] {
                     for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
-                        let operation = plan
-                            .configure(
-                                TransformRequest {
-                                    output_order,
-                                    ..TransformRequest::new(direction)
-                                },
-                                Strategy {
-                                    codelet,
-                                    ..strategy(backend)
-                                },
-                            )
-                            .unwrap();
+                        let mut operation = FftPlan::new(
+                            plan,
+                            TransformRequest {
+                                output_order,
+                                ..TransformRequest::new(direction)
+                            },
+                            nz(4),
+                            codelet,
+                        )
+                        .unwrap();
+                        if columns {
+                            operation = operation.with_columns(nz(3), nz(3)).unwrap();
+                        }
                         let mut values = inputs(domain.size());
-                        let mut scratch =
-                            vec![PastaField::ONE; operation.requirements().scratch_fields];
+                        let mut scratch = vec![PastaField::ONE; operation.retained_fields()];
                         let joins = CountJoins::default();
                         operation
-                            .execute(&mut values, &joins, &mut scratch)
+                            .execute(None, &mut values, None, &mut scratch, nz(3), &joins)
                             .unwrap();
                         for index in 0..joins.take() {
                             let mut values = inputs(domain.size());
                             let failed = catch_unwind(AssertUnwindSafe(|| {
                                 operation.execute(
+                                    None,
                                     &mut values,
+                                    None,
+                                    &mut scratch,
+                                    nz(3),
                                     &FailAt {
                                         calls: AtomicUsize::new(0),
                                         index,
                                     },
-                                    &mut scratch,
                                 )
                             }));
                             assert!(failed.is_err());
@@ -742,95 +526,53 @@ fn prepared_parallel_panics_restore_all_field_buffers() {
 }
 
 #[test]
-fn finish_tables_follow_prefix_codelet_and_backend_applicability() {
+fn finish_tables_preserve_prefix_and_codelet_results() {
     for log in [3, 7] {
         for shift in [Fp::ONE, Fp::zeta(), Fp::zeta_inverse(), Fp::from_u64(7)] {
             let domain = Domain::new(log).unwrap().coset(shift).unwrap();
             let prepared = Prepared::new(domain);
             let plan = Plan::new(prepared.tables().bind(domain).unwrap());
+            let dense = TwiddleTable::bind(
+                TwiddleDescription {
+                    size: domain.size(),
+                    inverse: true,
+                    storage: TwiddleStorage::Dense,
+                },
+                &prepared.inverse,
+            )
+            .unwrap();
             for len in [0, 1, 2, 3, domain.size()] {
                 let input = inputs(len);
-                let mut padded = input.clone();
-                padded.resize(domain.size(), Fp::ZERO);
-                let expected = inverse_direct(&padded, domain, true);
-                for (backend, codelet) in [
-                    (Backend::InPlace, Codelet::Radix8),
-                    (Backend::Blocked, Codelet::Radix2),
-                    (Backend::Auto, Codelet::Radix2),
-                ] {
-                    for input_policy in [InputPolicy::Preserve, InputPolicy::Disposable] {
+                let expected = inverse_direct(&input, domain, true);
+                for (columns, codelet) in [(false, Codelet::Radix8), (true, Codelet::Radix2)] {
+                    for input_storage in [InputStorage::Preserve, InputStorage::InPlace] {
                         let request = TransformRequest {
+                            input_storage,
                             support: InputSupport::Prefix(len),
-                            input_policy,
                             ..TransformRequest::new(Direction::Inverse)
                         };
-                        let mut selection = Strategy {
-                            codelet,
-                            ..strategy(backend)
-                        };
-                        // Codelets finish whole small transforms. A pruned prefix
-                        // can instead start at a later radix-2 butterfly.
-                        let combined = shift != Fp::ONE
-                            && (len > 1
-                                && (codelet == Codelet::Radix2
-                                    || domain.size() > 8
-                                    || len <= domain.size() / 2)
-                                || input_policy == InputPolicy::Disposable
-                                    && (codelet == Codelet::Radix2 || domain.size() > 8));
-                        let scales = shift == Fp::from_u64(7) || combined;
-                        let bytes = (2 + usize::from(combined) + usize::from(scales))
-                            * (domain.size() / 2)
-                            * 32;
-                        selection.budget.table_bytes = bytes;
-                        let operation = plan.configure(request, selection).unwrap();
-                        assert_eq!(operation.requirements().retained_table_bytes, bytes);
-                        let mut scratch =
-                            vec![Fp::ONE; operation.requirements().scratch_fields + 1];
-                        let mut output = vec![Fp::ONE; domain.size()];
-                        operation
-                            .execute_into(&input, &mut output, &SerialExecutor, &mut scratch)
-                            .unwrap();
-                        assert_eq!(output, expected);
-                        assert_eq!(scratch.last(), Some(&Fp::ONE));
-                        if input_policy == InputPolicy::Disposable {
-                            output.copy_from_slice(&padded);
+                        let mut operation = FftPlan::new(plan, request, nz(4), codelet).unwrap();
+                        if columns {
+                            operation = operation.with_columns(nz(3), nz(3)).unwrap();
+                        }
+                        for operation in [operation, operation.with_twiddles(dense)] {
+                            let mut scratch = vec![Fp::ONE; operation.retained_fields() + 1];
+                            let mut output = input.clone();
+                            output.resize(domain.size(), Fp::ONE);
                             operation
-                                .execute(&mut output, &SerialExecutor, &mut scratch)
+                                .execute(
+                                    (input_storage == InputStorage::Preserve)
+                                        .then_some(input.as_slice()),
+                                    &mut output,
+                                    None,
+                                    &mut scratch,
+                                    nz(3),
+                                    &SerialExecutor,
+                                )
                                 .unwrap();
                             assert_eq!(output, expected);
+                            assert_eq!(scratch.last(), Some(&Fp::ONE));
                         }
-                        if backend == Backend::Auto {
-                            let dense = TwiddleTable::bind(
-                                TwiddleDescription {
-                                    size: domain.size(),
-                                    inverse: true,
-                                    storage: TwiddleStorage::Dense,
-                                },
-                                &prepared.inverse,
-                            )
-                            .unwrap();
-                            selection.budget.table_bytes +=
-                                core::mem::size_of_val(dense.as_slice());
-                            let stages = plan
-                                .configure(request, selection)
-                                .unwrap()
-                                .with_twiddles(dense)
-                                .unwrap();
-                            assert_eq!(stages.requirements().backend, Backend::InPlace);
-                            assert_eq!(
-                                stages.requirements().retained_table_bytes,
-                                selection.budget.table_bytes
-                            );
-                            stages
-                                .execute_into(&input, &mut output, &SerialExecutor, &mut [])
-                                .unwrap();
-                            assert_eq!(output, expected);
-                        }
-                        selection.budget.table_bytes = bytes - 1;
-                        assert!(matches!(
-                            plan.configure(request, selection),
-                            Err(FftError::ResourceLimit)
-                        ));
                     }
                 }
             }

@@ -188,9 +188,10 @@ fn differentials<C: PastaCurve>() {
                         (3, NonZeroUsize::new(17)),
                         (65, NonZeroUsize::new(67)),
                     ] {
-                        let options = ExecutionOptions::SERIAL
-                            .with_task_budget(TaskBudget::new(tasks).unwrap())
-                            .with_max_terms_per_pass(cap);
+                        let options = BatchOptions::new(
+                            ArithmeticOptions::DEFAULT.with_max_terms_per_pass(cap),
+                        )
+                        .with_task_budget(TaskBudget::new(tasks).unwrap());
                         let r = input.requirements(options).unwrap();
                         assert_eq!(r, batch_requirements(&[input], options).unwrap());
                         let mut buffers = Buffers::new(r);
@@ -277,9 +278,10 @@ fn prepared_scalars_validate_before_writes_and_release_originals() {
         Input::new_prepared(Bases::Affine(&bases), retained).unwrap(),
         Input::indexed_prepared(Bases::Affine(&negative[..1]), &indices, retained).unwrap(),
     ];
-    let options = ExecutionOptions::SERIAL
-        .with_task_budget(TaskBudget::new(4).unwrap())
-        .with_max_terms_per_pass(NonZeroUsize::new(17));
+    let options = BatchOptions::new(
+        ArithmeticOptions::DEFAULT.with_max_terms_per_pass(NonZeroUsize::new(17)),
+    )
+    .with_task_budget(TaskBudget::new(4).unwrap());
     let r = batch_requirements(&inputs, options).unwrap();
     let mut buffers = Buffers::new(r);
     let mut output = [ProjectivePoint::GENERATOR; 3];
@@ -335,9 +337,10 @@ fn scalar_boundaries<C: PastaCurve>() {
                 Input::indexed_prepared(Bases::Points(&bases), &indices, retained).unwrap();
             for tasks in [1, 4] {
                 for cap in [1, 7, 8, 17, n] {
-                    let options = ExecutionOptions::SERIAL
-                        .with_task_budget(TaskBudget::new(tasks).unwrap())
-                        .with_max_terms_per_pass(NonZeroUsize::new(cap));
+                    let options = BatchOptions::new(
+                        ArithmeticOptions::DEFAULT.with_max_terms_per_pass(NonZeroUsize::new(cap)),
+                    )
+                    .with_task_budget(TaskBudget::new(tasks).unwrap());
                     let r = input.requirements(options).unwrap();
                     let mut buffers = Buffers::new(r);
                     assert_eq!(
@@ -406,14 +409,16 @@ fn dense_and_sparse_bounded_rows_cross_chunk_policies() {
                         &SerialExecutor,
                     )
                     .unwrap();
-                    let cache_options = ExecutionOptions::SERIAL;
+                    let cache_options = ArithmeticOptions::DEFAULT;
                     let mut digits = vec![73; prepared.cache_len(cache_options).unwrap()];
                     let cached = prepared.cache(cache_options, &mut digits).unwrap();
                     let reused = raw.selection().with_prepared_scalars(cached).unwrap();
                     for chunk in [n, 257] {
-                        let options = ExecutionOptions::SERIAL
-                            .with_chunk_size(NonZeroUsize::new(chunk).unwrap())
-                            .with_task_budget(TaskBudget::new(3).unwrap());
+                        let options = BatchOptions::new(
+                            ArithmeticOptions::DEFAULT
+                                .with_chunk_size(NonZeroUsize::new(chunk).unwrap()),
+                        )
+                        .with_task_budget(TaskBudget::new(3).unwrap());
                         for input in [raw, reused] {
                             let r = input.requirements(options).unwrap();
                             let mut buffers = Buffers::new(r);
@@ -465,9 +470,10 @@ fn scratch_can_be_reused_after_executor_unwind() {
     let scalars: Vec<_> = field_samples().take(bases.len()).collect();
     let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
     let expected = reference(&input);
-    let options = ExecutionOptions::SERIAL
-        .with_task_budget(TaskBudget::new(4).unwrap())
-        .with_max_terms_per_pass(NonZeroUsize::new(37));
+    let options = BatchOptions::new(
+        ArithmeticOptions::DEFAULT.with_max_terms_per_pass(NonZeroUsize::new(37)),
+    )
+    .with_task_budget(TaskBudget::new(4).unwrap());
     let r = input.requirements(options).unwrap();
     let mut buffers = Buffers::new(r);
     // The first two joins prepare three scalar-record chunks; later joins evaluate
@@ -565,10 +571,9 @@ fn collisions<C: PastaCurve>() {
             let input = Input::new(Bases::Points(&bases), &scalars).unwrap();
             let expected = reference(&input);
             for cap in [1, 2, 3, 37, n] {
-                let options = ExecutionOptions {
-                    max_terms_per_pass: NonZeroUsize::new(cap),
-                    ..ExecutionOptions::SERIAL
-                };
+                let options = BatchOptions::new(
+                    ArithmeticOptions::DEFAULT.with_max_terms_per_pass(NonZeroUsize::new(cap)),
+                );
                 let mut buffers = Buffers::new(input.requirements(options).unwrap());
                 assert_eq!(
                     input
@@ -606,9 +611,9 @@ fn grouped_jobs_share_workers_with_side_work_and_reuse_dirty_scratch() {
     let prepared =
         PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
             .unwrap();
-    let mut digits = vec![0; prepared.cache_len(ExecutionOptions::SERIAL).unwrap()];
+    let mut digits = vec![0; prepared.cache_len(ArithmeticOptions::DEFAULT).unwrap()];
     let retained = prepared
-        .cache(ExecutionOptions::SERIAL, &mut digits)
+        .cache(ArithmeticOptions::DEFAULT, &mut digits)
         .unwrap();
     jobs[1] = jobs[1].selection().with_prepared_scalars(retained).unwrap();
     for workers in [1, 2, 4] {
@@ -617,9 +622,10 @@ fn grouped_jobs_share_workers_with_side_work_and_reuse_dirty_scratch() {
             .build()
             .unwrap();
         for tasks in [1, 3, 7, 32, 128] {
-            let options = ExecutionOptions::SERIAL
-                .with_task_budget(TaskBudget::new(tasks).unwrap())
-                .with_max_terms_per_pass(NonZeroUsize::new(63));
+            let options = BatchOptions::new(
+                ArithmeticOptions::DEFAULT.with_max_terms_per_pass(NonZeroUsize::new(63)),
+            )
+            .with_task_budget(TaskBudget::new(tasks).unwrap());
             let r = batch_requirements(&jobs, options).unwrap();
             let mut buffers = Buffers::new(r);
             let mut output = [ProjectivePoint::IDENTITY; 5];
@@ -681,16 +687,19 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
     ));
     for n in [usize::MAX, isize::MAX as usize, usize::MAX / 64] {
         assert_eq!(
-            Input::<C>::requirements_for_len(n, ExecutionOptions::SERIAL),
+            Input::<C>::requirements_for_len(n, BatchOptions::default()),
             Err(CurveError::SizeOverflow)
         );
     }
-    const R: Requirements = match Input::<C>::requirements_for_len(256, ExecutionOptions::SERIAL) {
+    const R: Requirements = match Input::<C>::requirements_for_len(
+        256,
+        BatchOptions::new(ArithmeticOptions::DEFAULT),
+    ) {
         Ok(r) => r,
         Err(_) => panic!("valid length"),
     };
     let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
-    assert_eq!(input.requirements(ExecutionOptions::SERIAL).unwrap(), R);
+    assert_eq!(input.requirements(BatchOptions::default()).unwrap(), R);
     for short in 0..7 {
         let mut b = Buffers::<C>::new(R);
         let mut scratch = b.borrow();
@@ -709,7 +718,7 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
             execute_batch(
                 &[input],
                 &mut output[..len],
-                ExecutionOptions::SERIAL,
+                BatchOptions::default(),
                 &SerialExecutor,
                 scratch
             )
@@ -912,11 +921,22 @@ fn forced_kernels_chunks_and_incompatible_caches() {
         let prepared =
             PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
                 .unwrap();
-        let cached_options = ExecutionOptions::SERIAL.with_booth_width(8).unwrap();
+        let cached_options = ArithmeticOptions::DEFAULT
+            .with_kernel(Kernel::Booth {
+                width: Some(8),
+                accumulation: Accumulation::Auto,
+            })
+            .unwrap();
         let mut bytes = vec![73; prepared.cache_len(cached_options).unwrap() + 1];
         let cached = prepared.cache(cached_options, &mut bytes).unwrap();
         let reused = raw.selection().with_prepared_scalars(cached).unwrap();
-        assert_eq!(reused.requirements(cached_options).unwrap().digits(), 0);
+        assert_eq!(
+            reused
+                .requirements(BatchOptions::new(cached_options))
+                .unwrap()
+                .digits(),
+            0
+        );
         for width in 4..=12 {
             for accumulation in [
                 Accumulation::Affine,
@@ -933,13 +953,17 @@ fn forced_kernels_chunks_and_incompatible_caches() {
                     if chunk.is_some_and(|c| c.get() == 2) && width > 5 {
                         continue;
                     }
-                    let options = ExecutionOptions::SERIAL
-                        .with_booth_width(width)
-                        .unwrap()
-                        .with_accumulation(accumulation)
-                        .with_chunk_size(chunk.unwrap_or(NonZeroUsize::MAX))
-                        .with_max_terms_per_pass(pass)
-                        .with_task_budget(TaskBudget::new(3).unwrap());
+                    let options = BatchOptions::new(
+                        ArithmeticOptions::DEFAULT
+                            .with_kernel(Kernel::Booth {
+                                width: Some(width),
+                                accumulation,
+                            })
+                            .unwrap()
+                            .with_chunk_size(chunk.unwrap_or(NonZeroUsize::MAX))
+                            .with_max_terms_per_pass(pass),
+                    )
+                    .with_task_budget(TaskBudget::new(3).unwrap());
                     let r = raw.requirements(options).unwrap();
                     let mut buffers = Buffers::new(r);
                     assert_eq!(
@@ -1006,8 +1030,15 @@ fn typed_sources_validate_bounds_and_signed_extremes() {
         ] {
             let expected = reference(&selection.with_scalars(raw).unwrap());
             for width in [None, Some(5), Some(12)] {
-                let options = width.map_or(ExecutionOptions::SERIAL, |w| {
-                    ExecutionOptions::SERIAL.with_booth_width(w).unwrap()
+                let options = width.map_or(BatchOptions::default(), |w| {
+                    BatchOptions::new(
+                        ArithmeticOptions::DEFAULT
+                            .with_kernel(Kernel::Booth {
+                                width: Some(w),
+                                accumulation: Accumulation::Auto,
+                            })
+                            .unwrap(),
+                    )
                 });
                 let mut buffers = Buffers::new(typed.requirements(options).unwrap());
                 assert_eq!(
@@ -1064,17 +1095,17 @@ fn memory_ceiling_and_reusable_weighted_plans() {
         .map(|&n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap())
         .collect();
     let expected: Vec<_> = inputs.iter().map(reference).collect();
-    let serial = batch_requirements(&inputs, ExecutionOptions::SERIAL).unwrap();
+    let serial = batch_requirements(&inputs, BatchOptions::default()).unwrap();
     assert_eq!(
         serial.digits(),
         inputs[1]
-            .requirements(ExecutionOptions::SERIAL)
+            .requirements(BatchOptions::default())
             .unwrap()
             .digits()
     );
     for tasks in [1, 2, 3, 5, 17] {
         for limit in [8192, 32768, 262144, 8 * 1024 * 1024] {
-            let options = ExecutionOptions::SERIAL
+            let options = BatchOptions::default()
                 .with_task_budget(TaskBudget::new(tasks).unwrap())
                 .with_memory_limit(limit);
             let r = batch_requirements(&inputs, options).unwrap();
@@ -1099,7 +1130,7 @@ fn memory_ceiling_and_reusable_weighted_plans() {
             assert_eq!(workers[w], WorkerStorage::EMPTY);
         }
     }
-    let options = ExecutionOptions::SERIAL.with_memory_limit(0);
+    let options = BatchOptions::default().with_memory_limit(0);
     let mut jobs = [JobStorage::EMPTY; 6];
     let mut workers = [WorkerStorage::EMPTY; 1];
     assert!(matches!(
@@ -1111,7 +1142,7 @@ fn memory_ceiling_and_reusable_weighted_plans() {
     // A fixed ceiling bounds every buffer even at sizing-only stress lengths.
     for n in [32768, 1 << 20] {
         assert!(
-            Input::<C>::requirements_for_len(n, ExecutionOptions::SERIAL.with_memory_limit(32768))
+            Input::<C>::requirements_for_len(n, BatchOptions::default().with_memory_limit(32768))
                 .unwrap()
                 .bytes::<C>()
                 .unwrap()
@@ -1161,9 +1192,11 @@ fn compact_tables_and_selection_rebind_across_scalar_rows() {
                 let input = selection.with_scalars(&scalars).unwrap();
                 let expected = reference(&input);
                 for options in [
-                    ExecutionOptions::SERIAL,
-                    ExecutionOptions::SERIAL.with_chunk_size(NonZeroUsize::new(31).unwrap()),
-                    ExecutionOptions::SERIAL.with_memory_limit(8192),
+                    BatchOptions::default(),
+                    BatchOptions::new(
+                        ArithmeticOptions::DEFAULT.with_chunk_size(NonZeroUsize::new(31).unwrap()),
+                    ),
+                    BatchOptions::default().with_memory_limit(8192),
                 ] {
                     let mut buffers = Buffers::new(input.requirements(options).unwrap());
                     assert_eq!(
@@ -1355,11 +1388,12 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
                 .unwrap();
         for width in 4..=12 {
             for chunk in [1, 2, 17, 256, 513] {
-                let options = ExecutionOptions::SERIAL
-                    .with_booth_width(width)
-                    .unwrap()
-                    .with_chunk_size(NonZeroUsize::new(chunk).unwrap())
-                    .with_streaming_buckets();
+                let options = BatchOptions::new(
+                    ArithmeticOptions::DEFAULT
+                        .with_kernel(Kernel::StreamingBooth { width: Some(width) })
+                        .unwrap()
+                        .with_chunk_size(NonZeroUsize::new(chunk).unwrap()),
+                );
                 for input in [
                     raw,
                     raw.selection().with_prepared_scalars(prepared).unwrap(),
@@ -1378,11 +1412,12 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
                 }
             }
         }
-        let o = ExecutionOptions::SERIAL
-            .with_booth_width(4)
-            .unwrap()
-            .with_streaming_buckets()
-            .with_memory_limit(32768);
+        let o = BatchOptions::new(
+            ArithmeticOptions::DEFAULT
+                .with_kernel(Kernel::StreamingBooth { width: Some(4) })
+                .unwrap(),
+        )
+        .with_memory_limit(32768);
         let r = raw.requirements(o).unwrap();
         assert!(r.bytes::<C>().unwrap() <= 32768);
         let mut buffers = Buffers::new(r);

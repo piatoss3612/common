@@ -40,12 +40,17 @@ fn phases() {
         std::println!("curve={}", core::any::type_name::<C>());
         for budget in [1, 12] {
             let options =
-                ExecutionOptions::SERIAL.with_task_budget(TaskBudget::new(budget).unwrap());
+                BatchOptions::default().with_task_budget(TaskBudget::new(budget).unwrap());
             for (name, options) in [
                 ("uncapped", options),
                 (
                     "pass_512",
-                    options.with_max_terms_per_pass(core::num::NonZeroUsize::new(512)),
+                    BatchOptions::new(
+                        options
+                            .arithmetic()
+                            .with_max_terms_per_pass(core::num::NonZeroUsize::new(512)),
+                    )
+                    .with_task_budget(options.task_budget()),
                 ),
                 ("limit_32768", options.with_memory_limit(32768)),
             ] {
@@ -82,7 +87,14 @@ fn phases() {
                 }
                 black_box(&halves);
             });
-            let options = ExecutionOptions::SERIAL.with_booth_width(8).unwrap();
+            let options = BatchOptions::new(
+                ArithmeticOptions::DEFAULT
+                    .with_kernel(Kernel::Booth {
+                        width: Some(8),
+                        accumulation: Accumulation::Auto,
+                    })
+                    .unwrap(),
+            );
             let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
             let mut records = vec![ScalarStorage::ZERO; n];
             prepared::prepare(
@@ -405,7 +417,7 @@ fn native_controls() {
         }
         for n in [128, 1024, 8192] {
             let input = Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap();
-            let options = ExecutionOptions::SERIAL;
+            let options = BatchOptions::default();
             let mut buffers = tests::Buffers::new(input.requirements(options).unwrap());
             let expected = input
                 .execute(options, &SerialExecutor, buffers.borrow())
@@ -472,11 +484,16 @@ fn native_controls() {
                             ));
                         },
                     );
-                    let o = options
-                        .with_booth_width(u32::from(width))
-                        .unwrap()
-                        .with_accumulation(Accumulation::Projective)
-                        .with_chunk_size(NonZeroUsize::new(chunk).unwrap());
+                    let o = BatchOptions::new(
+                        options
+                            .arithmetic()
+                            .with_kernel(Kernel::Booth {
+                                width: Some(u32::from(width)),
+                                accumulation: Accumulation::Projective,
+                            })
+                            .unwrap()
+                            .with_chunk_size(NonZeroUsize::new(chunk).unwrap()),
+                    );
                     let r = input.requirements(o).unwrap();
                     let mut buffers = tests::Buffers::new(r);
                     assert_eq!(

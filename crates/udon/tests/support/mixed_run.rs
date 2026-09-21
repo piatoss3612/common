@@ -18,7 +18,7 @@ use zakura_udon::{
     curve::{
         AffinePoint, Pallas, ProjectivePoint,
         msm::{
-            Bases, ExecutionOptions, Input,
+            ArithmeticOptions, Bases, Input,
             run::{
                 Buffers as MsmBuffers, MsmKernel, MsmOutput, MsmPlan, MsmRun,
                 Resources as MsmResources,
@@ -88,7 +88,7 @@ impl Fixture {
                 [n, (n / 8).max(1)].map(|n| {
                     MsmPlan::new(
                         n,
-                        ExecutionOptions::SERIAL,
+                        ArithmeticOptions::DEFAULT,
                         NonZeroUsize::new(grain).unwrap(),
                     )
                     .unwrap()
@@ -103,7 +103,6 @@ impl Fixture {
                         TransformRequest::new(Direction::Forward),
                         NonZeroUsize::new(1024).unwrap(),
                         Codelet::Radix2,
-                        false,
                     )
                     .unwrap()
                 })

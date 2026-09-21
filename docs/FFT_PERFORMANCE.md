@@ -1,28 +1,22 @@
 # FFT strategy performance
 
-FFT strategy selection depends on the caller's memory, ordering, and concurrency
-constraints. These September 12, 2026 measurements compare the explicit choices
-in the earlier version of the
-[strategy suite](../crates/udon/benches/fft_strategies.rs).
-They do not select runtime defaults. See the [FFT guide](FFT.md) for operation
-contracts and resource queries.
+FFT strategy selection depends on memory, ordering, and concurrency constraints.
+The [strategy suite](../crates/udon/benches/fft_strategies.rs) measures explicit
+choices; it does not select runtime defaults. See the [FFT guide](FFT.md) for
+operation contracts and resource queries.
 
-The original strategy comparisons were collected before the removal of
-experimental backends and table representations. This report retains
-measurements for the remaining strategies. The
-[upgrade refinements](#measured-upgrade-refinements) record a later comparison
-against revision `d0c00ac`.
-
-The current suite uses the `fft::run` plans, whose drivers and scratch counts
-differ from the measured versions. It also constructs interpolation plans
-outside timing. The tables below retain the historical results; use the
-commands below to measure the current implementation.
+The tables below were collected on September 12, 2026. They retain comparisons
+between supported strategies, but the current `fft::run` drivers, interpolation
+plan binding, and scratch requirements differ from the measured versions.
+Use these results as evidence of tradeoffs and the commands below for current
+timings. Obtain temporary storage counts from the current plans.
 
 ## Method
 
 Measurements ran sequentially on `aarch64-apple-darwin`, with Rust 1.91.0,
-LLVM 21.1.2, the pinned dependencies, and the default Udon features. No builds
-or tests ran concurrently with timing. Criterion used ten samples, 300 ms of
+LLVM 21.1.2, the pinned dependencies, and the default Udon features. The CPU
+model and exact strategy-comparison revision were not recorded. No builds or
+tests ran concurrently with timing. Criterion used ten samples, 300 ms of
 warmup, and a one-second requested measurement period; slow cases can require
 longer. Tables below report elapsed-time estimates. Brackets, where shown,
 give Criterion's 95% confidence intervals.
@@ -36,11 +30,12 @@ separately into allocated buffers.
 
 Parallel cases use a persistent four-worker Rayon pool, entered outside the
 timed loop. Expansion, batch, and class inputs are restored outside timing.
-The reported class timings include binding restored buffers to class descriptors.
+The recorded class timings include binding restored buffers to class descriptors;
+the current suite constructs interpolation plans outside timing.
 The total task budget includes both outer jobs and inner transforms. Blocked
 geometry uses 1,024-element local transforms and 32 columns per job. Reported
-table and temporary bytes exclude input/output buffers, fixed stack frames,
-and executor resources. Each Pasta field occupies 32 bytes.
+table bytes exclude input/output buffers, fixed stack frames, and executor
+resources. Each Pasta field occupies 32 bytes.
 
 The suite also covers both fields, subgroup and order-three shifts, lengths
 2,048, 16,384, and 1,048,576, and one or four tasks. The measurements below
@@ -58,91 +53,37 @@ description. A mathematically valid table does not identify the fastest strategy
 on another machine. These results do not establish x86-64 performance or
 constant-time behavior.
 
-## Measured upgrade refinements
+## Avoiding repeated work
 
-Two changes reduce repeated work: prepared stages reuse validated `Plan`
-twiddles, and bit-reversed expansion prunes stages for short coefficient
-prefixes. In baseline revision `d0c00ac`, prepared stages revalidated twiddles
-on every stage, and bit-reversed expansion always ran full DIF transforms.
-These September 12, 2026 comparisons compile the same benchmark cases against
-both implementations. The platform and timing boundaries follow the method
-above. Values in this section are sample means in microseconds.
+Prepared stages reuse validated `Plan` twiddles without rescanning entries.
+Imported contents are checked by `Tables::bind`; trusted binding retains its
+caller obligations. A forward-oriented half-table can also serve inverse
+transforms by reconstructing opposite powers.
 
-Prepared stages now adapt already-bound twiddle slices without rescanning
-their entries. Imported contents are still checked by `Tables::bind`; trusted
-binding keeps its existing caller obligations. All cases below borrow one
-ordinary forward half-table, including inverse transforms that reconstruct
-the opposite powers. Inputs and outputs use natural order on the zeta coset.
-
-| Field | Size | Direction | Tasks | Before, µs | After, µs | Less time |
-| --- | ---: | --- | ---: | ---: | ---: | ---: |
-| Fp | 2,048 | Forward | 1 | 317.2 | 201.1 | 36.6% |
-| Fp | 2,048 | Inverse | 1 | 331.2 | 215.8 | 34.8% |
-| Fp | 16,384 | Forward | 1 | 3,901.1 | 2,666.5 | 31.6% |
-| Fq | 2,048 | Forward | 1 | 331.6 | 202.3 | 39.0% |
-| Fq | 2,048 | Forward | 4 | 357.5 | 65.6 | 81.7% |
-| Fq | 2,048 | Inverse | 4 | 359.5 | 68.2 | 81.0% |
-
-The larger parallel improvement removes validation work that was repeated in
-each stage's calling task before its butterflies could run concurrently. The
-2,048-element cases retain 32,768 table bytes; the 16,384-element case retains
-262,144. None requires scratch fields. The change introduces no new storage.
-
-Short bit-reversed expansions now broadcast the scaled coefficient prefix,
-skip the initial zero-only DIT stages, and permute each completed residue into
-its requested order. Terminal stores read factors in that order before the
-permutation. The following cases expand ten coefficients from a 2,048-element
-base to the 16,384-element zeta coset and multiply a nonconstant factor.
-Timing includes coefficient initialization, scaling, the local permutations,
-and the fused factor product. There is no base inverse in these cases.
-
-| Field | Tasks | Twiddles | Before, µs | After, µs | Less time |
-| --- | ---: | --- | ---: | ---: | ---: |
-| Fp | 1 | Computed | 1,979.2 | 1,138.8 | 42.5% |
-| Fp | 1 | Forward table | 2,335.4 | 738.0 | 68.4% |
-| Fp | 4 | Computed | 541.4 | 305.6 | 43.6% |
-| Fp | 4 | Forward table | 635.4 | 202.2 | 68.2% |
-| Fq | 1 | Computed | 2,025.1 | 1,172.4 | 42.1% |
-| Fq | 1 | Forward table | 2,362.6 | 759.9 | 67.8% |
-| Fq | 4 | Computed | 545.6 | 310.0 | 43.2% |
-| Fq | 4 | Forward table | 637.4 | 208.5 | 67.3% |
-
-Table cases benefit from both changes and retain 32,768 bytes. All cases
-require zero scratch fields and produce 524,288 output bytes; the factor
-also occupies 524,288 bytes. No expansion-scale table is retained.
-
-The pruning cutoff is `base_size / 16`, saving at least four initial stages
-for nonempty input. At the 128-coefficient boundary, table-free products took
-7–8% less time across these fields and task budgets. Trying a 256-coefficient
-cutoff did not consistently improve the table-free product, so longer prefixes
-retain DIF. Consecutive before/after control runs of table-free inverses and
-256- or 2,048-coefficient expansions changed by −2.1% to +0.2%. Longer runs
-showed timing drift; small differences do not establish additional wins.
-
-The suite covers constants, the pruning boundary, and full coefficients in
-both expansion orders. To compare revisions, use the same benchmark harness
-on the baseline implementation and save its samples, then repeat on the changed
-implementation with `--baseline fft_upgrade_before`:
+Short bit-reversed expansions broadcast the scaled coefficient prefix, skip
+zero-only DIT stages, and permute the result into the requested order. Terminal
+products read factors in that declared order. The `base_size / 16` cutoff saves
+at least four stages for nonempty input; longer prefixes retain DIF. The cutoff
+was selected using September 12 comparisons based on `d0c00ac`: extending it to
+`base_size / 8` did not consistently improve table-free products. It remains a
+heuristic, not a portable crossover guarantee. Measure boundary cases with:
 
 ```console
-cargo bench --locked -p zakura-udon --bench fft_strategies -- \
-  '(Fp|Fq)/strategies/2048/zeta/tasks_[14]/plan_twiddles|expansion_prefixes' \
-  --save-baseline fft_upgrade_before
+cargo bench --locked -p zakura-udon --bench fft_strategies -- expansion_prefixes
 ```
 
-These kernel and expansion measurements exclude the cost of a consuming
-application. Measure complete pipelines with their buffer ownership, allocation,
-and row access patterns before choosing a strategy.
+These kernel measurements exclude the consuming application. Include buffer
+ownership, allocation, and row access patterns when choosing a pipeline.
 
 ## Transform backends and initialization
 
 For 2,048 Fp values on the coset with shift 7, one task, natural input and output,
 and no retained tables, times are in microseconds:
 
-| Backend | Temporary bytes | Forward | Normalized inverse |
-| --- | ---: | ---: | ---: |
-| In-place stages | 0 | 312.04 [310.92, 314.02] | 312.87 [310.82, 315.10] |
-| Blocked | 2,048 | 325.20 [323.46, 327.19] | 316.42 [314.92, 317.84] |
+| Backend | Forward | Normalized inverse |
+| --- | ---: | ---: |
+| In-place stages | 312.04 [310.92, 314.02] | 312.87 [310.82, 315.10] |
+| Blocked | 325.20 [323.46, 327.19] | 316.42 [314.92, 317.84] |
 
 These are separate-input operations even for the in-place stage backend: the
 backend name describes its working transform.
@@ -156,20 +97,20 @@ chunk boundaries. This serial result does not determine their parallel ranking.
 For 1,048,576 Fp values, shift 7, four workers, natural input and output, and
 no tables, times are in milliseconds. Each input or output occupies 32 MiB.
 
-| Backend | Temporary bytes | Forward | Normalized inverse |
-| --- | ---: | ---: | ---: |
-| In-place stages | 0 | 181.60 [180.83, 182.38] | 188.02 [179.85, 196.00] |
-| Blocked | 4,194,304 | 194.02 [184.97, 204.15] | 168.18 [159.52, 177.20] |
+| Backend | Forward | Normalized inverse |
+| --- | ---: | ---: |
+| In-place stages | 181.60 [180.83, 182.38] | 188.02 [179.85, 196.00] |
+| Blocked | 194.02 [184.97, 204.15] | 168.18 [159.52, 177.20] |
 
 Large-transform intervals are wider than the small serial controls. This run
 does not establish one winner for both directions. The blocked candidate
 includes its microtiled column gathers; these measurements do not isolate the
-effect of that gather change from the rest of the backend.
+gather cost from the rest of the backend.
 
 ## Twiddle storage and coefficient powers
 
 The following 2,048-element Fp cases use the stage backend, one task, shift 7,
-natural boundaries, and zero temporary fields. Times are in microseconds.
+and natural boundaries. Times are in microseconds.
 All inverse cases borrow the same forward-oriented table, reconstructing inverse
 powers by the root identity; they do not retain a separate inverse table.
 
@@ -206,10 +147,10 @@ contents, and compiler work.
 
 These Fp operations interpolate 2,048 base subgroup evaluations and evaluate
 eight residues on the size-16,384 coset with shift 7, using four workers.
-Each result occupies 524,288 bytes. Every case here needs 8,192 scratch bytes;
-the coefficient-workspace policy additionally needs 65,536 bytes. Disposable
-input instead consumes the existing 65,536-byte input buffer. Times are in
-microseconds, with identical input restoration excluded from each case.
+Each result occupies 524,288 bytes. The coefficient-workspace policy retains
+a separate 65,536-byte coefficient buffer; disposable input uses the existing
+input buffer for coefficients. These are data-buffer sizes, excluding transform
+scratch. Times are in microseconds, with identical input restoration excluded.
 
 | Scale table | Output order | Reuse output | Coefficient workspace | Disposable input |
 | --- | --- | ---: | ---: | ---: |
@@ -248,10 +189,10 @@ Polynomial-major batches of size-2,048 Fp subgroup forward transforms use one
 total four-task budget. The time is for the entire batch, in microseconds;
 each polynomial occupies 65,536 bytes. Inputs are restored outside timing.
 
-| Backend | One polynomial | Four polynomials | Eight polynomials | Temporary bytes, one / four / eight |
-| --- | ---: | ---: | ---: | ---: |
-| In-place stages | 166.79 | 704.74 | 1,495.3 | 0 / 0 / 0 |
-| Blocked | 317.38 | 607.12 | 1,408.8 | 8,192 / 8,192 / 8,192 |
+| Backend | One polynomial | Four polynomials | Eight polynomials |
+| --- | ---: | ---: | ---: |
+| In-place stages | 166.79 | 704.74 | 1,495.3 |
+| Blocked | 317.38 | 607.12 | 1,408.8 |
 
 The batch scheduler spends concurrency on separate polynomials before inner
 transforms. Batching exposes that scheduling choice, but does not guarantee
@@ -259,8 +200,7 @@ lower time per polynomial. The blocked samples were noisy: the four-polynomial
 interval was [588.48, 646.93] µs.
 
 Four equal-domain size-2,048 Fp classes, one output plus three lifts, gave the
-following four-worker results. All cases retained no tables and required
-8,192 bytes of scratch with this geometry.
+following four-worker results. None of these cases retained tables.
 
 | Operation | Time, µs | Observable lift contents |
 | --- | ---: | --- |
@@ -271,14 +211,13 @@ following four-worker results. All cases retained no tables and required
 The destructive case adds equal-domain evaluations before one inverse. Its
 lower arithmetic cost follows from the weaker storage contract; it is not a
 replacement for callers that need each interpolated lift. Mixed domains need
-separate inverses for distinct groups. Scratch equality in this example follows
-from dividing the total task budget among classes; other geometries and class
-sizes can require different amounts.
+separate inverses for distinct groups. Scratch depends on the class sizes,
+geometry, and division of the total task budget.
 
 ## Codelets and field-kernel experiments
 
 For the 2,048-element Fp forward transform with bit-reversed output, one task,
-shift 7, no tables, and no scratch, radix-2, radix-4, and radix-8 took 284.91,
+shift 7, and no tables, radix-2, radix-4, and radix-8 took 284.91,
 272.98, and 261.18 µs. This compares the same output order. A natural-order
 transform has a different permutation contract and is not an equivalent timing
 control for this table. Radix choices remain explicit.
@@ -297,7 +236,7 @@ the small serial radix ranking did not establish a large parallel winner.
 The [codelet schedules](../crates/udon/src/fft/stages.rs) have one const step
 representation, replayed by a test interpreter and checked against direct
 evaluation. Production code expands the steps into fixed-index Rust operations.
-Optimized AArch64 assembly contains no remaining `codelet_step` calls. Stage
+The measured AArch64 build contained no remaining `codelet_step` calls. Stage
 direction and inverse normalization produce separate specializations, while
 twiddle families dispatch at stage boundaries. Terminal
 factor and order handling still appear where applicable. This inspection does
@@ -322,7 +261,7 @@ compilation gave:
 
 The first Fp zero measurement varied substantially between runs, so it should
 not be used to estimate a stable speedup. Interleaving helped these isolated
-candidates across distributions. Assembly also shows an unrolled interleaved
+candidates across distributions. The measured assembly showed an unrolled interleaved
 pair, a loop in the sequential pair, and out-of-line masked corrections; the
 timing includes those compiler decisions. The compiler generated conditional
 branches inside the masked correction itself, so source masks do not establish
@@ -340,5 +279,5 @@ The emitted `.s` file is under `target/release/deps`. On macOS, inspect the
 release test executable with `xcrun llvm-objdump --demangle --disassemble` to
 include the test-only candidates. Correctness coverage separately checks both
 fields against direct evaluation, independent inverse transforms, loose-range
-integer bounds, artifact validation, resource limits, and canonical recovery
+integer bounds, artifact validation, scratch requirements, and canonical recovery
 when an executor panics.

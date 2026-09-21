@@ -4,7 +4,7 @@
 
 use std::{env, fs, path::PathBuf};
 use udon::{
-    StoredForm,
+    STORED_FORM,
     fft::{Domain, ExpansionScaleNormalization, ExpansionScales, TwiddleTable},
     field::{Fp, Fq},
 };
@@ -18,7 +18,6 @@ fn main() {
     println!("cargo::rerun-if-env-changed=FFT_ARTIFACT_DAMAGE");
     let damage = env::var("FFT_ARTIFACT_DAMAGE").unwrap_or_default();
     let directory = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let form = StoredForm::for_target(&env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap());
     macro_rules! generate {
         ($name:literal, $record:ty, $field:ty) => {{
             let domain = Domain::for_size(record::SIZE).unwrap().subgroup();
@@ -56,7 +55,7 @@ fn main() {
                 bytes.pop();
             }
             fs::write(
-                directory.join(format!("{}-{}.bin", $name, form.descriptor())),
+                directory.join(format!("{}-{STORED_FORM}.bin", $name)),
                 bytes,
             )
             .unwrap();

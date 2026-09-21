@@ -64,9 +64,9 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
     /// Transforms contiguous buffers using the caller's scoped executor.
     ///
     /// `values` must contain exactly [`Self::size`] fields. `input` is `Some`
-    /// exactly when [`Self::new`] selected separate output; its length must
+    /// exactly when the request selects [`InputStorage::Preserve`]; its length must
     /// match the request's full domain or prefix. Otherwise `values` initially
-    /// holds the disposable input. Input uses the request's input order;
+    /// holds the in-place input. Input uses the request's input order;
     /// positions beyond a declared prefix are treated as zero.
     ///
     /// The result uses the requested output order and inverse scale. `factor`,
@@ -94,7 +94,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         max_tasks: NonZeroUsize,
         executor: &E,
     ) -> Result<(), FftError> {
-        if self.separate != input.is_some() {
+        if self.separate() != input.is_some() {
             return Err(FftError::InvalidExecution);
         }
         super::super::check_length("output", self.size(), values.len())?;
@@ -133,7 +133,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                 .map_or(Ok(()), Err);
         }
         let max_tasks = if self.first() > self.size()
-            || self.separate && self.request.input_len(self.size()) <= 1
+            || self.separate() && self.request.input_len(self.size()) <= 1
         {
             NonZeroUsize::MIN
         } else {
@@ -261,7 +261,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                 _ => {
                     let source = match run.kind {
                         WorkKind::Reorder => &scratch[..self.size()],
-                        WorkKind::Initialize | WorkKind::Fused if self.separate => input.unwrap(),
+                        WorkKind::Initialize | WorkKind::Fused if self.separate() => input.unwrap(),
                         _ => &[],
                     };
                     let product =
@@ -312,10 +312,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         count: usize,
         max_tasks: NonZeroUsize,
     ) -> Result<(Self, usize, NonZeroUsize), FftError> {
-        if self.separate
-            || self.request.support != InputSupport::Full
-            || self.request.input_policy == InputPolicy::Preserve
-        {
+        if self.separate() || self.request.support != InputSupport::Full {
             return Err(FftError::InvalidExecution);
         }
         let jobs = count.min(max_tasks.get());

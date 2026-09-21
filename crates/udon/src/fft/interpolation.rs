@@ -50,87 +50,12 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
             state: ClassState::Evaluations,
         })
     }
-    #[cfg(test)]
-    pub fn values(&self) -> &[PastaField<M>] {
-        self.values
-    }
-    #[cfg(test)]
-    pub const fn order(&self) -> ElementOrder {
-        self.order
-    }
-
-    #[cfg(test)]
-    pub const fn state(&self) -> ClassState {
-        self.state
-    }
-
     pub(super) const fn check_evaluations(&self) -> Result<(), FftError> {
         if matches!(self.state, ClassState::Evaluations) {
             Ok(())
         } else {
             Err(FftError::InvalidClassState)
         }
-    }
-
-    #[cfg(test)]
-    pub fn scatter(&mut self, start: usize, values: &[PastaField<M>]) -> Result<(), FftError> {
-        self.scatter_strided(start, 1, values)
-    }
-
-    #[cfg(test)]
-    pub fn scatter_strided(
-        &mut self,
-        start: usize,
-        stride: usize,
-        values: &[PastaField<M>],
-    ) -> Result<(), FftError> {
-        self.check_evaluations()?;
-        if stride == 0 {
-            return Err(FftError::InvalidLayout);
-        }
-        if let Some(last) = values.len().checked_sub(1) {
-            let end = last
-                .checked_mul(stride)
-                .and_then(|offset| start.checked_add(offset))
-                .ok_or(FftError::SizeOverflow)?;
-            if end >= self.values.len() {
-                return Err(FftError::InvalidLayout);
-            }
-        } else if start > self.values.len() {
-            return Err(FftError::InvalidLayout);
-        }
-        for (index, value) in values.iter().enumerate() {
-            let row = start + index * stride;
-            let destination = match self.order {
-                ElementOrder::Natural => row,
-                ElementOrder::BitReversed => self.plan.reversed(row),
-            };
-            self.values[destination] = *value;
-        }
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-impl ExecutionOptions {
-    pub(crate) const fn interpolation_requirements(
-        self,
-        output_size: usize,
-        lift_sizes: &[usize],
-    ) -> Result<ScratchRequirements, FftError> {
-        let mut required = match self.requirements(output_size) {
-            Ok(required) => required,
-            Err(error) => return Err(error),
-        };
-        let mut index = 0;
-        while index < lift_sizes.len() {
-            required = match include_lift(self, required, output_size, lift_sizes[index]) {
-                Ok(required) => required,
-                Err(error) => return Err(error),
-            };
-            index += 1;
-        }
-        Ok(required)
     }
 }
 

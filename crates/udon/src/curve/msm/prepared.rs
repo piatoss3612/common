@@ -118,7 +118,7 @@ impl<C: PastaCurve> ScalarStorage<C> {
 ///     Input::new_prepared(Bases::Affine(&bases), prepared)?,
 ///     Input::new_prepared(Bases::Affine(&opposite), prepared)?,
 /// ];
-/// let options = ExecutionOptions::SERIAL;
+/// let options = BatchOptions::default();
 /// let mut jobs = [run::JobStorage::EMPTY; 2];
 /// let mut workers = [run::WorkerStorage::EMPTY; 1];
 /// let plan = run::BatchPlan::new(&inputs, options, &mut jobs, &mut workers)?;
@@ -235,11 +235,11 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// Returns additional bytes needed to cache recoding for `options`.
     ///
     /// The scalar shape and requested kernel select a recoding for the complete
-    /// scalar vector. Chunk, pass, task, memory, and accumulator limits do not
+    /// scalar vector. Chunk, pass, and accumulator settings do not
     /// constrain this retained allocation; it is separate from execution scratch
     /// and scalar record storage. Returns [`CurveError::SizeOverflow`] if the
     /// byte slice would be too large. See [`Self::cache`] for reuse conditions.
-    pub fn cache_len(&self, options: super::ExecutionOptions) -> Result<usize, CurveError> {
+    pub fn cache_len(&self, options: super::ArithmeticOptions) -> Result<usize, CurveError> {
         super::recode::Geometry::for_shape(self.len(), self.shape, options).storage_len(self.len())
     }
 
@@ -254,7 +254,7 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// before writes. Bytes beyond the required prefix remain untouched.
     pub fn cache(
         &self,
-        options: super::ExecutionOptions,
+        options: super::ArithmeticOptions,
         storage: &'a mut [u8],
     ) -> Result<Self, CurveError> {
         let geometry = super::recode::Geometry::for_shape(self.len(), self.shape, options);

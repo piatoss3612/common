@@ -64,6 +64,13 @@ in a scoped queue. Sendability follows the kernel and resource bundle, and
 inputs need no `'static` lifetime. Scratch is never selected by thread identity;
 nested execution cannot borrow a still-live scratch lease a second time.
 
+FFT and MSM `Buffers` are transient kernel views. Their direct `Resources`
+implementations allow local execution, but erased `ReadView` references do not
+promise `Sync`. A movable owner can retain typed borrowed slices and create the
+views on the worker in `Resources::buffers`. The small
+[borrowed-owner checks](../crates/udon/tests/execution/borrowed.rs) demonstrate
+both protocols with non-static storage and scoped threads.
+
 The test [fragment provider](../crates/udon/tests/support/fft_run.rs) uses
 preallocated `spin::RwLock` fragments and nonblocking acquisition. Shared read
 views retain their guards; disjoint writes take exclusive guards. `spin` is a
@@ -78,11 +85,17 @@ success. A worker using unwinding catches it while retaining the task envelope,
 then calls `finish` and returns the failed receipt. Calling `finish` before
 execution cancels that task. Executing twice is rejected.
 
-Failed publication poisons the run and stops new claims. Other outstanding
-receipts remain drainable. The application must join workers and drop actual
-guards before releasing their accounting or reusing storage. Failed in-place
-data must be refilled. FFT tasks restore canonical field representation on
-unwind; they do not promise an unchanged or valid polynomial result.
+`Outcome::Success` means the kernel returned normally; its output can still be
+an arithmetic `Err`. Publication inspects both the outcome and the output.
+Setup validation precedes driver writes; each incremental task validates its
+own resource lengths before writing. A later task error leaves earlier writes
+in place. These are different scopes of validation, not whole-run rollback.
+An arithmetic error, failed execution, or cancellation poisons the run and
+stops new claims. Other outstanding receipts remain drainable. The application
+must join workers and drop actual guards before releasing their accounting or
+reusing storage. Failed in-place data must be refilled. FFT tasks restore
+canonical field representation on unwind; they do not promise an unchanged or
+valid polynomial result.
 
 Foreign or stale publication returns the intact receipt to its caller. Tickets
 are not forgeable or cloneable. Dropping or forgetting a task does not publish
@@ -90,6 +103,12 @@ it: its frontier and accounting stay occupied. This may stall an abandoned run,
 but memory safety does not depend on a destructor running. Abandon the run only
 after all accessible detached tasks have been drained or ended. Fresh identity
 storage cannot be rebound while accessible tickets still borrow it.
+
+[`TaskError`](../crates/udon/src/exec/run/task.rs) distinguishes invalid input
+shape, range, or configuration (`InvalidRequest`) from missing run metadata
+capacity (`Storage`). Unrepresentable storage sizes or exhausted epoch identity
+arithmetic return `Overflow`. Transition errors describe the current run or
+task state; they do not report arithmetic kernel results.
 
 ## Bounded readiness and retained results
 
@@ -170,6 +189,15 @@ Count three storage lifetimes separately: persistent plans/tables,
 operation-retained intermediates, and task-leased scratch. A task's result can
 move from an exclusive write lease to retained shared input; completion alone
 does not free it while consumers remain.
+
+For MSM, `MsmPlan::retained_for_slots` bounds the retained buffers for the chosen
+number of active chunks, while `temporary` bounds one executing task's scratch.
+Count that temporary bundle once per simultaneous lease. The contiguous driver
+combines one retained chunk with its explicit lease count in `requirements`.
+These queries check representability without applying a memory ceiling. Add
+metadata, queues, buffer alignment, and unused provider capacity when deciding
+what the application can admit. See
+[`MsmPlan`](../crates/udon/src/curve/msm/run.rs) for the individual query contracts.
 
 The [test fixture's admission policy](../crates/udon/tests/support/admission.rs)
 charges every provisioned block, including idle capacity,

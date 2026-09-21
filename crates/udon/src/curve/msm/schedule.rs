@@ -1,9 +1,9 @@
-//! Contiguous compatibility provisioning over bounded operation runs.
+//! Batch schedules and typed storage for contiguous MSM inputs.
 
 use super::{
-    Accumulation, Bases, CurveError, ExecutionOptions, Input, PastaCurve, ProjectivePoint,
-    Requirements, ScalarStorage, Scalars, Scratch, check_length, check_scratch, checked_count,
-    recode::Geometry,
+    Accumulation, ArithmeticOptions, Bases, BatchOptions, CurveError, Input, Kernel, PastaCurve,
+    ProjectivePoint, Requirements, ScalarStorage, Scalars, Scratch, check_length, check_scratch,
+    checked_count, recode::Geometry,
 };
 use crate::exec::{Executor, TaskBudget};
 use core::num::NonZeroUsize;
@@ -117,25 +117,57 @@ impl WorkerStorage {
     };
 }
 
+// Adaptation is private: resolving an automatic width or accumulator must not
+// turn the requested kernel into an explicit selection.
+#[derive(Clone, Copy)]
+pub(super) struct Options {
+    arithmetic: ArithmeticOptions,
+    task_budget: TaskBudget,
+    memory_limit: Option<usize>,
+    width: Option<u8>,
+    accumulation: Accumulation,
+}
+impl Options {
+    pub(super) const fn new(options: BatchOptions) -> Self {
+        Self {
+            arithmetic: options.arithmetic,
+            task_budget: options.task_budget,
+            memory_limit: options.memory_limit,
+            width: None,
+            accumulation: options.arithmetic.accumulation(),
+        }
+    }
+    const fn with_task_budget(mut self, budget: TaskBudget) -> Self {
+        self.task_budget = budget;
+        self
+    }
+    const fn geometry(self, n: usize) -> Geometry {
+        match self.width {
+            Some(width) => Geometry::Booth(width),
+            None => Geometry::for_plan(n, self.arithmetic),
+        }
+    }
+}
+
 pub(super) const fn layout<C: PastaCurve>(
     terms: usize,
     geometry: Geometry,
     retained: bool,
     cached: bool,
     compact: bool,
-    options: ExecutionOptions,
+    options: Options,
 ) -> Result<JobStorage, CurveError> {
     size!(checked_count::<ScalarStorage<C>>(terms, 1));
     if terms == 0 {
         return Ok(JobStorage::EMPTY);
     }
-    let cap = cap(terms, options);
-    let pass = match options.max_terms_per_pass {
+    let cap = cap(terms, options.arithmetic);
+    let pass = match options.arithmetic.max_terms_per_pass {
         Some(c) => min(cap, c.get()),
         None => cap,
     };
     let windows = geometry.windows();
-    let workers = if options.streaming {
+    let workers = if options.arithmetic.streaming() {
         1
     } else {
         min(windows, options.task_budget.get())
@@ -147,7 +179,7 @@ pub(super) const fn layout<C: PastaCurve>(
         Accumulation::Auto => Accumulation::Affine,
         a => a,
     };
-    let work = if options.streaming {
+    let work = if options.arithmetic.streaming() {
         Requirements {
             projective: size!(checked_count::<ProjectivePoint<C>>(
                 windows,
@@ -206,7 +238,7 @@ pub(super) const fn layout<C: PastaCurve>(
     let mut requirements = size!(work.times::<C>(workers));
     requirements.projective = size!(add(requirements.projective, windows));
     requirements.scalars = if retained { 0 } else { cap };
-    requirements.digits = if cached && cap == terms && !options.streaming {
+    requirements.digits = if cached && cap == terms && !options.arithmetic.streaming() {
         0
     } else {
         size!(geometry.storage_len(cap))
@@ -219,39 +251,23 @@ pub(super) const fn layout<C: PastaCurve>(
         pass,
         workers,
         budget: options.task_budget,
-        streaming: options.streaming,
+        streaming: options.arithmetic.streaming(),
         accumulation,
         work,
         requirements,
     })
 }
-const fn cap(terms: usize, options: ExecutionOptions) -> usize {
-    min(
-        8192,
-        match options.chunk_size {
-            Some(c) => min(terms, c.get()),
-            None => terms,
-        },
-    )
-}
-const fn arithmetic_options(terms: usize, mut options: ExecutionOptions) -> ExecutionOptions {
-    options.task_budget = TaskBudget::SERIAL;
-    if terms >= 4096 && options.window_bits.is_none() && !options.joint_tables {
-        options.window_bits = Some(11);
-    }
-    options
+const fn cap(terms: usize, options: ArithmeticOptions) -> usize {
+    min(8192, min(terms, options.chunk_cap()))
 }
 #[cfg(test)]
 const fn conservative<C: PastaCurve>(
     terms: usize,
-    options: ExecutionOptions,
+    options: Options,
 ) -> Result<JobStorage, CurveError> {
     layout::<C>(
         terms,
-        Geometry::for_len(
-            cap(terms, options),
-            arithmetic_options(cap(terms, options), options),
-        ),
+        options.geometry(cap(terms, options.arithmetic)),
         false,
         false,
         false,
@@ -262,35 +278,37 @@ const fn conservative<C: PastaCurve>(
 // Shared deterministic memory search for const and runtime planning. Reduce
 // affine staging first, then concurrency, then retain projective buckets, and
 // finally shorten complete chunks (including records and digits).
-const fn smaller(mut options: ExecutionOptions, n: usize) -> Option<ExecutionOptions> {
-    let pass = match options.max_terms_per_pass {
+const fn smaller(mut options: Options, n: usize) -> Option<Options> {
+    let pass = match options.arithmetic.max_terms_per_pass {
         Some(p) => min(n, p.get()),
         None => n,
     };
     if pass > 128 {
-        options.max_terms_per_pass = NonZeroUsize::new(128);
+        options.arithmetic.max_terms_per_pass = NonZeroUsize::new(128);
     } else if options.task_budget.get() > 1 {
         options.task_budget = match TaskBudget::new(options.task_budget.get().div_ceil(2)) {
             Some(b) => b,
             None => unreachable!(),
         };
     } else if matches!(options.accumulation, Accumulation::Auto)
-        && matches!(Geometry::for_len(n, options), Geometry::Booth(_))
+        && matches!(options.geometry(n), Geometry::Booth(_))
     {
         options.accumulation = Accumulation::Projective;
     } else if n > 1 {
         let chunk = n.div_ceil(2);
-        options.chunk_size = NonZeroUsize::new(chunk);
+        options.arithmetic.chunk_size = NonZeroUsize::new(chunk);
         if chunk < super::BOOTH_MIN
-            && !options.joint_tables
-            && options.window_bits.is_none()
             && matches!(
-                options.accumulation,
-                Accumulation::Auto | Accumulation::Projective
+                options.arithmetic.kernel,
+                Kernel::Auto
+                    | Kernel::Booth { width: None, .. }
+                    | Kernel::StreamingBooth { width: None }
             )
         {
-            options.window_bits = Some(4);
-            options.accumulation = Accumulation::Projective;
+            options.width = Some(4);
+            if matches!(options.accumulation, Accumulation::Auto) {
+                options.accumulation = Accumulation::Projective;
+            }
         }
     } else {
         return None;
@@ -301,12 +319,13 @@ const fn smaller(mut options: ExecutionOptions, n: usize) -> Option<ExecutionOpt
 #[cfg(test)]
 pub(super) const fn single_requirements<C: PastaCurve>(
     terms: usize,
-    mut options: ExecutionOptions,
+    options: BatchOptions,
 ) -> Result<Requirements, CurveError> {
+    let mut options = Options::new(options);
     let mut r = size!(conservative::<C>(terms, options)).requirements;
     if let Some(limit) = options.memory_limit {
         while size!(r.bytes::<C>()) > limit {
-            options = match smaller(options, cap(terms, options)) {
+            options = match smaller(options, cap(terms, options.arithmetic)) {
                 Some(o) => o,
                 None => {
                     return Err(CurveError::MemoryLimit {
@@ -321,27 +340,21 @@ pub(super) const fn single_requirements<C: PastaCurve>(
     Ok(r)
 }
 
-fn job<C: PastaCurve>(
-    input: &Input<'_, C>,
-    options: ExecutionOptions,
-) -> Result<JobStorage, CurveError> {
+fn job<C: PastaCurve>(input: &Input<'_, C>, options: Options) -> Result<JobStorage, CurveError> {
     let retained = match input.scalars {
         Scalars::Prepared(s) => Some(s),
         _ => None,
     };
+    let n = cap(input.len(), options.arithmetic);
     let geometry = retained.map_or_else(
-        || {
-            Geometry::for_len(
-                cap(input.len(), options),
-                arithmetic_options(cap(input.len(), options), options),
-            )
-        },
+        || options.geometry(n),
         |s| {
-            Geometry::for_shape(
-                cap(input.len(), options),
-                s.shape,
-                arithmetic_options(cap(input.len(), options), options),
-            )
+            let shape = Geometry::for_shape(n, s.shape, options.arithmetic);
+            if n < 4096 && matches!(shape, Geometry::Short(_)) {
+                shape
+            } else {
+                options.geometry(n)
+            }
         },
     );
     let cached = retained
@@ -359,7 +372,7 @@ fn job<C: PastaCurve>(
 fn weight<C: PastaCurve>(input: &Input<'_, C>) -> u128 {
     let windows = match input.scalars {
         Scalars::Prepared(s) => {
-            match Geometry::for_shape(input.len(), s.shape, ExecutionOptions::SERIAL) {
+            match Geometry::for_shape(input.len(), s.shape, ArithmeticOptions::DEFAULT) {
                 Geometry::Short(b) => usize::from(b).max(1),
                 g => g.windows() * 8,
             }
@@ -396,7 +409,7 @@ fn split<C: PastaCurve>(inputs: &[Input<'_, C>], budget: usize) -> Option<(usize
 }
 fn requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],
-    options: ExecutionOptions,
+    options: Options,
 ) -> Result<Requirements, CurveError> {
     if let Some((mid, left)) = split(inputs, options.task_budget.get()) {
         let a = requirements(
@@ -418,19 +431,20 @@ fn requirements<C: PastaCurve>(
 }
 pub(super) struct Plan {
     pub requirements: Requirements,
-    options: ExecutionOptions,
+    options: Options,
 }
 impl Plan {
     pub fn new<C: PastaCurve>(
         inputs: &[Input<'_, C>],
-        mut options: ExecutionOptions,
+        options: BatchOptions,
     ) -> Result<Self, CurveError> {
+        let mut options = Options::new(options);
         let mut r = requirements(inputs, options)?;
         if let Some(limit) = options.memory_limit {
             while r.bytes::<C>()? > limit {
                 let n = inputs
                     .iter()
-                    .map(|i| cap(i.len(), options))
+                    .map(|i| cap(i.len(), options.arithmetic))
                     .max()
                     .unwrap_or(0);
                 options = smaller(options, n).ok_or(CurveError::MemoryLimit {
@@ -476,7 +490,7 @@ pub(super) fn execute<C: PastaCurve, X: Executor>(
 fn execute_inputs<C: PastaCurve, X: Executor>(
     inputs: &[Input<'_, C>],
     output: &mut [ProjectivePoint<C>],
-    options: ExecutionOptions,
+    options: Options,
     executor: &X,
     mut scratch: Scratch<'_, C>,
 ) {
@@ -505,21 +519,26 @@ fn execute_inputs<C: PastaCurve, X: Executor>(
 fn execute_job<C: PastaCurve, X: Executor>(
     input: &Input<'_, C>,
     job: JobStorage,
-    options: ExecutionOptions,
+    options: Options,
     executor: &X,
     scratch: Scratch<'_, C>,
 ) -> ProjectivePoint<C> {
-    super::run::MsmPlan::from_job(input.len(), options, job)
-        .execute(
-            *input,
-            // Preparation and streaming deposits use retained storage, so their
-            // concurrency need not stop at the number of window scratch bundles.
-            // The driver clamps temporary leases to the available windows.
-            NonZeroUsize::new(job.budget.get()).unwrap(),
-            executor,
-            scratch,
-        )
-        .expect("validated synchronous MSM storage")
+    super::run::MsmPlan::from_job(
+        input.len(),
+        options.arithmetic,
+        job,
+        options.width.is_none(),
+    )
+    .execute(
+        *input,
+        // Preparation and streaming deposits use retained storage, so their
+        // concurrency need not stop at the number of window scratch bundles.
+        // The driver clamps temporary leases to the available windows.
+        NonZeroUsize::new(job.budget.get()).unwrap(),
+        executor,
+        scratch,
+    )
+    .expect("validated synchronous MSM storage")
 }
 
 /// Borrowed reusable plan over immutable inputs and caller-owned metadata.
@@ -530,7 +549,7 @@ fn execute_job<C: PastaCurve, X: Executor>(
 ///
 /// Different output buffers and previously used scratch may be supplied on every
 /// execution, including concurrent calls with separate buffers. The
-/// [memory ceiling](ExecutionOptions::with_memory_limit) includes metadata
+/// [memory ceiling](BatchOptions::with_memory_limit) includes metadata
 /// prefixes reserved by [`Self::storage_len`] and scratch from
 /// [`Self::requirements`].
 pub struct BatchPlan<'a, 'i, C: PastaCurve> {
@@ -550,7 +569,7 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     /// would be too large.
     pub const fn storage_len(
         inputs: usize,
-        options: ExecutionOptions,
+        options: BatchOptions,
     ) -> Result<(usize, usize), CurveError> {
         Ok((
             size!(checked_count::<JobStorage>(inputs, 1)),
@@ -567,12 +586,12 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     /// [`CurveError::ScratchTooSmall`] for short buffers,
     /// [`CurveError::SizeOverflow`] for unrepresentable sizes, or
     /// [`CurveError::MemoryLimit`] under the
-    /// [memory policy](ExecutionOptions::with_memory_limit).
+    /// [memory policy](BatchOptions::with_memory_limit).
     /// All returned errors precede writes; tails beyond the required metadata
     /// prefixes remain untouched.
     pub fn new(
         inputs: &'a [Input<'i, C>],
-        options: ExecutionOptions,
+        options: BatchOptions,
         jobs: &'a mut [JobStorage],
         workers: &'a mut [WorkerStorage],
     ) -> Result<Self, CurveError> {
@@ -595,9 +614,12 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
                 })?);
         }
         let plan = Plan::new(inputs, adjusted).map_err(|error| match error {
-            CurveError::MemoryLimit { required, .. } => CurveError::MemoryLimit {
-                limit: options.memory_limit.unwrap(),
-                required: required.saturating_add(metadata),
+            CurveError::MemoryLimit { required, .. } => match required.checked_add(metadata) {
+                Some(required) => CurveError::MemoryLimit {
+                    limit: options.memory_limit.unwrap(),
+                    required,
+                },
+                None => CurveError::SizeOverflow,
             },
             e => e,
         })?;
@@ -619,13 +641,15 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     }
     /// Execution scratch counts, excluding the separately borrowed metadata.
     ///
-    /// Use these counts for [`Self::execute`].
+    /// These are the required prefixes for [`Self::execute`]'s chosen schedule.
+    /// A prefix may cover several jobs that reuse its storage; it is not a
+    /// minimum over all possible schedules or input-specific arithmetic.
     pub const fn requirements(&self) -> Requirements {
         self.plan.requirements
     }
     /// Total temporary bytes, including the reserved metadata prefixes.
     ///
-    /// Uses the accounting of [`ExecutionOptions::with_memory_limit`], even if
+    /// Uses the accounting of [`BatchOptions::with_memory_limit`], even if
     /// the plan uses fewer worker entries than [`Self::storage_len`] reserves.
     pub const fn temporary_bytes(&self) -> usize {
         self.temporary_bytes
@@ -668,7 +692,7 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
 }
 fn fill_metadata<C: PastaCurve>(
     inputs: &[Input<'_, C>],
-    options: ExecutionOptions,
+    options: Options,
     jobs: &mut [JobStorage],
     workers: &mut [WorkerStorage],
     offset: usize,
@@ -715,7 +739,7 @@ fn execute_workers<C: PastaCurve, X: Executor>(
     workers: &[WorkerStorage],
     output: &mut [ProjectivePoint<C>],
     offset: usize,
-    options: ExecutionOptions,
+    options: Options,
     executor: &X,
     mut scratch: Scratch<'_, C>,
 ) {
@@ -784,7 +808,7 @@ mod tests {
         let input = |n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap();
         let inputs = [input(2), input(1024), input(3), input(17)];
         for budget in [2, 3, 5, 17] {
-            let options = ExecutionOptions::SERIAL
+            let options = BatchOptions::default()
                 .with_task_budget(TaskBudget::new(budget).unwrap())
                 .with_memory_limit(usize::MAX);
             let mut jobs = [JobStorage::EMPTY; 4];
@@ -795,7 +819,7 @@ mod tests {
         }
         let inputs = [input(2); 30];
         for budget in [3, 5] {
-            let options = ExecutionOptions::SERIAL
+            let options = BatchOptions::default()
                 .with_task_budget(TaskBudget::new(budget).unwrap())
                 .with_memory_limit(usize::MAX);
             let mut jobs = [JobStorage::EMPTY; 30];
@@ -827,10 +851,12 @@ mod tests {
             for tasks in [1, 2, 3, 5, 17, 65] {
                 for pass in [1, 2, 17, 128, 513] {
                     for limit in [8192, 32768, 1048576] {
-                        let options = ExecutionOptions::SERIAL
-                            .with_task_budget(TaskBudget::new(tasks).unwrap())
-                            .with_max_terms_per_pass(NonZeroUsize::new(pass))
-                            .with_memory_limit(limit);
+                        let options = BatchOptions::new(
+                            ArithmeticOptions::DEFAULT
+                                .with_max_terms_per_pass(NonZeroUsize::new(pass)),
+                        )
+                        .with_task_budget(TaskBudget::new(tasks).unwrap())
+                        .with_memory_limit(limit);
                         let (j, w) =
                             BatchPlan::<Pallas>::storage_len(inputs.len(), options).unwrap();
                         let mut jobs = vec![JobStorage::EMPTY; j];

@@ -115,24 +115,6 @@ impl<'a, M: PrimeModulus> Tables<'a, M> {
             tables: self,
         })
     }
-    #[cfg(test)]
-    pub(super) fn retained_bytes(self) -> Result<usize, FftError> {
-        let mut bytes = 0usize;
-        for table in [
-            self.forward,
-            self.inverse,
-            self.inverse_finish,
-            self.inverse_scales,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            bytes = bytes
-                .checked_add(core::mem::size_of_val(table))
-                .ok_or(FftError::SizeOverflow)?;
-        }
-        Ok(bytes)
-    }
     pub(super) fn check_shape(self, domain: CosetDomain<M>) -> Result<(), FftError> {
         let requirements = TableRequirements::for_domain(domain);
         for (buffer, table) in [

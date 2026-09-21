@@ -23,7 +23,9 @@ pub enum PallasScalar {}
 mod sealed {
     use super::{INVERSE_POWER_TABLE_LEN, PastaField, SAFEGCD_BATCHES};
 
-    pub trait Parameters<M: super::PrimeModulus>: Sized {
+    pub trait Sealed {}
+
+    pub(crate) trait Parameters<M: super::PrimeModulus>: Sized {
         /// Field values for [`PastaField::root_of_unity`], indexed by `log_size`.
         const ROOTS: &'static [PastaField<M>; INVERSE_POWER_TABLE_LEN];
         /// Inverses of the corresponding forward roots.
@@ -39,6 +41,7 @@ mod sealed {
         /// `2^448 mod p`, used to fold the upper limb of a product sum.
         const B448: [u64; 4];
         /// The ordinary exponent `(t - 1) / 2`, where `p - 1 = t * 2^32`.
+        #[cfg(test)]
         const SQRT_EXPONENT: [u64; 4];
         /// The Montgomery representation of `2^-1`.
         const TWO_INVERSE: [u64; 4];
@@ -57,7 +60,7 @@ mod sealed {
         /// every supported transform.
         const POWER_OF_TWO_INVERSES: [[u64; 4]; INVERSE_POWER_TABLE_LEN];
 
-        /// Raises `value` to [`Self::SQRT_EXPONENT`].
+        /// Raises `value` to `(t - 1) / 2`, where `p - 1 = t * 2^32`.
         ///
         /// `bento::addition_chain!` plans the multiplication schedule at
         /// compile time; only powers of the base are computed at runtime.
@@ -83,7 +86,10 @@ mod sealed {
 ///     const MODULUS: [u64; 4] = [97, 0, 0, 0];
 /// }
 /// ```
-pub trait PrimeModulus: sealed::Parameters<Self> + Copy + Eq + Send + Sync + 'static {
+#[expect(private_bounds, reason = "implementation parameters are crate-private")]
+pub trait PrimeModulus:
+    sealed::Sealed + sealed::Parameters<Self> + Copy + Eq + Send + Sync + 'static
+{
     /// The prime modulus as four ordinary little-endian 64-bit limbs.
     const MODULUS: [u64; 4];
 }
@@ -112,6 +118,8 @@ macro_rules! pasta_field_parameters {
         }
     };
     (@impl $marker:ty, $modulus:literal, $hash:literal, $($zeta:item)*) => {
+        impl sealed::Sealed for $marker {}
+
         impl PrimeModulus for $marker {
             const MODULUS: [u64; 4] = u256::from_hex!($modulus);
         }
@@ -156,6 +164,9 @@ macro_rules! pasta_field_parameters {
             const R2: [u64; 4] = m255::r2!(&Self::MODULUS);
             const R3: [u64; 4] = m255::mul!(&Self::MODULUS, &Self::R2, &Self::R2);
             const B448: [u64; 4] = m255::from_u256!(&Self::MODULUS, &[0, 0, 0, 1]);
+            // Runtime exponentiation uses the generated schedule below; only
+            // the independent parameter tests need the ordinary exponent.
+            #[cfg(test)]
             const SQRT_EXPONENT: [u64; 4] =
                 u256::tonelli_shanks_exponent!(&Self::MODULUS, TWO_ADICITY);
             const TWO_INVERSE: [u64; 4] = Self::POWER_OF_TWO_INVERSES[1];

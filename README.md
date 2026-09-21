@@ -1,4 +1,4 @@
-# (no name yet)
+# Rust arithmetic crates for Zakura
 
 This is an experimental stack of Rust crates for Zakura.
 
@@ -9,7 +9,7 @@ This is an experimental stack of Rust crates for Zakura.
   Pasta field and curve arithmetic and field FFTs.
 * All target crates (`bento`, `bento-core`, and `udon`) currently use `no_std`.
 * See [the crate development guide](docs/CRATES.md) for dependency naming,
-  workspace inheritance, macro path resolution, and publication conventions.
+  workspace inheritance, and macro path resolution.
 * See [the documentation guide](docs/DOCUMENTATION.md) when writing or reviewing
   documentation and code comments.
 
@@ -33,8 +33,7 @@ derives a root of unity and its inverse from a modulus and generator:
 cargo run --release --locked -p zakura-bento --example field_constants
 ```
 
-Additional procedural macros will generate code needed to define field and
-group operations. Downstream artifact generators will use the built
+Artifact generators use the built
 [`udon`](crates/udon/src/lib.rs) crate for runtime arithmetic; artifact formats
 and their generation belong with the data's owner.
 
@@ -75,8 +74,6 @@ Nonidentity `AffinePoint` and cached `PreparedAffinePoint` entries implement
 require no allocation. See the [curve guide](docs/CURVES.md) for point
 representations, caller-owned preparation buffers, and table validation, and the
 [performance report](docs/CURVE_PERFORMANCE.md) for timing and storage tradeoffs.
-
-Additional traits and utilities needed downstream for Tachyon remain planned.
 
 The [workspace guide](docs/WORKSPACES.md) explains how callers can own reusable
 arithmetic buffers and compose operations on a selected worker pool.

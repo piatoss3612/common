@@ -73,7 +73,7 @@ lookup discovers names, not which dependencies Cargo activated. Provide an
 explicit path for contexts where discovery is insufficient instead of trying
 to reproduce Cargo's resolver inside a macro.
 
-## Changes and publication
+## Maintaining the workspace
 
 When introducing a structure or convention, update directly affected code,
 tests, and links together. Organize around responsibilities that will remain
@@ -81,8 +81,3 @@ useful as the repository grows; avoid reorganizing unrelated code for symmetry.
 Choose tests by the boundary they exercise; see the [testing guide](TESTING.md).
 
 Packages currently inherit `publish = false` and use local dependency paths.
-Before publication, add registry version requirements alongside those paths,
-review package metadata and contents, and test consumers of the packaged crates.
-Pin implementation dependencies when generated code and support must evolve in
-lockstep. Such pins coordinate a facade's own dependencies; they do not prevent
-a consumer from declaring additional, incompatible versions.

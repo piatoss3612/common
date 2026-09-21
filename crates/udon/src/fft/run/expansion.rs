@@ -130,13 +130,18 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         FftPlan::new(
             self.expansion.base,
             TransformRequest {
+                input_storage: if !matches!(self.storage, ExpansionStorage::DisposableInput { .. })
+                {
+                    crate::fft::InputStorage::Preserve
+                } else {
+                    crate::fft::InputStorage::InPlace
+                },
                 input_order: self.input_order,
                 inverse_scale: scale,
                 ..TransformRequest::new(Direction::Inverse)
             },
             self.tile,
             self.codelet,
-            !matches!(self.storage, ExpansionStorage::DisposableInput { .. }),
         )
     }
 
@@ -189,6 +194,11 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         let mut plan = FftPlan::new(
             base,
             TransformRequest {
+                input_storage: if !in_place {
+                    crate::fft::InputStorage::Preserve
+                } else {
+                    crate::fft::InputStorage::InPlace
+                },
                 support: self.support,
                 input_order: if self.storage == ExpansionStorage::Coefficients {
                     self.input_order
@@ -204,7 +214,6 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
             },
             self.tile,
             self.codelet,
-            !in_place,
         )?
         .with_input_scale(extra)?;
         plan.forward_scales = scales

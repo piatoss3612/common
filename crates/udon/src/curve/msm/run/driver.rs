@@ -149,18 +149,18 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// Includes one retained chunk and at most `leases` complete temporary
     /// bundles, clamped to the window count and the driver's 32 task envelopes.
     /// Streaming retains all windows' buckets and needs no temporary bundle.
-    /// Counts exclude fixed driver metadata, which an application with a hard
-    /// working-storage ceiling must also charge. Returns size or memory-limit
-    /// errors before allocating or mutating any storage.
+    /// These prefixes provision execution without assuming reuse of prepared
+    /// input storage. They exclude fixed driver metadata, queues, buffer tails,
+    /// alignment between buffers, and stack/executor costs. The caller owns
+    /// total memory admission. Returns [`CurveError::SizeOverflow`] for
+    /// unrepresentable counts or bytes before mutating any storage.
     pub fn requirements(&self, leases: NonZeroUsize) -> Result<Requirements, CurveError> {
         let count = self.windows().min(leases.get()).min(32);
-        let r = self.retained.plus(self.temporary().times::<C>(count)?)?;
-        if let Some(limit) = self.options.memory_limit {
-            let required = r.bytes::<C>()?;
-            if required > limit {
-                return Err(CurveError::MemoryLimit { limit, required });
-            }
-        }
+        let r = self
+            .retained
+            .plus(self.temporary().times::<C>(count)?)?
+            .times::<C>(1)?;
+        r.bytes::<C>()?;
         Ok(r)
     }
 
@@ -201,7 +201,7 @@ impl<C: PastaCurve> MsmPlan<C> {
             if let Some(result) = run.result() {
                 return Ok(result);
             }
-            let limit = if run.kind == WorkKind::Window && !self.options.streaming {
+            let limit = if run.kind == WorkKind::Window && !self.options.streaming() {
                 self.windows().min(32)
             } else {
                 leases.get().min(32)
@@ -254,7 +254,7 @@ impl<C: PastaCurve> MsmPlan<C> {
                         });
                     dispatch(&mut run, &mut requests[..count], leases, executor)?;
                 }
-                WorkKind::Window if !self.options.streaming => {
+                WorkKind::Window if !self.options.streaming() => {
                     let mut claims = core::array::from_fn::<_, 32, _>(|_| None);
                     let mut receipts = core::array::from_fn::<_, 32, _>(|_| None);
                     for (claim, request) in claims.iter_mut().zip(&mut requests[..count]) {

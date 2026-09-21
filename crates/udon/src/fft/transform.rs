@@ -355,10 +355,16 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         let nz = |n| core::num::NonZeroUsize::new(n).unwrap();
         super::run::FftPlan::new(
             self,
-            request,
+            crate::fft::TransformRequest {
+                input_storage: if separate {
+                    crate::fft::InputStorage::Preserve
+                } else {
+                    crate::fft::InputStorage::InPlace
+                },
+                ..request
+            },
             nz(options.tile_len),
             super::Codelet::Radix2,
-            separate,
         )?
         .with_contiguous_permutation()
         .with_columns(nz(options.columns_per_task), nz(options.max_tasks))

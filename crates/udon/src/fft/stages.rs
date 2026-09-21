@@ -131,8 +131,8 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
         }
     }
 
-    // Compatibility entry for an initialized transform. Kernel-local calls use
-    // `run` with a serial executor; whole operations expose bounded run tasks.
+    // Continues an initialized transform, including the fused interpolation
+    // paths. Kernel-local calls use `run` with a serial executor.
     pub fn drive<E: Executor>(
         &self,
         values: &mut [PastaField<M>],
@@ -148,25 +148,20 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
         });
         request.inverse_scale = self.scale;
         request.output_order = self.output_order;
-        let mut plan = super::run::FftPlan::new(
-            self.plan,
-            request,
-            nz(options.tile_len),
-            self.codelet,
-            false,
-        )
-        .expect("validated stage request")
-        .with_contiguous_permutation()
-        .resume(
-            first,
-            if self.dif {
-                ElementOrder::Natural
-            } else {
-                ElementOrder::BitReversed
-            },
-        );
+        let mut plan =
+            super::run::FftPlan::new(self.plan, request, nz(options.tile_len), self.codelet)
+                .expect("validated stage request")
+                .with_contiguous_permutation()
+                .resume(
+                    first,
+                    if self.dif {
+                        ElementOrder::Natural
+                    } else {
+                        ElementOrder::BitReversed
+                    },
+                );
         if let Some(table) = self.twiddles {
-            plan = plan.with_twiddles(table).expect("validated twiddles");
+            plan = plan.with_twiddles(table);
         }
         plan.execute(
             None,

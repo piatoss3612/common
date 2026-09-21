@@ -98,16 +98,14 @@ For example, a downstream `build.rs` can write an `Fp` array:
 
 ```rust
 use std::{env, fs, path::PathBuf};
-use udon::{StoredForm, field::Fp};
+use udon::{STORED_FORM, field::Fp};
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
     let directory = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let pointer_width = env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap();
-    let form = StoredForm::for_target(&pointer_width);
     let values = [0, 1, 7, u64::MAX].map(|n| Fp::from_u64(n).square());
     fs::write(
-        directory.join(format!("fp-values-{}.bin", form.descriptor())),
+        directory.join(format!("fp-values-{STORED_FORM}.bin")),
         bento::bytes_of_slice(&values),
     )
     .unwrap();
@@ -130,11 +128,10 @@ fn main() {
 }
 ```
 
-The [`StoredForm` registry][stored-forms] defines each descriptor's representation
-and scope. Build scripts pass the target's pointer width to select a descriptor;
-consumers obtain the matching string literal through
-`stored_form!`. The artifact owner must still define the record schema and
-distinguish the two field moduli.
+The [`STORED_FORM` constant][stored-forms] defines the descriptor's representation
+and scope. Build scripts name files with this constant; consumers obtain the
+matching string literal through `stored_form!`. The artifact owner must still
+define the record schema and distinguish the two field moduli.
 
 Generators and consumers may choose different `sqrt-table-large` configurations:
 the feature preserves the stored field representation. See the [performance
@@ -179,11 +176,10 @@ base, length, and expanded table description when present. The
 the [curve guide](CURVES.md#fixed-base-multiplication) shows preparation and
 storage costs.
 
-`STORED_FORM` identifies the field representation, unchanged by curve support.
+`STORED_FORM` identifies the field representation.
 The owner must separately identify the curve, base, compact or expanded table
 kind, affine or cached entry representation, window width when present, and
-record schema. Follow the [migration guide](CURVES.md#migrating-expanded-tables)
-when replacing older expanded tables.
+record schema.
 
 The [curve embedding fixture](../crates/udon/tests/fixtures/curve_embedding)
 shares its record definition between generator and `no_std` consumer. It

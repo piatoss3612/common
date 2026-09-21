@@ -43,7 +43,7 @@ jobs:
         run: >-
           cargo test --release --locked -p zakura-udon
           --test embedding --test fft_embedding
-          --test curve_constants --test curve_embedding -- --ignored
+          --test curve_constants --test curve_embedding --test api_boundaries -- --ignored
       - name: Check arithmetic and FFTs with debug assertions
         run: |
           cargo test --locked -p zakura-udon --lib

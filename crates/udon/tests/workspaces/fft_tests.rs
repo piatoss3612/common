@@ -134,7 +134,6 @@ fn pipeline<M: PrimeModulus>() {
                 },
                 nz(64),
                 Codelet::Radix2,
-                false,
             )
             .unwrap()
             .with_contiguous_permutation()
@@ -355,7 +354,6 @@ fn incomplete_producers_and_panics_require_refill() {
         TransformRequest::new(Direction::Inverse),
         nz(2),
         Codelet::Radix2,
-        false,
     )
     .unwrap()
     .with_contiguous_permutation();

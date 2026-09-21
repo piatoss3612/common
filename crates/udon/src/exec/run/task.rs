@@ -16,7 +16,7 @@ pub trait Kernel<R> {
 /// State of a returned task envelope.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Outcome {
-    /// The kernel returned normally.
+    /// The kernel returned normally, including when its output is an error value.
     Success,
     /// Execution began but did not return normally.
     Failed,
@@ -24,10 +24,12 @@ pub enum Outcome {
     Cancelled,
 }
 
-/// Invalid task or frontier transition.
+/// Invalid run request, storage capacity, or task/frontier transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskError {
-    /// No frontier storage was supplied.
+    /// The input shape, range, or configuration is unsupported by the run.
+    InvalidRequest,
+    /// No retained slot or frontier storage was supplied.
     Storage,
     /// The key or completion does not belong to the current frontier epoch.
     Stale,
@@ -39,9 +41,26 @@ pub enum TaskError {
     Failed,
     /// Current work has not finished.
     Busy,
-    /// Epoch identity arithmetic overflowed.
+    /// Storage sizing or epoch identity arithmetic overflowed.
     Overflow,
 }
+
+impl core::fmt::Display for TaskError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidRequest => "invalid run input, range, or configuration",
+            Self::Storage => "insufficient run metadata storage",
+            Self::Stale => "task does not belong to the current frontier epoch",
+            Self::Claimed => "task has already been claimed or completed",
+            Self::Executed => "task execution has already started",
+            Self::Failed => "run has failed and accepts only draining completions",
+            Self::Busy => "current work has not finished",
+            Self::Overflow => "storage sizing or epoch identity overflow",
+        })
+    }
+}
+
+impl core::error::Error for TaskError {}
 
 /// Detached ownership of a kernel, all of its resources, and its completion.
 ///

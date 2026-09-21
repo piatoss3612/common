@@ -57,7 +57,7 @@ pub mod fft;
 pub mod field;
 mod stored_form;
 
-pub use stored_form::{STORED_FORM, StoredForm};
+pub use stored_form::STORED_FORM;
 
 // Keep macro support anchored to Udon through dependency aliases and re-exports.
 // These expose only Bento's const-enforcing macros, never arithmetic functions.

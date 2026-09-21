@@ -1,6 +1,8 @@
 //! Power-of-two field transforms with caller-owned tables, buffers, and execution.
 //!
-//! [`Plan`] transforms coefficients and evaluations in place. [`Expansion`]
+//! [`Plan`] binds a domain and borrowed tables, with synchronous transform
+//! conveniences. [`run::FftPlan`] fixes reusable transform semantics and geometry;
+//! its working buffers are borrowed only for execution. [`Expansion`]
 //! evaluates a base polynomial on a larger coset without constructing a full
 //! zero-padded transform. [`run::InterpolationPlan`] combines interpolations from
 //! several domains into one coefficient vector.
@@ -22,8 +24,12 @@
 //!
 //! # Validation and working storage
 //!
-//! The checked APIs validate sizes, execution settings, and scratch lengths
-//! before modifying buffers; a returned [`FftError`] leaves them unchanged.
+//! Plan construction validates configuration without binding working buffers.
+//! Synchronous drivers validate their complete buffer and scratch bindings before
+//! mutation. Incremental tasks validate their own resource lengths before they
+//! write; a later task error does not undo writes from earlier tasks. Publication
+//! inspects arithmetic errors even when a task returned normally, poisons the
+//! run, and permits outstanding receipts to drain.
 //! Length mismatches identify the buffer parameter or table field, along with
 //! its expected and actual lengths. Invalid input prefixes report the
 //! supported length range separately from unsupported domain sizes.
@@ -136,7 +142,7 @@
 //!     TransformRequest {
 //!         input_order: ElementOrder::BitReversed,
 //!         ..TransformRequest::new(Direction::Inverse)
-//!     }, tile, Codelet::Radix2, false,
+//!     }, tile, Codelet::Radix2,
 //! ).unwrap();
 //! inverse.execute(None, &mut product, None, &mut [], tasks, &SerialExecutor).unwrap();
 //! assert_eq!(&product[..3], &[Fp::ONE, Fp::from_u64(4), Fp::from_u64(4)]);
@@ -169,28 +175,14 @@ pub use domain::{CosetDomain, Domain};
 pub use execution::{ExecutionOptions, ScratchRequirements};
 pub use expansion::{Expansion, ExpansionOptions};
 pub use expansion_operation::{ExpansionOrder, ExpansionStorage, Residue};
-#[cfg(test)]
-#[path = "tests/expansion_api.rs"]
-mod expansion_api;
-#[cfg(test)]
-use expansion_api::ExpansionStrategy;
 pub use expansion_scales::{ExpansionScaleNormalization, ExpansionScales};
 pub use interpolation::ClassState;
 use interpolation::{Class, interpolate_classes, interpolation_scratch};
 use interpolation_parallel::interpolate_sum;
-#[cfg(test)]
-use interpolation_parallel::{InterpolationOptions, interpolate_classes_parallel};
 pub use layout::{
     CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, InverseScale, ResidueLayout,
 };
-pub use operation::{Codelet, Direction, InputPolicy, InputSupport, TransformRequest};
-#[cfg(test)]
-#[path = "tests/operation_api.rs"]
-mod operation_api;
-#[cfg(test)]
-use operation_api::{
-    Backend, Initialization, OperationDescription, OperationRequirements, ResourceBudget, Strategy,
-};
+pub use operation::{Codelet, Direction, InputStorage, InputSupport, TransformRequest};
 pub use powers::{PowerTable, TwiddleDescription, TwiddleStorage, TwiddleTable};
 pub use tables::{BoundTables, TableRequirements, Tables, TablesMut};
 pub use transform::Plan;
@@ -217,8 +209,6 @@ pub enum FftError {
     InvalidShift,
     /// An execution setting or combination of request options is invalid.
     InvalidExecution,
-    /// The requested storage exceeds an explicit resource ceiling.
-    ResourceLimit,
     /// A buffer has the wrong length.
     LengthMismatch {
         /// Name of the buffer parameter or table field with the wrong length.
@@ -257,7 +247,6 @@ impl core::fmt::Display for FftError {
             Self::ZeroShift => f.write_str("coset shift must be nonzero"),
             Self::InvalidShift => f.write_str("coset shift must have reduced Montgomery limbs"),
             Self::InvalidExecution => f.write_str("invalid FFT execution settings"),
-            Self::ResourceLimit => f.write_str("FFT resource ceiling exceeded"),
             Self::LengthMismatch {
                 buffer,
                 expected,

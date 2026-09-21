@@ -96,14 +96,15 @@ fn exercise_field<M: PrimeModulus>(
     assert_eq!(recovered, coefficients);
     FftPlan::new(
         plan,
-        TransformRequest::new(Direction::Forward),
+        udon::fft::TransformRequest {
+            input_storage: udon::fft::InputStorage::Preserve,
+            ..TransformRequest::new(Direction::Forward)
+        },
         core::num::NonZeroUsize::new(record::SIZE).unwrap(),
         Codelet::Radix2,
-        true,
     )
     .unwrap()
     .with_twiddles(twiddles)
-    .unwrap()
     .execute(
         Some(&coefficients),
         &mut recovered,

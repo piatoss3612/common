@@ -67,11 +67,18 @@ algebraic laws that a custom implementation must satisfy.
 ## Transform plans and task budgets
 
 [`run::FftPlan`](../crates/udon/src/fft/run.rs) fixes a `TransformRequest`, tile
-size, codelet, and whether execution uses a separate input. The request selects
-direction, full or prefix support, input and output order, inverse scaling, and
-input preservation. A prefix requires natural input order. In-place execution
-requires `InputPolicy::Disposable` and overwrites the complete buffer, including
-a prefix's unused tail.
+size, and codelet over a domain/table `Plan`. The request selects direction,
+full or prefix support, input and output order, inverse scaling, and one
+`InputStorage` choice. `InPlace` reads and overwrites the values bank, including
+a prefix's unused tail. `Preserve` reads an immutable separate input and writes
+the values bank. A prefix requires natural input order. The default request
+uses `InPlace`; `execute` requires `Some(input)` exactly for `Preserve`.
+
+Both plans borrow tables and are reusable across executions. Working buffers
+are borrowed by a synchronous call or individual task resources, while an
+incremental run borrows its own frontier storage. Plan configuration and buffer
+validation have separate lifetimes; see the [execution guide](EXECUTION.md)
+for transferable resource owners and failure boundaries.
 
 `retained_fields()` reports initialized scratch fields for synchronous execution.
 The application accounts separately for inputs, outputs, borrowed tables, and
@@ -169,7 +176,7 @@ shows the complete build-to-runtime path for both fields:
    owns concrete POD arrays for a chosen domain and expansion ratio.
 2. Its [build script](../crates/udon/tests/fixtures/fft_embedding/build.rs) prepares
    the arrays with Udon, writes `bento::bytes_of(&record)`, and names the file
-   using `StoredForm::for_target`.
+   using `STORED_FORM`.
 3. Its [consumer library](../crates/udon/tests/fixtures/fft_embedding/src/lib.rs)
    uses `bento::embed_struct!` with `udon::stored_form!()`, borrows tables directly
    from the embedded record, and executes with stack-owned buffers.
@@ -198,7 +205,7 @@ local tile length, columns per cross-tile task, and a task budget. Its const
 `plan.scratch_requirements(options)` returns the same requirement. Scratch is
 initialized field storage, so arrays filled with `Fp::ZERO` or `Fq::ZERO`
 suffice. The [module contract](../crates/udon/src/fft/mod.rs) defines scratch
-reuse, unchanged buffers on validation errors, and partial results on panic.
+reuse, the scope of validation and mutation guarantees, and recovery on unwind.
 
 `ExecutionOptions::serial()` uses one whole-transform tile, makes no executor
 calls, and needs zero scratch. `ExecutionOptions::default()` uses 1,024-element

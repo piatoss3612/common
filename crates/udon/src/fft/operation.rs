@@ -22,13 +22,13 @@ pub enum InputSupport {
     Prefix(usize),
 }
 
-/// Liveness of input storage during prepared execution.
+/// Location and lifetime of transform input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InputPolicy {
-    /// Require a distinct output bank.
+pub enum InputStorage {
+    /// Read an immutable input view and write a separate output bank.
     Preserve,
-    /// Use either an in-place buffer or a separate output.
-    Disposable,
+    /// Read and overwrite the writable values bank.
+    InPlace,
 }
 
 /// Mathematical and storage semantics fixed before executing an operation.
@@ -44,12 +44,12 @@ pub struct TransformRequest {
     pub output_order: ElementOrder,
     /// Inverse-size factor; forward requests must use [`InverseScale::Normalized`].
     pub inverse_scale: InverseScale,
-    /// Whether input storage must be preserved.
-    pub input_policy: InputPolicy,
+    /// In-place input or a preserved separate input view.
+    pub input_storage: InputStorage,
 }
 
 impl TransformRequest {
-    /// A full natural-order transform, permitting in-place execution.
+    /// A full natural-order transform using in-place input.
     pub const fn new(direction: Direction) -> Self {
         Self {
             direction,
@@ -57,7 +57,7 @@ impl TransformRequest {
             input_order: ElementOrder::Natural,
             output_order: ElementOrder::Natural,
             inverse_scale: InverseScale::Normalized,
-            input_policy: InputPolicy::Disposable,
+            input_storage: InputStorage::InPlace,
         }
     }
     pub(super) const fn input_len(self, size: usize) -> usize {

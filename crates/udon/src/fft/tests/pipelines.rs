@@ -1,15 +1,17 @@
 use super::*;
 
-fn expansion_strategy() -> ExpansionStrategy {
-    ExpansionStrategy {
-        transform: ExecutionOptions {
-            tile_len: 4,
-            columns_per_task: 2,
-            max_tasks: 5,
-        },
-        budget: ResourceBudget::for_tasks(5),
-    }
+use crate::fft::run::{ExpansionPlan, FftPlan, InterpolationPlan};
+use core::num::NonZeroUsize;
+
+fn nz(value: usize) -> NonZeroUsize {
+    NonZeroUsize::new(value).unwrap()
 }
+
+const OPTIONS: ExecutionOptions = ExecutionOptions {
+    tile_len: 4,
+    columns_per_task: 2,
+    max_tasks: 5,
+};
 
 fn check_coefficients<M: PrimeModulus>(
     view: CoefficientView<'_, M>,
@@ -57,24 +59,24 @@ fn expansions<M: PrimeModulus>() {
                         expansion
                     };
                     expansion.validate_scales().unwrap();
-                    let mut legacy = vec![PastaField::ZERO; domain.size()];
+                    let mut contiguous = vec![PastaField::ZERO; domain.size()];
                     expansion
                         .evaluations(
                             &evaluations,
-                            &mut legacy,
+                            &mut contiguous,
                             ExpansionOptions::serial(),
                             &SerialExecutor,
                             &mut [],
                         )
                         .unwrap();
-                    let legacy = EvaluationView::bind(
-                        &legacy,
+                    let contiguous = EvaluationView::bind(
+                        &contiguous,
                         domain,
                         EvaluationLayout::Residues(expansion.layout()),
                     )
                     .unwrap();
                     for (row, value) in expected.iter().enumerate() {
-                        assert_eq!(legacy.get(row), Some(value));
+                        assert_eq!(contiguous.get(row), Some(value));
                     }
                     for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
                         for storage in [
@@ -93,83 +95,67 @@ fn expansions<M: PrimeModulus>() {
                                 scale: InverseScale::Unscaled,
                             },
                         ] {
-                            let operation =
-                                expansion.configure(order, storage, expansion_strategy());
+                            let operation = ExpansionPlan::new(
+                                expansion,
+                                storage,
+                                order,
+                                InputSupport::Full,
+                                ElementOrder::Natural,
+                                nz(4),
+                                Codelet::Radix2,
+                            );
                             let scale = match storage {
                                 ExpansionStorage::CoefficientWorkspace { scale }
                                 | ExpansionStorage::DisposableInput { scale } => Some(scale),
                                 _ => None,
                             };
-                            if matches!(
-                                (scale, normalization),
-                                (
-                                    Some(InverseScale::Normalized),
-                                    Some(ExpansionScaleNormalization::UnscaledInverse)
-                                ) | (
-                                    Some(InverseScale::Unscaled),
-                                    Some(ExpansionScaleNormalization::Coefficients)
-                                )
-                            ) {
-                                assert!(matches!(operation, Err(FftError::InvalidTables)));
-                                continue;
-                            }
                             let operation = operation.unwrap();
-                            assert_eq!(operation.coefficient_scale(), scale);
-                            assert_eq!(operation.description().storage, storage);
-                            assert_eq!(
-                                operation
-                                    .description()
-                                    .requirements(operation.requirements().retained_table_bytes)
-                                    .unwrap(),
-                                operation.requirements()
-                            );
                             let mut output = vec![PastaField::ONE; domain.size()];
                             let mut scratch =
-                                vec![PastaField::ONE; operation.requirements().scratch_fields + 1];
-                            let mut working =
-                                vec![PastaField::ONE; operation.requirements().coefficient_fields];
+                                vec![PastaField::ONE; operation.scratch_fields(nz(5)).unwrap() + 1];
+                            let mut working = vec![PastaField::ONE; operation.coefficient_fields()];
                             let mut disposable = evaluations.clone();
-                            match storage {
-                                ExpansionStorage::Coefficients => operation
-                                    .execute_into(
-                                        &coefficients,
-                                        &mut output,
-                                        &SerialExecutor,
-                                        &mut scratch,
+                            let retained =
+                                if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
+                                    Some(
+                                        operation
+                                            .execute_disposable(
+                                                &mut disposable,
+                                                &mut output,
+                                                None,
+                                                &mut scratch,
+                                                nz(5),
+                                                &SerialExecutor,
+                                            )
+                                            .unwrap(),
                                     )
-                                    .map(|_| ()),
-                                ExpansionStorage::ReuseOutput => operation
-                                    .execute_into(
-                                        &evaluations,
-                                        &mut output,
-                                        &SerialExecutor,
-                                        &mut scratch,
-                                    )
-                                    .map(|_| ()),
-                                ExpansionStorage::CoefficientWorkspace { .. } => operation
-                                    .execute_with_workspace(
-                                        &evaluations,
-                                        &mut output,
-                                        &mut working,
-                                        &SerialExecutor,
-                                        &mut scratch,
-                                    )
-                                    .map(|view| {
-                                        check_coefficients(view, &coefficients, scale.unwrap())
-                                    }),
-                                ExpansionStorage::DisposableInput { .. } => operation
-                                    .execute_disposable(
-                                        &mut disposable,
-                                        &mut output,
-                                        &SerialExecutor,
-                                        &mut scratch,
-                                    )
-                                    .map(|view| {
-                                        check_coefficients(view, &coefficients, scale.unwrap())
-                                    }),
+                                } else {
+                                    let input = if storage == ExpansionStorage::Coefficients {
+                                        &coefficients
+                                    } else {
+                                        &evaluations
+                                    };
+                                    operation
+                                        .execute(
+                                            input,
+                                            &mut output,
+                                            &mut working,
+                                            None,
+                                            &mut scratch,
+                                            nz(5),
+                                            &SerialExecutor,
+                                        )
+                                        .unwrap()
+                                };
+                            if let Some(view) = retained {
+                                check_coefficients(view, &coefficients, scale.unwrap());
                             }
-                            .unwrap();
-                            let view = operation.view(&output).unwrap();
+                            let layout = if order == ExpansionOrder::Residues {
+                                EvaluationLayout::Residues(expansion.layout())
+                            } else {
+                                EvaluationLayout::BitReversed
+                            };
+                            let view = EvaluationView::bind(&output, domain, layout).unwrap();
                             for (row, value) in expected.iter().enumerate() {
                                 assert_eq!(
                                     view.get(row),
@@ -182,12 +168,14 @@ fn expansions<M: PrimeModulus>() {
                             if storage == ExpansionStorage::Coefficients {
                                 let mut product = output.clone();
                                 operation
-                                    .execute_product_into(
+                                    .execute(
                                         &coefficients,
-                                        view,
                                         &mut product,
-                                        &SerialExecutor,
+                                        &mut [],
+                                        Some(&output),
                                         &mut scratch,
+                                        nz(5),
+                                        &SerialExecutor,
                                     )
                                     .unwrap();
                                 for (product, value) in product.iter().zip(&output) {
@@ -216,7 +204,7 @@ fn expansions<M: PrimeModulus>() {
                         let mut output = vec![PastaField::ONE; base.domain().size()];
                         for index in 0..expansion.layout().residues() {
                             let residue = expansion.residue(index, order).unwrap();
-                            let options = expansion_strategy().transform;
+                            let options = OPTIONS;
                             let mut scratch = vec![
                                 PastaField::ONE;
                                 residue
@@ -312,39 +300,54 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                     } else {
                         expansion
                     };
-                    let operation = expansion
-                        .configure(
-                            ExpansionOrder::BitReversed,
-                            ExpansionStorage::Coefficients,
-                            expansion_strategy(),
-                        )
-                        .unwrap();
+                    let operation = ExpansionPlan::new(
+                        expansion,
+                        ExpansionStorage::Coefficients,
+                        ExpansionOrder::BitReversed,
+                        InputSupport::Prefix(len),
+                        ElementOrder::Natural,
+                        nz(4),
+                        Codelet::Radix2,
+                    )
+                    .unwrap();
                     let mut ordered_factors = vec![PastaField::ZERO; domain.size()];
                     for (row, factor) in factors.iter().enumerate() {
-                        ordered_factors[operation.layout().index(row, domain.size()).unwrap()] =
-                            *factor;
+                        ordered_factors[EvaluationLayout::BitReversed
+                            .index(row, domain.size())
+                            .unwrap()] = *factor;
                     }
-                    let factor = operation.view(&ordered_factors).unwrap();
                     let mut output = vec![PastaField::ONE; domain.size()];
                     let mut scratch =
-                        vec![PastaField::ONE; operation.requirements().scratch_fields + 1];
+                        vec![PastaField::ONE; operation.scratch_fields(nz(5)).unwrap() + 1];
                     operation
-                        .execute_into(&coefficients[..len], &mut output, executor, &mut scratch)
+                        .execute(
+                            &coefficients[..len],
+                            &mut output,
+                            &mut [],
+                            None,
+                            &mut scratch,
+                            nz(5),
+                            executor,
+                        )
                         .unwrap();
-                    let view = operation.view(&output).unwrap();
+                    let view = EvaluationView::bind(&output, domain, EvaluationLayout::BitReversed)
+                        .unwrap();
                     for (row, expected) in expected.iter().enumerate() {
                         assert_eq!(view.get(row), Some(expected));
                     }
                     operation
-                        .execute_product_into(
+                        .execute(
                             &coefficients[..len],
-                            factor,
                             &mut output,
-                            executor,
+                            &mut [],
+                            Some(&ordered_factors),
                             &mut scratch,
+                            nz(5),
+                            executor,
                         )
                         .unwrap();
-                    let view = operation.view(&output).unwrap();
+                    let view = EvaluationView::bind(&output, domain, EvaluationLayout::BitReversed)
+                        .unwrap();
                     for (row, expected) in expected.iter().enumerate() {
                         assert_eq!(view.get(row), Some(&expected.mul(&factors[row])));
                     }
@@ -355,13 +358,18 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                             .map(|value| value.mul(&PastaField::from_u64(len as u64)))
                             .collect();
                         let mut product = vec![PastaField::ZERO; domain.size()];
+                        let retained = CoefficientView::new(&raw, InverseScale::Unscaled);
                         operation
-                            .execute_product_into(
-                                CoefficientView::new(&raw, InverseScale::Unscaled),
-                                factor,
+                            .with_coefficient_scale(retained.normalization_factor())
+                            .unwrap()
+                            .execute(
+                                retained.as_slice(),
                                 &mut product,
-                                executor,
+                                &mut [],
+                                Some(&ordered_factors),
                                 &mut scratch,
+                                nz(5),
+                                executor,
                             )
                             .unwrap();
                         assert_eq!(product, output);
@@ -388,7 +396,7 @@ fn short_bit_reversed_residues_restore_fields_on_panic() {
     let residue = expansion.residue(5, ElementOrder::BitReversed).unwrap();
     let input = inputs(10);
     let expected = direct(&input, residue.domain());
-    let options = expansion_strategy().transform;
+    let options = OPTIONS;
     let mut output = vec![Fp::ONE; base.domain().size()];
     let mut scratch = vec![
         Fp::ONE;
@@ -432,22 +440,6 @@ fn expansion_metadata_storage_errors_and_panics() {
     let domain = Domain::new(7).unwrap().coset(Fp::from_u64(7)).unwrap();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let coefficients = inputs(base.domain().size());
-    assert!(matches!(
-        expansion.configure(
-            ExpansionOrder::BitReversed,
-            ExpansionStorage::CoefficientWorkspace {
-                scale: InverseScale::Unscaled
-            },
-            ExpansionStrategy {
-                budget: ResourceBudget {
-                    scratch_fields: base.domain().size() - 1,
-                    ..ResourceBudget::for_tasks(1)
-                },
-                ..ExpansionStrategy::serial()
-            }
-        ),
-        Err(FftError::ResourceLimit)
-    ));
     let evaluations = direct(&coefficients, base.domain());
     for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
         for storage in [
@@ -466,31 +458,38 @@ fn expansion_metadata_storage_errors_and_panics() {
                 scale: InverseScale::Unscaled,
             },
         ] {
-            let operation = expansion
-                .configure(order, storage, expansion_strategy())
-                .unwrap();
+            let operation = ExpansionPlan::new(
+                expansion,
+                storage,
+                order,
+                InputSupport::Full,
+                ElementOrder::Natural,
+                nz(4),
+                Codelet::Radix2,
+            )
+            .unwrap();
             let mut output = vec![Fp::ONE; domain.size()];
-            let mut scratch = vec![Fp::ONE; operation.requirements().scratch_fields];
-            let mut workspace = vec![Fp::ONE; operation.requirements().coefficient_fields];
+            let mut scratch = vec![Fp::ONE; operation.scratch_fields(nz(5)).unwrap()];
+            let mut workspace = vec![Fp::ONE; operation.coefficient_fields()];
             let mut disposable = evaluations.clone();
             let execute = |input: &mut [Fp],
                            output: &mut [Fp],
                            workspace: &mut [Fp],
                            scratch: &mut [Fp],
                            executor: &CountJoins| {
-                match storage {
-                    ExpansionStorage::Coefficients => {
-                        operation.execute_into(&coefficients, output, executor, scratch)
-                    }
-                    ExpansionStorage::ReuseOutput => {
-                        operation.execute_into(&evaluations, output, executor, scratch)
-                    }
-                    ExpansionStorage::CoefficientWorkspace { .. } => operation
-                        .execute_with_workspace(&evaluations, output, workspace, executor, scratch)
-                        .map(|_| ()),
-                    ExpansionStorage::DisposableInput { .. } => operation
-                        .execute_disposable(input, output, executor, scratch)
-                        .map(|_| ()),
+                if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
+                    operation
+                        .execute_disposable(input, output, None, scratch, nz(5), executor)
+                        .map(|_| ())
+                } else {
+                    let input = if storage == ExpansionStorage::Coefficients {
+                        &coefficients
+                    } else {
+                        &evaluations
+                    };
+                    operation
+                        .execute(input, output, workspace, None, scratch, nz(5), executor)
+                        .map(|_| ())
                 }
             };
             let joins = CountJoins::default();
@@ -510,36 +509,34 @@ fn expansion_metadata_storage_errors_and_panics() {
                 };
                 assert!(
                     catch_unwind(AssertUnwindSafe(|| {
-                        match storage {
-                            ExpansionStorage::Coefficients => operation.execute_into(
-                                &coefficients,
-                                &mut output,
-                                &executor,
-                                &mut scratch,
-                            ),
-                            ExpansionStorage::ReuseOutput => operation.execute_into(
-                                &evaluations,
-                                &mut output,
-                                &executor,
-                                &mut scratch,
-                            ),
-                            ExpansionStorage::CoefficientWorkspace { .. } => operation
-                                .execute_with_workspace(
-                                    &evaluations,
-                                    &mut output,
-                                    &mut workspace,
-                                    &executor,
-                                    &mut scratch,
-                                )
-                                .map(|_| ()),
-                            ExpansionStorage::DisposableInput { .. } => operation
+                        if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
+                            operation
                                 .execute_disposable(
                                     &mut disposable,
                                     &mut output,
-                                    &executor,
+                                    None,
                                     &mut scratch,
+                                    nz(5),
+                                    &executor,
                                 )
-                                .map(|_| ()),
+                                .map(|_| ())
+                        } else {
+                            let input = if storage == ExpansionStorage::Coefficients {
+                                &coefficients
+                            } else {
+                                &evaluations
+                            };
+                            operation
+                                .execute(
+                                    input,
+                                    &mut output,
+                                    &mut workspace,
+                                    None,
+                                    &mut scratch,
+                                    nz(5),
+                                    &executor,
+                                )
+                                .map(|_| ())
                         }
                     }))
                     .is_err()
@@ -547,6 +544,35 @@ fn expansion_metadata_storage_errors_and_panics() {
                 for values in [&output, &workspace, &scratch, &disposable] {
                     assert_canonical(values);
                 }
+            }
+            if !workspace.is_empty() {
+                let short = workspace.len() - 1;
+                let before = (
+                    disposable.clone(),
+                    output.clone(),
+                    workspace.clone(),
+                    scratch.clone(),
+                );
+                assert!(matches!(
+                    execute(
+                        &mut disposable,
+                        &mut output,
+                        &mut workspace[..short],
+                        &mut scratch,
+                        &joins
+                    ),
+                    Err(FftError::LengthMismatch { .. })
+                ));
+                assert_eq!(
+                    (
+                        disposable.clone(),
+                        output.clone(),
+                        workspace.clone(),
+                        scratch.clone()
+                    ),
+                    before
+                );
+                assert_eq!(joins.take(), 0);
             }
             output.fill(Fp::ONE);
             if !scratch.is_empty() {
@@ -611,118 +637,70 @@ fn expansion_metadata_storage_errors_and_panics() {
 
 #[test]
 fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
-    let plan = Plan::without_tables(Domain::<PallasBase>::new(7).unwrap().subgroup());
-    let other = Plan::without_tables(Domain::new(7).unwrap().coset(Fp::from_u64(7)).unwrap());
-    let original = inputs(plan.domain().size());
-    let options = ExecutionOptions {
-        tile_len: 8,
-        columns_per_task: 3,
-        max_tasks: 5,
-    };
-    let parallel = InterpolationOptions {
-        transform: options,
-        max_class_tasks: 3,
-        max_tasks: 5,
-    };
-    let requirements = parallel
-        .requirements(original.len(), &[original.len(); 2])
-        .unwrap();
-    assert!(requirements.scratch_partitions * requirements.transform_tasks <= parallel.max_tasks);
-    for sum in [false, true] {
-        let fields = if sum {
-            options
-                .interpolation_requirements(original.len(), &[original.len(); 2])
-                .unwrap()
-                .field_elements
-        } else {
-            requirements.scratch_fields
-        };
-        let mut output = original.clone();
-        let mut a = original.clone();
-        let mut b = original.clone();
-        let mut scratch = vec![Fp::ONE; fields];
-        let mut output_class = Class::new(plan, &mut output, ElementOrder::Natural).unwrap();
-        let mut lifts = [
-            Class::new(plan, &mut a, ElementOrder::Natural).unwrap(),
-            Class::new(other, &mut b, ElementOrder::Natural).unwrap(),
-        ];
-        let result = if sum {
-            interpolate_sum(
-                &mut output_class,
-                &mut lifts,
-                options,
-                &SerialExecutor,
-                &mut scratch[..fields - 1],
+    let domain = Domain::<PallasBase>::new(7).unwrap().subgroup();
+    let other = domain.domain().coset(Fp::from_u64(7)).unwrap();
+    let original = inputs(domain.size());
+    for consume in [false, true] {
+        let transforms = [domain, domain, other].map(|domain| {
+            FftPlan::new(
+                Plan::without_tables(domain),
+                TransformRequest::new(Direction::Inverse),
+                nz(8),
+                Codelet::Radix2,
             )
-        } else {
-            interpolate_classes_parallel(
-                &mut output_class,
-                &mut lifts,
-                parallel,
-                &SerialExecutor,
-                &mut scratch[..fields - 1],
-            )
-        };
-        assert!(matches!(result, Err(FftError::ScratchTooSmall { .. })));
-        assert_eq!(output_class.state(), ClassState::Evaluations);
-        assert_eq!(output_class.values(), original);
-        for class in &lifts {
-            assert_eq!(class.state(), ClassState::Evaluations);
-            assert_eq!(class.values(), original);
-        }
-        assert!(scratch.iter().all(|v| *v == Fp::ONE));
+            .unwrap()
+            .with_columns(nz(3), nz(2))
+            .unwrap()
+        });
+        let plan = InterpolationPlan::new(transforms, consume).unwrap();
+        let mut values: [_; 3] = core::array::from_fn(|_| original.clone());
+        let mut scratch: [_; 3] =
+            core::array::from_fn(|i| vec![Fp::ONE; plan.snapshot_fields(i).unwrap() + 1]);
         let count = CountJoins::default();
-        if sum {
-            interpolate_sum(&mut output_class, &mut lifts, options, &count, &mut scratch)
-        } else {
-            interpolate_classes_parallel(
-                &mut output_class,
-                &mut lifts,
-                parallel,
-                &count,
-                &mut scratch,
-            )
-        }
+        let short = plan.snapshot_fields(2).unwrap() - 1;
+        let [a, b, c] = &mut scratch;
+        assert!(matches!(
+            plan.execute(
+                values.each_mut().map(Vec::as_mut_slice),
+                [a, b, &mut c[..short]],
+                nz(5),
+                &count
+            ),
+            Err(FftError::ScratchTooSmall { .. })
+        ));
+        assert!(values.iter().all(|v| *v == original));
+        assert!(scratch.iter().flatten().all(|v| *v == Fp::ONE));
+        assert_eq!(count.take(), 0);
+        plan.execute(
+            values.each_mut().map(Vec::as_mut_slice),
+            scratch.each_mut().map(Vec::as_mut_slice),
+            nz(5),
+            &count,
+        )
         .unwrap();
-        for index in 0..count.take() {
-            let mut output = original.clone();
-            let mut a = original.clone();
-            let mut b = original.clone();
-            let mut output_class = Class::new(plan, &mut output, ElementOrder::Natural).unwrap();
-            let mut lifts = [
-                Class::new(plan, &mut a, ElementOrder::Natural).unwrap(),
-                Class::new(other, &mut b, ElementOrder::Natural).unwrap(),
-            ];
+        let joins = count.take();
+        assert!(joins > 0);
+        for index in 0..joins {
+            values.iter_mut().for_each(|v| v.copy_from_slice(&original));
             let executor = FailAt {
                 calls: AtomicUsize::new(0),
                 index,
             };
             assert!(
                 catch_unwind(AssertUnwindSafe(|| {
-                    if sum {
-                        interpolate_sum(
-                            &mut output_class,
-                            &mut lifts,
-                            options,
-                            &executor,
-                            &mut scratch,
-                        )
-                    } else {
-                        interpolate_classes_parallel(
-                            &mut output_class,
-                            &mut lifts,
-                            parallel,
-                            &executor,
-                            &mut scratch,
-                        )
-                    }
+                    plan.execute(
+                        values.each_mut().map(Vec::as_mut_slice),
+                        scratch.each_mut().map(Vec::as_mut_slice),
+                        nz(5),
+                        &executor,
+                    )
                 }))
                 .is_err()
             );
-            assert_ne!(output_class.state(), ClassState::Evaluations);
-            for values in [&output, &a, &b, &scratch] {
-                assert_canonical(values);
+            for buffer in values.iter().chain(&scratch) {
+                assert_canonical(buffer);
             }
+            assert!(scratch.iter().all(|s| s.last() == Some(&Fp::ONE)));
         }
     }
 }
@@ -755,93 +733,64 @@ fn interpolation<M: PrimeModulus>() {
                 *out = out.add(value);
             }
         }
-        let options = ExecutionOptions {
-            tile_len: 4,
-            columns_per_task: 2,
-            max_tasks: 3,
-        };
-        let parallel = InterpolationOptions {
-            transform: options,
-            max_class_tasks: 3,
-            max_tasks: 5,
-        };
-        for mode in 0..3 {
-            let mut output = direct(&coefficients, output_domain);
-            let mut evaluations: Vec<_> = domains
-                .iter()
-                .zip(&lift_coefficients)
-                .enumerate()
-                .map(|(i, (&domain, coefficients))| {
-                    let mut values = direct(coefficients, domain);
-                    if i % 2 == 0 {
-                        Plan::without_tables(domain).permute(&mut values);
-                    }
-                    values
-                })
-                .collect();
-            let mut lifts: Vec<_> = evaluations
-                .iter_mut()
-                .zip(&domains)
-                .enumerate()
-                .map(|(i, (values, &domain))| {
-                    Class::new(
-                        Plan::without_tables(domain),
-                        values,
-                        if i % 2 == 0 {
-                            ElementOrder::BitReversed
+        for consume in [false, true] {
+            // One task exercises fused interpolation; multiple tasks exercise
+            // separate class transforms with the same independent polynomial sum.
+            for tasks in [1, 5] {
+                let mut values: [_; 5] = core::array::from_fn(|i| {
+                    if i == 0 {
+                        direct(&coefficients, output_domain)
+                    } else {
+                        let natural = direct(&lift_coefficients[i - 1], domains[i - 1]);
+                        if i % 2 == 1 {
+                            (0..natural.len())
+                                .map(|j| natural[reverse(j, natural.len().ilog2())])
+                                .collect()
                         } else {
-                            ElementOrder::Natural
+                            natural
+                        }
+                    }
+                });
+                let transforms = core::array::from_fn(|i| {
+                    FftPlan::new(
+                        Plan::without_tables(if i == 0 {
+                            output_domain
+                        } else {
+                            domains[i - 1]
+                        }),
+                        TransformRequest {
+                            input_order: if i % 2 == 1 {
+                                ElementOrder::BitReversed
+                            } else {
+                                ElementOrder::Natural
+                            },
+                            ..TransformRequest::new(Direction::Inverse)
                         },
+                        nz(4),
+                        Codelet::Radix2,
                     )
                     .unwrap()
-                })
-                .collect();
-            let mut class = Class::new(
-                Plan::without_tables(output_domain),
-                &mut output,
-                ElementOrder::Natural,
-            )
-            .unwrap();
-            let fields = if mode == 1 {
-                let required = parallel.scratch(&class, &lifts).unwrap();
-                assert_eq!(
-                    required,
-                    parallel.requirements(output_domain.size(), &sizes).unwrap()
-                );
-                required.scratch_fields
-            } else {
-                interpolation_scratch(&class, &lifts, options)
-                    .unwrap()
-                    .field_elements
-            };
-            let mut scratch = vec![PastaField::ONE; fields + 1];
-            match mode {
-                0 => interpolate_classes(&mut class, &mut lifts, options, &Threads, &mut scratch),
-                1 => interpolate_classes_parallel(
-                    &mut class,
-                    &mut lifts,
-                    parallel,
+                });
+                let plan = InterpolationPlan::<_, 5>::new(transforms, consume).unwrap();
+                let mut scratch: [_; 5] = core::array::from_fn(|i| {
+                    vec![PastaField::ONE; plan.snapshot_fields(i).unwrap() + 1]
+                });
+                plan.execute(
+                    values.each_mut().map(Vec::as_mut_slice),
+                    scratch.each_mut().map(Vec::as_mut_slice),
+                    nz(tasks),
                     &Threads,
-                    &mut scratch,
-                ),
-                _ => interpolate_sum(&mut class, &mut lifts, options, &Threads, &mut scratch),
-            }
-            .unwrap();
-            assert_eq!(class.values(), expected);
-            assert_eq!(class.state(), ClassState::Coefficients);
-            for (class, expected) in lifts.iter().zip(&lift_coefficients) {
-                if mode < 2 {
-                    assert_eq!(class.values(), expected);
-                } else {
-                    assert_eq!(class.state(), ClassState::Consumed);
+                )
+                .unwrap();
+                assert_eq!(values[0], expected);
+                if !consume {
+                    assert_eq!(values[1..], lift_coefficients);
+                }
+                for buffer in &scratch {
+                    assert_eq!(buffer.last(), Some(&PastaField::ONE));
+                    assert_canonical(buffer);
                 }
             }
-            assert_eq!(scratch.last(), Some(&PastaField::ONE));
-            assert_canonical(&scratch);
-            assert_eq!(
-                interpolate_sum(&mut class, &mut lifts, options, &Threads, &mut scratch),
-                Err(FftError::InvalidClassState)
-            );
         }
     }
 }
@@ -870,20 +819,29 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                 .with_scales(scales)
                 .unwrap();
             for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
-                let operation = expansion
-                    .configure(order, ExpansionStorage::ReuseOutput, expansion_strategy())
-                    .unwrap();
-                let count = operation.requirements().scratch_fields;
-                assert!(count > 0);
+                let operation = ExpansionPlan::new(
+                    expansion,
+                    ExpansionStorage::ReuseOutput,
+                    order,
+                    InputSupport::Full,
+                    ElementOrder::Natural,
+                    nz(4),
+                    Codelet::Radix2,
+                )
+                .unwrap();
+                let count = operation.scratch_fields(nz(5)).unwrap();
                 let mut scratch = vec![PastaField::ONE; count + 1];
                 let mut output = vec![PastaField::ONE; input.len()];
                 let joins = CountJoins::default();
                 assert!(matches!(
-                    operation.execute_into(
+                    operation.execute(
                         &input[..input.len() - 1],
                         &mut output,
-                        &joins,
-                        &mut scratch
+                        &mut [],
+                        None,
+                        &mut scratch,
+                        nz(5),
+                        &joins
                     ),
                     Err(FftError::LengthMismatch {
                         buffer: "input",
@@ -891,26 +849,67 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                     })
                 ));
                 assert!(matches!(
-                    operation.execute_into(
+                    operation.execute(
                         &input,
                         &mut output[..input.len() - 1],
-                        &joins,
-                        &mut scratch
+                        &mut [],
+                        None,
+                        &mut scratch,
+                        nz(5),
+                        &joins
                     ),
                     Err(FftError::LengthMismatch {
                         buffer: "output",
                         ..
                     })
                 ));
+                if count > 0 {
+                    assert!(matches!(
+                        operation.execute(
+                            &input,
+                            &mut output,
+                            &mut [],
+                            None,
+                            &mut scratch[..count - 1],
+                            nz(5),
+                            &joins
+                        ),
+                        Err(FftError::ScratchTooSmall { .. })
+                    ));
+                }
                 assert!(matches!(
-                    operation.execute_into(&input, &mut output, &joins, &mut scratch[..count - 1]),
-                    Err(FftError::ScratchTooSmall { .. })
+                    operation.execute(
+                        &input,
+                        &mut output,
+                        &mut [],
+                        Some(&input[..input.len() - 1]),
+                        &mut scratch,
+                        nz(5),
+                        &joins
+                    ),
+                    Err(FftError::LengthMismatch {
+                        buffer: "factor",
+                        ..
+                    })
                 ));
                 assert!(output.iter().all(|v| *v == PastaField::ONE));
                 operation
-                    .execute_into(&input, &mut output, &joins, &mut scratch)
+                    .execute(
+                        &input,
+                        &mut output,
+                        &mut [],
+                        None,
+                        &mut scratch,
+                        nz(5),
+                        &joins,
+                    )
                     .unwrap();
-                let view = operation.view(&output).unwrap();
+                let layout = if order == ExpansionOrder::Residues {
+                    EvaluationLayout::Residues(expansion.layout())
+                } else {
+                    EvaluationLayout::BitReversed
+                };
+                let view = EvaluationView::bind(&output, base.domain(), layout).unwrap();
                 for (i, value) in input.iter().enumerate() {
                     assert_eq!(view.get(i), Some(value));
                 }

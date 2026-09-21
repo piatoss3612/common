@@ -622,7 +622,6 @@ fn interpolation<M: PrimeModulus>(
                         TransformRequest::new(Direction::Inverse),
                         nz(TILED.tile_len),
                         Codelet::Radix2,
-                        false,
                     )
                     .unwrap()
                     .with_contiguous_permutation()

@@ -48,10 +48,11 @@ budget divides work within an operation; it does not cap all concurrent requests
 ## Owning an MSM workspace
 
 The [MSM workspace](../crates/udon/tests/support/workspaces/msm.rs) holds
-initialized scratch and plan metadata. Its `prepare` method first sizes the
-metadata and constructs a `msm::run::BatchPlan`, then grows scratch to that plan's
-requirements. This order matters because metadata counts against a plan's
-memory ceiling and can affect the selected scratch layout. The
+initialized scratch and plan metadata. Its `prepare` method accepts
+`BatchOptions`, sizes metadata, and constructs a `msm::run::BatchPlan`, then grows
+scratch to that plan's requirements. This order matters because reserved
+metadata prefixes count against the batch memory ceiling and can affect the
+selected scratch layout. The ceiling excludes excess workspace capacity. The
 [grouped-job guide](CURVES.md#grouped-jobs-and-other-work) explains planning and
 how long plans borrow scalar rows.
 

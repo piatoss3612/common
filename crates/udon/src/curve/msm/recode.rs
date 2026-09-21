@@ -8,7 +8,7 @@
 
 use super::run::storage::Storage;
 
-use super::{CurveError, ExecutionOptions, PastaCurve, ScalarStorage, checked_count};
+use super::{ArithmeticOptions, CurveError, Kernel, PastaCurve, ScalarStorage, checked_count};
 use crate::curve::{eisenstein, parameters::GlvParameters, scalar::centered_digit};
 #[cfg(test)]
 use crate::exec::{Executor, TaskBudget, for_each_chunk_mut};
@@ -24,17 +24,21 @@ pub(super) enum Geometry {
 }
 
 impl Geometry {
-    pub const fn for_len(n: usize, options: ExecutionOptions) -> Self {
-        if options.joint_tables {
-            Self::Joint
-        } else if let Some(width) = options.window_bits {
-            Self::Booth(width)
-        } else if n < super::BOOTH_MIN {
+    pub const fn for_len(n: usize, options: ArithmeticOptions) -> Self {
+        match options.kernel {
+            Kernel::Joint => return Self::Joint,
+            Kernel::Booth {
+                width: Some(width), ..
+            }
+            | Kernel::StreamingBooth { width: Some(width) } => return Self::Booth(width as u8),
+            Kernel::StreamingBooth { width: None } => return Self::Booth(8),
+            _ => {}
+        }
+        if matches!(options.kernel, Kernel::Auto) && n < super::BOOTH_MIN {
             Self::Joint
         } else {
-            // Larger windows reduce the number of window tasks but enlarge each
-            // bucket workspace. Serial execution favors smaller buckets, while
-            // larger task budgets can benefit from fewer window tasks.
+            // Larger windows reduce recoding work but enlarge each bucket
+            // workspace. Geometry does not depend on scheduling capacity.
             Self::Booth(if n < 192 {
                 6
             } else if n < 512 {
@@ -42,20 +46,29 @@ impl Geometry {
             } else if n < 4096 {
                 8
             } else if n < 32768 {
-                if options.task_budget.get() < 4 {
-                    10
-                } else {
-                    11
-                }
+                10
             } else {
                 11
             })
         }
     }
 
-    pub const fn for_shape(n: usize, shape: Shape, options: ExecutionOptions) -> Self {
+    pub const fn for_plan(n: usize, options: ArithmeticOptions) -> Self {
+        if n >= 4096
+            && matches!(
+                options.kernel,
+                Kernel::Auto | Kernel::Booth { width: None, .. }
+            )
+        {
+            Self::Booth(11)
+        } else {
+            Self::for_len(n, options)
+        }
+    }
+
+    pub const fn for_shape(n: usize, shape: Shape, options: ArithmeticOptions) -> Self {
         let Shape { bits, weight } = shape;
-        if options.window_bits.is_some() || options.joint_tables || bits == 255 {
+        if !matches!(options.kernel, Kernel::Auto) || bits == 255 {
             return Self::for_len(n, options);
         }
         // Dense bounded rows eventually favor Booth buckets too. Keep sparse

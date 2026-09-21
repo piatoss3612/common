@@ -4,6 +4,7 @@
 #[allow(dead_code)]
 mod run_pool;
 
+mod borrowed;
 mod expansion;
 mod fft;
 #[path = "../support/fft_pipeline.rs"]

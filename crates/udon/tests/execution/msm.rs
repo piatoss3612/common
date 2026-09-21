@@ -6,17 +6,19 @@ use spin::RwLock;
 use std::num::NonZeroUsize;
 use zakura_udon::{
     curve::{
-        AffinePoint, EisensteinTableBatch, Pallas, PastaCurve, Point, PreparedAffinePoint,
-        ProjectivePoint, Vesta,
+        AffinePoint, CurveError, EisensteinTableBatch, Pallas, PastaCurve, Point,
+        PreparedAffinePoint, ProjectivePoint, Vesta,
         msm::{
-            Accumulation, Bases, ExecutionOptions, Input, PreparedScalars, ScalarStorage, Scratch,
-            Selection,
-            run::{MsmPlan, MsmRun, ParallelMsmRun, WorkKind},
+            Accumulation, ArithmeticOptions, Bases, BatchOptions, Input, Kernel, PreparedScalars,
+            Requirements, ScalarStorage, Scratch, Selection,
+            run::{
+                BatchPlan, JobStorage, MsmPlan, MsmRun, ParallelMsmRun, WorkKind, WorkerStorage,
+            },
         },
     },
     exec::{
         SerialExecutor, TaskBudget,
-        run::{Identity, TaskStorage},
+        run::{Identity, Outcome, TaskStorage},
     },
     field::{CanonicalUint, PastaField},
 };
@@ -87,11 +89,12 @@ fn produced<C: PastaCurve>() {
     for indexed in [false, true] {
         for streaming in [false, true] {
             let options = if streaming {
-                ExecutionOptions::SERIAL
-                    .with_streaming_buckets()
+                ArithmeticOptions::DEFAULT
+                    .with_kernel(Kernel::StreamingBooth { width: None })
+                    .unwrap()
                     .with_chunk_size(NonZeroUsize::new(512).unwrap())
             } else {
-                ExecutionOptions::SERIAL
+                ArithmeticOptions::DEFAULT
             };
             let original =
                 MsmPlan::<C>::new(TERMS, options, NonZeroUsize::new(TERMS).unwrap()).unwrap();
@@ -205,8 +208,6 @@ fn produced_fragments_wait_for_sources_and_rebind_partition_epochs() {
 
 #[test]
 fn invalid_produced_sources_preserve_destinations_and_drain_admitted_tasks() {
-    use zakura_udon::curve::CurveError;
-
     let bases = [AffinePoint::<Pallas>::GENERATOR; 513];
     let scalars = [PastaField::from_u64(7); 256];
     let indices = [0; 256];
@@ -214,7 +215,7 @@ fn invalid_produced_sources_preserve_destinations_and_drain_admitted_tasks() {
     invalid_indices[19] = bases.len() as u32;
     let plan = MsmPlan::new(
         513,
-        ExecutionOptions::SERIAL,
+        ArithmeticOptions::DEFAULT,
         NonZeroUsize::new(513).unwrap(),
     )
     .unwrap();
@@ -264,7 +265,10 @@ fn invalid_produced_sources_preserve_destinations_and_drain_admitted_tasks() {
             .unwrap()
             .unwrap();
         bad.execute().unwrap();
-        let published = run.complete(bad.finish()).unwrap();
+        let completion = bad.finish();
+        assert_eq!(completion.outcome(), Outcome::Success);
+        let published = run.complete(completion).unwrap();
+        assert_eq!(published.outcome, Outcome::Success);
         match invalid {
             0 | 1 => assert!(matches!(
                 published.error,
@@ -290,6 +294,10 @@ fn invalid_produced_sources_preserve_destinations_and_drain_admitted_tasks() {
         drop(run.complete(pending.finish()).unwrap());
         assert_eq!(run.inflight(), 0);
         assert_eq!(run.result(), None);
+        assert_eq!(
+            run.rebind_produced(plan, ProducedInput::indexed(Bases::Affine(&bases), 513)),
+            Err(TaskError::Failed)
+        );
         assert!(arena.acquire(first, &work).is_some());
         assert!(arena.acquire(second, &work).is_some());
     }
@@ -315,9 +323,9 @@ fn cached_borrowed_partitions_preserve_global_scalar_and_index_offsets() {
     let prepared =
         PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
             .unwrap();
-    let mut digits = vec![0; prepared.cache_len(ExecutionOptions::SERIAL).unwrap()];
+    let mut digits = vec![0; prepared.cache_len(ArithmeticOptions::DEFAULT).unwrap()];
     let cached = prepared
-        .cache(ExecutionOptions::SERIAL, &mut digits)
+        .cache(ArithmeticOptions::DEFAULT, &mut digits)
         .unwrap();
     let input = Selection::indexed(Bases::Affine(&bases), &indices)
         .unwrap()
@@ -325,7 +333,7 @@ fn cached_borrowed_partitions_preserve_global_scalar_and_index_offsets() {
         .unwrap();
     let original = MsmPlan::new(
         input.len(),
-        ExecutionOptions::SERIAL,
+        ArithmeticOptions::DEFAULT,
         NonZeroUsize::new(input.len()).unwrap(),
     )
     .unwrap();
@@ -389,30 +397,44 @@ fn check<C: PastaCurve>() {
         }
     }
     let options = [
-        ExecutionOptions::SERIAL,
-        ExecutionOptions::SERIAL.with_joint_tables(),
-        ExecutionOptions::SERIAL
-            .with_booth_width(11)
-            .unwrap()
-            .with_accumulation(Accumulation::Projective),
-        ExecutionOptions::SERIAL
-            .with_booth_width(7)
-            .unwrap()
-            .with_accumulation(Accumulation::Hybrid),
-        ExecutionOptions::SERIAL.with_streaming_buckets(),
+        ArithmeticOptions::DEFAULT,
+        ArithmeticOptions::DEFAULT
+            .with_kernel(Kernel::Joint)
+            .unwrap(),
+        ArithmeticOptions::DEFAULT
+            .with_kernel(Kernel::Booth {
+                width: Some(11),
+                accumulation: Accumulation::Projective,
+            })
+            .unwrap(),
+        ArithmeticOptions::DEFAULT
+            .with_kernel(Kernel::Booth {
+                width: Some(7),
+                accumulation: Accumulation::Hybrid,
+            })
+            .unwrap(),
+        ArithmeticOptions::DEFAULT
+            .with_kernel(Kernel::StreamingBooth { width: None })
+            .unwrap(),
     ];
     for options in options {
+        let plan = MsmPlan::<C>::new(TERMS, options, NonZeroUsize::new(256).unwrap()).unwrap();
+        let retained = counts(plan.retained());
+        let temporary = counts(plan.temporary());
+        for slots in [1, 3] {
+            assert_eq!(
+                counts(
+                    plan.retained_for_slots(NonZeroUsize::new(slots).unwrap())
+                        .unwrap()
+                ),
+                retained.map(|count| count * slots),
+            );
+        }
+        assert_eq!(
+            plan.retained_for_slots(NonZeroUsize::MAX),
+            Err(CurveError::SizeOverflow)
+        );
         for workers in [1, 3, 4] {
-            let plan = MsmPlan::new(
-                TERMS,
-                options.with_task_budget(TaskBudget::new(workers).unwrap()),
-                NonZeroUsize::new(256).unwrap(),
-            )
-            .unwrap();
-            let serial =
-                MsmPlan::<C>::new(TERMS, options, NonZeroUsize::new(256).unwrap()).unwrap();
-            assert_eq!(plan.retained(), serial.retained());
-            assert_eq!(plan.temporary(), serial.temporary());
             let arena = Arena::new(plan);
             let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
             let mut identity = Identity::new();
@@ -451,6 +473,12 @@ fn check<C: PastaCurve>() {
             assert_eq!(run.result(), Some(expected));
             let leases = NonZeroUsize::new(workers).unwrap();
             let required = plan.requirements(leases).unwrap();
+            let executing = workers.min(plan.windows()).min(32);
+            assert_eq!(
+                counts(required),
+                core::array::from_fn(|i| retained[i] + executing * temporary[i]),
+            );
+            assert_eq!(plan.grain(), 256);
             let result = plan
                 .execute(
                     Input::new(Bases::Affine(&bases), &scalars).unwrap(),
@@ -490,10 +518,318 @@ fn ladder<C: PastaCurve>(scalar: PastaField<C::Scalar>) -> ProjectivePoint<C> {
     result
 }
 
+fn counts(required: Requirements) -> [usize; 6] {
+    [
+        required.scalars(),
+        required.digits(),
+        required.affine(),
+        required.projective(),
+        required.field(),
+        required.indices(),
+    ]
+}
+
+fn batch_limits<C: PastaCurve>() {
+    let bases = [AffinePoint::<C>::GENERATOR; 257];
+    let scalars: Vec<_> = (2..259)
+        .map(|i| PastaField::<C::Scalar>::from_u64(i).invert().unwrap())
+        .collect();
+    let expected = ladder::<C>(scalars.iter().fold(PastaField::ZERO, |sum, s| sum.add(s)));
+    let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
+    let empty = Input::new(Bases::Affine(&[]), &[]).unwrap();
+    let inputs = [input, empty, empty];
+    for width in [None, Some(4), Some(7)] {
+        for accumulation in [
+            Accumulation::Projective,
+            Accumulation::Affine,
+            Accumulation::Hybrid,
+        ] {
+            let arithmetic = ArithmeticOptions::DEFAULT
+                .with_kernel(Kernel::Booth {
+                    width,
+                    accumulation,
+                })
+                .unwrap()
+                .with_max_terms_per_pass(NonZeroUsize::new(17));
+            // One term and one task leave no smaller layout for these explicit
+            // compatible choices. Compare adaptation with that public plan.
+            let floor = {
+                let mut jobs = [JobStorage::EMPTY; 3];
+                let mut workers = [WorkerStorage::EMPTY; 1];
+                BatchPlan::new(
+                    &inputs,
+                    BatchOptions::new(
+                        arithmetic
+                            .with_kernel(Kernel::Booth {
+                                width: Some(width.unwrap_or(4)),
+                                accumulation,
+                            })
+                            .unwrap()
+                            .with_chunk_size(NonZeroUsize::MIN),
+                    ),
+                    &mut jobs,
+                    &mut workers,
+                )
+                .unwrap()
+                .requirements()
+            };
+            let options =
+                BatchOptions::new(arithmetic).with_task_budget(TaskBudget::new(3).unwrap());
+            assert_eq!(options.arithmetic(), arithmetic);
+            assert_eq!(options.task_budget().get(), 3);
+            assert_eq!(options.memory_limit(), None);
+            let (j, w) = BatchPlan::<C>::storage_len(inputs.len(), options).unwrap();
+            assert_eq!((j, w), (3, 3));
+            let metadata = j * size_of::<JobStorage>() + w * size_of::<WorkerStorage>();
+            let minimum = floor.bytes::<C>().unwrap() + metadata;
+            let mut jobs = vec![JobStorage::EMPTY; j + 1];
+            let mut workers = vec![WorkerStorage::EMPTY; w + 1];
+            assert_eq!(
+                BatchPlan::new(
+                    &inputs,
+                    options.with_memory_limit(minimum - 1),
+                    &mut jobs,
+                    &mut workers,
+                )
+                .err(),
+                Some(CurveError::MemoryLimit {
+                    limit: minimum - 1,
+                    required: minimum
+                }),
+            );
+            assert!(jobs.iter().all(|j| *j == JobStorage::EMPTY));
+            assert!(workers.iter().all(|w| *w == WorkerStorage::EMPTY));
+            {
+                let plan = BatchPlan::new(
+                    &inputs,
+                    options.with_memory_limit(minimum),
+                    &mut jobs,
+                    &mut workers,
+                )
+                .unwrap();
+                assert_eq!(plan.requirements(), floor);
+                // Charge all three reserved worker entries, even with one range.
+                assert_eq!(plan.worker_ranges(), 1);
+                assert_eq!(plan.temporary_bytes(), minimum);
+                let r = plan.requirements();
+                let mut records = vec![ScalarStorage::ZERO; r.scalars() + 1];
+                let mut digits = vec![u8::MAX; r.digits() + 1];
+                let mut affine = vec![AffinePoint::GENERATOR; r.affine() + 1];
+                let mut projective = vec![ProjectivePoint::GENERATOR; r.projective() + 1];
+                let mut field = vec![PastaField::ONE; r.field() + 1];
+                let mut indices = vec![usize::MAX; r.indices() + 1];
+                let mut output = [ProjectivePoint::GENERATOR; 3];
+                plan.execute(
+                    &mut output,
+                    &SerialExecutor,
+                    Scratch::new(
+                        &mut records,
+                        &mut digits,
+                        &mut affine,
+                        &mut projective,
+                        &mut field,
+                        &mut indices,
+                    ),
+                )
+                .unwrap();
+                assert_eq!(
+                    output,
+                    [
+                        expected,
+                        ProjectivePoint::IDENTITY,
+                        ProjectivePoint::IDENTITY
+                    ]
+                );
+                assert!(records[r.scalars()] == ScalarStorage::ZERO);
+                assert_eq!(digits[r.digits()], u8::MAX);
+                assert_eq!(affine[r.affine()], AffinePoint::GENERATOR);
+                assert_eq!(projective[r.projective()], ProjectivePoint::GENERATOR);
+                assert_eq!(field[r.field()], PastaField::ONE);
+                assert_eq!(indices[r.indices()], usize::MAX);
+            }
+            assert_eq!(jobs[j], JobStorage::EMPTY);
+            assert_eq!(workers[w], WorkerStorage::EMPTY);
+        }
+    }
+
+    // Retained preparation and digit caches belong to their owner, outside the
+    // batch ceiling, even when they are larger than the execution provision.
+    let arithmetic = ArithmeticOptions::DEFAULT
+        .with_kernel(Kernel::Booth {
+            width: Some(7),
+            accumulation: Accumulation::Projective,
+        })
+        .unwrap();
+    let mut records = vec![ScalarStorage::ZERO; scalars.len()];
+    let prepared =
+        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
+            .unwrap();
+    let mut digits = vec![0; prepared.cache_len(arithmetic).unwrap()];
+    let cached = prepared.cache(arithmetic, &mut digits).unwrap();
+    let inputs = [Selection::new(Bases::Affine(&bases))
+        .with_prepared_scalars(cached)
+        .unwrap()];
+    let mut jobs = [JobStorage::EMPTY];
+    let mut workers = [WorkerStorage::EMPTY];
+    let options = BatchOptions::new(arithmetic);
+    let bytes = BatchPlan::new(&inputs, options, &mut jobs, &mut workers)
+        .unwrap()
+        .temporary_bytes();
+    assert!(cached.retained_bytes() > bytes);
+    let plan = BatchPlan::new(
+        &inputs,
+        options.with_memory_limit(bytes),
+        &mut jobs,
+        &mut workers,
+    )
+    .unwrap();
+    let r = plan.requirements();
+    assert_eq!((r.scalars(), r.digits()), (0, 0));
+    assert_eq!(
+        bytes,
+        r.bytes::<C>().unwrap() + size_of::<JobStorage>() + size_of::<WorkerStorage>()
+    );
+    let mut output = [ProjectivePoint::IDENTITY];
+    plan.execute(
+        &mut output,
+        &SerialExecutor,
+        Scratch::new(
+            &mut [],
+            &mut [],
+            &mut vec![AffinePoint::GENERATOR; r.affine()],
+            &mut vec![ProjectivePoint::IDENTITY; r.projective()],
+            &mut vec![PastaField::ZERO; r.field()],
+            &mut vec![0; r.indices()],
+        ),
+    )
+    .unwrap();
+    assert_eq!(output, [expected]);
+}
+
+#[test]
+fn batch_limits_include_reserved_metadata_and_preserve_explicit_booth_choices() {
+    batch_limits::<Pallas>();
+    batch_limits::<Vesta>();
+    let plan = BatchPlan::<Pallas>::new(
+        &[],
+        BatchOptions::default().with_memory_limit(0),
+        &mut [],
+        &mut [],
+    )
+    .unwrap();
+    assert_eq!(plan.requirements(), Requirements::default());
+    assert_eq!(plan.temporary_bytes(), 0);
+}
+
+#[test]
+fn run_binding_distinguishes_invalid_requests_from_metadata_capacity() {
+    let bases = [AffinePoint::<Pallas>::GENERATOR; 2];
+    let scalars = [PastaField::ONE; 2];
+    let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
+    let short = Input::new(Bases::Affine(&bases[..1]), &scalars[..1]).unwrap();
+    let produced = ProducedInput::dense(Bases::Affine(&bases));
+    let short_produced = ProducedInput::dense(Bases::Affine(&bases[..1]));
+    let plan = MsmPlan::new(2, ArithmeticOptions::DEFAULT, NonZeroUsize::MIN).unwrap();
+    let mut identity = Identity::new();
+    let mut storage = [const { TaskStorage::EMPTY }; 1];
+    assert_eq!(
+        MsmRun::new(plan, short, &mut identity, &mut storage).err(),
+        Some(TaskError::InvalidRequest),
+    );
+    assert_eq!(
+        MsmRun::new_produced(plan, short_produced, &mut identity, &mut storage).err(),
+        Some(TaskError::InvalidRequest),
+    );
+    assert_eq!(
+        MsmRun::new_partition(plan, short, 0..1, &mut identity, &mut storage).err(),
+        Some(TaskError::InvalidRequest),
+    );
+    assert_eq!(
+        MsmRun::new_produced_partition(plan, short_produced, 0..1, &mut identity, &mut storage)
+            .err(),
+        Some(TaskError::InvalidRequest),
+    );
+    for (start, end) in [(2, 1), (0, 3)] {
+        assert_eq!(
+            MsmRun::new_partition(plan, input, start..end, &mut identity, &mut storage).err(),
+            Some(TaskError::InvalidRequest),
+        );
+        assert_eq!(
+            MsmRun::new_produced_partition(plan, produced, start..end, &mut identity, &mut storage)
+                .err(),
+            Some(TaskError::InvalidRequest),
+        );
+    }
+    assert_eq!(
+        MsmRun::new(plan, input, &mut identity, &mut []).err(),
+        Some(TaskError::Storage),
+    );
+    assert_eq!(
+        MsmRun::new_produced_partition(plan, produced, 0..1, &mut identity, &mut []).err(),
+        Some(TaskError::Storage),
+    );
+    let mut run = MsmRun::new_partition(plan, input, 0..0, &mut identity, &mut storage).unwrap();
+    assert_eq!(run.rebind(plan, short), Err(TaskError::InvalidRequest));
+    assert_eq!(
+        run.rebind_produced(plan, short_produced),
+        Err(TaskError::InvalidRequest)
+    );
+    for (start, end) in [(2, 1), (0, 3)] {
+        assert_eq!(
+            run.rebind_produced_partition(plan, produced, start..end),
+            Err(TaskError::InvalidRequest),
+        );
+    }
+    assert_eq!(run.result(), Some(ProjectivePoint::IDENTITY));
+    run.rebind(plan, input).unwrap();
+    assert_eq!(run.rebind(plan, input), Err(TaskError::Busy));
+
+    let mut identities = [];
+    let mut storage: [[TaskStorage; 1]; 0] = [];
+    assert_eq!(
+        ParallelMsmRun::new(plan, input, &mut identities, &mut storage).err(),
+        Some(TaskError::Storage),
+    );
+    let mut identities = [Identity::new()];
+    assert_eq!(
+        ParallelMsmRun::new(plan, input, &mut identities, &mut [[]]).err(),
+        Some(TaskError::Storage),
+    );
+    let mut storage = [[const { TaskStorage::EMPTY }; 1]];
+    assert_eq!(
+        ParallelMsmRun::new(plan, short, &mut identities, &mut storage).err(),
+        Some(TaskError::InvalidRequest),
+    );
+    let streaming = MsmPlan::new(
+        2,
+        ArithmeticOptions::DEFAULT
+            .with_kernel(Kernel::StreamingBooth { width: None })
+            .unwrap(),
+        NonZeroUsize::MIN,
+    )
+    .unwrap();
+    assert_eq!(
+        ParallelMsmRun::new(streaming, input, &mut identities, &mut storage).err(),
+        Some(TaskError::InvalidRequest),
+    );
+    let empty = Input::new(Bases::Affine(&[]), &[]).unwrap();
+    let empty_plan = MsmPlan::new(0, ArithmeticOptions::DEFAULT, NonZeroUsize::MIN).unwrap();
+    let mut run = ParallelMsmRun::new(empty_plan, empty, &mut identities, &mut storage).unwrap();
+    assert_eq!(run.rebind(plan, short), Err(TaskError::InvalidRequest));
+    assert_eq!(run.rebind(streaming, input), Err(TaskError::InvalidRequest));
+    assert_eq!(run.result(), Some(ProjectivePoint::IDENTITY));
+    run.rebind(plan, input).unwrap();
+    assert_eq!(run.rebind(plan, input), Err(TaskError::Busy));
+
+    let error: &dyn core::error::Error = &TaskError::InvalidRequest;
+    assert!(error.to_string().contains("input, range, or configuration"));
+    assert!(error.source().is_none());
+}
+
 fn chunks<C: PastaCurve>(
     input: Input<'_, C>,
     expected: ProjectivePoint<C>,
-    options: ExecutionOptions,
+    options: ArithmeticOptions,
     grain: usize,
     prepared: bool,
     cached: bool,
@@ -680,9 +1016,9 @@ fn representations<C: PastaCurve>() {
                 &SerialExecutor,
             )
             .unwrap();
-            let mut digits = vec![0; prepared.cache_len(ExecutionOptions::SERIAL).unwrap()];
+            let mut digits = vec![0; prepared.cache_len(ArithmeticOptions::DEFAULT).unwrap()];
             let cached = prepared
-                .cache(ExecutionOptions::SERIAL, &mut digits)
+                .cache(ArithmeticOptions::DEFAULT, &mut digits)
                 .unwrap();
             for (input, answer, retained) in [
                 (
@@ -719,7 +1055,7 @@ fn representations<C: PastaCurve>() {
                 chunks(
                     input,
                     answer,
-                    ExecutionOptions::SERIAL,
+                    ArithmeticOptions::DEFAULT,
                     8,
                     retained,
                     false,
@@ -729,7 +1065,7 @@ fn representations<C: PastaCurve>() {
             chunks(
                 selection.with_prepared_scalars(cached).unwrap(),
                 expected(&scalars),
-                ExecutionOptions::SERIAL,
+                ArithmeticOptions::DEFAULT,
                 64,
                 true,
                 true,
@@ -753,7 +1089,12 @@ fn independent_booth_chunks_and_empty_runs() {
         .collect();
     let expected = ladder::<Pallas>(scalars.iter().fold(PastaField::ZERO, |sum, s| sum.add(s)));
     for width in 4..=12 {
-        let options = ExecutionOptions::SERIAL.with_booth_width(width).unwrap();
+        let options = ArithmeticOptions::DEFAULT
+            .with_kernel(Kernel::Booth {
+                width: Some(width),
+                accumulation: Accumulation::Auto,
+            })
+            .unwrap();
         chunks(
             Input::new(Bases::Affine(&bases), &scalars).unwrap(),
             expected,
@@ -767,6 +1108,14 @@ fn independent_booth_chunks_and_empty_runs() {
         let plan = MsmPlan::<Pallas>::new(0, options, NonZeroUsize::new(128).unwrap()).unwrap();
         assert_eq!(plan.retained().bytes::<Pallas>().unwrap(), 0);
         assert_eq!(plan.temporary().bytes::<Pallas>().unwrap(), 0);
+        assert_eq!(
+            plan.retained_for_slots(NonZeroUsize::MAX).unwrap(),
+            Requirements::default()
+        );
+        assert_eq!(
+            plan.requirements(NonZeroUsize::MAX).unwrap(),
+            Requirements::default()
+        );
         chunks(
             empty,
             ProjectivePoint::IDENTITY,
@@ -777,4 +1126,211 @@ fn independent_booth_chunks_and_empty_runs() {
             false,
         );
     }
+    assert!(matches!(
+        MsmPlan::<Pallas>::new(usize::MAX, ArithmeticOptions::DEFAULT, NonZeroUsize::MAX),
+        Err(CurveError::SizeOverflow)
+    ));
+}
+
+#[test]
+fn kernel_selection_validates_widths_and_replaces_all_preferences() {
+    const JOINT: ArithmeticOptions = match ArithmeticOptions::DEFAULT.with_kernel(Kernel::Joint) {
+        Ok(options) => options,
+        Err(_) => panic!("valid kernel"),
+    };
+    for width in [0, 3, 13, u32::MAX] {
+        for kernel in [
+            Kernel::Booth {
+                width: Some(width),
+                accumulation: Accumulation::Auto,
+            },
+            Kernel::StreamingBooth { width: Some(width) },
+        ] {
+            assert_eq!(
+                JOINT.with_kernel(kernel),
+                Err(CurveError::InvalidMsmWindow { bits: width })
+            );
+        }
+    }
+    for width in 4..=12 {
+        let booth = JOINT
+            .with_kernel(Kernel::Booth {
+                width: Some(width),
+                accumulation: Accumulation::Hybrid,
+            })
+            .unwrap();
+        let streaming = booth
+            .with_kernel(Kernel::StreamingBooth { width: Some(width) })
+            .unwrap();
+        assert_eq!(streaming.with_kernel(Kernel::Joint).unwrap(), JOINT);
+        assert_eq!(
+            streaming.with_kernel(Kernel::Auto).unwrap(),
+            ArithmeticOptions::DEFAULT
+        );
+        let empty = MsmPlan::<Pallas>::new(0, streaming, NonZeroUsize::MIN).unwrap();
+        let mut identity = Identity::new();
+        let mut slots = [const { TaskStorage::EMPTY }; 1];
+        let run = MsmRun::new(
+            empty,
+            Input::new(Bases::Affine(&[]), &[]).unwrap(),
+            &mut identity,
+            &mut slots,
+        )
+        .unwrap();
+        assert_eq!(run.result(), Some(ProjectivePoint::IDENTITY));
+    }
+}
+
+fn small_kernel_dispatch<C: PastaCurve>() {
+    let bases = [AffinePoint::<C>::GENERATOR; 3];
+    let scalars = [PastaField::ONE; 3];
+    let expected = ladder::<C>(PastaField::from_u64(3));
+    let selection = Selection::new(Bases::Affine(&bases));
+    let mut records = [ScalarStorage::ZERO; 3];
+    let prepared =
+        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
+            .unwrap();
+    for kernel in [
+        Kernel::Auto,
+        Kernel::Joint,
+        Kernel::Booth {
+            width: None,
+            accumulation: Accumulation::Affine,
+        },
+        Kernel::Booth {
+            width: Some(4),
+            accumulation: Accumulation::Projective,
+        },
+        Kernel::Booth {
+            width: Some(7),
+            accumulation: Accumulation::Hybrid,
+        },
+        Kernel::StreamingBooth { width: None },
+        Kernel::StreamingBooth { width: Some(4) },
+    ] {
+        let options = ArithmeticOptions::DEFAULT.with_kernel(kernel).unwrap();
+        let original = MsmPlan::<C>::new(3, options, NonZeroUsize::new(7).unwrap()).unwrap();
+        let plan = original.with_grain(NonZeroUsize::MIN).unwrap();
+        assert_eq!(plan.windows(), original.windows());
+        assert!(
+            counts(plan.temporary())
+                .iter()
+                .zip(counts(original.temporary()))
+                .all(|(a, b)| *a <= b)
+        );
+        let mut digits = vec![0; prepared.cache_len(options).unwrap()];
+        let cached = prepared.cache(options, &mut digits).unwrap();
+        let arena = Arena::new(plan);
+        let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
+        let mut identity = Identity::new();
+        let mut slots = [const { TaskStorage::EMPTY }; 3];
+        let raw = selection.with_scalars(&scalars).unwrap();
+        let mut run = MsmRun::new(plan, raw, &mut identity, &mut slots).unwrap();
+        for (source, input) in [
+            raw,
+            selection.with_prepared_scalars(prepared).unwrap(),
+            selection.with_prepared_scalars(cached).unwrap(),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            // Rebinding keeps the same requirements even when scalar shape and
+            // cache availability become known at different times.
+            if run.result().is_some() {
+                run.rebind(plan, input).unwrap();
+            }
+            let mut windows = 0;
+            let mut collapses = 0;
+            while run.result().is_none() {
+                let mut ready = [None; 3];
+                let count = run.ready(&mut ready);
+                assert!(count > 0);
+                for request in ready[..count].iter().flatten() {
+                    if request.kind == WorkKind::Window {
+                        windows += 1;
+                        match kernel {
+                            Kernel::Booth {
+                                accumulation: Accumulation::Projective,
+                                ..
+                            } => {
+                                assert_eq!(request.scratch.affine(), 0);
+                                assert_eq!(request.scratch.field(), 0);
+                                assert!(request.scratch.projective() >= 8);
+                            }
+                            Kernel::Booth {
+                                accumulation: Accumulation::Affine | Accumulation::Hybrid,
+                                ..
+                            } => {
+                                assert!(request.scratch.affine() > 0);
+                                assert!(request.scratch.field() > 0);
+                            }
+                            Kernel::StreamingBooth { .. } => assert!(request.buckets > 0),
+                            _ => {}
+                        }
+                    }
+                    collapses += usize::from(request.kind == WorkKind::Collapse);
+                    let mut task = run
+                        .try_claim(*request, || arena.acquire(*request, &work))
+                        .unwrap()
+                        .unwrap();
+                    task.execute().unwrap();
+                    assert_eq!(run.complete(task.finish()).unwrap().error, None);
+                }
+            }
+            assert_eq!(run.result(), Some(expected));
+            assert_eq!(
+                windows,
+                3 * if kernel == Kernel::Auto {
+                    1
+                } else {
+                    plan.windows()
+                }
+            );
+            assert_eq!(
+                collapses,
+                if matches!(kernel, Kernel::StreamingBooth { .. }) {
+                    plan.windows()
+                } else {
+                    0
+                }
+            );
+            // Batch dispatch on the same short prepared input must retain the
+            // requested family too: Booth needs digits, Joint does not.
+            let inputs = [input];
+            let mut jobs = [JobStorage::EMPTY];
+            let mut workers = [WorkerStorage::EMPTY];
+            let batch =
+                BatchPlan::new(&inputs, BatchOptions::new(options), &mut jobs, &mut workers)
+                    .unwrap();
+            let r = batch.requirements();
+            if matches!(kernel, Kernel::Booth { .. } | Kernel::StreamingBooth { .. }) {
+                assert!(r.projective() > 0);
+                if source == 0 {
+                    assert!(r.digits() > 0);
+                }
+            }
+            let mut output = [ProjectivePoint::IDENTITY];
+            batch
+                .execute(
+                    &mut output,
+                    &SerialExecutor,
+                    Scratch::new(
+                        &mut vec![ScalarStorage::ZERO; r.scalars()],
+                        &mut vec![0; r.digits()],
+                        &mut vec![AffinePoint::GENERATOR; r.affine()],
+                        &mut vec![ProjectivePoint::IDENTITY; r.projective()],
+                        &mut vec![PastaField::ZERO; r.field()],
+                        &mut vec![0; r.indices()],
+                    ),
+                )
+                .unwrap();
+            assert_eq!(output, [expected]);
+        }
+    }
+}
+
+#[test]
+fn explicit_kernels_dispatch_on_short_raw_prepared_and_cached_inputs() {
+    small_kernel_dispatch::<Pallas>();
+    small_kernel_dispatch::<Vesta>();
 }

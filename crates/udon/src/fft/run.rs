@@ -14,7 +14,7 @@
 use core::{num::NonZeroUsize, ops::Range};
 
 use super::{
-    Codelet, Direction, Domain, ElementOrder, FftError, InputPolicy, InputSupport, InverseScale,
+    Codelet, Direction, Domain, ElementOrder, FftError, InputStorage, InputSupport, InverseScale,
     PastaField, Plan, PrimeModulus, TransformRequest, TwiddleTable, reverse,
     stages::{StageKernel, twiddle_table},
 };
@@ -44,14 +44,16 @@ mod expansion_driver;
 ///
 /// Use [`Self::execute`] for one contiguous transform, [`Self::execute_batch`]
 /// for consecutive polynomials, or [`FftRun`] for incremental scheduling.
-/// Plans borrow tables and can be reused with new working buffers.
+/// Plans borrow tables for `'t` and can be reused with new working buffers.
+/// The underlying [`Plan`] binds the domain and tables; this plan adds storage,
+/// ordering, normalization, and task geometry. An [`FftRun`] binds one invocation
+/// to frontier storage; it does not extend the lifetime of borrowed tables.
 #[derive(Clone, Copy, Debug)]
 pub struct FftPlan<'t, M: PrimeModulus> {
     plan: Plan<'t, M>,
     request: TransformRequest,
     tile: usize,
     codelet: Codelet,
-    separate: bool,
     twiddles: Option<TwiddleTable<'t, M>>,
     input_scale: PastaField<M>,
     forward_scales: Option<&'t [PastaField<M>]>,
@@ -64,22 +66,20 @@ pub struct FftPlan<'t, M: PrimeModulus> {
 impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Validates the mathematical request and power-of-two tile size.
     ///
-    /// `separate` selects a preserved input view. Otherwise the input initially
-    /// occupies the writable fragments and must permit disposal. `tile` must
+    /// The request selects in-place or preserved separate input. `tile` must
     /// be a power of two and is clamped to the domain size. It limits local
     /// transforms and half the fields in a paired stage task.
     ///
     /// Prefix lengths may range from zero through the domain size; larger
     /// prefixes return [`FftError::InvalidPrefix`]. A bit-reversed prefix,
-    /// unscaled forward transform, non-power-of-two tile, or preserved input
-    /// without separate output returns [`FftError::InvalidExecution`]. No
-    /// storage is bound or modified. Tables in `plan` remain borrowed across runs.
+    /// unscaled forward transform, or non-power-of-two tile returns
+    /// [`FftError::InvalidExecution`]. No storage is bound or modified. Tables in
+    /// `plan` remain borrowed across runs.
     pub fn new(
         plan: Plan<'t, M>,
         request: TransformRequest,
         tile: NonZeroUsize,
         codelet: Codelet,
-        separate: bool,
     ) -> Result<Self, FftError> {
         let size = plan.domain().size();
         let input = request.input_len(size);
@@ -91,7 +91,6 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
             });
         }
         if !tile.get().is_power_of_two()
-            || (!separate && request.input_policy == InputPolicy::Preserve)
             || (matches!(request.support, InputSupport::Prefix(_))
                 && request.input_order == ElementOrder::BitReversed)
             || (request.direction == Direction::Forward
@@ -104,7 +103,6 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
             request,
             tile: tile.get().min(plan.domain().size()),
             codelet,
-            separate,
             twiddles: None,
             input_scale: PastaField::ONE,
             forward_scales: None,
@@ -126,9 +124,9 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Either root direction supplies both transform directions. A smaller table
     /// covers local stages; larger stages compute their powers. Without this
     /// override, tasks use `plan`'s tables or computed recurrence.
-    pub fn with_twiddles(mut self, table: TwiddleTable<'t, M>) -> Result<Self, FftError> {
+    pub fn with_twiddles(mut self, table: TwiddleTable<'t, M>) -> Self {
         self.twiddles = Some(table);
-        Ok(self)
+        self
     }
 
     /// Multiplies forward coefficients by a common factor before transforming.
@@ -243,7 +241,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
             return 0;
         }
         let snapshot = if !self.contiguous_permutation
-            && ((!self.separate && self.pre_reverse()) || self.post_reverse())
+            && ((!self.separate() && self.pre_reverse()) || self.post_reverse())
         {
             self.size()
         } else {
@@ -253,6 +251,10 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
             self.columns
                 .map_or(0, |(columns, panels)| columns * panels * self.fragments()),
         )
+    }
+
+    fn separate(&self) -> bool {
+        self.request.input_storage == InputStorage::Preserve
     }
 
     fn inverse(&self) -> bool {
@@ -291,7 +293,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
             && self.request.inverse_scale == InverseScale::Normalized
     }
     fn sparse(&self) -> bool {
-        self.separate
+        self.separate()
             && matches!(self.request.support, InputSupport::Prefix(_))
             && self.native_input() == ElementOrder::BitReversed
     }
@@ -319,7 +321,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
                 || self.forward_scales.is_some())
     }
     fn twist_before_permute(&self) -> bool {
-        !self.separate && self.pre_reverse() && self.twist()
+        !self.separate() && self.pre_reverse() && self.twist()
     }
     fn permutation(&self) -> WorkKind {
         if self.contiguous_permutation {
@@ -340,9 +342,9 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
             } else {
                 (WorkKind::Pair, self.size())
             }
-        } else if self.separate || matches!(self.request.support, InputSupport::Prefix(_)) {
+        } else if self.separate() || matches!(self.request.support, InputSupport::Prefix(_)) {
             (
-                if self.separate && self.scatter_input && !self.sparse() {
+                if self.separate() && self.scatter_input && !self.sparse() {
                     WorkKind::InitializeScatter
                 } else {
                     WorkKind::Initialize
@@ -420,7 +422,12 @@ pub struct Request<'a> {
     pub factor: Option<Range<usize>>,
 }
 
-/// Shared source access, indexed relative to the start of the requested range.
+/// Transient kernel views, indexed relative to the requested ranges.
+///
+/// The direct [`Resources`] implementation supports local task execution.
+/// Erased [`ReadView`] references need not be `Sync`, so this bundle is not a
+/// transferable owner. To send a task to a worker, own typed borrowed slices or
+/// movable guards and construct these views in [`Resources::buffers`] there.
 pub struct Buffers<'a, M: PrimeModulus> {
     /// Exclusive first fragment, exactly the requested range length.
     pub values: &'a mut [PastaField<M>],
@@ -490,7 +497,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
             WorkKind::Snapshot => tile,
             WorkKind::Reorder => plan.size(),
             WorkKind::Initialize | WorkKind::InitializeScatter | WorkKind::Fused
-                if plan.separate =>
+                if plan.separate() =>
             {
                 plan.request.input_len(plan.size())
             }
@@ -512,7 +519,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
             WorkKind::Fused => {
                 // Full inputs also benefit from visiting coefficients in
                 // degree order: copy, scaling, and bit reversal share a pass.
-                let input = (plan.separate
+                let input = (plan.separate()
                     && plan.resume.is_none()
                     && plan.request.input_order == ElementOrder::Natural
                     && plan.native_input() == ElementOrder::BitReversed)
@@ -532,9 +539,9 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     );
                 } else if plan.sparse() {
                     self.initialize_prefix(values, source);
-                } else if plan.separate && plan.scatter_input {
+                } else if plan.separate() && plan.scatter_input {
                     self.initialize_scatter(values, source);
-                } else if plan.separate {
+                } else if plan.separate() {
                     for (index, value) in values.iter_mut().enumerate() {
                         let logical = if plan.native_input() == ElementOrder::Natural {
                             index
@@ -596,7 +603,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 let support = plan.request.input_len(plan.size());
                 for (offset, value) in values.iter_mut().enumerate() {
                     let index = self.start + offset;
-                    if plan.separate {
+                    if plan.separate() {
                         let logical = if plan.native_input() == ElementOrder::Natural {
                             index
                         } else {
@@ -1008,7 +1015,7 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
                 WorkKind::Snapshot => Some((Bank::Values, range.clone())),
                 WorkKind::Reorder => Some((Bank::Snapshot, 0..self.plan.size())),
                 WorkKind::Initialize | WorkKind::InitializeScatter | WorkKind::Fused
-                    if self.plan.separate =>
+                    if self.plan.separate() =>
                 {
                     Some((
                         Bank::Input,
@@ -1134,7 +1141,7 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
                 WorkKind::Initialize | WorkKind::InitializeScatter => {
                     if self.plan.twist_before_permute() {
                         self.kind = WorkKind::Twist;
-                    } else if !self.plan.separate && self.plan.pre_reverse() {
+                    } else if !self.plan.separate() && self.plan.pre_reverse() {
                         self.kind = self.plan.permutation();
                     } else {
                         self.after_input();

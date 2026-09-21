@@ -156,7 +156,7 @@ pub enum CurveError {
     },
     /// The planner found no layout within the caller's temporary byte ceiling.
     ///
-    /// The search follows [`msm::ExecutionOptions::with_memory_limit`] and is not
+    /// The search follows [`msm::BatchOptions::with_memory_limit`] and is not
     /// exhaustive; this does not establish a global minimum storage requirement.
     MemoryLimit {
         /// Supplied byte ceiling.

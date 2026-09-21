@@ -3,7 +3,7 @@ use zakura_udon::{
     curve::{
         CurveError, PastaCurve, ProjectivePoint,
         msm::{
-            ExecutionOptions, Input, Requirements, Scratch,
+            BatchOptions, Input, Requirements, Scratch,
             run::{BatchPlan, JobStorage, WorkerStorage},
         },
     },
@@ -12,7 +12,7 @@ use zakura_udon::{
 
 fn planned<C: PastaCurve, T>(
     inputs: &[Input<'_, C>],
-    options: ExecutionOptions,
+    options: BatchOptions,
     f: impl FnOnce(BatchPlan<'_, '_, C>) -> Result<T, CurveError>,
 ) -> Result<T, CurveError> {
     let (j, w) = BatchPlan::<C>::storage_len(inputs.len(), options)?;
@@ -29,7 +29,7 @@ fn planned<C: PastaCurve, T>(
 
 pub fn batch_requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],
-    options: ExecutionOptions,
+    options: BatchOptions,
 ) -> Result<Requirements, CurveError> {
     planned(inputs, options, |plan| Ok(plan.requirements()))
 }
@@ -37,7 +37,7 @@ pub fn batch_requirements<C: PastaCurve>(
 pub fn execute_batch<C: PastaCurve, E: Executor>(
     inputs: &[Input<'_, C>],
     output: &mut [ProjectivePoint<C>],
-    options: ExecutionOptions,
+    options: BatchOptions,
     executor: &E,
     scratch: Scratch<'_, C>,
 ) -> Result<(), CurveError> {
@@ -47,21 +47,21 @@ pub fn execute_batch<C: PastaCurve, E: Executor>(
 }
 
 pub trait MsmBench<C: PastaCurve> {
-    fn requirements(&self, options: ExecutionOptions) -> Result<Requirements, CurveError>;
+    fn requirements(&self, options: BatchOptions) -> Result<Requirements, CurveError>;
     fn execute<E: Executor>(
         &self,
-        options: ExecutionOptions,
+        options: BatchOptions,
         executor: &E,
         scratch: Scratch<'_, C>,
     ) -> Result<ProjectivePoint<C>, CurveError>;
 }
 impl<C: PastaCurve> MsmBench<C> for Input<'_, C> {
-    fn requirements(&self, options: ExecutionOptions) -> Result<Requirements, CurveError> {
+    fn requirements(&self, options: BatchOptions) -> Result<Requirements, CurveError> {
         batch_requirements(&[*self], options)
     }
     fn execute<E: Executor>(
         &self,
-        options: ExecutionOptions,
+        options: BatchOptions,
         executor: &E,
         scratch: Scratch<'_, C>,
     ) -> Result<ProjectivePoint<C>, CurveError> {

@@ -14,7 +14,8 @@ use zakura_udon::{
         AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve,
         Point, PreparedAffinePoint, ProjectivePoint, Vesta,
         msm::{
-            Bases, ExecutionOptions, Input, PreparedScalars, Requirements, ScalarStorage, Scratch,
+            ArithmeticOptions, Bases, BatchOptions, Input, PreparedScalars, Requirements,
+            ScalarStorage, Scratch,
         },
     },
     exec::{Executor, SerialExecutor, TaskBudget},
@@ -250,7 +251,7 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                     }
                     .unwrap();
                     let mut buffers =
-                        Buffers::new(input.requirements(ExecutionOptions::SERIAL).unwrap());
+                        Buffers::new(input.requirements(BatchOptions::default()).unwrap());
                     // The fixture bases are known generator multiples. Check
                     // their scalar inner product independently of MSM recoding.
                     let expected =
@@ -267,7 +268,7 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                             });
                     assert_eq!(
                         input
-                            .execute(ExecutionOptions::SERIAL, &SerialExecutor, buffers.borrow())
+                            .execute(BatchOptions::default(), &SerialExecutor, buffers.borrow())
                             .unwrap(),
                         AffinePoint::<C>::GENERATOR.mul_projective(&expected)
                     );
@@ -275,11 +276,7 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                     group.bench_with_input(BenchmarkId::new(case, n), &input, |b, input| {
                         b.iter(|| {
                             black_box(input)
-                                .execute(
-                                    ExecutionOptions::SERIAL,
-                                    &SerialExecutor,
-                                    buffers.borrow(),
-                                )
+                                .execute(BatchOptions::default(), &SerialExecutor, buffers.borrow())
                                 .unwrap()
                         })
                     });
@@ -328,9 +325,10 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                 .collect();
             for (execution, tasks) in [("serial", 1), ("rayon4", 4)] {
                 for (cap, maximum) in [("all", None), ("512", NonZeroUsize::new(512))] {
-                    let options = ExecutionOptions::SERIAL
-                        .with_task_budget(TaskBudget::new(tasks).unwrap())
-                        .with_max_terms_per_pass(maximum);
+                    let options = BatchOptions::new(
+                        ArithmeticOptions::DEFAULT.with_max_terms_per_pass(maximum),
+                    )
+                    .with_task_budget(TaskBudget::new(tasks).unwrap());
                     let mut buffers =
                         Buffers::new(bench_msm::batch_requirements(&jobs, options).unwrap());
                     let mut output = vec![ProjectivePoint::IDENTITY; jobs.len()];
@@ -449,7 +447,7 @@ fn corpus<C: PastaCurve>(
             ("cancellation", &inverse[..n], &ones[..n]),
         ] {
             let input = Input::new(Bases::Affine(bases), scalars).unwrap();
-            let mut buffers = Buffers::new(input.requirements(ExecutionOptions::SERIAL).unwrap());
+            let mut buffers = Buffers::new(input.requirements(BatchOptions::default()).unwrap());
             let expected = scalars
                 .iter()
                 .enumerate()
@@ -466,14 +464,14 @@ fn corpus<C: PastaCurve>(
                 });
             assert_eq!(
                 input
-                    .execute(ExecutionOptions::SERIAL, &SerialExecutor, buffers.borrow())
+                    .execute(BatchOptions::default(), &SerialExecutor, buffers.borrow())
                     .unwrap(),
                 AffinePoint::<C>::GENERATOR.mul_projective(&expected)
             );
             group.bench_function(BenchmarkId::new(format!("{name}/warm"), n), |b| {
                 b.iter(|| {
                     black_box(input)
-                        .execute(ExecutionOptions::SERIAL, &SerialExecutor, buffers.borrow())
+                        .execute(BatchOptions::default(), &SerialExecutor, buffers.borrow())
                         .unwrap()
                 })
             });
@@ -505,17 +503,17 @@ fn corpus<C: PastaCurve>(
                 .unwrap();
                 let reused = Input::new_prepared(Bases::Affine(bases), retained).unwrap();
                 let mut buffers =
-                    Buffers::new(reused.requirements(ExecutionOptions::SERIAL).unwrap());
+                    Buffers::new(reused.requirements(BatchOptions::default()).unwrap());
                 assert_eq!(
                     reused
-                        .execute(ExecutionOptions::SERIAL, &SerialExecutor, buffers.borrow())
+                        .execute(BatchOptions::default(), &SerialExecutor, buffers.borrow())
                         .unwrap(),
                     AffinePoint::<C>::GENERATOR.mul_projective(&expected)
                 );
                 group.bench_function(BenchmarkId::new(format!("{name}/reused"), n), |b| {
                     b.iter(|| {
                         black_box(reused)
-                            .execute(ExecutionOptions::SERIAL, &SerialExecutor, buffers.borrow())
+                            .execute(BatchOptions::default(), &SerialExecutor, buffers.borrow())
                             .unwrap()
                     })
                 });
@@ -531,11 +529,7 @@ fn corpus<C: PastaCurve>(
                             black_box(&eviction);
                             let start = Instant::now();
                             black_box(input)
-                                .execute(
-                                    ExecutionOptions::SERIAL,
-                                    &SerialExecutor,
-                                    buffers.borrow(),
-                                )
+                                .execute(BatchOptions::default(), &SerialExecutor, buffers.borrow())
                                 .map(black_box)
                                 .unwrap();
                             elapsed += start.elapsed();

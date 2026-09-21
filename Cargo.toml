@@ -16,8 +16,6 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 # Internal dependency aliases and locations; members opt in with `workspace = true`.
-# Before publication, add version requirements here and pin the facade's core
-# and macros dependencies to their exact matching release. See `docs/CRATES.md`.
 [workspace.dependencies]
 bento = { package = "zakura-bento", path = "crates/bento" }
 bento-core = { package = "zakura-bento-core", path = "crates/bento-core" }

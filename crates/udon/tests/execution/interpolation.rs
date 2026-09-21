@@ -92,7 +92,6 @@ fn check<M: PrimeModulus>() {
                         },
                         NonZeroUsize::new(tile).unwrap(),
                         Codelet::Radix4,
-                        false,
                     )
                     .unwrap()
                 });
@@ -127,7 +126,6 @@ fn check<M: PrimeModulus>() {
                                 },
                                 NonZeroUsize::new(tile).unwrap(),
                                 codelet,
-                                false,
                             )
                             .unwrap()
                         });

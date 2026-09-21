@@ -1078,77 +1078,62 @@ fn classed<M: PrimeModulus>(log: u32) {
     let plan = Plan::new(prepared.tables().bind(domain).unwrap());
     let small_plan = Plan::new(small_prepared.tables().bind(smaller).unwrap());
     for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+        let layout = if order == ElementOrder::Natural {
+            EvaluationLayout::Natural
+        } else {
+            EvaluationLayout::BitReversed
+        };
         let mut full = vec![PastaField::ZERO; domain.size()];
         let mut small = vec![PastaField::ZERO; smaller.size()];
-        let mut smallest_work = smallest_values.clone();
-        let mut output = Class::new(plan, &mut full, order).unwrap();
-        let mut lifts = [
-            Class::new(small_plan, &mut small, order).unwrap(),
-            Class::new(
-                Plan::without_tables(smallest),
-                &mut smallest_work,
-                ElementOrder::Natural,
-            )
-            .unwrap(),
-        ];
-        for (index, chunk) in full_values.chunks(7).enumerate() {
-            output.scatter(index * 7, chunk).unwrap();
+        // Callers can scatter chunks and strided rows directly into the declared
+        // order before giving the class buffers to an interpolation plan.
+        for (chunk, values) in full_values.chunks(7).enumerate() {
+            for (offset, value) in values.iter().enumerate() {
+                full[layout.index(chunk * 7 + offset, domain.size()).unwrap()] = *value;
+            }
         }
         for start in 0..2 {
-            let rows: Vec<_> = small_values
-                .iter()
-                .skip(start)
-                .step_by(2)
-                .copied()
-                .collect();
-            lifts[0].scatter_strided(start, 2, &rows).unwrap();
+            for row in (start..small_values.len()).step_by(2) {
+                small[layout.index(row, smaller.size()).unwrap()] = small_values[row];
+            }
         }
-        let options = ExecutionOptions {
-            tile_len: if log > 8 { 2048 } else { 4 },
-            columns_per_task: 257,
-            max_tasks: 3,
-        };
-        let count = options
-            .interpolation_requirements(domain.size(), &[smaller.size(), smallest.size()])
-            .unwrap()
-            .field_elements;
-        assert_eq!(
-            interpolation_scratch(&output, &lifts, options)
+        for tasks in [1, 3] {
+            let mut values = [full.clone(), small.clone(), smallest_values.clone()];
+            let transforms = [plan, small_plan, Plan::without_tables(smallest)].map(|plan| {
+                run::FftPlan::new(
+                    plan,
+                    TransformRequest {
+                        input_order: if plan.domain().size() == smallest.size() {
+                            ElementOrder::Natural
+                        } else {
+                            order
+                        },
+                        ..TransformRequest::new(Direction::Inverse)
+                    },
+                    core::num::NonZeroUsize::new(if log > 8 { 2048 } else { 4 }).unwrap(),
+                    Codelet::Radix2,
+                )
                 .unwrap()
-                .field_elements,
-            count
-        );
-        let mut scratch = vec![PastaField::ONE; count + 2];
-        interpolate_classes(&mut output, &mut lifts, options, &Threads, &mut scratch).unwrap();
-        assert_eq!(output.values(), expected);
-        assert_eq!(lifts[0].values(), small_coefficients);
-        assert_eq!(lifts[1].values(), smallest_coefficients);
-        assert_eq!(output.order(), ElementOrder::Natural);
-        assert_eq!(&scratch[count..], &[PastaField::ONE; 2]);
-        let scratch_before = scratch.clone();
-        assert_eq!(
-            interpolate_classes(&mut output, &mut lifts, options, &Threads, &mut scratch),
-            Err(FftError::InvalidClassState)
-        );
-        assert_eq!(
-            output.scatter(0, &[PastaField::ONE]),
-            Err(FftError::InvalidClassState)
-        );
-        assert_eq!(output.values(), expected);
-        assert_eq!(lifts[0].values(), small_coefficients);
-        assert_eq!(lifts[1].values(), smallest_coefficients);
-        assert_eq!(scratch, scratch_before);
-
-        // A fresh output must reject a spent lift before touching any buffer.
-        let mut fresh_values = full_values.clone();
-        let mut fresh = Class::new(plan, &mut fresh_values, ElementOrder::Natural).unwrap();
-        assert_eq!(
-            interpolate_classes(&mut fresh, &mut lifts, options, &Threads, &mut scratch),
-            Err(FftError::InvalidClassState)
-        );
-        assert_eq!(fresh.values(), full_values);
-        assert_eq!(lifts[0].values(), small_coefficients);
-        assert_eq!(scratch, scratch_before);
+            });
+            let plan = run::InterpolationPlan::new(transforms, false).unwrap();
+            let mut scratch: [_; 3] = core::array::from_fn(|i| {
+                vec![PastaField::ONE; plan.snapshot_fields(i).unwrap() + 2]
+            });
+            plan.execute(
+                values.each_mut().map(Vec::as_mut_slice),
+                scratch.each_mut().map(Vec::as_mut_slice),
+                core::num::NonZeroUsize::new(tasks).unwrap(),
+                &Threads,
+            )
+            .unwrap();
+            assert_eq!(values[0], expected);
+            assert_eq!(values[1], small_coefficients);
+            assert_eq!(values[2], smallest_coefficients);
+            for buffer in &scratch {
+                assert_eq!(&buffer[buffer.len() - 2..], &[PastaField::ONE; 2]);
+                assert_canonical(buffer);
+            }
+        }
     }
 }
 
@@ -1244,10 +1229,6 @@ fn size_queries_validate_without_constructing_domains() {
             expansion.evaluation_requirements(1, 1),
             Ok(ScratchRequirements { field_elements: 0 })
         ));
-        assert!(matches!(
-            serial.interpolation_requirements(1, &[]),
-            Ok(ScratchRequirements { field_elements: 0 })
-        ));
         let invalid_sizes = [0, 3, usize::MAX];
         let mut index = 0;
         while index < invalid_sizes.len() {
@@ -1266,10 +1247,6 @@ fn size_queries_validate_without_constructing_domains() {
             ));
             assert!(matches!(
                 expansion.evaluation_requirements(1, size),
-                Err(FftError::InvalidSize)
-            ));
-            assert!(matches!(
-                serial.interpolation_requirements(size, &[]),
                 Err(FftError::InvalidSize)
             ));
             index += 1;
@@ -1297,10 +1274,6 @@ fn size_queries_validate_without_constructing_domains() {
             let options = invalid_options[index];
             assert!(matches!(
                 options.requirements(1),
-                Err(FftError::InvalidExecution)
-            ));
-            assert!(matches!(
-                options.interpolation_requirements(1, &[]),
                 Err(FftError::InvalidExecution)
             ));
             let expansion = ExpansionOptions {
@@ -1337,18 +1310,6 @@ fn size_queries_validate_without_constructing_domains() {
             expansion.evaluation_requirements(8, 4),
             Err(FftError::InvalidLayout)
         ));
-        assert!(matches!(
-            serial.interpolation_requirements(8, &[16]),
-            Err(FftError::InvalidClass)
-        ));
-        assert!(matches!(
-            serial.interpolation_requirements(8, &[0]),
-            Err(FftError::InvalidSize)
-        ));
-        assert!(matches!(
-            serial.interpolation_requirements(8, &[3]),
-            Err(FftError::InvalidSize)
-        ));
     };
 
     for log in 0..usize::BITS {
@@ -1368,12 +1329,6 @@ fn size_queries_validate_without_constructing_domains() {
         assert_eq!(
             ExpansionOptions::serial()
                 .evaluation_requirements(1, size)
-                .map(|_| ()),
-            expected
-        );
-        assert_eq!(
-            ExecutionOptions::serial()
-                .interpolation_requirements(size, &[])
                 .map(|_| ()),
             expected
         );
@@ -1543,30 +1498,23 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         );
         assert_eq!(output, original);
     }
-    let mut class = Class::new(plan, &mut output, ElementOrder::BitReversed).unwrap();
-    assert_eq!(
-        class.scatter_strided(1, usize::MAX, &[Fp::ONE; 3]),
-        Err(FftError::SizeOverflow)
-    );
-    assert_eq!(
-        class.scatter(63, &[Fp::ONE; 2]),
+    let inverse = |domain| {
+        run::FftPlan::new(
+            Plan::without_tables(domain),
+            TransformRequest::new(Direction::Inverse),
+            core::num::NonZeroUsize::new(8).unwrap(),
+            Codelet::Radix2,
+        )
+        .unwrap()
+    };
+    assert!(matches!(
+        run::InterpolationPlan::new(
+            [inverse(domain), inverse(Domain::new(7).unwrap().subgroup()),],
+            false
+        ),
         Err(FftError::InvalidLayout)
-    );
-    assert_eq!(
-        class.scatter_strided(0, 0, &[]),
-        Err(FftError::InvalidLayout)
-    );
-    class.scatter(64, &[]).unwrap();
-    assert_eq!(class.values(), original);
-    let mut lift_values = original.repeat(2);
-    let lift_plan = Plan::without_tables(Domain::new(7).unwrap().subgroup());
-    let mut lifts = [Class::new(lift_plan, &mut lift_values, ElementOrder::Natural).unwrap()];
-    assert_eq!(
-        interpolate_classes(&mut class, &mut lifts, options, &SerialExecutor, &mut []),
-        Err(FftError::InvalidClass)
-    );
-    assert_eq!(class.values(), original);
-    assert_eq!(lifts[0].values(), original.repeat(2));
+    ));
+    assert_eq!(output, original);
     let expansion = Expansion::new(plan, Domain::new(7).unwrap().subgroup(), None).unwrap();
     let options = ExpansionOptions {
         max_residue_tasks: 2,
@@ -1775,6 +1723,7 @@ fn executor_panics_leave_public_buffers_canonical() {
     );
     assert_canonical(&values);
     assert_canonical(&scratch);
+    // The private fused path also rejects a class interrupted by an executor.
     let mut class = Class::new(plan, &mut values, ElementOrder::Natural).unwrap();
     assert!(
         catch_unwind(AssertUnwindSafe(|| interpolate_classes(
@@ -1786,19 +1735,15 @@ fn executor_panics_leave_public_buffers_canonical() {
         )))
         .is_err()
     );
-    assert_canonical(class.values());
+    assert_canonical(class.values);
     assert_canonical(&scratch);
-    let partial = class.values().to_vec();
+    let partial = class.values.to_vec();
     let scratch_before = scratch.clone();
     assert_eq!(
         interpolate_classes(&mut class, &mut [], options, &SerialExecutor, &mut scratch),
         Err(FftError::InvalidClassState)
     );
-    assert_eq!(
-        class.scatter(0, &[Fp::ONE]),
-        Err(FftError::InvalidClassState)
-    );
-    assert_eq!(class.values(), partial);
+    assert_eq!(class.values, partial);
     assert_eq!(scratch, scratch_before);
 }
 

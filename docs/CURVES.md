@@ -262,18 +262,6 @@ metadata, and file generation belong to the downstream owner. See
 [POD storage](POD.md#storing-affine-points-and-fixed-base-tables) for the format
 contract and a complete generator and consumer example.
 
-### Migrating expanded tables
-
-Expanded tables now cover 128-bit halves. Regenerate tables stored with the
-older full-scalar layout. Rename `FixedBaseRequirements` to
-`CurveTableRequirements` and its `affine_points` field to `table_entries`.
-The default width-4 table has 257 entries rather than 513; width 8 has 2,049
-rather than 4,097.
-There is no compatibility binding for the older layout.
-
-Bump the owner's schema when adopting this layout. Udon's `STORED_FORM`
-continues to describe the unchanged field representation.
-
 ## Multiscalar multiplication
 
 [`curve::msm`](../crates/udon/src/curve/msm/mod.rs) computes sums of scalar/base
@@ -313,9 +301,9 @@ using `PreparedScalars::<C>::storage_len(terms)`, then call
 `PreparedScalars::prepare(scalars, storage, budget, executor)`. Preparation
 retains signed GLV components and small-integer classification and releases the
 original scalar borrow. It remains usable across chunk sizes, widths, and
-backends. Its optional `cache(options, bytes)` retains recoding as well; size
-those bytes with `cache_len(options)`. Cache allocation covers the complete
-scalar vector independently of the execution memory ceiling. See
+backends. Its optional `cache(arithmetic, bytes)` retains recoding as well; pass
+`ArithmeticOptions` to it and `cache_len(arithmetic)`. Cache allocation covers
+the complete scalar vector independently of batch memory policy. See
 [`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs) for the
 geometry and chunking conditions that permit reuse.
 `retained_bytes()` counts the borrowed records and optional cache. This storage
@@ -323,40 +311,52 @@ is separate from execution scratch and is not a POD serialization format.
 
 ### Sizing and reusing scratch
 
-`ExecutionOptions::SERIAL` selects one task without a memory ceiling.
-Use `with_task_budget` for scoped concurrency. `with_max_terms_per_pass` caps
-affine bucket and temporary table staging; it alone does not bound scalar records
-or recoding bytes. The default term grain is capped at 8,192; `with_chunk_size`
-can reduce it further. Independent chunk MSMs reuse temporary buffers, trading
-repeated collapses for storage independent of total input size.
-`with_memory_limit(bytes)` lets the planner
-reduce pass size, concurrency, and chunk size and select projective buckets.
+[`ArithmeticOptions`](../crates/udon/src/curve/msm/mod.rs) holds reusable kernel,
+accumulation, and staging choices. `with_max_terms_per_pass` caps affine bucket
+and temporary table staging; it alone does not bound scalar records or recoding
+bytes. `with_chunk_size` caps the terms prepared together. Independent chunk
+MSMs reuse temporary buffers, trading repeated collapses for storage independent
+of total input size.
 
-`with_streaming_buckets()` instead retains projective buckets for all windows
+`BatchOptions::new(arithmetic)` adds serial execution without a memory ceiling;
+`BatchOptions::default()` also uses automatic arithmetic choices. Its
+`with_task_budget` and `with_memory_limit` control batch concurrency and adaptive
+storage planning. The batch chunk cap defaults to 8,192 terms. A memory ceiling
+can reduce pass size, concurrency, or chunk size and change automatic kernel
+choices.
+
+`ArithmeticOptions::with_kernel` replaces the complete arithmetic selection.
+`Kernel::Auto` selects joint, short-scalar, or nonstreaming Booth arithmetic.
+`Kernel::Joint` requires the joint ladder. `Kernel::Booth { width, accumulation }`
+requires Booth even for small inputs or short scalars, which can forgo faster
+short-scalar arithmetic. `None` chooses a width within that family; supplied
+widths must be in `4..=12`. Only `Accumulation::Auto` permits strategy changes.
+
+`Kernel::StreamingBooth { width }` retains projective buckets for all windows
 while preparing and recoding one chunk at a time. It avoids repeating each
-chunk's weighted collapse, with a larger fixed workspace floor. Each bounded
-deposit owns one window's buckets; different windows can execute concurrently.
-This choice respects the same memory ceiling and supports indexed and retained
-bases. Use `with_booth_width(bits)` with `bits` in `4..=12` and
-`with_accumulation` for controlled comparisons of complete-chunk kernels;
-streaming always uses projective accumulation. Explicit width and accumulator
-choices also restrict the planner's memory search. See the
-[MSM report](MSM_REVIEW_PERFORMANCE.md) for measured tradeoffs.
+chunk's weighted collapse, with a larger fixed workspace floor. Each deposit
+owns one window's buckets; different windows can execute concurrently. This
+choice supports indexed and retained bases. Streaming always uses projective
+accumulation. A batch memory ceiling preserves explicit family, streaming mode,
+width, and accumulation requirements, and returns `MemoryLimit` when its search
+cannot fit them. See the [performance guide](CURVE_PERFORMANCE.md#multiscalar-multiplication)
+for tuning evidence and measurement limits.
 
 The ceiling counts required execution buffer prefixes and reserved plan metadata;
 it excludes retained preparation and surplus buffer tails. The accounting and
 search contract lives on
-[`ExecutionOptions::with_memory_limit`](../crates/udon/src/curve/msm/mod.rs).
+[`BatchOptions::with_memory_limit`](../crates/udon/src/curve/msm/mod.rs).
 The search is not exhaustive. A `MemoryLimit` error reports the storage needed
 at its stopping point, which may be the metadata alone; it does not establish
 the minimum possible storage. Planning and scratch errors precede writes.
 
-For an application-wide ceiling, use [`msm::run`](../crates/udon/src/curve/msm/run.rs)
-with the [run admission protocol](EXECUTION.md#admission-with-a-progress-reservation).
-It accounts for the complete provision, including idle scratch, retained
-intermediates, and metadata. A task budget does not change an `MsmPlan`'s
-geometry. Scratch is leased per executing task, and each window partial has one
-logical result slot. A configured memory limit does not select a queue policy.
+For application-controlled scheduling, `MsmPlan::new` takes `ArithmeticOptions`
+and a term grain. Its retained-slot and per-task scratch queries return bounds;
+they do not apply a batch concurrency or memory policy. The caller accounts for
+all simultaneous scratch bundles, retained intermediates, metadata, and idle
+provider capacity. See the
+[run admission protocol](EXECUTION.md#admission-with-a-progress-reservation)
+for composing those requirements under an application-wide ceiling.
 
 `msm::run::BatchPlan::requirements()` returns counts for six private `Scratch`
 slices: `scalars()`, `digits()`, `affine()`, `projective()`, `field()`, and
@@ -392,14 +392,14 @@ input order. Jobs share the task budget, and sequential jobs reuse scratch.
 Retain the plan to reuse its schedule with new outputs or dirty scratch. A plan
 borrows its scalar rows; rebuild it when those rows change. Selection rebinding
 and retained scalar preparation remain independent capabilities. The
-[MSM report](MSM_REVIEW_PERFORMANCE.md#retained-preparation-and-grouped-scheduling)
-records measured scheduling tradeoffs.
+[execution benchmarks](EXECUTION_PERFORMANCE.md) compare operation geometry and
+caller-selected concurrency policies.
 
 Compose fixed-base products or other work with
 [`Executor::join`](../crates/udon/src/exec.rs). Choose per-operation budgets and
 account for simultaneous scratch as described under
 [scoped execution](WORKSPACES.md#scoped-execution), then pass the MSM branch's
-budget to its `ExecutionOptions`. Ordinary fixed-base products need no executor.
+budget to its `BatchOptions`. Ordinary fixed-base products need no executor.
 This uses the same scoped execution contract as FFTs and works inside an
 existing pool, including a one-thread pool.
 

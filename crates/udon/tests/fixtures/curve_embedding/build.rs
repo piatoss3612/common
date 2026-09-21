@@ -4,7 +4,7 @@
 
 use std::{env, fs, path::PathBuf};
 use udon::{
-    StoredForm,
+    STORED_FORM,
     curve::{
         EisensteinTable, FixedBaseTable, Pallas, PastaCurve, Point, PreparedAffinePoint,
         ProjectivePoint, Vesta, batch_normalize,
@@ -82,13 +82,12 @@ fn generate<C: PastaCurve>(name: &str, damage: &str) {
         _ => panic!("unknown artifact damage"),
     }
     let directory = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let form = StoredForm::for_target(&env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap());
     let mut bytes = bento::bytes_of(&record).to_vec();
     if damage == "truncate" {
         bytes.pop();
     }
     fs::write(
-        directory.join(format!("{name}-fixed-base-{}.bin", form.descriptor())),
+        directory.join(format!("{name}-fixed-base-{STORED_FORM}.bin")),
         bytes,
     )
     .unwrap();
@@ -125,9 +124,8 @@ fn generate_srs<C: PastaCurve>(name: &str, damage: &str) {
         _ => panic!("unknown SRS artifact damage"),
     }
     let directory = PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    let form = StoredForm::for_target(&env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap());
     fs::write(
-        directory.join(format!("{name}-srs-{}.bin", form.descriptor())),
+        directory.join(format!("{name}-srs-{STORED_FORM}.bin")),
         bento::bytes_of(&record),
     )
     .unwrap();

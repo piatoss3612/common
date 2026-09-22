@@ -123,9 +123,10 @@ The [curve artifact consumer](../crates/udon/tests/fixtures/curve_embedding/)
 generates a small structured reference string (SRS) for both curves and embeds
 coefficient and Lagrange bases as `PreparedAffinePoint` arrays. The fixture uses
 known generator multiples solely as deterministic test data. Its consumer
-checks domain metadata, curve membership, endomorphism caches, basis order and
-commitment agreement. Bento POD verifies storage layout; the
-[artifact owner](POD.md#format-ownership) defines mathematical validation.
+tests basis order against a direct DFT and checks commitment agreement across
+both bases. Bento POD establishes storage layout at compile time and borrows
+the constructed values directly; the
+[artifact owner](POD.md#format-ownership) defines their schema.
 
 The workspace tests run in the normal suite. The artifact consumer uses the
 separate [slow consumer command](TESTING.md#slow-consumer-tests).

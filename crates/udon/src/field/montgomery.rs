@@ -10,15 +10,28 @@ use super::word::{adc, mac, subtract_limbs};
 ///
 /// Inputs below `2p` produce a reduced residue.
 #[inline]
-pub(super) fn reduce_once<M: PrimeModulus>(limbs: [u64; 4]) -> [u64; 4] {
+pub(super) const fn reduce_once<M: PrimeModulus>(limbs: [u64; 4]) -> [u64; 4] {
     let (reduced, borrow) = subtract_limbs(&limbs, &M::MODULUS);
     if borrow == 0 { reduced } else { limbs }
 }
 
-/// Computes the reduced residue `lhs * rhs * R^-1 mod p`, with `R = 2^256`.
+/// Reduces a five-limb integer below `4p` modulo `2p`.
+#[inline]
+pub(super) fn reduce_twice_modulus<M: PrimeModulus>(limbs: [u64; 4], carry: u64) -> [u64; 4] {
+    let (reduced, borrow) = subtract_limbs(&limbs, &M::TWICE_MODULUS);
+    if carry != 0 || borrow == 0 {
+        reduced
+    } else {
+        limbs
+    }
+}
+
+/// Computes `lhs * rhs * R^-1 mod p` in `[0, 2p)`, with `R = 2^256`.
 ///
-/// The input product must be below `p * R`; field arithmetic and conversion
-/// from a 256-bit integer both satisfy this bound.
+/// Both inputs may lie in `[0, 2p)`; see the closure proof below. Conversion
+/// also uses this kernel with `lhs < R` and `rhs = R2 < p`, whose product is
+/// below `pR`. The live CIOS accumulator fits because `lhs + p < 3p < R`
+/// for field arithmetic; conversion's integrated result is below `2p`.
 #[inline(always)]
 pub(super) fn montgomery_multiply<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
     debug_assert_eq!(M::MODULUS[2], 0);
@@ -48,13 +61,13 @@ pub(super) fn montgomery_multiply<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4
         accumulator = [r0, r1, r2, r3, product_overflow + reduction_overflow];
     }
     debug_assert_eq!(accumulator[4], 0);
-    reduce_once::<M>(accumulator[..4].try_into().unwrap())
+    accumulator[..4].try_into().unwrap()
 }
 
-/// Squares a reduced Montgomery residue, retaining Montgomery form.
+/// Squares a loose Montgomery residue, retaining the `[0, 2p)` bound.
 #[inline(always)]
 pub(super) fn montgomery_square<M: PrimeModulus>(value: &[u64; 4]) -> [u64; 4] {
-    montgomery_reduce::<M>(crate::field::word::square_wide(value))
+    montgomery_reduce_unreduced::<M>(crate::field::word::square_wide(value))
 }
 
 /// Montgomery REDC: maps an eight-limb integer below `p * R` to its
@@ -70,7 +83,8 @@ pub(super) fn montgomery_reduce<M: PrimeModulus>(limbs: [u64; 8]) -> [u64; 4] {
 /// The result is below `2p + p²/R < 3p`.
 /// For Pasta, `p < R/3`, so `limbs + (R - 1)p < 2pR + p² < R²`;
 /// cancellation therefore fits in eight limbs throughout. A caller with
-/// input below `pR` needs one subtraction; the wider bound requires two.
+/// input below `pR` produces a loose result below `2p`. Producing a reduced
+/// result takes one subtraction, or two for the wider input bound.
 #[inline(always)]
 pub(super) fn montgomery_reduce_unreduced<M: PrimeModulus>(limbs: [u64; 8]) -> [u64; 4] {
     // Cancel only the low half, then add the untouched high half once.
@@ -95,26 +109,31 @@ pub(super) fn montgomery_reduce_unreduced<M: PrimeModulus>(limbs: [u64; 8]) -> [
     [r0, r1, r2, r3]
 }
 
-/// Repeated squaring with raw, unreduced intermediates, followed by an
-/// optional multiplication by a reduced residue. No field value crosses the
-/// canonical representation boundary until the final reduction.
+/// Repeated squaring and an optional product, all in `[0, 2p)`.
 ///
-/// Requires a reduced input and at most 256 squares. Compile-time parameter
-/// checks verify the exact REDC recurrence for every permitted run length,
-/// including the final product bound. Larger runs are split by the caller.
+/// Closure for the Pasta primes is stronger than the generic REDC bound.
+/// Write `p = R/4 + c`; the parameters assert `16c² < R` and `3p < R`.
+/// Suppose `a,b < 2p` but `u = (ab + mp)/R >= 2p`, with `0 <= m < R`.
+/// Then `ab >= pR + p`. Set `A = 2p-a`, `B = 2p-b`, and `S = A+B`.
+/// If `S >= 2c+1`, AM-GM gives
+/// `ab <= (R/2+c-1/2)² < pR`, a contradiction. Hence `S <= 2c`,
+/// `0 < AB <= c² < p`, and, with `L = 4c-2S`, `ab = pR + pL + AB`.
+/// Write `u = 2p+k` and `j = L+m-R`; then `kR = AB+jp`, so
+/// `0 <= j <= L-1` and `AB+jc = (4k-j)R/4`. But
+/// `0 < AB+jc < 4c² < R/4`, impossible for a multiple of `R/4`.
+/// Thus arbitrary chains of loose products and squares remain below `2p`.
 #[inline]
 pub(super) fn square_run<M: PrimeModulus>(
     value: &[u64; 4],
     count: usize,
     factor: Option<&[u64; 4]>,
 ) -> [u64; 4] {
-    debug_assert!(count <= 256);
     let mut value = *value;
     for _ in 0..count {
         value = montgomery_reduce_unreduced::<M>(super::word::square_wide(&value));
     }
     match factor {
         Some(factor) => montgomery_multiply::<M>(&value, factor),
-        None => reduce_once::<M>(value),
+        None => value,
     }
 }

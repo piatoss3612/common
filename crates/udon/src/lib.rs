@@ -15,9 +15,12 @@
 //! and [`fft::run`] expose incremental arithmetic with exclusively leased scratch.
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
-//! embedded storage. Their type docs distinguish mathematical invariants from
-//! memory validity. [`stored_form!`] names the field representation; artifact
-//! owners identify the curve and record schema.
+//! embedded storage. Construction establishes their invariants; embedding
+//! preserves their exact representations for immediate use. Field arithmetic
+//! returns [`field::Loose`] values; explicit reduction produces [`field::Reduced`]
+//! values for equality, ordering, and square roots. [`stored_form!`] names the
+//! limb representation; artifact schemas identify the field, reduction state,
+//! and curve.
 //!
 //! Arithmetic is variable-time and provides no constant-time guarantee for
 //! secret inputs.
@@ -26,9 +29,9 @@
 //! use zakura_udon::{field::Fp, fp_hex};
 //!
 //! let value = fp_hex!("0x0000000000000000000000000000000000000000000000000000000000000007");
-//! assert_eq!(value.mul(&Fp::from_u64(3)), Fp::from_u64(21));
-//! assert_eq!(value.mul(&value.invert().unwrap()), Fp::ONE);
-//! assert_eq!(Fp::from_bytes(value.to_bytes()), Some(value));
+//! assert_eq!(value.mul(&<Fp>::from_u64(3)).reduce(), <Fp>::from_u64(21).reduce());
+//! assert_eq!(value.mul(&value.invert().unwrap()).reduce(), <Fp>::ONE.reduce());
+//! assert_eq!(<Fp>::from_bytes(value.to_bytes()).unwrap().reduce(), value.reduce());
 //! ```
 //!
 //! # Features

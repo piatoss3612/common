@@ -86,12 +86,8 @@ impl<M: PrimeModulus> Domain<M> {
 
     /// Constructs the evaluation points `shift * root^j` for `0 <= j < size`.
     ///
-    /// Returns [`FftError::ZeroShift`] when `shift` is zero, or
-    /// [`FftError::InvalidShift`] for an unreduced Montgomery representation.
+    /// Returns [`FftError::ZeroShift`] when `shift` is zero.
     pub fn coset(self, shift: PastaField<M>) -> Result<CosetDomain<M>, FftError> {
-        if !shift.is_reduced() {
-            return Err(FftError::InvalidShift);
-        }
         let inverse = shift.invert().ok_or(FftError::ZeroShift)?;
         Ok(CosetDomain::with_inverse(self, shift, inverse))
     }
@@ -127,8 +123,8 @@ impl<M: PrimeModulus> CosetDomain<M> {
     /// Whether both descriptors identify the same ordered evaluation points.
     pub fn same_domain(self, other: Self) -> bool {
         self.size() == other.size()
-            && self.domain.root() == other.domain.root()
-            && self.shift == other.shift
+            && self.domain.root().reduce() == other.domain.root().reduce()
+            && self.shift.reduce() == other.shift.reduce()
     }
 
     pub(super) fn with_inverse(
@@ -137,12 +133,13 @@ impl<M: PrimeModulus> CosetDomain<M> {
         inverse_shift: PastaField<M>,
     ) -> Self {
         let square = inverse_shift.square();
-        let inverse_scale_cycle = if square.mul(&inverse_shift) == PastaField::ONE {
-            let scale = domain.size_inverse();
-            Some([scale, scale.mul(&inverse_shift), scale.mul(&square)])
-        } else {
-            None
-        };
+        let inverse_scale_cycle =
+            if square.mul(&inverse_shift).reduce() == PastaField::<M>::ONE.reduce() {
+                let scale = domain.size_inverse();
+                Some([scale, scale.mul(&inverse_shift), scale.mul(&square)])
+            } else {
+                None
+            };
         Self {
             domain,
             shift,

@@ -23,15 +23,18 @@ macro_rules! stored_form {
 
 /// The permanent filename token for the stored field representation.
 ///
-/// Field elements store `x * 2^256 mod p` as four little-endian `u64` limbs,
-/// least significant limb first. Here `x` is the canonical integer representing
-/// the field element and `p` is its field's prime modulus.
+/// Field elements store a Montgomery representative congruent to `x * 2^256`
+/// modulo `p` as four little-endian `u64` limbs, least significant limb first.
+/// Here `x` is the canonical integer representing the field element and `p` is
+/// its field's prime modulus. `Loose` representatives are below `2p`; `Reduced`
+/// representatives are below `p`. The marker occupies no bytes.
 ///
 /// This descriptor identifies storage, not canonical protocol bytes, a modulus,
 /// or the surrounding record's schema. In particular, [`Fp`](crate::field::Fp)
-/// and [`Fq`](crate::field::Fq) share a descriptor; the artifact format must
-/// distinguish them. Naming an artifact does not convert values or validate its
-/// contents. See [`PastaField`](crate::field::PastaField) for the mathematical
+/// and [`Fq`](crate::field::Fq), in either reduction state, share a descriptor;
+/// the artifact format identifies the modulus and state. Storage preserves the
+/// exact limbs of the constructed value. See
+/// [`PastaField`](crate::field::PastaField) for the mathematical
 /// storage invariants and [`bento::Pod`] for layout and endianness requirements.
 ///
 /// Use [`stored_form!`] where a string literal is required, such as [`concat!`].

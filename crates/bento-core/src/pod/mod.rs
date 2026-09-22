@@ -1,10 +1,12 @@
-//! Layout validation and byte storage for embedded records.
+//! Direct byte storage and embedding of trusted values.
 //!
 //! # Background
 //!
-//! Artifact generators write records that consumers access directly from static
-//! bytes. This requires agreement on byte order and layout, and excludes padding
-//! and types whose bit patterns can be invalid. [`Pod`] expresses that contract.
+//! Artifact generators write already-constructed values that consumers access
+//! directly from static bytes. Embedding preserves those values, including any
+//! representation state encoded in their types. It performs no runtime
+//! validation, normalization, or initialization. [`Pod`] expresses the layout
+//! and memory-safety requirements for sharing values this way.
 //!
 //! # Design
 //!
@@ -19,12 +21,15 @@ mod macros;
 mod storage;
 pub use storage::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 
-/// A type whose validated layout can be read directly from embedded bytes.
+/// A type whose values can be stored as bytes and used directly after embedding.
 ///
 /// Stored records use a fixed little-endian layout so generators can write bytes
 /// that consumers read without decoding or allocation. This contract supports
 /// shared byte views through [`bytes_of`] and [`bytes_of_slice`], and typed
 /// static views through [`AlignedBytes`].
+/// The bytes come from trusted values of the same type. Construction establishes
+/// the values' invariants; storage preserves their exact representation without
+/// rechecking or changing it.
 ///
 /// Layout validation is conditional: a type can implement this trait even when
 /// [`ASSERT_LAYOUT`] fails. Every byte conversion evaluates that assertion at
@@ -38,10 +43,9 @@ pub use storage::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 /// Arrays validate their element type even when empty. [`PhantomData`] does not
 /// store or validate its marker type's layout.
 ///
-/// Generator and consumer must agree on type definitions and representation
-/// attributes. Byte conversion does not establish mathematical invariants such
-/// as canonical residues or curve membership; checking those belongs to the
-/// artifact's owner.
+/// Generator and consumer must agree on type definitions, representation
+/// attributes, and type parameters. A marker describing a representation bound,
+/// for example, is part of the stored type even when it occupies no bytes.
 ///
 /// # Safety
 ///
@@ -60,10 +64,8 @@ pub use storage::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 ///
 /// Every admitted bit pattern must be memory-safe for all safe operations on the
 /// resulting type, including operations implemented internally with unsafe code.
-/// A trusted generator cannot establish this obligation for arbitrary-byte
-/// conversions. Types whose operations require stronger invariants for memory
-/// safety need a validated construction boundary before those operations become
-/// available.
+/// This memory-safety obligation also applies to arbitrary bytes supplied to
+/// [`AlignedBytes`]; mathematical invariants are not a substitute for it.
 ///
 /// Unsafe consumers must force compile-time evaluation before relying on these
 /// guarantees. Use `const { T::ASSERT_LAYOUT; size_of::<T>() }` as the conversion's

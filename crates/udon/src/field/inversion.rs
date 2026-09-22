@@ -5,7 +5,7 @@
 
 use super::montgomery::reduce_once;
 use super::word::{adc, mac};
-use super::{PastaField, PrimeModulus};
+use super::{PastaField, PrimeModulus, Reduced, ReductionState};
 
 use crate::field::safegcd::{
     SAFEGCD_BATCHES, SIGNED62_MASK, bezout_offset, divsteps_62, to_signed62, update_fg,
@@ -15,11 +15,11 @@ use crate::field::safegcd::{
 #[path = "tests/inversion.rs"]
 mod tests;
 
-impl<M: PrimeModulus> PastaField<M> {
+impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Returns the multiplicative inverse, or `None` for zero.
     ///
     /// The safegcd loop terminates according to the input.
-    pub fn invert(&self) -> Option<Self> {
+    pub fn invert(&self) -> Option<PastaField<M>> {
         if self.is_zero() {
             None
         } else {
@@ -27,6 +27,73 @@ impl<M: PrimeModulus> PastaField<M> {
         }
     }
 
+    /// Modular inverse via batched Bernstein–Yang safegcd.
+    ///
+    /// Requires nonzero `self`. The loop stops once the full-width `g` row is
+    /// zero, within the bound documented on [`SAFEGCD_BATCHES`], and uses the
+    /// correction for the number of completed batches.
+    ///
+    /// The core inverts the canonical integer `x`; the Bézout coefficients `d`
+    /// and `e` are tracked as field elements (initialized `0` and `1`) whose
+    /// per-batch matrix update is one fused signed row pass ending in a single
+    /// Montgomery reduction round. Each batch therefore scales the rows by
+    /// `2^62` (the matrix scale) and `2^-64` (the reduction round). After all
+    /// divsteps `g = 0` and `f = ±1`, with the invariant
+    /// `d ≡ f · x^-1 · 2^-(2 · batches)`, so
+    /// `x^-1 = sign(f) · d · 2^(2 · batches)`. The final multiplication uses
+    /// the prederived Montgomery correction for the completed batch count.
+    fn invert_safegcd(&self) -> PastaField<M> {
+        let mut f = M::MODULUS_SIGNED62;
+        let mut g = to_signed62(&self.canonical_limbs());
+        let mut d = PastaField::<M, Reduced>::ZERO;
+        let mut e = PastaField::<M, Reduced>::ONE;
+        let mut delta = 1i64;
+        let mut completed_batches = 0;
+
+        for batch in 0..SAFEGCD_BATCHES {
+            let f_low = f[0] as u64 | ((f[1] as u64) << 62);
+            let g_low = g[0] as u64 | ((g[1] as u64) << 62);
+            let (next_delta, matrix) = divsteps_62(delta, f_low, g_low);
+            delta = next_delta;
+            (f, g) = update_fg(&f, &g, matrix);
+            let terminal = g == [0; 5];
+
+            let [u, v, q, r] = matrix;
+            let prev_d = d;
+            d = PastaField::bezout_row_update(u, &prev_d, v, &e);
+            if !terminal {
+                // Once g is zero, only d contributes to the inverse; the
+                // second coefficient row has no remaining consumer.
+                e = PastaField::bezout_row_update(q, &prev_d, r, &e);
+            }
+            completed_batches = batch + 1;
+            if terminal {
+                break;
+            }
+        }
+
+        debug_assert_eq!(g, [0i64; 5], "safegcd did not converge (g != 0)");
+        debug_assert!(
+            f == [1, 0, 0, 0, 0]
+                || f == [
+                    SIGNED62_MASK,
+                    SIGNED62_MASK,
+                    SIGNED62_MASK,
+                    SIGNED62_MASK,
+                    -1
+                ],
+            "safegcd final f is not ±1"
+        );
+
+        let correction = PastaField::<M, Reduced>::from_montgomery(
+            M::SAFEGCD_CORRECTIONS[completed_batches - 1],
+        );
+        let corrected = d.mul(&correction);
+        if f[4] < 0 { corrected.neg() } else { corrected }
+    }
+}
+
+impl<M: PrimeModulus> PastaField<M, Reduced> {
     /// Computes `(u * lhs + v * rhs) * 2^-64` in Montgomery form with one
     /// fused signed limb pass and a single Montgomery reduction round.
     ///
@@ -64,68 +131,5 @@ impl<M: PrimeModulus> PastaField<M> {
         let (r3, overflow) = adc(limbs[4], multiplier >> 2, carry);
         debug_assert_eq!(overflow, 0);
         Self::from_montgomery(reduce_once::<M>([r0, r1, r2, r3]))
-    }
-
-    /// Modular inverse via batched Bernstein–Yang safegcd.
-    ///
-    /// Requires nonzero `self`. The loop stops once the full-width `g` row is
-    /// zero, within the bound documented on [`SAFEGCD_BATCHES`], and uses the
-    /// correction for the number of completed batches.
-    ///
-    /// The core inverts the canonical integer `x`; the Bézout coefficients `d`
-    /// and `e` are tracked as field elements (initialized `0` and `1`) whose
-    /// per-batch matrix update is one fused signed row pass ending in a single
-    /// Montgomery reduction round. Each batch therefore scales the rows by
-    /// `2^62` (the matrix scale) and `2^-64` (the reduction round). After all
-    /// divsteps `g = 0` and `f = ±1`, with the invariant
-    /// `d ≡ f · x^-1 · 2^-(2 · batches)`, so
-    /// `x^-1 = sign(f) · d · 2^(2 · batches)`. The final multiplication uses
-    /// the prederived Montgomery correction for the completed batch count.
-    fn invert_safegcd(&self) -> Self {
-        let mut f = M::MODULUS_SIGNED62;
-        let mut g = to_signed62(&self.canonical_limbs());
-        let mut d = Self::ZERO;
-        let mut e = Self::ONE;
-        let mut delta = 1i64;
-        let mut completed_batches = 0;
-
-        for batch in 0..SAFEGCD_BATCHES {
-            let f_low = f[0] as u64 | ((f[1] as u64) << 62);
-            let g_low = g[0] as u64 | ((g[1] as u64) << 62);
-            let (next_delta, matrix) = divsteps_62(delta, f_low, g_low);
-            delta = next_delta;
-            (f, g) = update_fg(&f, &g, matrix);
-            let terminal = g == [0; 5];
-
-            let [u, v, q, r] = matrix;
-            let prev_d = d;
-            d = Self::bezout_row_update(u, &prev_d, v, &e);
-            if !terminal {
-                // Once g is zero, only d contributes to the inverse; the
-                // second coefficient row has no remaining consumer.
-                e = Self::bezout_row_update(q, &prev_d, r, &e);
-            }
-            completed_batches = batch + 1;
-            if terminal {
-                break;
-            }
-        }
-
-        debug_assert_eq!(g, [0i64; 5], "safegcd did not converge (g != 0)");
-        debug_assert!(
-            f == [1, 0, 0, 0, 0]
-                || f == [
-                    SIGNED62_MASK,
-                    SIGNED62_MASK,
-                    SIGNED62_MASK,
-                    SIGNED62_MASK,
-                    -1
-                ],
-            "safegcd final f is not ±1"
-        );
-
-        let correction = Self::from_montgomery(M::SAFEGCD_CORRECTIONS[completed_batches - 1]);
-        let corrected = d.mul(&correction);
-        if f[4] < 0 { corrected.neg() } else { corrected }
     }
 }

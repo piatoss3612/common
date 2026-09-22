@@ -97,9 +97,9 @@ writes in place.
 An arithmetic error, failed execution, or cancellation poisons the run and
 stops new claims. Other outstanding receipts remain drainable. The application
 must join workers and drop actual guards before releasing their accounting or
-reusing storage. Failed in-place data must be refilled. FFT tasks restore
-canonical field representation on unwind; they do not promise an unchanged or
-valid polynomial result.
+reusing storage. Failed in-place data must be refilled. FFT arithmetic preserves
+the loose field bound at every step, including on unwind, without a cleanup
+pass. A failed task does not promise an unchanged or valid polynomial result.
 
 Foreign or stale publication returns the intact receipt to its caller. Tickets
 are not forgeable or cloneable. Dropping or forgetting a task does not publish

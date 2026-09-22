@@ -21,7 +21,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                 &mut [],
             )
             .unwrap();
-            assert_eq!(output, expected);
+            assert_eq!(reduced(&output), reduced(&expected));
             if size == ordinary.len() {
                 plan.forward_into_with(
                     view,
@@ -31,10 +31,10 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                     &mut [],
                 )
                 .unwrap();
-                assert_eq!(output, expected);
+                assert_eq!(reduced(&output), reduced(&expected));
             }
             let mut scales = vec![PastaField::ZERO; size];
-            let scales = PowerTable::prepare(PastaField::ONE, shift, &mut scales).unwrap();
+            let scales = PowerTable::prepare(PastaField::ONE, shift, &mut scales);
             for columns in [false, true] {
                 for scatter in [false, true] {
                     for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
@@ -86,9 +86,15 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                                     } else {
                                         *value
                                     };
-                                    assert_eq!(result.get(row), Some(&expected));
+                                    assert_eq!(
+                                        (result.get(row)).map(|value| value.reduce()),
+                                        (Some(&expected)).map(|value| value.reduce())
+                                    );
                                 }
-                                assert_eq!(scratch.last(), Some(&PastaField::ONE));
+                                assert_eq!(
+                                    (scratch.last()).map(|value| value.reduce()),
+                                    (Some(&PastaField::<_>::ONE)).map(|value| value.reduce())
+                                );
                             }
                         }
                     }
@@ -121,7 +127,10 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                     .unwrap();
                 let result = expansion.view(&output);
                 for (row, value) in expected.iter().enumerate() {
-                    assert_eq!(result.get(row), Some(value));
+                    assert_eq!(
+                        (result.get(row)).map(|value| value.reduce()),
+                        (Some(value)).map(|value| value.reduce())
+                    );
                 }
                 let factor_values = vec![PastaField::from_u64(11); extended.size()];
                 expansion
@@ -136,7 +145,10 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                     .unwrap();
                 let result = expansion.view(&output);
                 for (row, value) in expected.iter().enumerate() {
-                    assert_eq!(result.get(row), Some(&value.mul(&factor_values[0])));
+                    assert_eq!(
+                        (result.get(row)).map(|value| value.reduce()),
+                        (Some(&value.mul(&factor_values[0]))).map(|value| value.reduce())
+                    );
                 }
                 for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
                     let operation = ExpansionPlan::with_strategy(
@@ -174,9 +186,15 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                             } else {
                                 *value
                             };
-                            assert_eq!(result.get(row), Some(&expected));
+                            assert_eq!(
+                                (result.get(row)).map(|value| value.reduce()),
+                                (Some(&expected)).map(|value| value.reduce())
+                            );
                         }
-                        assert_eq!(scratch.last(), Some(&PastaField::ONE));
+                        assert_eq!(
+                            (scratch.last()).map(|value| value.reduce()),
+                            (Some(&PastaField::<_>::ONE)).map(|value| value.reduce())
+                        );
                     }
                     let inner_order = if order == ExpansionOrder::Residues {
                         ElementOrder::Natural
@@ -202,8 +220,8 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                                 reverse(row, size.ilog2())
                             };
                             assert_eq!(
-                                output[index],
-                                expected[residue + expansion.layout().residues() * row]
+                                (output[index]).reduce(),
+                                (expected[residue + expansion.layout().residues() * row]).reduce()
                             );
                         }
                     }
@@ -243,7 +261,7 @@ fn coefficient_composition<M: PrimeModulus>() {
             );
             let before = view.as_slice().to_vec();
             consume_coefficients(view, &ordinary);
-            assert_eq!(view.as_slice(), before);
+            assert_eq!(bytes_of_slice(view.as_slice()), bytes_of_slice(&before));
         }
     }
 }
@@ -329,7 +347,12 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
         ),
         Err(FftError::InvalidPrefix { .. })
     ));
-    assert!(output.iter().chain(&scratch).all(|v| *v == PastaField::ONE));
+    assert!(
+        output
+            .iter()
+            .chain(&scratch)
+            .all(|v| v.reduce() == PastaField::ONE)
+    );
     assert_eq!(joins.take(), 0);
 
     // Empty ordinary prefixes remain valid through the view conversion.
@@ -341,5 +364,5 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
         &mut scratch,
     )
     .unwrap();
-    assert!(output.iter().all(|v| *v == PastaField::ZERO));
+    assert!(output.iter().all(|v| v.reduce() == PastaField::ZERO));
 }

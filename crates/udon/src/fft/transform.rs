@@ -7,9 +7,7 @@ use super::{
 #[cfg(test)]
 use super::{assert_length, check_prefix};
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-use crate::field::fft::{
-    Guard, butterfly, divide_by_power_of_two, normalize, scale as scale_loose,
-};
+use crate::field::fft::{butterfly, divide_by_power_of_two, scale as scale_loose};
 
 /// Reusable transform metadata borrowing caller-prepared tables.
 ///
@@ -214,8 +212,8 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
                 plan = plan.with_input_scale(input.normalization_factor());
             } else {
                 assert_eq!(
-                    input.normalization_factor(),
-                    PastaField::ONE,
+                    input.normalization_factor().reduce(),
+                    PastaField::<M>::ONE.reduce(),
                     "inverse input must be normalized"
                 );
             }
@@ -498,13 +496,15 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     #[cfg(test)]
     pub(super) fn scale_coefficients(self, values: &mut [PastaField<M>], extra: PastaField<M>) {
         let shift = self.domain.shift();
-        if shift == PastaField::ONE && extra == PastaField::ONE {
+        if shift.reduce() == PastaField::<M>::ONE.reduce()
+            && extra.reduce() == PastaField::<M>::ONE.reduce()
+        {
             return;
         }
         if self.domain.inverse_scale_cycle.is_some() {
             let cycle = [extra, extra.mul(&shift), extra.mul(&shift.square())];
             for (index, value) in values.iter_mut().enumerate() {
-                if index % 3 != 0 || extra != PastaField::ONE {
+                if index % 3 != 0 || extra.reduce() != PastaField::<M>::ONE.reduce() {
                     *value = value.mul(&cycle[index % 3]);
                 }
             }
@@ -541,11 +541,11 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         // that coefficient, so broadcasting skips those rounds. Visiting the
         // coefficients in degree order also permits a scaling progression.
         let mut scale = extra;
-        let normalized = extra != PastaField::ONE;
-        let identity = shift == PastaField::ONE;
+        let normalized = extra.reduce() != PastaField::<M>::ONE.reduce();
+        let identity = shift.reduce() == PastaField::<M>::ONE.reduce();
         let cycle = if scales.is_none() && !identity && coefficients.len() > 1 {
             let squared = shift.square();
-            (squared.mul(&shift) == PastaField::ONE)
+            (squared.mul(&shift).reduce() == PastaField::<M>::ONE.reduce())
                 .then(|| [extra, extra.mul(&shift), extra.mul(&squared)])
         } else {
             None
@@ -732,8 +732,6 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
                 || self.plan.tables.inverse_finish.is_none())
     }
 
-    // The guard spans all local rounds. Normalizing only at the boundary keeps
-    // the loose arithmetic optimization while preventing a public slice escape.
     #[inline(never)]
     fn local(&self, values: &mut [PastaField<M>]) {
         let whole_inverse = self.run.normalized && values.len() == self.plan.domain.size();
@@ -743,7 +741,6 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
         } else {
             values.len()
         };
-        let guard = Guard::new(values);
         let mut block = self.run.first;
         while block <= last {
             let stride = self.plan.domain.size() / block;
@@ -752,7 +749,7 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
             } else {
                 self.stage_root(block.trailing_zeros())
             };
-            for chunk in guard.values.chunks_exact_mut(block) {
+            for chunk in values.chunks_exact_mut(block) {
                 let (left, right) = chunk.split_at_mut(block / 2);
                 let mut power = PastaField::ONE;
                 for (index, (left, right)) in left.iter_mut().zip(right).enumerate() {
@@ -774,7 +771,7 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
             block *= 2;
         }
         if whole_inverse {
-            let (left, right) = guard.values.split_at_mut(self.plan.domain.size() / 2);
+            let (left, right) = values.split_at_mut(self.plan.domain.size() / 2);
             let mut scale = self.plan.domain.domain().size_inverse();
             let mut twiddle = PastaField::ONE;
             let right_scale = self.right_scale();
@@ -787,17 +784,13 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
                     twiddle = twiddle.mul(&self.root());
                 }
             }
-            guard.disarm();
-        } else if whole_forward {
-            guard.disarm();
         }
     }
 
     fn forward_store(&self, value: PastaField<M>, index: usize) -> PastaField<M> {
-        self.run.factor.map_or_else(
-            || normalize(value),
-            |factor| scale_loose(value, &factor[index]),
-        )
+        self.run
+            .factor
+            .map_or_else(|| value, |factor| scale_loose(value, &factor[index]))
     }
 
     fn finish(
@@ -832,7 +825,7 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
                 }
             }
         }
-        // Add canonical coefficients only after normalization and untwisting.
+        // Add coefficients only after inverse scaling and untwisting.
         // Equal-size lifts also contribute to the upper terminal store.
         for lift in self.run.lifts {
             if let Some(coefficient) = lift.values.get(index) {
@@ -855,8 +848,7 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
     ) {
         // At coefficient i, scale the low input by n^-1 * shift^-i and
         // the high input by that times root^-i. The upper output also needs
-        // shift^(-n/2). Loose-input multiplication avoids reducing each input
-        // solely to meet the ordinary field multiplication contract.
+        // shift^(-n/2). All products retain the ordinary loose field bound.
         let scale = self.plan.tables.inverse_scales.map_or_else(
             || {
                 if self.plan.domain.inverse_scale_cycle.is_some() {
@@ -881,7 +873,7 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
         let high = scale_loose(*right, &high_scale);
         *left = low.add(&high);
         let difference = low.sub(&high);
-        *right = if right_scale == PastaField::ONE {
+        *right = if right_scale.reduce() == PastaField::<M>::ONE.reduce() {
             difference
         } else {
             difference.mul(&right_scale)
@@ -900,7 +892,6 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
     }
 
     fn cross(&self, values: &mut [PastaField<M>], first_column: usize, geometry: &Geometry) {
-        let guard = Guard::new(values);
         let scale_progression = self.needs_scale_progression();
         let finish_twiddles = self.needs_finish_twiddles();
         let mut column_scale = if scale_progression {
@@ -949,8 +940,8 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
                 }
             }
         }
-        let columns = guard.values.len() / geometry.tiles;
-        for (offset, lane) in guard.values.chunks_exact_mut(geometry.tiles).enumerate() {
+        let columns = values.len() / geometry.tiles;
+        for (offset, lane) in values.chunks_exact_mut(geometry.tiles).enumerate() {
             let column = first_column + offset;
             let mut distance = 1;
             while distance < geometry.tiles {
@@ -1014,9 +1005,6 @@ impl<M: PrimeModulus> Kernel<'_, '_, '_, M> {
             if offset + 1 < columns && finish_twiddles {
                 column_twiddle = column_twiddle.mul(&self.root());
             }
-        }
-        if self.run.normalized || !self.run.inverse {
-            guard.disarm();
         }
     }
 }

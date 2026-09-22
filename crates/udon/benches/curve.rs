@@ -6,9 +6,9 @@ use criterion::{
 };
 use zakura_udon::{
     curve::{
-        AffinePoint, CurveError, CurveTableEntry, EisensteinTable, FixedBaseDescription,
-        FixedBaseTable, Pallas, PastaCurve, Point, PreparedAffinePoint, ProjectivePoint, Vesta,
-        batch_normalize, glv_decompose,
+        AffinePoint, CurveTableEntry, EisensteinTable, FixedBaseDescription, FixedBaseTable,
+        Pallas, PastaCurve, Point, PreparedAffinePoint, ProjectivePoint, Vesta, batch_normalize,
+        glv_decompose,
     },
     field::{CanonicalUint, PastaField, PrimeModulus},
 };
@@ -52,8 +52,14 @@ fn curve<C: PastaCurve>(criterion: &mut Criterion, name: &str) {
     let lhs = generator.mul_projective(&scalar);
     let rhs = lhs.double();
     let affine = rhs.to_point().as_affine().copied().unwrap();
-    assert_ne!(*lhs.coordinates().2, PastaField::ONE);
-    assert_ne!(*rhs.coordinates().2, PastaField::ONE);
+    assert_ne!(
+        (*lhs.coordinates().2).reduce(),
+        (PastaField::<_>::ONE).reduce()
+    );
+    assert_ne!(
+        (*rhs.coordinates().2).reduce(),
+        (PastaField::<_>::ONE).reduce()
+    );
     let encoding = affine.to_bytes();
     assert_eq!(Point::<C>::from_bytes(encoding), Some(affine.to_point()));
     let mut group = criterion.benchmark_group(format!("{name}/operations"));
@@ -156,7 +162,10 @@ fn endomorphisms<C: PastaCurve>(
     projective: ProjectivePoint<C>,
 ) {
     assert_eq!(projective.to_point(), affine.to_point());
-    assert_ne!(*projective.coordinates().2, PastaField::ONE);
+    assert_ne!(
+        (*projective.coordinates().2).reduce(),
+        (PastaField::<_>::ONE).reduce()
+    );
     let mut group = criterion.benchmark_group(format!("{name}/endomorphism"));
     assert_eq!(affine.endomorphism().endomorphism().endomorphism(), *affine);
     bench(&mut group, "affine", affine, AffinePoint::endomorphism);
@@ -180,7 +189,10 @@ fn endomorphisms<C: PastaCurve>(
             point.endomorphism().to_point(),
             point.to_point().endomorphism()
         );
-        assert_eq!(point.endomorphism().coordinates().2, point.coordinates().2);
+        assert_eq!(
+            (point.endomorphism().coordinates().2).reduce(),
+            (point.coordinates().2).reduce()
+        );
         bench(
             &mut group,
             &format!("projective/{case}"),
@@ -199,25 +211,6 @@ fn endomorphisms<C: PastaCurve>(
         affine,
         PreparedAffinePoint::from_affine,
     );
-    assert!(prepared.valid_cache());
-    bench(&mut group, "valid_cache/valid", &prepared, |entry| {
-        entry.valid_cache()
-    });
-    for (case, bytes) in [("inconsistent", [0; 32]), ("unreduced", [0xff; 32])] {
-        let mut raw = bento::AlignedBytes([0; 96]);
-        raw.0.copy_from_slice(bento::bytes_of(&prepared));
-        raw.0[32..64].copy_from_slice(&bytes);
-        // Typed POD views need static storage; create the fixture before timing.
-        let damaged = *Box::leak(Box::new(raw)).as_value::<PreparedAffinePoint<C>>();
-        assert_eq!(damaged.affine(), *affine);
-        assert!(!damaged.valid_cache());
-        bench(
-            &mut group,
-            &format!("valid_cache/{case}"),
-            &damaged,
-            |entry| entry.valid_cache(),
-        );
-    }
     group.finish();
 
     entry_rotations(criterion, name, "affine", affine);
@@ -268,8 +261,8 @@ fn decomposition<C: PastaCurve>(
         assert!(a.unsigned_abs() < 1_u128 << 127);
         assert!(b.unsigned_abs() < 1_u128 << 127);
         assert_eq!(
-            signed_scalar(a).add(&PastaField::ZETA.mul(&signed_scalar(b))),
-            *scalar
+            (signed_scalar(a).add(&PastaField::<_>::ZETA.mul(&signed_scalar(b)))).reduce(),
+            (*scalar).reduce()
         );
         if a != 0 && b != 0 {
             signs[usize::from(a < 0) * 2 + usize::from(b < 0)] = true;
@@ -293,15 +286,12 @@ fn coordinates_and_encoding<C: PastaCurve>(
     affine: &AffinePoint<C>,
 ) {
     let (&x, &y) = affine.coordinates();
-    let unreduced: PastaField<C::Base> = *bento::AlignedBytes([0xff; 32]).as_value();
     let mut group = criterion.benchmark_group(format!("{name}/coordinates"));
 
-    // Invalid stored residues must be rejected before curve arithmetic.
+    // Fresh coordinates must satisfy the curve equation.
     for (case, coordinates, expected) in [
         ("valid", (x, y), Some(affine.to_point())),
         ("off_curve", (x, PastaField::ZERO), None),
-        ("unreduced_x", (unreduced, y), None),
-        ("unreduced_y", (x, unreduced), None),
         (
             "identity",
             (PastaField::ZERO, PastaField::ZERO),
@@ -340,7 +330,8 @@ fn coordinates_and_encoding<C: PastaCurve>(
             !x.is_zero()
                 && x.square()
                     .mul(x)
-                    .add(&PastaField::from_u64(5))
+                    .add(&PastaField::<C::Base>::from_u64(5))
+                    .reduce()
                     .sqrt()
                     .is_none()
         })
@@ -501,18 +492,27 @@ fn multiplication<C: PastaCurve>(
                 .unwrap(),
         ),
         ("dense", dense),
-        ("minus_one", PastaField::ONE.neg()),
+        ("minus_one", PastaField::<_>::ONE.neg()),
         ("lambda", PastaField::ZETA),
-        ("minus_lambda", PastaField::ZETA.neg()),
-        ("one_plus_lambda", PastaField::ONE.add(&PastaField::ZETA)),
-        ("one_minus_lambda", PastaField::ONE.sub(&PastaField::ZETA)),
+        ("minus_lambda", PastaField::<_>::ZETA.neg()),
+        (
+            "one_plus_lambda",
+            PastaField::<_>::ONE.add(&PastaField::<_>::ZETA),
+        ),
+        (
+            "one_minus_lambda",
+            PastaField::<_>::ONE.sub(&PastaField::<_>::ZETA),
+        ),
     ];
     let corpus = values::<C::Scalar>();
     decomposition::<C>(criterion, name, &scalars, &corpus);
     // Compare scalar methods on the same base, retaining nontrivial Jacobian z.
     let projective = affine.to_projective().double().add_mixed(&affine.neg());
     assert_eq!(projective, affine.to_projective());
-    assert_ne!(*projective.coordinates().2, PastaField::ONE);
+    assert_ne!(
+        (*projective.coordinates().2).reduce(),
+        (PastaField::<_>::ONE).reduce()
+    );
     let point = affine.to_point();
     let mut group = criterion.benchmark_group(format!("{name}/scalar_mul"));
     for (case, scalar) in scalars {
@@ -594,48 +594,6 @@ fn multiplication<C: PastaCurve>(
     );
 }
 
-fn invalid_entries<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
-    entries: &[E],
-) -> Vec<(String, Vec<E>)> {
-    // First and last failures distinguish early rejection from a complete
-    // validation scan; the last expanded entry is also its final carry.
-    let mut cases = Vec::new();
-    for (position, index) in [("first", 0), ("last", entries.len() - 1)] {
-        let mut damaged = vec![
-            (
-                "wrong_multiple",
-                E::from_affine(&entries[index].affine().neg()),
-            ),
-            (
-                "unreduced",
-                match size_of::<E>() {
-                    64 => *bento::AlignedBytes([0xff; 64]).as_value::<E>(),
-                    96 => *bento::AlignedBytes([0xff; 96]).as_value::<E>(),
-                    _ => unreachable!("the entry trait is sealed to two POD layouts"),
-                },
-            ),
-        ];
-        if size_of::<E>() == 96 {
-            // Preserve valid x/y and replace only the cached x-coordinate.
-            // Bento's typed views require static storage; allocate each small
-            // damaged record once during setup, outside all timed iterations.
-            let mut raw = bento::AlignedBytes([0; 96]);
-            raw.0.copy_from_slice(bento::bytes_of(&entries[index]));
-            raw.0[32..64].fill(0);
-            damaged.push((
-                "inconsistent_cache",
-                *Box::leak(Box::new(raw)).as_value::<E>(),
-            ));
-        }
-        for (damage, entry) in damaged {
-            let mut invalid = entries.to_vec();
-            invalid[index] = entry;
-            cases.push((format!("{damage}/{position}"), invalid));
-        }
-    }
-    cases
-}
-
 fn expanded<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
     criterion: &mut Criterion,
     name: &str,
@@ -672,7 +630,7 @@ fn expanded<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
             FixedBaseTable::prepare(affine, &mut entries, &mut projective, &mut field).unwrap();
         assert_eq!(table.mul(&dense), affine.mul_projective(&dense));
         assert_eq!(
-            table.mul(&PastaField::ONE.neg()),
+            table.mul(&PastaField::<_>::ONE.neg()),
             affine.neg().to_projective()
         );
         assert_eq!(corpus.map(|scalar| table.mul(&scalar)), expected);
@@ -686,36 +644,6 @@ fn expanded<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
                 .unwrap()
             })
         });
-        bench(
-            &mut group,
-            "bind_trusted",
-            &(description, *affine, table.as_slice()),
-            |(description, base, entries)| {
-                FixedBaseTable::bind_trusted(*description, base, entries).unwrap()
-            },
-        );
-        bench(&mut group, "validate", &table, |table| {
-            table.validate().unwrap()
-        });
-        for (case, entries) in invalid_entries::<C, E>(table.as_slice()) {
-            assert_eq!(
-                FixedBaseTable::bind(description, affine, &entries).unwrap_err(),
-                CurveError::InvalidTable
-            );
-            let invalid = FixedBaseTable::bind_trusted(description, affine, &entries).unwrap();
-            assert_eq!(invalid.validate(), Err(CurveError::InvalidTable));
-            bench(
-                &mut group,
-                &format!("bind/{case}"),
-                &(description, *affine, entries.as_slice()),
-                |&(description, base, entries)| {
-                    FixedBaseTable::bind(description, &base, entries).unwrap_err()
-                },
-            );
-            bench(&mut group, &format!("validate/{case}"), &invalid, |table| {
-                table.validate().unwrap_err()
-            });
-        }
         group.bench_function("mul", |b| {
             b.iter(|| black_box(&table).mul(black_box(&dense)))
         });
@@ -783,44 +711,14 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
                 black_box(&mut entries),
                 black_box(&mut projective),
                 black_box(&mut field),
-            )
-            .unwrap();
+            );
             black_box(table.as_array());
         })
     });
-    let table =
-        EisensteinTable::prepare(affine, &mut entries, &mut projective, &mut field).unwrap();
+    let table = EisensteinTable::prepare(affine, &mut entries, &mut projective, &mut field);
     group.bench_function("bind", |b| {
-        b.iter(|| EisensteinTable::bind(black_box(affine), black_box(table.as_array())).unwrap())
+        b.iter(|| EisensteinTable::bind(black_box(affine), black_box(table.as_array())))
     });
-    group.bench_function("bind_trusted", |b| {
-        b.iter(|| {
-            EisensteinTable::bind_trusted(black_box(affine), black_box(table.as_array())).unwrap()
-        })
-    });
-    bench(&mut group, "validate", &table, |table| {
-        table.validate().unwrap()
-    });
-    for (case, entries) in invalid_entries::<C, E>(table.as_array()) {
-        assert_eq!(
-            EisensteinTable::bind(affine, entries.as_slice().try_into().unwrap()).unwrap_err(),
-            CurveError::InvalidTable
-        );
-        let invalid =
-            EisensteinTable::bind_trusted(affine, entries.as_slice().try_into().unwrap()).unwrap();
-        assert_eq!(invalid.validate(), Err(CurveError::InvalidTable));
-        bench(
-            &mut group,
-            &format!("bind/{case}"),
-            &(*affine, entries.as_slice()),
-            |&(base, entries)| {
-                EisensteinTable::bind(&base, entries.try_into().unwrap()).unwrap_err()
-            },
-        );
-        bench(&mut group, &format!("validate/{case}"), &invalid, |table| {
-            table.validate().unwrap_err()
-        });
-    }
     assert_eq!(table.mul(&dense), affine.mul_projective(&dense));
     bench(&mut group, "mul", &(table, dense), |(table, scalar)| {
         table.mul(scalar)

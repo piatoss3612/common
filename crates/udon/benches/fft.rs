@@ -192,7 +192,7 @@ fn transforms<M: PrimeModulus>(
                     });
                     setup.finish();
                 }
-                let plan = tables.tables().bind(domain).unwrap();
+                let plan = tables.tables().bind(domain);
                 let mut group = criterion.benchmark_group(format!(
                     "{field}/fft/{}/{shift_name}/{direction}/{profile}",
                     domain.size()
@@ -354,13 +354,12 @@ fn expansions<M: PrimeModulus>(
 ) {
     let base = Domain::new(11).unwrap().subgroup();
     let tables = Prepared::selected(base, 15);
-    let plan = tables.tables().bind(base).unwrap();
+    let plan = tables.tables().bind(base);
     let coefficient_plan = (Tables {
         forward: Some(&tables.forward),
         ..Tables::default()
     })
-    .bind(base)
-    .unwrap();
+    .bind(base);
     let coefficients = inputs::<M>(base.size());
     let mut evaluations = coefficients.clone();
     plan.forward(
@@ -383,7 +382,7 @@ fn expansions<M: PrimeModulus>(
         setup.finish();
         let scales = expansion.prepare_scales(&mut scales);
         let dense_tables = Prepared::selected(extended, 1);
-        let dense_plan = dense_tables.tables().bind(extended).unwrap();
+        let dense_plan = dense_tables.tables().bind(extended);
         let factor_values = inputs::<M>(extended.size());
         let factor = expansion.view(&factor_values);
         let mut natural_factor = vec![PastaField::ZERO; extended.size()];
@@ -578,7 +577,7 @@ fn interpolation<M: PrimeModulus>(
 ) {
     let domains = [14, 13, 12].map(|log| Domain::new(log).unwrap().coset(shift).unwrap());
     let tables = domains.map(Prepared::new);
-    let plans = core::array::from_fn::<_, 3, _>(|i| tables[i].tables().bind(domains[i]).unwrap());
+    let plans = core::array::from_fn::<_, 3, _>(|i| tables[i].tables().bind(domains[i]));
     let input = domains.map(|domain| inputs::<M>(domain.size()));
     let mut scratch = vec![
         PastaField::ZERO;

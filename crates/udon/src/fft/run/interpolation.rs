@@ -192,7 +192,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     /// inner transforms.
     ///
     /// Buffer requirement violations panic before any mutation. No allocation occurs;
-    /// an executor panic leaves canonical fields but requires refilling affected
+    /// an executor panic leaves valid loose fields but requires refilling affected
     /// evaluations before retrying.
     ///
     /// This example adds a constant polynomial to a linear polynomial evaluated
@@ -213,14 +213,14 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     ///     (Transform::new(lift_domain), ElementOrder::Natural),
     /// ], false, StorageLayout::Contiguous, ExecutionOptions::default()).unwrap();
     /// // 1 + x at 7 and -7, plus the constant polynomial 5.
-    /// let mut output = [Fp::from_u64(8), Fp::from_u64(6).neg()];
+    /// let mut output = [Fp::from_u64(8), <Fp>::from_u64(6).neg()];
     /// let mut lift = [Fp::from_u64(5)];
     /// plan.execute(
     ///     [&mut output, &mut lift], [&mut [], &mut []],
     ///     &SerialExecutor,
     /// );
-    /// assert_eq!(output, [Fp::from_u64(6), Fp::ONE]); // 6 + x
-    /// assert_eq!(lift, [Fp::from_u64(5)]);
+    /// assert_eq!(output.map(|value| value.reduce()), [Fp::from_u64(6), Fp::ONE]); // 6 + x
+    /// assert_eq!(lift.map(|value| value.reduce()), [Fp::from_u64(5)]);
     /// ```
     pub fn execute<E: crate::exec::Executor>(
         self,

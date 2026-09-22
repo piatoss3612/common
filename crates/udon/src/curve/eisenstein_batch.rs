@@ -59,7 +59,7 @@ const LADDER_AFFINE_MIN: usize = 64;
 ///     &mut field,
 ///     TaskBudget::SERIAL,
 ///     &SerialExecutor,
-/// )?;
+/// );
 /// let scalar = EisensteinScalar::new(&Fq::from_u64(42));
 /// let mut output = [PallasProjective::IDENTITY; N];
 /// tables.mul_prepared(
@@ -119,11 +119,6 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
     /// tails left untouched. Initial contents do not matter. The returned view
     /// borrows only `entries`, leaving scratch available for other work.
     ///
-    /// # Errors
-    ///
-    /// Returns [`CurveError::InvalidBase`] for invalid coordinates or caches, leaving
-    /// every buffer unchanged.
-    ///
     /// # Panics
     ///
     /// Incorrect buffer lengths panic before writes. An executor panic may leave
@@ -136,7 +131,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         field: &mut [PastaField<C::Base>],
         budget: TaskBudget,
         executor: &X,
-    ) -> Result<Self, CurveError> {
+    ) -> Self {
         assert_eq!(entries.len() / 8, bases.len(), "one table per base");
         assert!(
             entries.len().is_multiple_of(8),
@@ -146,12 +141,6 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         assert_length("entries", r.table_entries, entries.len());
         assert_scratch("projective", r.projective_scratch, projective.len());
         assert_scratch("field", r.field_scratch, field.len());
-        for base in bases {
-            let p = base.affine();
-            if AffinePoint::<C>::from_xy(p.x, p.y).is_none() || !base.valid_cache() {
-                return Err(CurveError::InvalidBase);
-            }
-        }
         prepare_inner(
             bases,
             entries,
@@ -160,60 +149,26 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
             budget.get(),
             executor,
         );
-        Ok(Self {
+        Self {
             entries,
             marker: PhantomData,
-        })
-    }
-
-    /// Binds stored tables after validating every multiple and cached coordinate.
-    ///
-    /// Returns [`CurveError::InvalidTableLayout`] for an incomplete group,
-    /// [`CurveError::InvalidBase`] for invalid affine coordinates in entry zero,
-    /// or [`CurveError::InvalidTable`] for an incorrect multiple or cache,
-    /// including entry zero's cache. Uses no scratch.
-    pub fn bind(entries: &'a [E]) -> Result<Self, CurveError> {
-        if !entries.len().is_multiple_of(8) {
-            return Err(CurveError::InvalidTableLayout);
         }
-        let batch = Self::bind_trusted(entries)?;
-        batch.validate()?;
-        Ok(batch)
     }
 
-    /// Binds tables whose multiples and caches the owner has established.
+    /// Borrows trusted tables in consecutive groups of eight entries.
     ///
-    /// Panics unless the storage consists of complete eight-entry tables. Checks entry
-    /// zero's affine coordinates in each group, returning [`CurveError::InvalidBase`]
-    /// as described by [`Self::bind`]. All multiples and cached coordinates, including
-    /// entry zero's cache, must already satisfy [`EisensteinTable`]'s mathematical
-    /// contract. Violations remain memory-safe but may make arithmetic panic or return
-    /// incorrect results.
-    pub fn bind_trusted(entries: &'a [E]) -> Result<Self, CurveError> {
+    /// Each group must have been prepared in [`EisensteinTable`]'s order.
+    /// Panics unless the storage contains complete groups. Binding performs no
+    /// field or curve arithmetic and does not inspect entries.
+    pub const fn bind(entries: &'a [E]) -> Self {
         assert!(
             entries.len().is_multiple_of(8),
             "incomplete Eisenstein table"
         );
-        for group in entries.chunks_exact(8) {
-            let p = group[0].affine();
-            if AffinePoint::<C>::from_xy(p.x, p.y).is_none() {
-                return Err(CurveError::InvalidBase);
-            }
-        }
-        Ok(Self {
+        Self {
             entries,
             marker: PhantomData,
-        })
-    }
-
-    /// Checks every table's specified multiples and cached coordinates.
-    ///
-    /// Returns [`CurveError::InvalidTable`] for an invalid entry. Uses no scratch.
-    pub fn validate(&self) -> Result<(), CurveError> {
-        for i in 0..self.len() {
-            self.get(i).unwrap().validate()?;
         }
-        Ok(())
     }
 
     /// Returns the number of bases.
@@ -256,12 +211,11 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         checked_count::<PastaField<C::Base>>(bases, if bases < LADDER_AFFINE_MIN { 0 } else { 5 })
     }
 
-    /// Multiplies every base by the same reduced scalar, in table order.
+    /// Multiplies every base by the same scalar, in table order.
     ///
     /// Has the mathematical result and buffer and panic contracts of
     /// [`Self::mul_prepared`]. Retain an [`EisensteinScalar`] to reuse scalar
-    /// preparation and its batch eligibility check across calls. The scalar must
-    /// satisfy [`PastaField`]'s reduced-residue invariant.
+    /// preparation and its batch eligibility check across calls.
     pub fn mul<X: Executor>(
         &self,
         scalar: &PastaField<C::Scalar>,
@@ -384,8 +338,8 @@ fn chord<C: PastaCurve>(
     let x = slope.square().sub(&p.x).sub(&q.x);
     let y = slope.mul(&p.x.sub(&x)).sub(&p.y);
     AffinePoint {
-        x,
-        y,
+        x: x.reduce(),
+        y: y.reduce(),
         marker: PhantomData,
     }
 }
@@ -456,10 +410,10 @@ fn digit_scalar<C: PastaCurve>(code: u8) -> PastaField<C::Scalar> {
         (a, b) = (-b, a - b);
     }
     let signed = |x: i8| {
-        let f = PastaField::from_u64(u64::from(x.unsigned_abs()));
+        let f = PastaField::<C::Scalar>::from_u64(u64::from(x.unsigned_abs()));
         if x < 0 { f.neg() } else { f }
     };
-    let d = signed(a).add(&signed(b).mul(&PastaField::ZETA));
+    let d = signed(a).add(&signed(b).mul(&PastaField::<C::Scalar>::ZETA));
     if value & 1 == 1 { d.neg() } else { d }
 }
 
@@ -477,7 +431,7 @@ pub(super) fn ladder_safe<C: PastaCurve>(digits: &[u8]) -> bool {
             s = twice;
         } else {
             let d = digit_scalar::<C>(code);
-            if d == s || d == twice.neg() {
+            if d.reduce() == s.reduce() || d.reduce() == twice.neg().reduce() {
                 return false;
             }
             s = twice.add(&d);
@@ -578,7 +532,7 @@ fn affine_ladder<C: PastaCurve, E: CurveTableEntry<C>>(
                 h2s[i] = hs[i].square();
                 denom[i] = h2s[i].mul(&p.x.double().add(&d.x)).sub(&rs[i].square());
                 // The finish needs the digit x and the original y only.
-                p.x = d.x;
+                p.x = d.x.into_loose();
             }
             invert_nonzero(denom, prefix);
             for (i, p) in output.iter_mut().enumerate() {
@@ -588,7 +542,7 @@ fn affine_ladder<C: PastaCurve, E: CurveTableEntry<C>>(
                 let lambda = c.sub(&rs[i]);
                 p.x = p.x.add(&b.mul(&lambda).double().double());
                 p.y = p.y.neg().sub(
-                    &PastaField::ONE
+                    &PastaField::<C::Base>::ONE
                         .add(&a.mul(&lambda).double().double())
                         .mul(&lambda.add(&c)),
                 );
@@ -618,7 +572,7 @@ mod tests {
         let bases: Vec<_> = (1..=35)
             .map(|i| {
                 *AffinePoint::<C>::GENERATOR
-                    .mul_projective(&PastaField::from_u64(i))
+                    .mul_projective(&PastaField::<_>::from_u64(i))
                     .to_point()
                     .as_affine()
                     .unwrap()
@@ -633,8 +587,7 @@ mod tests {
             &mut field,
             TaskBudget::SERIAL,
             &SerialExecutor,
-        )
-        .unwrap();
+        );
         for (digits, safe) in cases {
             assert_eq!(ladder_safe::<C>(digits), safe);
             let mut scalar = PastaField::ZERO;
@@ -645,7 +598,7 @@ mod tests {
                 }
             }
             if digits.len() == len {
-                assert_eq!(scalar, PastaField::ZERO);
+                assert_eq!((scalar).reduce(), (PastaField::<_>::ZERO).reduce());
             }
             let mut output = vec![ProjectivePoint::IDENTITY; bases.len()];
             multiply_inner(

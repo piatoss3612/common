@@ -19,14 +19,17 @@ fn check_coefficients<M: PrimeModulus>(
     scale: InverseScale,
 ) {
     assert_eq!(view.scale(), scale);
-    let multiplier = match scale {
+    let multiplier: PastaField<M> = match scale {
         InverseScale::Normalized => PastaField::ONE,
         InverseScale::Unscaled => PastaField::from_u64(coefficients.len() as u64),
     };
     assert_eq!(view.as_slice().len(), coefficients.len());
     for (actual, coefficient) in view.as_slice().iter().zip(coefficients) {
-        assert_eq!(*actual, coefficient.mul(&multiplier));
-        assert_eq!(actual.mul(&view.normalization_factor()), *coefficient);
+        assert_eq!((*actual).reduce(), (coefficient.mul(&multiplier)).reduce());
+        assert_eq!(
+            (actual.mul(&view.normalization_factor())).reduce(),
+            (*coefficient).reduce()
+        );
     }
 }
 
@@ -58,7 +61,6 @@ fn expansions<M: PrimeModulus>() {
                     } else {
                         expansion
                     };
-                    expansion.validate_scales().unwrap();
                     let mut contiguous = vec![PastaField::ZERO; domain.size()];
                     expansion
                         .evaluations_with(
@@ -75,7 +77,10 @@ fn expansions<M: PrimeModulus>() {
                         EvaluationLayout::Residues(expansion.layout()),
                     );
                     for (row, value) in expected.iter().enumerate() {
-                        assert_eq!(contiguous.get(row), Some(value));
+                        assert_eq!(
+                            (contiguous.get(row)).map(|value| value.reduce()),
+                            (Some(value)).map(|value| value.reduce())
+                        );
                     }
                     for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
                         for storage in [
@@ -151,13 +156,16 @@ fn expansions<M: PrimeModulus>() {
                             let view = EvaluationView::bind(&output, domain, layout);
                             for (row, value) in expected.iter().enumerate() {
                                 assert_eq!(
-                                    view.get(row),
-                                    Some(value),
+                                    (view.get(row)).map(|value| value.reduce()),
+                                    (Some(value)).map(|value| value.reduce()),
                                     "log={log}, extra={extra}, normalization={normalization:?}, order={order:?}, storage={storage:?}, row={row}"
                                 );
                             }
-                            assert_canonical(&scratch);
-                            assert_eq!(scratch.last(), Some(&PastaField::ONE));
+                            assert_loose_bound(&scratch);
+                            assert_eq!(
+                                (scratch.last()).map(|value| value.reduce()),
+                                (Some(&PastaField::<_>::ONE)).map(|value| value.reduce())
+                            );
                             if storage == ExpansionStorage::Coefficients {
                                 let mut product = output.clone();
                                 operation.execute_with(
@@ -170,7 +178,7 @@ fn expansions<M: PrimeModulus>() {
                                     &SerialExecutor,
                                 );
                                 for (product, value) in product.iter().zip(&output) {
-                                    assert_eq!(*product, value.square());
+                                    assert_eq!((*product).reduce(), (value.square()).reduce());
                                 }
                             }
                             if order == ExpansionOrder::BitReversed {
@@ -182,11 +190,14 @@ fn expansions<M: PrimeModulus>() {
                                         &mut [],
                                     )
                                     .unwrap();
-                                assert_eq!(&output[..coefficients.len()], coefficients);
+                                assert_eq!(
+                                    reduced(&output[..coefficients.len()]),
+                                    reduced(&coefficients)
+                                );
                                 assert!(
                                     output[coefficients.len()..]
                                         .iter()
-                                        .all(|v| *v == PastaField::ZERO)
+                                        .all(|v| v.reduce() == PastaField::ZERO)
                                 );
                             }
                         }
@@ -220,8 +231,9 @@ fn expansions<M: PrimeModulus>() {
                             let view = EvaluationView::bind(&output, residue.domain(), layout);
                             for row in 0..base.domain().size() {
                                 assert_eq!(
-                                    view.get(row),
-                                    Some(&expected[index + expansion.layout().residues() * row])
+                                    (view.get(row)).map(|value| value.reduce()),
+                                    (Some(&expected[index + expansion.layout().residues() * row]))
+                                        .map(|value| value.reduce())
                                 );
                             }
                         }
@@ -262,7 +274,6 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                         ..Tables::default()
                     }
                     .bind(subgroup)
-                    .unwrap()
                 } else {
                     Transform::new(subgroup)
                 };
@@ -316,7 +327,10 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                     );
                     let view = EvaluationView::bind(&output, domain, EvaluationLayout::BitReversed);
                     for (row, expected) in expected.iter().enumerate() {
-                        assert_eq!(view.get(row), Some(expected));
+                        assert_eq!(
+                            (view.get(row)).map(|value| value.reduce()),
+                            (Some(expected)).map(|value| value.reduce())
+                        );
                     }
                     operation.execute_with(
                         &coefficients[..len],
@@ -329,13 +343,16 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                     );
                     let view = EvaluationView::bind(&output, domain, EvaluationLayout::BitReversed);
                     for (row, expected) in expected.iter().enumerate() {
-                        assert_eq!(view.get(row), Some(&expected.mul(&factors[row])));
+                        assert_eq!(
+                            (view.get(row)).map(|value| value.reduce()),
+                            (Some(&expected.mul(&factors[row]))).map(|value| value.reduce())
+                        );
                     }
                     // A retained inverse can also be a short prefix of this base.
                     if len.is_power_of_two() {
                         let raw: Vec<_> = coefficients[..len]
                             .iter()
-                            .map(|value| value.mul(&PastaField::from_u64(len as u64)))
+                            .map(|value| value.mul(&PastaField::<_>::from_u64(len as u64)))
                             .collect();
                         let mut product = vec![PastaField::ZERO; domain.size()];
                         let retained = CoefficientView::new(&raw, InverseScale::Unscaled);
@@ -350,10 +367,13 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                                 nz(5),
                                 executor,
                             );
-                        assert_eq!(product, output);
+                        assert_eq!(reduced(&product), reduced(&output));
                     }
-                    assert_canonical(&scratch);
-                    assert_eq!(scratch.last(), Some(&PastaField::ONE));
+                    assert_loose_bound(&scratch);
+                    assert_eq!(
+                        (scratch.last()).map(|value| value.reduce()),
+                        (Some(&PastaField::<_>::ONE)).map(|value| value.reduce())
+                    );
                 }
             }
         }
@@ -367,7 +387,7 @@ fn short_bit_reversed_products_match_reference_at_pruning_boundary() {
 }
 
 #[test]
-fn short_bit_reversed_residues_restore_fields_on_panic() {
+fn short_bit_reversed_residues_preserve_loose_bounds_on_panic() {
     let base = Transform::new(Domain::<PallasBase>::new(8).unwrap().subgroup());
     let domain = Domain::new(11).unwrap().coset(Fp::ZETA).unwrap();
     let expansion = Expansion::new(base, domain, None).unwrap();
@@ -390,7 +410,10 @@ fn short_bit_reversed_residues_restore_fields_on_panic() {
         .unwrap();
     let view = EvaluationView::bind(&output, residue.domain(), EvaluationLayout::BitReversed);
     for (row, expected) in expected.iter().enumerate() {
-        assert_eq!(view.get(row), Some(expected));
+        assert_eq!(
+            (view.get(row)).map(|value| value.reduce()),
+            (Some(expected)).map(|value| value.reduce())
+        );
     }
     let count = joins.take();
     assert!(count > 0);
@@ -405,9 +428,12 @@ fn short_bit_reversed_residues_restore_fields_on_panic() {
             }))
             .is_err()
         );
-        assert_canonical(&output);
-        assert_canonical(&scratch);
-        assert_eq!(scratch.last(), Some(&Fp::ONE));
+        assert_loose_bound(&output);
+        assert_loose_bound(&scratch);
+        assert_eq!(
+            (scratch.last()).map(|value| value.reduce()),
+            (Some(&<Fp>::ONE)).map(|value| value.reduce())
+        );
     }
 }
 
@@ -525,7 +551,7 @@ fn expansion_metadata_storage_errors_and_panics() {
                     .is_err()
                 );
                 for values in [&output, &workspace, &scratch, &disposable] {
-                    assert_canonical(values);
+                    assert_loose_bound(values);
                 }
             }
             if !workspace.is_empty() {
@@ -548,15 +574,17 @@ fn expansion_metadata_storage_errors_and_panics() {
                     }))
                     .is_err()
                 );
-                assert_eq!(
-                    (
-                        disposable.clone(),
-                        output.clone(),
-                        workspace.clone(),
-                        scratch.clone()
-                    ),
-                    before
-                );
+                for (actual, expected) in [
+                    (&disposable, &before.0),
+                    (&output, &before.1),
+                    (&workspace, &before.2),
+                    (&scratch, &before.3),
+                ] {
+                    assert_eq!(
+                        bento::bytes_of_slice(actual),
+                        bento::bytes_of_slice(expected)
+                    );
+                }
                 assert_eq!(joins.take(), 0);
             }
             output.fill(Fp::ONE);
@@ -580,10 +608,10 @@ fn expansion_metadata_storage_errors_and_panics() {
                     }))
                     .is_err()
                 );
-                assert_eq!(disposable, before.0);
-                assert_eq!(output, before.1);
-                assert_eq!(workspace, before.2);
-                assert_eq!(scratch, before.3);
+                assert_eq!(bytes_of_slice(&disposable), bytes_of_slice(&before.0));
+                assert_eq!(bytes_of_slice(&output), bytes_of_slice(&before.1));
+                assert_eq!(bytes_of_slice(&workspace), bytes_of_slice(&before.2));
+                assert_eq!(bytes_of_slice(&scratch), bytes_of_slice(&before.3));
                 assert_eq!(joins.take(), 0);
             }
         }
@@ -611,20 +639,10 @@ fn expansion_metadata_storage_errors_and_panics() {
         }))
         .is_err()
     );
-    scales[1] = Fp::ONE;
-    assert!(matches!(
-        ExpansionScales::bind(
-            base.domain().size(),
-            domain,
-            ExpansionScaleNormalization::UnscaledInverse,
-            &scales
-        ),
-        Err(FftError::InvalidTables)
-    ));
 }
 
 #[test]
-fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
+fn interpolation_checks_lengths_before_mutation_and_preserves_loose_bounds_on_panic() {
     let domain = Domain::<PallasBase>::new(7).unwrap().subgroup();
     let other = domain.domain().coset(Fp::from_u64(7)).unwrap();
     let original = inputs(domain.size());
@@ -658,8 +676,12 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
             }))
             .is_err()
         );
-        assert!(values.iter().all(|v| *v == original));
-        assert!(scratch.iter().flatten().all(|v| *v == Fp::ONE));
+        assert!(
+            values
+                .iter()
+                .all(|v| bento::bytes_of_slice(v) == bento::bytes_of_slice(&original))
+        );
+        assert!(scratch.iter().flatten().all(|v| v.reduce() == Fp::ONE));
         assert_eq!(count.take(), 0);
         plan.execute_with(
             values.each_mut().map(Vec::as_mut_slice),
@@ -687,9 +709,13 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
                 .is_err()
             );
             for buffer in values.iter().chain(&scratch) {
-                assert_canonical(buffer);
+                assert_loose_bound(buffer);
             }
-            assert!(scratch.iter().all(|s| s.last() == Some(&Fp::ONE)));
+            assert!(
+                scratch
+                    .iter()
+                    .all(|s| s.last().map(|value| value.reduce()) == Some(Fp::ONE))
+            );
         }
     }
 }
@@ -770,13 +796,18 @@ fn interpolation<M: PrimeModulus>() {
                     nz(tasks),
                     &Threads,
                 );
-                assert_eq!(values[0], expected);
+                assert_eq!(reduced(&values[0]), reduced(&expected));
                 if !consume {
-                    assert_eq!(values[1..], lift_coefficients);
+                    for (actual, expected) in values[1..].iter().zip(&lift_coefficients) {
+                        assert_eq!(reduced(actual), reduced(expected));
+                    }
                 }
                 for buffer in &scratch {
-                    assert_eq!(buffer.last(), Some(&PastaField::ONE));
-                    assert_canonical(buffer);
+                    assert_eq!(
+                        (buffer.last()).map(|value| value.reduce()),
+                        (Some(&PastaField::<_>::ONE)).map(|value| value.reduce())
+                    );
+                    assert_loose_bound(buffer);
                 }
             }
         }
@@ -878,7 +909,7 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                     }))
                     .is_err()
                 );
-                assert!(output.iter().all(|v| *v == PastaField::ONE));
+                assert!(output.iter().all(|v| v.reduce() == PastaField::ONE));
                 operation.execute_with(
                     &input,
                     &mut output,
@@ -895,10 +926,13 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                 };
                 let view = EvaluationView::bind(&output, base.domain(), layout);
                 for (i, value) in input.iter().enumerate() {
-                    assert_eq!(view.get(i), Some(value));
+                    assert_eq!(
+                        (view.get(i)).map(|value| value.reduce()),
+                        (Some(value)).map(|value| value.reduce())
+                    );
                 }
                 assert_eq!(joins.take(), 0);
-                assert!(scratch.iter().all(|v| *v == PastaField::ONE));
+                assert!(scratch.iter().all(|v| v.reduce() == PastaField::ONE));
             }
         }
     }

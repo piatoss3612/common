@@ -72,7 +72,7 @@ with caller-owned scratch and execution.
 Nonidentity `AffinePoint` and cached `PreparedAffinePoint` entries implement
 `bento::Pod` for direct storage. All curve operations are variable-time and
 require no allocation. See the [curve guide](docs/CURVES.md) for point
-representations, caller-owned preparation buffers, and table validation, and the
+representations, caller-owned preparation buffers, and table binding, and the
 [performance report](docs/CURVE_PERFORMANCE.md) for timing and storage tradeoffs.
 
 The [workspace guide](docs/WORKSPACES.md) explains how callers can own reusable

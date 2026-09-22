@@ -35,21 +35,6 @@ fn main() {
                 &mut record.residues,
             )
             .unwrap();
-            record.header.validate(extended).unwrap();
-            // Inject damage after generation so the consumer's import checks
-            // must reject an otherwise valid artifact.
-            if $name == "fp-fft" {
-                match damage.as_str() {
-                    "field" => record.forward[0] = *bento::AlignedBytes([0xff; 32]).as_value(),
-                    "scales" => record.residues[1] = <$field>::ZERO,
-                    "metadata" => record.header.normalization = 0,
-                    "schema" => record.header.schema_version = 1,
-                    "kind" => record.header.twiddle_kind = 1,
-                    "packed" => record.packed[1] = <$field>::ZERO,
-                    "" | "truncate" => {}
-                    _ => panic!("unknown artifact damage"),
-                }
-            }
             let mut bytes = bento::bytes_of(&record).to_vec();
             if $name == "fp-fft" && damage == "truncate" {
                 bytes.pop();

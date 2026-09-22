@@ -102,8 +102,7 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C>>(
                     &mut field,
                     TaskBudget::SERIAL,
                     &SerialExecutor,
-                )
-                .unwrap();
+                );
                 black_box(tables);
             })
         });
@@ -123,8 +122,7 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C>>(
                         &mut field,
                         TaskBudget::SERIAL,
                         &SerialExecutor,
-                    )
-                    .unwrap();
+                    );
                     black_box(tables);
                 })
             },
@@ -136,8 +134,7 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C>>(
             &mut field,
             TaskBudget::SERIAL,
             &SerialExecutor,
-        )
-        .unwrap();
+        );
         let mut output = vec![ProjectivePoint::IDENTITY; n];
         let mut scratch = vec![
             PastaField::ZERO;

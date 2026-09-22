@@ -1,6 +1,5 @@
 use super::{
     FftError, PastaField, PrimeModulus, assert_length, check_domain_size, check_field_count,
-    validate_length,
 };
 
 /// Retained representation of subgroup powers, independent of value ordering.
@@ -51,7 +50,7 @@ impl TwiddleDescription {
 
     // Each sequence starts at one and advances by its canonical stage root.
     // Dense storage has only the final stage; packed storage concatenates all
-    // stages. This lets preparation and validation avoid per-entry powers.
+    // stages. This lets preparation avoid per-entry powers.
     // Callers have already checked the description's size.
     fn stages<M: PrimeModulus>(self) -> impl Iterator<Item = (usize, PastaField<M>)> {
         let last = self.size.ilog2();
@@ -76,9 +75,8 @@ impl TwiddleDescription {
 /// A smaller table serves local stages of a larger transform; larger stages
 /// generate their powers as needed. A larger table serves smaller transforms
 /// using the nested canonical roots. Either table direction can serve forward
-/// and inverse transforms. Native preparation and [`Self::bind`] establish the
-/// formulas in [`TwiddleStorage`]. [`Self::bind_trusted`] relies on the caller
-/// for correct contents instead.
+/// and inverse transforms. Preparation constructs the formulas in
+/// [`TwiddleStorage`]; [`Self::bind`] borrows trusted stored entries.
 #[derive(Clone, Copy)]
 pub struct TwiddleTable<'a, M: PrimeModulus> {
     description: TwiddleDescription,
@@ -95,30 +93,20 @@ impl<M: PrimeModulus> core::fmt::Debug for TwiddleTable<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
-    /// Checks every entry and binds its subgroup, direction, and storage order.
+    /// Borrows trusted entries for their subgroup, direction, and storage order.
     ///
-    /// Configuration errors follow [`TwiddleDescription::requirements`]. A wrong stored
-    /// length returns [`FftError::LengthMismatch`]; incorrect or unreduced entries
-    /// return [`FftError::InvalidTables`]. Validation takes linear field work.
-    pub fn bind(
+    /// Entries must follow [`TwiddleStorage`]'s formulas. Configuration errors
+    /// follow [`TwiddleDescription::requirements`]. Panics unless `values` has
+    /// the reported length. Binding does not inspect the entries.
+    pub const fn bind(
         description: TwiddleDescription,
         values: &'a [PastaField<M>],
     ) -> Result<Self, FftError> {
-        validate_length("twiddles", description.requirements()?, values.len())?;
-        Self::bind_trusted(description, values)?.validate()
-    }
-
-    /// Binds caller-trusted entries after checking dimensions and length.
-    ///
-    /// Configuration errors follow [`TwiddleDescription::requirements`]. Panics unless
-    /// `values` has the reported length. The caller must establish the reduced
-    /// Montgomery entries described by [`TwiddleStorage`]. Incorrect contents can cause
-    /// wrong results or panics, but not memory unsafety.
-    pub fn bind_trusted(
-        description: TwiddleDescription,
-        values: &'a [PastaField<M>],
-    ) -> Result<Self, FftError> {
-        assert_length("twiddles", description.requirements()?, values.len());
+        let required = match description.requirements() {
+            Ok(required) => required,
+            Err(error) => return Err(error),
+        };
+        assert!(values.len() == required, "twiddle table length mismatch");
         Ok(Self {
             description,
             values,
@@ -127,9 +115,8 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
 
     /// Generates subgroup twiddles into exactly sized caller storage.
     ///
-    /// Entries follow [`TwiddleStorage`]'s formulas and use reduced Montgomery
-    /// representations. Storage, error, and panic contracts follow
-    /// [`Self::bind_trusted`]. All checks precede writes; initial destination values
+    /// Entries follow [`TwiddleStorage`]'s formulas. Storage, error, and panic
+    /// contracts follow [`Self::bind`]. All checks precede writes; initial destination values
     /// are overwritten.
     pub fn prepare(
         description: TwiddleDescription,
@@ -152,28 +139,6 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
         })
     }
 
-    /// Checks every entry against the canonical root, including reduced limbs.
-    ///
-    /// Returns [`FftError::InvalidTables`] for any incorrect or unreduced entry.
-    /// Validation takes linear work without arithmetic on imported entries.
-    pub fn validate(self) -> Result<Self, FftError> {
-        // Regenerate expected powers from known reduced roots. Comparing limbs
-        // rejects unreduced imports without feeding them into field arithmetic.
-        let mut remaining = self.values;
-        for (len, step) in self.description.stages::<M>() {
-            let (stage, rest) = remaining.split_at(len);
-            let mut power = PastaField::ONE;
-            for value in stage {
-                if value.montgomery_limbs() != power.montgomery_limbs() {
-                    return Err(FftError::InvalidTables);
-                }
-                power = power.mul(&step);
-            }
-            remaining = rest;
-        }
-        Ok(self)
-    }
-
     /// Generation semantics; the field is also fixed by the type parameter.
     pub const fn description(self) -> TwiddleDescription {
         self.description
@@ -189,8 +154,7 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
 /// Entry `i` represents `first * step^i`, with no implicit FFT normalization.
 /// Empty sequences and zero starting values or steps are accepted. For example,
 /// forward coefficient scales have `first = 1` and the coset shift as `step`.
-/// Native preparation and [`Self::bind`] establish reduced fields and matching
-/// entries. [`Self::bind_trusted`] relies on the caller for correct entries.
+/// Preparation constructs matching entries; [`Self::bind`] borrows trusted storage.
 #[derive(Clone, Copy)]
 pub struct PowerTable<'a, M: PrimeModulus> {
     first: PastaField<M>,
@@ -209,84 +173,42 @@ impl<M: PrimeModulus> core::fmt::Debug for PowerTable<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> PowerTable<'a, M> {
-    /// Checks a sequence against its declared starting value and step.
+    /// Borrows a trusted sequence with its starting value and step.
     ///
-    /// Returns [`FftError::InvalidTables`] for unreduced seeds or any incorrect
-    /// or unreduced entry. Any length, including zero, is accepted. Validation
-    /// performs linear work without arithmetic on imported entries.
-    pub fn bind(
+    /// Entry `i` must represent `first * step^i`. Any length, including zero,
+    /// is accepted. Binding performs no arithmetic and does not inspect entries.
+    pub const fn bind(
         first: PastaField<M>,
         step: PastaField<M>,
         values: &'a [PastaField<M>],
-    ) -> Result<Self, FftError> {
+    ) -> Self {
         Self {
             first,
             step,
             values,
         }
-        .validate()
-    }
-
-    /// Binds caller-trusted entries after checking that both seeds are reduced.
-    ///
-    /// Returns [`FftError::InvalidTables`] for an unreduced seed, even for an
-    /// empty sequence. The caller must establish that entry `i` is the reduced
-    /// Montgomery representation of `first * step^i`. Incorrect contents can
-    /// cause wrong results or panics, but not memory unsafety.
-    pub fn bind_trusted(
-        first: PastaField<M>,
-        step: PastaField<M>,
-        values: &'a [PastaField<M>],
-    ) -> Result<Self, FftError> {
-        Self::check_seeds(first, step)?;
-        Ok(Self {
-            first,
-            step,
-            values,
-        })
-    }
-
-    fn check_seeds(first: PastaField<M>, step: PastaField<M>) -> Result<(), FftError> {
-        if !first.is_reduced() || !step.is_reduced() {
-            return Err(FftError::InvalidTables);
-        }
-        Ok(())
     }
 
     /// Writes `first * step^i` into caller storage and returns its handle.
     ///
     /// Here `i` is the entry index. Any storage length, including zero, is accepted.
-    /// Returns [`FftError::InvalidTables`] before writing for an unreduced seed.
     pub fn prepare(
         first: PastaField<M>,
         step: PastaField<M>,
         values: &'a mut [PastaField<M>],
-    ) -> Result<Self, FftError> {
-        Self::check_seeds(first, step)?;
+    ) -> Self {
         let mut power = first;
         for value in values.iter_mut() {
             *value = power;
             power = power.mul(&step);
         }
-        Ok(Self {
+        Self {
             first,
             step,
             values,
-        })
+        }
     }
 
-    /// Checks all entries, with the content checks and errors of [`Self::bind`].
-    pub fn validate(self) -> Result<Self, FftError> {
-        Self::check_seeds(self.first, self.step)?;
-        let mut power = self.first;
-        for value in self.values {
-            if value.montgomery_limbs() != power.montgomery_limbs() {
-                return Err(FftError::InvalidTables);
-            }
-            power = power.mul(&self.step);
-        }
-        Ok(self)
-    }
     /// Starting value, including any deliberate scale.
     pub const fn first(self) -> PastaField<M> {
         self.first

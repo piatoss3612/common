@@ -51,8 +51,14 @@ fn check_parameters<M: PrimeModulus>(zeta_power: u32) {
         }
     }
     for log_size in [33, 64, u32::MAX] {
-        assert_eq!(PastaField::<M>::root_of_unity(log_size), None);
-        assert_eq!(PastaField::<M>::root_of_unity_inverse(log_size), None);
+        assert_eq!(
+            (PastaField::<M>::root_of_unity(log_size)).map(|value| value.reduce()),
+            None
+        );
+        assert_eq!(
+            (PastaField::<M>::root_of_unity_inverse(log_size)).map(|value| value.reduce()),
+            None
+        );
     }
     assert_value(PastaField::<M>::DELTA, &five.modpow(&(&one << 32usize), &p));
     let zeta = five

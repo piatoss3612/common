@@ -11,17 +11,47 @@ fn exercise<M: PrimeModulus>() {
     batch_invert(&mut values, &mut scratch);
     let p = modulus::<M>();
     for ((actual, (value, integer)), expected) in values.iter().zip(&samples).zip(&original) {
-        assert_eq!(*actual, value.invert().unwrap_or(PastaField::ZERO));
+        assert_eq!(
+            (*actual).reduce(),
+            (value.invert().unwrap_or(PastaField::<_>::ZERO)).reduce()
+        );
         assert_value(*actual, &integer.modpow(&(&p - 2u8), &p));
-        assert_eq!(*value, *expected);
+        assert_eq!((*value).reduce(), (*expected).reduce());
     }
-    assert_eq!(&scratch[values.len()..], &[sentinel; 3]);
+    assert_eq!(
+        scratch[values.len()..]
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>(),
+        [sentinel; 3]
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
     // Reuse dirty prefixes, crossing both odd and empty group boundaries.
     let (a, rest) = values.split_at_mut(3);
     let (b, c) = rest.split_at_mut(4);
     batch_invert_groups(&mut [&mut [][..], a, &mut [], b, c, &mut []], &mut scratch);
-    assert_eq!(values, original);
-    assert_eq!(&scratch[values.len()..], &[sentinel; 3]);
+    assert_eq!(
+        (values)
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>(),
+        (original)
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        scratch[values.len()..]
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>(),
+        [sentinel; 3]
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
 
     for capacity in [0, 1, 2, 7, values.len() - 1] {
         let mut short = vec![sentinel; capacity];
@@ -29,10 +59,22 @@ fn exercise<M: PrimeModulus>() {
         let (a, b) = values.split_at_mut(1);
         batch_invert_groups(&mut [a, b], &mut short);
         for (value, original) in values.iter().zip(&original) {
-            assert_eq!(*value, original.invert().unwrap_or(PastaField::ZERO));
+            assert_eq!(
+                (*value).reduce(),
+                (original.invert().unwrap_or(PastaField::<_>::ZERO)).reduce()
+            );
         }
         batch_invert(&mut values, &mut short);
-        assert_eq!(values, original);
+        assert_eq!(
+            (values)
+                .iter()
+                .map(|value| value.reduce())
+                .collect::<Vec<_>>(),
+            (original)
+                .iter()
+                .map(|value| value.reduce())
+                .collect::<Vec<_>>()
+        );
     }
 
     for len in [0, 1, 2, 7] {
@@ -43,12 +85,27 @@ fn exercise<M: PrimeModulus>() {
     batch_invert_groups::<M>(&mut [] as &mut [&mut [PastaField<M>]], &mut []);
     let mut singleton = [sentinel];
     batch_invert(&mut singleton, &mut scratch);
-    assert_eq!(singleton[0].mul(&sentinel), PastaField::ONE);
+    assert_eq!(
+        (singleton[0].mul(&sentinel)).reduce(),
+        (PastaField::<_>::ONE).reduce()
+    );
     let mut a = [PastaField::ZERO, sentinel, PastaField::ZERO];
     let mut b = [PastaField::ZERO, sentinel];
     batch_invert_groups(&mut [&mut a[..], &mut b[..]], &mut scratch);
-    assert_eq!(a, [PastaField::ZERO, singleton[0], PastaField::ZERO]);
-    assert_eq!(b, [PastaField::ZERO, singleton[0]]);
+    assert_eq!(
+        (a).iter().map(|value| value.reduce()).collect::<Vec<_>>(),
+        ([PastaField::<_>::ZERO, singleton[0], PastaField::<_>::ZERO])
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        (b).iter().map(|value| value.reduce()).collect::<Vec<_>>(),
+        ([PastaField::<_>::ZERO, singleton[0]])
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -84,10 +141,26 @@ fn group_boundaries<M: PrimeModulus>() {
                     &mut scratch,
                 );
                 assert_eq!(
-                    values, expected,
+                    (values)
+                        .iter()
+                        .map(|value| value.reduce())
+                        .collect::<Vec<_>>(),
+                    (expected)
+                        .iter()
+                        .map(|value| value.reduce())
+                        .collect::<Vec<_>>(),
                     "length {len}, zeros {zeros}, split {split}"
                 );
-                assert_eq!(&scratch[len..], tail);
+                assert_eq!(
+                    scratch[len..]
+                        .iter()
+                        .map(|value| value.reduce())
+                        .collect::<Vec<_>>(),
+                    (tail)
+                        .iter()
+                        .map(|value| value.reduce())
+                        .collect::<Vec<_>>()
+                );
             }
         }
     }
@@ -108,14 +181,20 @@ fn inversion_endpoints<M: PrimeModulus>() {
         let mut input = values[..n].to_vec();
         let mut prefix = vec![PastaField::from_u64(91); n + 1];
         crate::field::invert_nonzero(&mut input, &mut prefix);
-        assert_eq!(prefix[n], PastaField::from_u64(91));
+        assert_eq!(
+            (prefix[n]).reduce(),
+            (PastaField::<_>::from_u64(91)).reduce()
+        );
         for (value, inverse) in values.iter().zip(&input) {
-            assert_eq!(value.mul(inverse), PastaField::ONE);
+            assert_eq!(
+                (value.mul(inverse)).reduce(),
+                (PastaField::<_>::ONE).reduce()
+            );
         }
         // Reuse dirty prefixes with unit denominators and both lane parities.
         input.fill(PastaField::ONE);
         crate::field::invert_nonzero(&mut input, &mut prefix);
-        assert!(input.iter().all(|x| *x == PastaField::ONE));
+        assert!(input.iter().all(|x| x.reduce() == PastaField::ONE));
     }
 }
 
@@ -151,8 +230,15 @@ fn record_inversion<M: PrimeModulus>() {
                 |record| record.1,
                 &mut scratch,
                 |index, record, inverse| {
-                    assert_eq!(record, &records[index]);
-                    assert_eq!(record.1.mul(&inverse), PastaField::ONE);
+                    assert_eq!(record.0, records[index].0);
+                    assert_eq!(
+                        record.1.montgomery_limbs(),
+                        records[index].1.montgomery_limbs()
+                    );
+                    assert_eq!(
+                        (record.1.mul(&inverse)).reduce(),
+                        (PastaField::<_>::ONE).reduce()
+                    );
                     assert!(!seen[index]);
                     seen[index] = true;
                     Ok::<_, VisitError>(())
@@ -160,7 +246,11 @@ fn record_inversion<M: PrimeModulus>() {
             )
             .unwrap();
             assert!(seen.iter().all(|x| *x));
-            assert!(scratch[len.min(capacity)..].iter().all(|x| *x == sentinel));
+            assert!(
+                scratch[len.min(capacity)..]
+                    .iter()
+                    .all(|x| x.montgomery_limbs() == sentinel.montgomery_limbs())
+            );
         }
     }
     for zero in [0, 18, 36] {
@@ -179,7 +269,11 @@ fn record_inversion<M: PrimeModulus>() {
                     BatchInversionError::ZeroDenominator { index: zero }
                 ))
             );
-            assert!(scratch.iter().all(|x| *x == sentinel));
+            assert!(
+                scratch
+                    .iter()
+                    .all(|x| x.montgomery_limbs() == sentinel.montgomery_limbs())
+            );
         }
     }
     for capacity in [0, 2, 40] {
@@ -191,7 +285,10 @@ fn record_inversion<M: PrimeModulus>() {
                 |record| record.1,
                 &mut scratch,
                 |index, record, inverse| {
-                    assert_eq!(record.1.mul(&inverse), PastaField::ONE);
+                    assert_eq!(
+                        (record.1.mul(&inverse)).reduce(),
+                        (PastaField::<_>::ONE).reduce()
+                    );
                     if seen.len() == 3 {
                         return Err(VisitError::Stop);
                     }

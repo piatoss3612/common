@@ -1,6 +1,7 @@
 use super::*;
-use crate::field::{Fp, PallasBase, PallasScalar};
+use crate::field::{Fp, PallasBase, PallasScalar, Reduced};
 use crate::test_support::field_samples;
+use bento::bytes_of_slice;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     sync::atomic::{AtomicUsize, Ordering},
@@ -13,6 +14,10 @@ mod contracts;
 mod group;
 mod operations;
 mod pipelines;
+
+fn reduced<M: PrimeModulus>(values: &[PastaField<M>]) -> Vec<PastaField<M, Reduced>> {
+    values.iter().map(|value| value.reduce()).collect()
+}
 
 struct Prepared<M: PrimeModulus> {
     forward: Vec<PastaField<M>>,
@@ -56,7 +61,7 @@ fn inputs<M: PrimeModulus>(size: usize) -> Vec<PastaField<M>> {
     (0..size)
         .map(|index| match index % 17 {
             0 => PastaField::ZERO,
-            1 => PastaField::ONE.neg(),
+            1 => PastaField::<_>::ONE.neg(),
             _ => samples.next().unwrap(),
         })
         .collect()
@@ -102,17 +107,20 @@ fn reference_coset<M: PrimeModulus>(
     values
 }
 
-fn assert_canonical<M: PrimeModulus>(values: &[PastaField<M>]) {
+fn assert_loose_bound<M: PrimeModulus>(values: &[PastaField<M>]) {
     for value in values {
         assert!(
             value
                 .montgomery_limbs()
                 .iter()
                 .rev()
-                .cmp(M::MODULUS.iter().rev())
+                .cmp(M::TWICE_MODULUS.iter().rev())
                 .is_lt()
         );
-        assert_eq!(PastaField::<M>::from_bytes(value.to_bytes()), Some(*value));
+        assert_eq!(
+            (PastaField::<M>::from_bytes(value.to_bytes())).map(|value| value.reduce()),
+            (Some(*value)).map(|value| value.reduce())
+        );
     }
 }
 
@@ -161,9 +169,15 @@ fn small_transforms<M: PrimeModulus>() {
         let by_size = Domain::<M>::for_size(1 << log).unwrap();
         assert_eq!(by_size.size(), subgroup.size());
         assert_eq!(by_size.log_size(), log);
-        assert_eq!(by_size.root(), subgroup.root());
-        assert_eq!(by_size.inverse_root(), subgroup.inverse_root());
-        assert_eq!(by_size.size_inverse(), subgroup.size_inverse());
+        assert_eq!((by_size.root()).reduce(), (subgroup.root()).reduce());
+        assert_eq!(
+            (by_size.inverse_root()).reduce(),
+            (subgroup.inverse_root()).reduce()
+        );
+        assert_eq!(
+            (by_size.size_inverse()).reduce(),
+            (subgroup.size_inverse()).reduce()
+        );
         let coefficients = inputs(subgroup.size());
         for shift in [
             PastaField::ONE,
@@ -183,7 +197,7 @@ fn small_transforms<M: PrimeModulus>() {
                     inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
                     inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 };
-                let plan = tables.bind(domain).unwrap();
+                let plan = tables.bind(domain);
                 for (index, options) in OPTIONS.into_iter().enumerate() {
                     let count = SCRATCH[log as usize][index];
                     assert_eq!(
@@ -203,11 +217,15 @@ fn small_transforms<M: PrimeModulus>() {
                         &mut scratch,
                     )
                     .unwrap();
-                    assert_eq!(output, expected, "forward log={log}");
-                    assert_canonical(&output);
+                    assert_eq!(reduced(&output), reduced(&expected), "forward log={log}");
+                    assert_loose_bound(&output);
                     plan.inverse_with(&mut output, options, &SerialExecutor, &mut scratch)
                         .unwrap();
-                    assert_eq!(output, coefficients, "inverse log={log}");
+                    assert_eq!(
+                        reduced(&output),
+                        reduced(&coefficients),
+                        "inverse log={log}"
+                    );
                     let evaluations = expected.clone();
                     plan.inverse_into_with(
                         &evaluations,
@@ -217,8 +235,12 @@ fn small_transforms<M: PrimeModulus>() {
                         &mut scratch,
                     )
                     .unwrap();
-                    assert_eq!(output, coefficients, "inverse_into log={log}");
-                    assert_eq!(evaluations, expected);
+                    assert_eq!(
+                        reduced(&output),
+                        reduced(&coefficients),
+                        "inverse_into log={log}"
+                    );
+                    assert_eq!(reduced(&evaluations), reduced(&expected));
                     // Construct the input order independently of Transform::permute.
                     for (row, value) in expected.iter().enumerate() {
                         let bits = (0..log).fold(0, |bits, bit| (bits << 1) | ((row >> bit) & 1));
@@ -231,9 +253,16 @@ fn small_transforms<M: PrimeModulus>() {
                         &mut scratch,
                     )
                     .unwrap();
-                    assert_eq!(output, coefficients, "inverse_bit_reversed log={log}");
-                    assert_eq!(&scratch[count..], &[sentinel; 3]);
-                    assert_canonical(&scratch);
+                    assert_eq!(
+                        reduced(&output),
+                        reduced(&coefficients),
+                        "inverse_bit_reversed log={log}"
+                    );
+                    assert_eq!(
+                        bytes_of_slice(&scratch[count..]),
+                        bytes_of_slice(&[sentinel; 3])
+                    );
+                    assert_loose_bound(&scratch);
                 }
             }
         }
@@ -255,7 +284,7 @@ fn prefixes<M: PrimeModulus>() {
         let prepared = Prepared::new(domain);
         let input = inputs(domain.size());
         for table in [Tables::default(), prepared.tables()] {
-            let plan = table.bind(domain).unwrap();
+            let plan = table.bind(domain);
             for len in [
                 0,
                 1,
@@ -292,7 +321,8 @@ fn prefixes<M: PrimeModulus>() {
                     )
                     .unwrap();
                     assert_eq!(
-                        output, expected,
+                        reduced(&output),
+                        reduced(&expected),
                         "prefix log={log} len={len} tile={tile_len}"
                     );
                 }
@@ -335,7 +365,7 @@ fn source_sizes<M: PrimeModulus>() {
             .coset(PastaField::ZETA)
             .unwrap();
         let prepared = Prepared::new(domain);
-        let plan = prepared.tables().bind(domain).unwrap();
+        let plan = prepared.tables().bind(domain);
         let coefficients = inputs(domain.size());
         let expected = reference_coset(&coefficients, domain);
         let options = Strategy {
@@ -352,10 +382,10 @@ fn source_sizes<M: PrimeModulus>() {
         let mut output = coefficients.clone();
         plan.forward_with(&mut output, options, &Threads, &mut scratch)
             .unwrap();
-        assert_eq!(output, expected);
+        assert_eq!(reduced(&output), reduced(&expected));
         plan.inverse_with(&mut output, options, &Threads, &mut scratch)
             .unwrap();
-        assert_eq!(output, coefficients);
+        assert_eq!(reduced(&output), reduced(&coefficients));
     }
 }
 
@@ -370,19 +400,28 @@ fn larger_transform<M: PrimeModulus>() {
     for log in 1..=32 {
         let root = PastaField::<M>::root_of_unity(log).unwrap();
         let inverse = PastaField::<M>::root_of_unity_inverse(log).unwrap();
-        assert_eq!(root.square(), PastaField::root_of_unity(log - 1).unwrap());
         assert_eq!(
-            inverse.square(),
-            PastaField::root_of_unity_inverse(log - 1).unwrap()
+            (root.square()).reduce(),
+            (PastaField::<_>::root_of_unity(log - 1).unwrap()).reduce()
         );
-        assert_eq!(root.mul(&inverse), PastaField::ONE);
-        assert_eq!(root.pow_u64(1u64 << (log - 1)), PastaField::ONE.neg());
+        assert_eq!(
+            (inverse.square()).reduce(),
+            (PastaField::<_>::root_of_unity_inverse(log - 1).unwrap()).reduce()
+        );
+        assert_eq!(
+            (root.mul(&inverse)).reduce(),
+            (PastaField::<_>::ONE).reduce()
+        );
+        assert_eq!(
+            (root.pow_u64(1u64 << (log - 1))).reduce(),
+            (PastaField::<_>::ONE.neg()).reduce()
+        );
     }
     let subgroup = Domain::<M>::for_size(1 << 16).unwrap();
     assert_eq!(subgroup.log_size(), 16);
     let domain = subgroup.coset(PastaField::from_u64(7)).unwrap();
     let prepared = Prepared::new(domain);
-    let plan = prepared.tables().bind(domain).unwrap();
+    let plan = prepared.tables().bind(domain);
     let coefficients = inputs(domain.size());
     let expected = reference_coset(&coefficients, domain);
     let options = Strategy {
@@ -399,11 +438,11 @@ fn larger_transform<M: PrimeModulus>() {
     let mut output = coefficients.clone();
     plan.forward_with(&mut output, options, &executor, &mut scratch)
         .unwrap();
-    assert_eq!(output, expected);
+    assert_eq!(reduced(&output), reduced(&expected));
     assert!(executor.0.load(Ordering::Relaxed) > 0);
     plan.inverse_with(&mut output, options, &executor, &mut scratch)
         .unwrap();
-    assert_eq!(output, coefficients);
+    assert_eq!(reduced(&output), reduced(&coefficients));
 
     let mut reference = coefficients.clone();
     reference::transform(&mut reference, &subgroup.root());
@@ -412,7 +451,7 @@ fn larger_transform<M: PrimeModulus>() {
         &subgroup.inverse_root(),
         &subgroup.size_inverse(),
     );
-    assert_eq!(reference, coefficients);
+    assert_eq!(reduced(&reference), reduced(&coefficients));
 }
 
 #[test]
@@ -425,7 +464,7 @@ fn expansions<M: PrimeModulus>() {
     for log in [0, 1, 3, 6] {
         let base_domain = Domain::<M>::new(log).unwrap();
         let base_tables = Prepared::new(base_domain.subgroup());
-        let base = base_tables.tables().bind(base_domain.subgroup()).unwrap();
+        let base = base_tables.tables().bind(base_domain.subgroup());
         let coefficients = inputs(base_domain.size());
         let evaluations = direct(&coefficients, base_domain.subgroup());
         for extra in [0, 1, 2, 3] {
@@ -436,7 +475,6 @@ fn expansions<M: PrimeModulus>() {
                 let scales = expansion.prepare_scales(&mut scales);
                 for scales in [None, Some(scales)] {
                     let expansion = Expansion::new(base, domain, scales).unwrap();
-                    expansion.validate_scales().unwrap();
                     let expected = direct(&coefficients, domain);
                     for options in [
                         ExpansionStrategy::SERIAL,
@@ -476,10 +514,13 @@ fn expansions<M: PrimeModulus>() {
                                 &mut scratch,
                             )
                             .unwrap();
-                        assert_eq!(scratch[count], PastaField::ONE);
+                        assert_eq!((scratch[count]).reduce(), (PastaField::<_>::ONE).reduce());
                         let view = expansion.view(&output);
                         for (row, expected) in expected.iter().enumerate() {
-                            assert_eq!(view.get(row), Some(expected));
+                            assert_eq!(
+                                (view.get(row)).map(|value| value.reduce()),
+                                (Some(expected)).map(|value| value.reduce())
+                            );
                         }
                         let count = expansion
                             .evaluation_scratch_with(options)
@@ -498,11 +539,14 @@ fn expansions<M: PrimeModulus>() {
                         assert!(
                             scratch[count..]
                                 .iter()
-                                .all(|value| *value == PastaField::ONE)
+                                .all(|value| value.reduce() == PastaField::ONE)
                         );
                         let view = expansion.view(&output);
                         for (row, expected) in expected.iter().enumerate() {
-                            assert_eq!(view.get(row), Some(expected));
+                            assert_eq!(
+                                (view.get(row)).map(|value| value.reduce()),
+                                (Some(expected)).map(|value| value.reduce())
+                            );
                         }
                         for len in [1, coefficients.len().min(3), coefficients.len().min(10)] {
                             let short = &coefficients[..len];
@@ -521,8 +565,9 @@ fn expansions<M: PrimeModulus>() {
                             let product = expansion.view(&product);
                             for row in 0..domain.size() {
                                 assert_eq!(
-                                    product.get(row),
-                                    Some(&expected[row].mul(&short_values[row]))
+                                    (product.get(row)).map(|value| value.reduce()),
+                                    (Some(&expected[row].mul(&short_values[row])))
+                                        .map(|value| value.reduce())
                                 );
                             }
                         }
@@ -535,7 +580,11 @@ fn expansions<M: PrimeModulus>() {
                                 &mut scratch,
                             )
                             .unwrap();
-                        assert!(output.iter().all(|value| *value == PastaField::ZERO));
+                        assert!(
+                            output
+                                .iter()
+                                .all(|value| value.reduce() == PastaField::ZERO)
+                        );
                     }
                 }
             }
@@ -552,7 +601,7 @@ fn residue_expansion_and_fused_short_products_match_direct_evaluation() {
 fn large_expansion<M: PrimeModulus>() {
     let base_domain = Domain::<M>::new(11).unwrap();
     let prepared = Prepared::new(base_domain.subgroup());
-    let base = prepared.tables().bind(base_domain.subgroup()).unwrap();
+    let base = prepared.tables().bind(base_domain.subgroup());
     let coefficients = inputs(base_domain.size());
     for extra in [1, 3] {
         let domain = Domain::new(11 + extra)
@@ -582,13 +631,13 @@ fn large_expansion<M: PrimeModulus>() {
             .unwrap();
         let mut natural = vec![PastaField::ZERO; domain.size()];
         expansion.layout().copy_to_natural(&output, &mut natural);
-        assert_eq!(natural, expected);
+        assert_eq!(reduced(&natural), reduced(&expected));
         let evaluations = reference_coset(&coefficients, base_domain.subgroup());
         expansion
             .evaluations_with(&evaluations, &mut output, options, &Threads, &mut scratch)
             .unwrap();
         expansion.layout().copy_to_natural(&output, &mut natural);
-        assert_eq!(natural, expected);
+        assert_eq!(reduced(&natural), reduced(&expected));
         let factor = expansion.view(&output);
         let mut product = vec![PastaField::ZERO; domain.size()];
         expansion
@@ -605,8 +654,8 @@ fn large_expansion<M: PrimeModulus>() {
         let product = expansion.view(&product);
         for row in 0..domain.size() {
             assert_eq!(
-                product.get(row),
-                Some(&expected[row].mul(&short_values[row]))
+                (product.get(row)).map(|value| value.reduce()),
+                (Some(&expected[row].mul(&short_values[row]))).map(|value| value.reduce())
             );
         }
     }
@@ -709,7 +758,7 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
             .evaluations_with(&evaluations, &mut output, options, &executor, &mut scratch)
             .unwrap();
         assert!(executor.take() > residues);
-        assert_eq!(output, expected);
+        assert_eq!(reduced(&output), reduced(&expected));
         let ones = vec![Fp::ONE; domain.size()];
         let factor = expansion.view(&ones);
         expansion
@@ -727,7 +776,10 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
         let expected_short = direct(&coefficients[..5], domain);
         let view = expansion.view(&output);
         for (row, expected) in expected_short.iter().enumerate() {
-            assert_eq!(view.get(row), Some(expected));
+            assert_eq!(
+                (view.get(row)).map(|value| value.reduce()),
+                (Some(expected)).map(|value| value.reduce())
+            );
         }
 
         // Whole transforms still allow callers to parallelize only residues
@@ -747,7 +799,7 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
             .coefficients_with(&coefficients, &mut output, options, &executor, &mut [])
             .unwrap();
         assert_eq!(executor.take(), residues.min(3) - 1);
-        assert_eq!(output, expected);
+        assert_eq!(reduced(&output), reduced(&expected));
     }
 }
 
@@ -773,7 +825,7 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
                     inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 };
                 let expansion =
-                    Expansion::new(tables.bind(subgroup).unwrap(), extended, Some(scales)).unwrap();
+                    Expansion::new(tables.bind(subgroup), extended, Some(scales)).unwrap();
                 for transform in [
                     Strategy::SERIAL,
                     Strategy {
@@ -803,12 +855,15 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
                         .unwrap();
                     let view = expansion.view(&output);
                     for (row, expected) in expected.iter().enumerate() {
-                        assert_eq!(view.get(row), Some(expected));
+                        assert_eq!(
+                            (view.get(row)).map(|value| value.reduce()),
+                            (Some(expected)).map(|value| value.reduce())
+                        );
                     }
-                    assert_eq!(evaluations, saved);
-                    assert_eq!(scratch[count], PastaField::ONE);
-                    assert_canonical(&output);
-                    assert_canonical(&scratch);
+                    assert_eq!(bytes_of_slice(&evaluations), bytes_of_slice(&saved));
+                    assert_eq!((scratch[count]).reduce(), (PastaField::<_>::ONE).reduce());
+                    assert_loose_bound(&output);
+                    assert_loose_bound(&scratch);
                 }
             }
         }
@@ -874,8 +929,16 @@ fn constant_prefixes<M: PrimeModulus>() {
                         .unwrap();
                     }
                     assert_eq!(executor.take(), 0);
-                    assert!(output.iter().all(|&value| value == expected));
-                    assert!(scratch.iter().all(|&value| value == PastaField::ONE));
+                    assert!(
+                        output
+                            .iter()
+                            .all(|&value| value.reduce() == expected.reduce())
+                    );
+                    assert!(
+                        scratch
+                            .iter()
+                            .all(|&value| value.reduce() == PastaField::ONE)
+                    );
                 }
             }
             let factor = inputs::<M>(domain.size());
@@ -894,17 +957,25 @@ fn constant_prefixes<M: PrimeModulus>() {
                 expansion.layout().residues().min(options.max_residue_tasks) - 1
             );
             for (actual, factor) in output.iter().zip(&factor) {
-                assert_eq!(*actual, constant[0].mul(factor));
+                assert_eq!((*actual).reduce(), (constant[0].mul(factor)).reduce());
             }
-            assert!(scratch.iter().all(|&value| value == PastaField::ONE));
-            if extra == 0 && shift == PastaField::ONE {
+            assert!(
+                scratch
+                    .iter()
+                    .all(|&value| value.reduce() == PastaField::ONE)
+            );
+            if extra == 0 && shift.reduce() == PastaField::ONE {
                 let input = inputs::<M>(base.domain().size());
                 expansion
                     .evaluations_with(&input, &mut output, options, &executor, &mut scratch)
                     .unwrap();
-                assert_eq!(output, input);
+                assert_eq!(reduced(&output), reduced(&input));
                 assert_eq!(executor.take(), 0);
-                assert!(scratch.iter().all(|&value| value == PastaField::ONE));
+                assert!(
+                    scratch
+                        .iter()
+                        .all(|&value| value.reduce() == PastaField::ONE)
+                );
             }
         }
     }
@@ -1006,8 +1077,8 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
                 }))
                 .is_err()
             );
-            assert_eq!(output, factors);
-            assert!(scratch.iter().all(|value| *value == Fp::ONE));
+            assert_eq!(reduced(&output), reduced(&factors));
+            assert!(scratch.iter().all(|value| value.reduce() == Fp::ONE));
         }
         let valid = ExpansionStrategy {
             max_residue_tasks: 2,
@@ -1080,8 +1151,8 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
                 ),
                 Err(FftError::InvalidExecution)
             );
-            assert_eq!(output, factors);
-            assert!(scratch.iter().all(|value| *value == Fp::ONE));
+            assert_eq!(reduced(&output), reduced(&factors));
+            assert!(scratch.iter().all(|value| value.reduce() == Fp::ONE));
         }
     }
 }
@@ -1104,11 +1175,15 @@ fn classed<M: PrimeModulus>(log: u32) {
         .enumerate()
         .map(|(index, value)| {
             value
-                .add(small_coefficients.get(index).unwrap_or(&PastaField::ZERO))
+                .add(
+                    small_coefficients
+                        .get(index)
+                        .unwrap_or(&PastaField::<_>::ZERO),
+                )
                 .add(
                     smallest_coefficients
                         .get(index)
-                        .unwrap_or(&PastaField::ZERO),
+                        .unwrap_or(&PastaField::<_>::ZERO),
                 )
         })
         .collect();
@@ -1117,8 +1192,8 @@ fn classed<M: PrimeModulus>(log: u32) {
     let smallest_values = reference_coset(&smallest_coefficients, smallest);
     let prepared = Prepared::new(domain);
     let small_prepared = Prepared::new(smaller);
-    let plan = prepared.tables().bind(domain).unwrap();
-    let small_plan = small_prepared.tables().bind(smaller).unwrap();
+    let plan = prepared.tables().bind(domain);
+    let small_plan = small_prepared.tables().bind(smaller);
     for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
         let layout = if order == ElementOrder::Natural {
             EvaluationLayout::Natural
@@ -1167,12 +1242,15 @@ fn classed<M: PrimeModulus>(log: u32) {
                 core::num::NonZeroUsize::new(tasks).unwrap(),
                 &Threads,
             );
-            assert_eq!(values[0], expected);
-            assert_eq!(values[1], small_coefficients);
-            assert_eq!(values[2], smallest_coefficients);
+            assert_eq!(reduced(&values[0]), reduced(&expected));
+            assert_eq!(reduced(&values[1]), reduced(&small_coefficients));
+            assert_eq!(reduced(&values[2]), reduced(&smallest_coefficients));
             for buffer in &scratch {
-                assert_eq!(&buffer[buffer.len() - 2..], &[PastaField::ONE; 2]);
-                assert_canonical(buffer);
+                assert_eq!(
+                    bytes_of_slice(&buffer[buffer.len() - 2..]),
+                    bytes_of_slice(&[PastaField::<M>::ONE; 2])
+                );
+                assert_loose_bound(buffer);
             }
         }
     }
@@ -1201,27 +1279,33 @@ fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
         let mut natural = [Fp::ZERO; 32];
         layout.copy_from_natural(&input, &mut stored);
         layout.copy_to_natural(&stored, &mut natural);
-        assert_eq!(input, natural);
+        assert_eq!(reduced(&input), reduced(&natural));
         let view = EvaluationView::bind(
             &stored,
             Domain::for_size(32).unwrap().subgroup(),
             EvaluationLayout::Residues(layout),
         );
         for (row, expected) in input.iter().enumerate() {
-            assert_eq!(view.get(row), Some(expected));
+            assert_eq!(
+                (view.get(row)).map(|value| value.reduce()),
+                (Some(expected)).map(|value| value.reduce())
+            );
             assert_eq!(layout.natural_row(layout.index(row).unwrap()), Some(row));
             assert_eq!(
-                view.get_extended_row(row * 4, Domain::for_size(128).unwrap().subgroup()),
-                Some(expected)
+                (view.get_extended_row(row * 4, Domain::for_size(128).unwrap().subgroup()))
+                    .map(|value| value.reduce()),
+                (Some(expected)).map(|value| value.reduce())
             );
             assert_eq!(
-                view.get_extended_row(row * 4 + 1, Domain::for_size(128).unwrap().subgroup()),
+                (view.get_extended_row(row * 4 + 1, Domain::for_size(128).unwrap().subgroup()))
+                    .map(|value| value.reduce()),
                 None
             );
         }
-        assert_eq!(view.get(32), None);
+        assert_eq!((view.get(32)).map(|value| value.reduce()), None);
         assert_eq!(
-            view.get_extended_row(0, Domain::for_size(16).unwrap().subgroup()),
+            (view.get_extended_row(0, Domain::for_size(16).unwrap().subgroup()))
+                .map(|value| value.reduce()),
             None
         );
         for (input_len, output_len) in [(31, 32), (33, 32), (32, 31), (32, 33)] {
@@ -1430,8 +1514,11 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         }))
         .is_err()
     );
-    assert_eq!(output, original);
-    assert_eq!(scratch, vec![Fp::ONE; required - 1]);
+    assert_eq!(bytes_of_slice(&output), bytes_of_slice(&original));
+    assert_eq!(
+        bytes_of_slice(&scratch),
+        bytes_of_slice(&vec![<Fp>::ONE; required - 1])
+    );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ =
@@ -1439,7 +1526,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         }))
         .is_err()
     );
-    assert_eq!(output, original);
+    assert_eq!(bytes_of_slice(&output), bytes_of_slice(&original));
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = plan.forward_into_with(
@@ -1452,8 +1539,11 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         }))
         .is_err()
     );
-    assert_eq!(output, original);
-    assert_eq!(scratch, vec![Fp::ONE; required - 1]);
+    assert_eq!(bytes_of_slice(&output), bytes_of_slice(&original));
+    assert_eq!(
+        bytes_of_slice(&scratch),
+        bytes_of_slice(&vec![<Fp>::ONE; required - 1])
+    );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = plan.inverse_into_with(
@@ -1466,8 +1556,11 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         }))
         .is_err()
     );
-    assert_eq!(output, original);
-    assert_eq!(scratch, vec![Fp::ONE; required - 1]);
+    assert_eq!(bytes_of_slice(&output), bytes_of_slice(&original));
+    assert_eq!(
+        bytes_of_slice(&scratch),
+        bytes_of_slice(&vec![<Fp>::ONE; required - 1])
+    );
     for (input_len, output_len) in [(63, 64), (65, 64), (64, 63), (64, 65)] {
         let input = vec![Fp::ONE; input_len];
         let mut output = vec![Fp::ZERO; output_len];
@@ -1483,7 +1576,10 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
             }))
             .is_err()
         );
-        assert_eq!(output, vec![Fp::ZERO; output_len]);
+        assert_eq!(
+            bytes_of_slice(&output),
+            bytes_of_slice(&vec![<Fp>::ZERO; output_len])
+        );
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let _ = plan.inverse_into_with(
@@ -1496,7 +1592,10 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
             }))
             .is_err()
         );
-        assert_eq!(output, vec![Fp::ZERO; output_len]);
+        assert_eq!(
+            bytes_of_slice(&output),
+            bytes_of_slice(&vec![<Fp>::ZERO; output_len])
+        );
         if output_len != 64 {
             assert!(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -1509,7 +1608,10 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
                 }))
                 .is_err()
             );
-            assert_eq!(output, vec![Fp::ZERO; output_len]);
+            assert_eq!(
+                bytes_of_slice(&output),
+                bytes_of_slice(&vec![<Fp>::ZERO; output_len])
+            );
         }
     }
     for options in [
@@ -1530,7 +1632,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
             plan.forward_with(&mut output, options, &SerialExecutor, &mut []),
             Err(FftError::InvalidExecution)
         );
-        assert_eq!(output, original);
+        assert_eq!(bytes_of_slice(&output), bytes_of_slice(&original));
     }
     assert!(matches!(
         run::InterpolationPlan::new(
@@ -1547,7 +1649,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         ),
         Err(FftError::InvalidLayout)
     ));
-    assert_eq!(output, original);
+    assert_eq!(bytes_of_slice(&output), bytes_of_slice(&original));
     let expansion = Expansion::new(plan, Domain::new(7).unwrap().subgroup(), None).unwrap();
     let options = ExpansionStrategy {
         max_residue_tasks: 2,
@@ -1566,7 +1668,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         }))
         .is_err()
     );
-    assert_eq!(expanded, [Fp::ONE; 128]);
+    assert_eq!(bytes_of_slice(&expanded), bytes_of_slice(&[<Fp>::ONE; 128]));
     let too_long = FftError::InvalidPrefix {
         min: 0,
         max: 64,
@@ -1582,7 +1684,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         ),
         Err(too_long)
     );
-    assert_eq!(expanded, [Fp::ONE; 128]);
+    assert_eq!(bytes_of_slice(&expanded), bytes_of_slice(&[<Fp>::ONE; 128]));
     assert_eq!(
         plan.forward_prefix_with(
             &[Fp::ONE; 65],
@@ -1593,7 +1695,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         ),
         Err(too_long)
     );
-    assert_eq!(output, original);
+    assert_eq!(bytes_of_slice(&output), bytes_of_slice(&original));
     assert_eq!(
         std::format!("{too_long}"),
         "input prefix must contain 0..=64 elements, received 65"
@@ -1619,12 +1721,12 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
                 actual: len
             }
         );
-        assert_eq!(expanded, [Fp::ONE; 128]);
+        assert_eq!(bytes_of_slice(&expanded), bytes_of_slice(&[<Fp>::ONE; 128]));
     }
 }
 
 #[test]
-fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() {
+fn table_preparation_checks_all_lengths_before_writing() {
     let domain = Domain::<PallasBase>::new(3)
         .unwrap()
         .coset(Fp::from_u64(7))
@@ -1642,8 +1744,11 @@ fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() 
         }))
         .is_err()
     );
-    assert_eq!(valid, [Fp::from_u64(17); 4]);
-    assert_eq!(wrong, [Fp::ONE; 3]);
+    assert_eq!(
+        bytes_of_slice(&valid),
+        bytes_of_slice(&[<Fp>::from_u64(17); 4])
+    );
+    assert_eq!(bytes_of_slice(&wrong), bytes_of_slice(&[<Fp>::ONE; 3]));
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = TablesMut {
@@ -1655,62 +1760,28 @@ fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() 
         }))
         .is_err()
     );
-    assert_eq!(valid, [Fp::from_u64(17); 4]);
-    assert_eq!(wrong, [Fp::ONE; 3]);
-    let mut prepared = Prepared::new(domain);
-    prepared.inverse[1] = Fp::ZERO;
-    assert!(matches!(
-        prepared.tables().bind(domain),
-        Err(FftError::InvalidTables)
-    ));
     assert_eq!(
-        prepared.tables().validate(domain),
-        Err(FftError::InvalidTables)
+        bytes_of_slice(&valid),
+        bytes_of_slice(&[<Fp>::from_u64(17); 4])
     );
-    let mut prepared = Prepared::new(domain);
-    prepared.finish[1] = Fp::ZERO;
-    assert_eq!(
-        prepared.tables().validate(domain),
-        Err(FftError::InvalidTables)
-    );
-    let invalid: &Fp = bento::AlignedBytes([0xff; 32]).as_value();
-    prepared.forward[0] = *invalid;
-    assert_eq!(
-        prepared.tables().validate(domain),
-        Err(FftError::InvalidTables)
-    );
-    let expansion =
-        Expansion::new(Transform::new(domain.domain().subgroup()), domain, None).unwrap();
-    let mut scales = [Fp::ZERO; 8];
-    expansion.prepare_scales(&mut scales);
-    scales[2] = Fp::ZERO;
-    assert!(matches!(
-        ExpansionScales::bind(
-            domain.size(),
-            domain,
-            ExpansionScaleNormalization::Coefficients,
-            &scales
-        ),
-        Err(FftError::InvalidTables)
-    ));
+    assert_eq!(bytes_of_slice(&wrong), bytes_of_slice(&[<Fp>::ONE; 3]));
 }
 
 #[test]
-fn loose_regions_normalize_on_unwind_and_serial_join_completes_both_jobs() {
-    let a = Fp::ONE.neg();
-    let b = Fp::from_u64(2).neg();
+fn loose_values_remain_valid_on_unwind_and_serial_join_completes_both_jobs() {
+    let a = <Fp>::ONE.neg();
+    let b = <Fp>::from_u64(2).neg();
     let mut values = [a, b];
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
-            let guard = crate::field::fft::Guard::new(&mut values);
-            let (left, right) = guard.values.split_at_mut(1);
+            let (left, right) = values.split_at_mut(1);
             crate::field::fft::butterfly(&mut left[0], &mut right[0], None);
             panic!("interrupt loose region");
         }))
         .is_err()
     );
-    assert_eq!(values, [a.add(&b), a.sub(&b)]);
-    assert_canonical(&values);
+    assert_eq!(reduced(&values), reduced(&[a.add(&b), a.sub(&b)]));
+    assert_loose_bound(&values);
     let count = AtomicUsize::new(0);
     assert!(
         catch_unwind(|| SerialExecutor.join(
@@ -1725,7 +1796,7 @@ fn loose_regions_normalize_on_unwind_and_serial_join_completes_both_jobs() {
 }
 
 #[test]
-fn executor_panics_leave_public_buffers_canonical() {
+fn executor_panics_leave_public_buffers_within_loose_bounds() {
     struct Panics;
     impl Executor for Panics {
         fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)
@@ -1762,8 +1833,8 @@ fn executor_panics_leave_public_buffers_canonical() {
         )))
         .is_err()
     );
-    assert_canonical(&values);
-    assert_canonical(&scratch);
+    assert_loose_bound(&values);
+    assert_loose_bound(&scratch);
     // The private fused path also rejects a class interrupted by an executor.
     let mut class = Class::new(plan, &mut values, ElementOrder::Natural);
     assert!(
@@ -1776,20 +1847,20 @@ fn executor_panics_leave_public_buffers_canonical() {
         )))
         .is_err()
     );
-    assert_canonical(class.values);
-    assert_canonical(&scratch);
+    assert_loose_bound(class.values);
+    assert_loose_bound(&scratch);
     let partial = class.values.to_vec();
     let scratch_before = scratch.clone();
     assert_eq!(
         interpolate_classes(&mut class, &mut [], options, &SerialExecutor, &mut scratch),
         Err(FftError::InvalidClassState)
     );
-    assert_eq!(class.values, partial);
-    assert_eq!(scratch, scratch_before);
+    assert_eq!(bytes_of_slice(class.values), bytes_of_slice(&partial));
+    assert_eq!(bytes_of_slice(&scratch), bytes_of_slice(&scratch_before));
 }
 
 #[test]
-fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
+fn inverse_panics_leave_outputs_and_scratch_within_loose_bounds() {
     fn check<M: PrimeModulus>() {
         let options = Strategy {
             tile_len: 16,
@@ -1807,7 +1878,7 @@ fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
             let domain = subgroup.coset(shift).unwrap();
             let prepared = Prepared::new(domain);
             for tables in [Tables::default(), prepared.tables()] {
-                let plan = tables.bind(domain).unwrap();
+                let plan = tables.bind(domain);
                 let count = plan
                     .scratch_requirements_with(options)
                     .unwrap()
@@ -1817,7 +1888,7 @@ fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
                 plan.inverse_with(&mut input.clone(), options, &joins, &mut scratch)
                     .unwrap();
                 // Interrupt each scheduling boundary, including after terminal
-                // kernels have disarmed scratch guards and after only some
+                // kernels have stored their results and after only some
                 // columns have been copied back to the caller's output.
                 for index in 0..joins.take() {
                     let mut values = input.clone();
@@ -1835,9 +1906,12 @@ fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
                         )))
                         .is_err()
                     );
-                    assert_canonical(&values);
-                    assert_canonical(&scratch);
-                    assert_eq!(&scratch[count..], &[PastaField::ONE; 2]);
+                    assert_loose_bound(&values);
+                    assert_loose_bound(&scratch);
+                    assert_eq!(
+                        bytes_of_slice(&scratch[count..]),
+                        bytes_of_slice(&[PastaField::<M>::ONE; 2])
+                    );
                 }
             }
         }
@@ -1906,8 +1980,8 @@ fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
             }))
             .is_err()
         );
-        assert_canonical(&output);
-        assert_canonical(&scratch);
+        assert_loose_bound(&output);
+        assert_loose_bound(&scratch);
     }
 }
 

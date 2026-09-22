@@ -140,8 +140,8 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
                 });
                 // Nested roots make residue zero identical to the original base
                 // evaluations whenever the two coset shifts agree.
-                let copy_first =
-                    self.expansion.extended.shift() == self.expansion.base.domain().shift();
+                let copy_first = self.expansion.extended.shift().reduce()
+                    == self.expansion.base.domain().shift().reduce();
                 if !rest.is_empty() || !copy_first {
                     self.inverse().execute_with(
                         Some(input),

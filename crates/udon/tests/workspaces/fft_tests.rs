@@ -18,7 +18,7 @@ const N: usize = 2048;
 
 fn coefficients<M: PrimeModulus>(size: usize, seed: usize) -> Vec<PastaField<M>> {
     (0..size)
-        .map(|i| PastaField::from_u64((i * i + seed + 1) as u64).neg())
+        .map(|i| PastaField::<_>::from_u64((i * i + seed + 1) as u64).neg())
         .collect()
 }
 
@@ -151,11 +151,14 @@ fn pipeline<M: PrimeModulus>() {
                         )
                         .unwrap();
                     assert_eq!(
-                        view.normalization_factor(),
-                        base_plan.domain().domain().size_inverse()
+                        (view.normalization_factor()).reduce(),
+                        (base_plan.domain().domain().size_inverse()).reduce()
                     );
                     for (stored, coefficient) in view.as_slice().iter().zip(original) {
-                        assert_eq!(*stored, coefficient.mul(&PastaField::from_u64(N as u64)));
+                        assert_eq!(
+                            (*stored).reduce(),
+                            (coefficient.mul(&PastaField::<_>::from_u64(N as u64))).reduce()
+                        );
                     }
                     let output = EvaluationView::bind(
                         &work.output,
@@ -163,7 +166,10 @@ fn pipeline<M: PrimeModulus>() {
                         EvaluationLayout::Residues(expansion.layout()),
                     );
                     for (row, value) in expected.iter().enumerate() {
-                        assert_eq!(output.get(row), Some(value));
+                        assert_eq!(
+                            (output.get(row)).map(|value| value.reduce()),
+                            (Some(value)).map(|value| value.reduce())
+                        );
                     }
 
                     // Carry the scale with the coefficients into another expansion
@@ -178,7 +184,16 @@ fn pipeline<M: PrimeModulus>() {
                             &mut work.scratch,
                             &executor,
                         );
-                    assert_eq!(work.output, work.product);
+                    assert_eq!(
+                        (work.output)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>(),
+                        (work.product)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>()
+                    );
                     plans[3]
                         .execute(
                             TransformRequest {
@@ -193,7 +208,16 @@ fn pipeline<M: PrimeModulus>() {
                             &mut work.scratch,
                         )
                         .unwrap();
-                    assert_eq!(&work.product, expected);
+                    assert_eq!(
+                        work.product
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>(),
+                        (expected)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>()
+                    );
                     let (prefix, short) = &products[index];
                     ExpansionPlan::new(
                         expansion,
@@ -219,7 +243,10 @@ fn pipeline<M: PrimeModulus>() {
                         EvaluationLayout::Residues(expansion.layout()),
                     );
                     for row in 0..output_size {
-                        assert_eq!(product.get(row), Some(&short[row].mul(&expected[row])));
+                        assert_eq!(
+                            (product.get(row)).map(|value| value.reduce()),
+                            (Some(&short[row].mul(&expected[row]))).map(|value| value.reduce())
+                        );
                     }
 
                     // Disjoint residue blocks can fill bit-reversed class storage
@@ -256,14 +283,23 @@ fn pipeline<M: PrimeModulus>() {
                         &executor,
                     );
                     for (lift, (polynomial, _)) in [a, b, c].iter().zip(class_cases) {
-                        assert_eq!(*lift, polynomial);
+                        assert_eq!(
+                            (*lift)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            (polynomial)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>()
+                        );
                     }
                     for (i, value) in output.iter().enumerate() {
                         let expected = class_cases
                             .iter()
                             .filter_map(|(polynomial, _)| polynomial.get(i))
                             .fold(PastaField::ZERO, |sum, value| sum.add(value));
-                        assert_eq!(*value, expected);
+                        assert_eq!((*value).reduce(), (expected).reduce());
                     }
                 },
             );
@@ -346,6 +382,9 @@ fn incomplete_producers_and_panics_require_refill() {
         [&mut [], &mut []],
         &SerialExecutor,
     );
-    assert_eq!(storage[0], PastaField::from_u64(2));
+    assert_eq!(
+        (storage[0]).reduce(),
+        (PastaField::<_>::from_u64(2)).reduce()
+    );
     assert!(storage[1..].iter().all(PastaField::is_zero));
 }

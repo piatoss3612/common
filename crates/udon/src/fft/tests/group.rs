@@ -9,7 +9,7 @@ fn exercise<C: PastaCurve>() {
                 0 => ProjectivePoint::<C>::IDENTITY,
                 1 => ProjectivePoint::GENERATOR,
                 2 => ProjectivePoint::GENERATOR.neg(),
-                _ => ProjectivePoint::GENERATOR.mul(&PastaField::from_u64(i as u64 + 3)),
+                _ => ProjectivePoint::GENERATOR.mul(&PastaField::<_>::from_u64(i as u64 + 3)),
             })
             .collect();
         let mut actual = original.clone();

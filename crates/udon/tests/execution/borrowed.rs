@@ -73,9 +73,12 @@ fn fft_task_owns_nonstatic_slices_on_a_scoped_worker() {
     assert!(run.is_complete());
     for (row, value) in values.iter().enumerate() {
         let point = domain.domain().root().pow_u64(row as u64);
-        assert_eq!(*value, Fp::ONE.add(&Fp::from_u64(2).mul(&point)));
+        assert_eq!(
+            (*value).reduce(),
+            (<Fp>::ONE.add(&<Fp>::from_u64(2).mul(&point))).reduce()
+        );
     }
-    assert_eq!(source[1], Fp::from_u64(2));
+    assert_eq!((source[1]).reduce(), (<Fp>::from_u64(2)).reduce());
 }
 
 struct MsmSlices<'a> {

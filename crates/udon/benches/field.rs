@@ -5,7 +5,7 @@ use criterion::{
     measurement::WallTime,
 };
 use zakura_udon::field::{
-    CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum,
+    CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum, Reduced,
 };
 
 const SEED_A: u64 = 0x243f_6a88_85a3_08d3;
@@ -67,7 +67,11 @@ fn arithmetic<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
         &(a, b, c, d),
         |(a, b, c, d)| a.mul_sub_double_product(b, c, d),
     );
-    bench(&mut group, "cmp", &(a, b), |(a, b)| a.cmp(b));
+    bench(&mut group, "reduce", &a, |a| a.reduce());
+    bench(&mut group, "eq", &(a.reduce(), b.reduce()), |(a, b)| a == b);
+    bench(&mut group, "cmp", &(a.reduce(), b.reduce()), |(a, b)| {
+        a.cmp(b)
+    });
     group.finish();
 
     let operands = values::<M, 128>(SEED_B);
@@ -92,11 +96,11 @@ fn arithmetic<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     bench(&mut group, "invert", &operands, |values| {
         values.map(|value| value.invert())
     });
-    let squares = operands.map(|value| value.square());
+    let squares = operands.map(|value| value.square().reduce());
     bench(&mut group, "sqrt_square", &squares, |values| {
         values.map(|value| value.sqrt())
     });
-    let nonsquares = squares.map(|value| value.mul(&PastaField::from_u64(5)));
+    let nonsquares = squares.map(|value| value.mul(&PastaField::<M>::from_u64(5)).reduce());
     bench(&mut group, "sqrt_nonsquare", &nonsquares, |values| {
         values.map(|value| value.sqrt())
     });
@@ -124,11 +128,11 @@ fn arithmetic<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     let mut group = criterion.benchmark_group(format!("{field}/sqrt"));
     for (name, value) in [("dense_a", a), ("dense_b", b)] {
         assert!(!value.is_zero());
-        let square = value.square();
+        let square = value.square().reduce();
         // Five generates both multiplicative groups, so multiplying a nonzero
         // square by five gives a nonsquare. Validate the fixture before timing.
-        let nonsquare = square.mul(&PastaField::from_u64(5));
-        assert_eq!(square.sqrt().unwrap().square(), square);
+        let nonsquare = square.mul(&PastaField::<M>::from_u64(5)).reduce();
+        assert_eq!(square.sqrt().unwrap().square().reduce(), square);
         assert!(nonsquare.sqrt().is_none());
         bench(&mut group, &format!("square/{name}"), &square, |value| {
             value.sqrt()
@@ -140,12 +144,15 @@ fn arithmetic<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
             |value| value.sqrt(),
         );
     }
-    bench(&mut group, "one", &PastaField::<M>::ONE, |value| {
+    bench(&mut group, "one", &PastaField::<M, Reduced>::ONE, |value| {
         value.sqrt()
     });
-    bench(&mut group, "zero", &PastaField::<M>::ZERO, |value| {
-        value.sqrt()
-    });
+    bench(
+        &mut group,
+        "zero",
+        &PastaField::<M, Reduced>::ZERO,
+        |value| value.sqrt(),
+    );
     group.finish();
 }
 

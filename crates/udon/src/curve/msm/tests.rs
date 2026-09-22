@@ -41,7 +41,10 @@ impl<C: PastaCurve> Buffers<C> {
         assert_eq!(self.digits[r.digits], 73);
         assert_eq!(self.affine[r.affine], AffinePoint::GENERATOR);
         assert_eq!(self.projective[r.projective], ProjectivePoint::GENERATOR);
-        assert_eq!(self.field[r.field], PastaField::ONE);
+        assert_eq!(
+            (self.field[r.field]).reduce(),
+            (PastaField::<_>::ONE).reduce()
+        );
         assert_eq!(self.indices[r.indices], 73);
     }
 }
@@ -117,7 +120,7 @@ fn differentials<C: PastaCurve>() {
     let g = AffinePoint::<C>::GENERATOR;
     let affine: Vec<_> = (1..=1030)
         .map(|i| {
-            *g.mul_projective(&PastaField::from_u64(i))
+            *g.mul_projective(&PastaField::<_>::from_u64(i))
                 .to_point()
                 .as_affine()
                 .unwrap()
@@ -147,7 +150,7 @@ fn differentials<C: PastaCurve>() {
             *k = PastaField::ZERO;
         }
         if i % 23 == 0 {
-            *k = PastaField::ONE.neg();
+            *k = PastaField::<_>::ONE.neg();
         }
     }
     let short: Vec<_> = (0..1030)
@@ -575,7 +578,7 @@ fn collisions<C: PastaCurve>() {
             PastaField::ZERO,
             PastaField::ONE,
             PastaField::from_u64(128),
-            PastaField::ONE.neg(),
+            PastaField::<_>::ONE.neg(),
         ] {
             let scalars = vec![value; n];
             let input = Input::new(Bases::Points(&bases), &scalars);
@@ -745,7 +748,7 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
                 .iter()
                 .all(|&x| x == ProjectivePoint::GENERATOR)
         );
-        assert!(b.field.iter().all(|&x| x == PastaField::ONE));
+        assert!(b.field.iter().all(|&x| x.reduce() == PastaField::ONE));
         assert!(b.indices.iter().all(|&x| x == 73));
     }
 }
@@ -792,7 +795,7 @@ fn affine_reducer_and_weighted_collapse_match_biguint() {
         let g = AffinePoint::<C>::GENERATOR;
         let pool: Vec<_> = (1..=13)
             .map(|i| {
-                *g.mul_projective(&PastaField::from_u64(i))
+                *g.mul_projective(&PastaField::<_>::from_u64(i))
                     .to_point()
                     .as_affine()
                     .unwrap()
@@ -853,7 +856,11 @@ fn affine_reducer_and_weighted_collapse_match_biguint() {
             );
             assert_eq!(lens, control_lens);
             assert_eq!(lens, fused_lens);
-            assert!(fields[pairs * 2..].iter().all(|x| *x == PastaField::ONE));
+            assert!(
+                fields[pairs * 2..]
+                    .iter()
+                    .all(|x| x.reduce() == PastaField::ONE)
+            );
             let mut survivors = vec![g; starts.len()];
             let mut weighted = Reference::identity();
             for i in 0..starts.len() {
@@ -1186,14 +1193,13 @@ fn compact_tables_and_selection_rebind_across_scalar_rows() {
             &mut field,
             TaskBudget::new(3).unwrap(),
             &Pool,
-        )
-        .unwrap();
+        );
         let cached_entries: Vec<_> = tables
             .as_slice()
             .iter()
             .map(PreparedAffinePoint::from_affine)
             .collect();
-        let cached_tables = EisensteinTableBatch::bind(&cached_entries).unwrap();
+        let cached_tables = EisensteinTableBatch::bind(&cached_entries);
         let cached_bases: Vec<_> = bases.iter().map(PreparedAffinePoint::from_affine).collect();
         let indices: Vec<_> = (0..259).map(|i| (i % 7) as u32).collect();
         for basis in [
@@ -1339,16 +1345,19 @@ fn optional_compact_batch_certificate_preserves_fallbacks() {
             &mut fields,
             TaskBudget::SERIAL,
             &SerialExecutor,
-        )
-        .unwrap();
+        );
         let mut fields = vec![
             PastaField::ZERO;
             EisensteinTableBatch::<C>::multiplication_scratch(bases.len())
                 .unwrap()
         ];
-        for scalar in [PastaField::ZERO, PastaField::ONE, PastaField::ONE.neg()]
-            .into_iter()
-            .chain(field_samples::<C::Scalar>().take(64))
+        for scalar in [
+            PastaField::<_>::ZERO,
+            PastaField::<_>::ONE,
+            PastaField::<_>::ONE.neg(),
+        ]
+        .into_iter()
+        .chain(field_samples::<C::Scalar>().take(64))
         {
             let prepared = EisensteinScalar::new(&scalar);
             let certified = prepared;

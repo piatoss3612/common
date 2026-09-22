@@ -45,8 +45,8 @@
 //!     plan.forward(tile, options, &SerialExecutor, &mut scratch).unwrap();
 //!     plan.inverse(tile, options, &SerialExecutor, &mut scratch).unwrap();
 //! });
-//! assert_eq!(first, [Fp::ONE; 4]);
-//! assert_eq!(second, [Fp::from_u64(2); 4]);
+//! assert_eq!(first.map(|value| value.reduce()), [Fp::ONE; 4]);
+//! assert_eq!(second.map(|value| value.reduce()), [Fp::from_u64(2); 4]);
 //! ```
 
 use core::num::NonZeroUsize;

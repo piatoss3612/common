@@ -27,11 +27,3 @@ fn primitives_preserve_little_endian_bytes_at_boundaries() {
     }
     check!(u8, u16, u32, u64);
 }
-
-#[test]
-fn runtime_views_reject_incorrect_buffer_lengths() {
-    static BYTES: AlignedBytes<8> = AlignedBytes([0; 8]);
-    assert!(std::panic::catch_unwind(|| BYTES.as_value::<u32>()).is_err());
-    assert!(std::panic::catch_unwind(|| BYTES.as_array::<u32, 3>()).is_err());
-    assert!(std::panic::catch_unwind(|| BYTES.as_array::<u32, 0>()).is_err());
-}

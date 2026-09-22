@@ -1,6 +1,4 @@
-use super::{
-    CosetDomain, FftError, PastaField, PrimeModulus, Transform, check_domain_size, validate_length,
-};
+use super::{CosetDomain, FftError, PastaField, PrimeModulus, Transform, check_domain_size};
 
 /// Lengths of independently optional prepared tables for one domain.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -42,14 +40,12 @@ impl TableRequirements {
 
 /// Independently optional immutable tables borrowed by a [`super::Transform`].
 ///
-/// [`Self::bind`] checks lengths and mathematical contents once, returning a
-/// handle that retains the domain and immutable borrows. [`Self::bind_trusted`]
-/// skips content checks when the caller establishes correctness elsewhere.
-///
-/// All field entries must be reduced Montgomery residues for correct arithmetic.
-/// Entries can use downstream Bento POD storage; this descriptor contains
-/// references and is not an artifact format. Omitted tables use computed powers
-/// and multiplicative recurrences. The default omits every table.
+/// [`Self::bind`] borrows trusted contents after checking lengths, retaining the
+/// domain in the handle. Entries may use either representative of a loose field
+/// value. Bento POD storage preserves those representations for direct use.
+/// This descriptor contains references and is not an artifact format. Omitted
+/// tables use computed powers and multiplicative recurrences. The default omits
+/// every table.
 ///
 /// In the entry formulas below, `size`, `root`, and `shift` come from the bound
 /// [`CosetDomain`]. Slice lengths are given by [`TableRequirements::for_domain`].
@@ -90,81 +86,37 @@ impl<M: PrimeModulus> Default for Tables<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> Tables<'a, M> {
-    /// Checks all supplied entries and binds the table set to its coset.
+    /// Borrows trusted tables for this coset without inspecting entries.
     ///
-    /// Performs the linear content checks of [`Self::validate`]. Shift-dependent
-    /// finish tables remain attached to this domain through plan construction.
-    /// Returns [`FftError::LengthMismatch`] for a wrong length or
-    /// [`FftError::InvalidTables`] for an incorrect or unreduced entry.
-    pub fn bind(self, domain: CosetDomain<M>) -> Result<Transform<'a, M>, FftError> {
-        self.validate(domain)?;
-        Ok(Transform {
-            domain,
-            tables: self,
-        })
-    }
-
-    /// Binds caller-trusted contents after checking all supplied lengths.
-    ///
-    /// Panics if table lengths differ from [`TableRequirements::for_domain`]. The
-    /// caller must establish that every entry matches [`Tables`]' formulas for this
-    /// domain. Incorrect or unreduced entries can cause wrong results or panics, but
-    /// not memory unsafety. Prefer [`Self::bind`] when importing unchecked artifacts.
-    pub fn bind_trusted(self, domain: CosetDomain<M>) -> Transform<'a, M> {
-        self.validate_shape(domain)
-            .expect("table lengths must match the domain");
+    /// Each supplied table must match the formulas in [`Tables`] for `domain`.
+    /// Panics if its length differs from [`TableRequirements::for_domain`].
+    pub const fn bind(self, domain: CosetDomain<M>) -> Transform<'a, M> {
+        self.assert_shape(domain);
         Transform {
             domain,
             tables: self,
         }
     }
-    pub(super) fn validate_shape(self, domain: CosetDomain<M>) -> Result<(), FftError> {
+
+    const fn assert_shape(self, domain: CosetDomain<M>) {
         let requirements = TableRequirements::for_domain(domain);
-        for (buffer, table) in [
-            ("forward", self.forward),
-            ("inverse", self.inverse),
-            ("inverse_finish", self.inverse_finish),
-        ] {
-            if let Some(table) = table {
-                validate_length(buffer, requirements.twiddles, table.len())?;
+        let tables = [self.forward, self.inverse, self.inverse_finish];
+        let mut index = 0;
+        while index < tables.len() {
+            if let Some(table) = tables[index] {
+                assert!(
+                    table.len() == requirements.twiddles,
+                    "twiddle table length mismatch"
+                );
             }
+            index += 1;
         }
         if let Some(table) = self.inverse_scales {
-            validate_length("inverse_scales", requirements.inverse_scales, table.len())?;
+            assert!(
+                table.len() == requirements.inverse_scales,
+                "inverse scale table length mismatch"
+            );
         }
-        Ok(())
-    }
-
-    /// Checks lengths and every supplied entry against its mathematical value.
-    ///
-    /// This performs linear work without allocation. It also rejects unreduced
-    /// Montgomery field entries, comparing stored limbs to generated canonical
-    /// values without performing arithmetic on the supplied entries.
-    /// Returns [`FftError::LengthMismatch`] for a wrong length or
-    /// [`FftError::InvalidTables`] for a wrong entry. Omitted tables need no
-    /// validation and are accepted.
-    pub fn validate(self, domain: CosetDomain<M>) -> Result<(), FftError> {
-        self.validate_shape(domain)?;
-        let generators = generators(domain);
-        for (table, (first, step)) in [
-            (self.forward, generators.forward),
-            (self.inverse, generators.inverse),
-            (self.inverse_finish, generators.inverse_finish),
-            (self.inverse_scales, generators.inverse_scales),
-        ] {
-            if let Some(table) = table {
-                let mut expected = first;
-                for (index, entry) in table.iter().enumerate() {
-                    if entry.montgomery_limbs() != expected.montgomery_limbs() {
-                        return Err(FftError::InvalidTables);
-                    }
-                    if index + 1 < table.len() {
-                        expected = expected.mul(&step);
-                    }
-                }
-            }
-        }
-        Ok(())
     }
 }
 
@@ -219,8 +171,7 @@ impl<'a, M: PrimeModulus> TablesMut<'a, M> {
             inverse_finish: self.inverse_finish.as_deref(),
             inverse_scales: self.inverse_scales.as_deref(),
         }
-        .validate_shape(domain)
-        .expect("table lengths must match the domain");
+        .assert_shape(domain);
         fn fill<M: PrimeModulus>(
             table: Option<&mut [PastaField<M>]>,
             (first, step): (PastaField<M>, PastaField<M>),
@@ -254,7 +205,7 @@ impl<'a, M: PrimeModulus> super::Transform<'a, M> {
     /// Reuses these tables on another coset of the same subgroup.
     ///
     /// Ordinary forward and inverse twiddles retain their borrows without
-    /// revalidation; any caller obligations from [`Tables::bind_trusted`] remain.
+    /// inspecting their entries.
     /// If the shift changes, inverse-finish and inverse-scaling tables are
     /// omitted because their entries depend on that shift. An unchanged domain
     /// retains every table. This takes constant work without scanning entries.
@@ -272,14 +223,6 @@ impl<'a, M: PrimeModulus> super::Transform<'a, M> {
         }
         self.domain = domain;
         self
-    }
-
-    /// Rechecks every supplied entry against the bound domain.
-    ///
-    /// Content checks and errors follow [`Tables::validate`].
-    pub fn validate(self) -> Result<Self, FftError> {
-        self.tables.validate(self.domain)?;
-        Ok(self)
     }
 }
 

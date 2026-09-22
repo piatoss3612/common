@@ -3,7 +3,7 @@
 use core::fmt;
 
 use super::{AffinePoint, PastaCurve, Point, ProjectivePoint};
-use crate::field::PastaField;
+use crate::field::{PastaField, Reduced};
 
 impl<C: PastaCurve> fmt::Debug for Point<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -25,9 +25,11 @@ impl<C: PastaCurve> Point<C> {
 
     /// Constructs identity for `(0, 0)` or a checked nonidentity point.
     ///
-    /// Returns `None` for other coordinates rejected by [`AffinePoint::from_xy`],
-    /// including unreduced residues read through POD storage.
-    pub fn from_xy(x: PastaField<C::Base>, y: PastaField<C::Base>) -> Option<Self> {
+    /// Returns `None` for other coordinates rejected by [`AffinePoint::from_xy`].
+    pub fn from_xy(
+        x: PastaField<C::Base, Reduced>,
+        y: PastaField<C::Base, Reduced>,
+    ) -> Option<Self> {
         if x.is_zero() && y.is_zero() {
             return Some(Self::IDENTITY);
         }
@@ -49,7 +51,9 @@ impl<C: PastaCurve> Point<C> {
         clippy::type_complexity,
         reason = "Expose coordinates as a borrowed pair."
     )]
-    pub const fn coordinates(&self) -> Option<(&PastaField<C::Base>, &PastaField<C::Base>)> {
+    pub const fn coordinates(
+        &self,
+    ) -> Option<(&PastaField<C::Base, Reduced>, &PastaField<C::Base, Reduced>)> {
         match &self.0 {
             Some(point) => Some(point.coordinates()),
             None => None,

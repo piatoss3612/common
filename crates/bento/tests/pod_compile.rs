@@ -66,10 +66,15 @@ impl Consumer {
                     diagnostic.contains(expected),
                     "{name} failed for the wrong reason; expected {expected:?}:\n{diagnostic}"
                 );
-                assert!(
-                    diagnostic.contains(&format!("src/bin/{name}.rs:")),
-                    "{diagnostic}"
-                );
+                let source =
+                    if expected == "embedded byte length must equal the requested type's size" {
+                        // Inline const assertions are evaluated during monomorphization
+                        // and point at the definition, even for runtime calls.
+                        "src/pod/storage.rs:".to_owned()
+                    } else {
+                        format!("src/bin/{name}.rs:")
+                    };
+                assert!(diagnostic.contains(&source), "{diagnostic}");
             }
             None => assert!(output.status.success(), "{name} failed:\n{diagnostic}"),
         }
@@ -382,6 +387,18 @@ fn static_views_require_exact_byte_lengths(consumer: &Consumer) {
             static B: bento::AlignedBytes<8> = bento::AlignedBytes([0; 8]);
             static V: &[u32; 3] = B.as_array();
             fn main() {}
+        }),
+        ("wrong_runtime_value_length", quote! {
+            static B: bento::AlignedBytes<8> = bento::AlignedBytes([0; 8]);
+            fn main() {
+                std::hint::black_box(B.as_value::<u32>());
+            }
+        }),
+        ("wrong_runtime_array_length", quote! {
+            static B: bento::AlignedBytes<8> = bento::AlignedBytes([0; 8]);
+            fn main() {
+                std::hint::black_box(B.as_array::<u32, 3>());
+            }
         }),
     ] {
         consumer.build(

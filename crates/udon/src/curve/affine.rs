@@ -4,7 +4,7 @@ use bento::const_arithmetic::{m255, u256};
 use core::{fmt, marker::PhantomData};
 
 use super::{AffinePoint, PastaCurve, Point, ProjectivePoint, curve_rhs};
-use crate::field::{PastaField, PrimeModulus};
+use crate::field::{PastaField, PrimeModulus, Reduced};
 
 impl<C: PastaCurve> fmt::Debug for AffinePoint<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -30,13 +30,14 @@ impl<C: PastaCurve> AffinePoint<C> {
         marker: PhantomData,
     };
 
-    /// Checks reduced coordinates and the curve equation.
+    /// Checks that reduced coordinates satisfy the curve equation.
     ///
-    /// Returns `None` for invalid coordinates, including `(0, 0)`. This method
-    /// also rejects unreduced residues read through POD storage, before doing
-    /// field arithmetic.
-    pub fn from_xy(x: PastaField<C::Base>, y: PastaField<C::Base>) -> Option<Self> {
-        if !x.is_reduced() || !y.is_reduced() || y.square() != curve_rhs::<C>(&x) {
+    /// Returns `None` for coordinates off the curve, including `(0, 0)`.
+    pub fn from_xy(
+        x: PastaField<C::Base, Reduced>,
+        y: PastaField<C::Base, Reduced>,
+    ) -> Option<Self> {
+        if y.square().reduce() != curve_rhs::<C>(&x).reduce() {
             return None;
         }
         Some(Self {
@@ -47,7 +48,13 @@ impl<C: PastaCurve> AffinePoint<C> {
     }
 
     /// Borrows the affine coordinates `(x, y)`.
-    pub const fn coordinates(&self) -> (&PastaField<C::Base>, &PastaField<C::Base>) {
+    #[allow(
+        clippy::type_complexity,
+        reason = "the pair directly describes the borrowed coordinates"
+    )]
+    pub const fn coordinates(
+        &self,
+    ) -> (&PastaField<C::Base, Reduced>, &PastaField<C::Base, Reduced>) {
         (&self.x, &self.y)
     }
 
@@ -58,7 +65,7 @@ impl<C: PastaCurve> AffinePoint<C> {
     /// [`PastaField::ZETA`] value.
     pub fn endomorphism(&self) -> Self {
         Self {
-            x: self.x.mul(&PastaField::ZETA),
+            x: self.x.mul(&PastaField::<C::Base>::ZETA).reduce(),
             ..*self
         }
     }
@@ -67,7 +74,7 @@ impl<C: PastaCurve> AffinePoint<C> {
     pub fn neg(&self) -> Self {
         Self {
             x: self.x,
-            y: self.y.neg(),
+            y: self.y.neg().reduce(),
             marker: PhantomData,
         }
     }
@@ -85,7 +92,7 @@ impl<C: PastaCurve> AffinePoint<C> {
     /// Multiplies by a scalar using variable-time doubling and mixed addition.
     ///
     /// Processes the full canonical scalar; zero returns identity. The scalar
-    /// must satisfy [`PastaField`]'s reduced-residue invariant. Uses bounded
+    /// uses the loose field representation. Uses bounded
     /// internal stack storage, with no caller table, scratch, or allocation.
     ///
     /// The current implementation uses an inversion-free binary ladder for
@@ -154,7 +161,7 @@ impl<C: PastaCurve> AffinePoint<C> {
 /// Constructs a nonidentity Pallas affine point from constant coordinates.
 ///
 /// Both arguments must be [`Fp`](crate::field::Fp) constant expressions with
-/// reduced residues satisfying `y² = x³ + 5`. Invalid values, including `(0, 0)`,
+/// residues satisfying `y² = x³ + 5`. Invalid values, including `(0, 0)`,
 /// values from the wrong field, and runtime arguments fail compilation, even
 /// when the macro invocation appears in a runtime expression.
 ///
@@ -172,35 +179,35 @@ macro_rules! pallas_affine {
         const {
             $crate::curve::PallasAffine::__from_montgomery_coordinates::<
                 {
-                    let value: $crate::field::Fp = $x;
+                    let value: $crate::field::Fp = ($x).reduce().into_loose();
                     value.montgomery_limbs()[0]
                 },
                 {
-                    let value: $crate::field::Fp = $x;
+                    let value: $crate::field::Fp = ($x).reduce().into_loose();
                     value.montgomery_limbs()[1]
                 },
                 {
-                    let value: $crate::field::Fp = $x;
+                    let value: $crate::field::Fp = ($x).reduce().into_loose();
                     value.montgomery_limbs()[2]
                 },
                 {
-                    let value: $crate::field::Fp = $x;
+                    let value: $crate::field::Fp = ($x).reduce().into_loose();
                     value.montgomery_limbs()[3]
                 },
                 {
-                    let value: $crate::field::Fp = $y;
+                    let value: $crate::field::Fp = ($y).reduce().into_loose();
                     value.montgomery_limbs()[0]
                 },
                 {
-                    let value: $crate::field::Fp = $y;
+                    let value: $crate::field::Fp = ($y).reduce().into_loose();
                     value.montgomery_limbs()[1]
                 },
                 {
-                    let value: $crate::field::Fp = $y;
+                    let value: $crate::field::Fp = ($y).reduce().into_loose();
                     value.montgomery_limbs()[2]
                 },
                 {
-                    let value: $crate::field::Fp = $y;
+                    let value: $crate::field::Fp = ($y).reduce().into_loose();
                     value.montgomery_limbs()[3]
                 },
             >()
@@ -218,35 +225,35 @@ macro_rules! vesta_affine {
         const {
             $crate::curve::VestaAffine::__from_montgomery_coordinates::<
                 {
-                    let value: $crate::field::Fq = $x;
+                    let value: $crate::field::Fq = ($x).reduce().into_loose();
                     value.montgomery_limbs()[0]
                 },
                 {
-                    let value: $crate::field::Fq = $x;
+                    let value: $crate::field::Fq = ($x).reduce().into_loose();
                     value.montgomery_limbs()[1]
                 },
                 {
-                    let value: $crate::field::Fq = $x;
+                    let value: $crate::field::Fq = ($x).reduce().into_loose();
                     value.montgomery_limbs()[2]
                 },
                 {
-                    let value: $crate::field::Fq = $x;
+                    let value: $crate::field::Fq = ($x).reduce().into_loose();
                     value.montgomery_limbs()[3]
                 },
                 {
-                    let value: $crate::field::Fq = $y;
+                    let value: $crate::field::Fq = ($y).reduce().into_loose();
                     value.montgomery_limbs()[0]
                 },
                 {
-                    let value: $crate::field::Fq = $y;
+                    let value: $crate::field::Fq = ($y).reduce().into_loose();
                     value.montgomery_limbs()[1]
                 },
                 {
-                    let value: $crate::field::Fq = $y;
+                    let value: $crate::field::Fq = ($y).reduce().into_loose();
                     value.montgomery_limbs()[2]
                 },
                 {
-                    let value: $crate::field::Fq = $y;
+                    let value: $crate::field::Fq = ($y).reduce().into_loose();
                     value.montgomery_limbs()[3]
                 },
             >()

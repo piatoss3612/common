@@ -28,14 +28,17 @@ preserves point encodings and storage. See the
 Use `AffinePoint` for a known nonidentity base, `Point` when affine results can
 include identity, and `ProjectivePoint` to accumulate arithmetic before
 normalizing. `Point::as_affine()` returns `None` for identity. Coordinates are
-private and can be borrowed through `coordinates()`.
+private and can be borrowed through `coordinates()`. Affine coordinates use
+`PastaField<_, Reduced>`; projective coordinates use loose field elements.
 
-`AffinePoint::from_xy(x, y)` checks reduced field residues before evaluating
-the curve equation. It rejects `(0, 0)` and other invalid coordinates.
+`AffinePoint::from_xy(x, y)` takes reduced field elements and checks the curve
+equation. Reduction is guaranteed by the coordinate types. It rejects `(0, 0)`
+and other off-curve coordinates.
 `Point::from_xy(x, y)` additionally accepts `(0, 0)` as identity. For constants,
 `pallas_affine!(x, y)` and `vesta_affine!(x, y)` enforce the same nonidentity
-coordinate checks during compilation, including in runtime expression
-positions. Their inputs must be constant expressions of the correct field:
+curve checks during compilation, including in runtime expression positions.
+Their inputs may use either reduction state and must be constant expressions
+of the correct field:
 
 ```rust
 use udon::{curve::PallasAffine, fp_hex, pallas_affine};
@@ -67,8 +70,8 @@ bounded internal stack storage. The current implementation uses an inversion-fre
 binary ladder for scalars below `2^64`. For larger scalars and nonidentity bases,
 each call prepares eight cached entries with one field inversion before running
 the GLV/Eisenstein ladder. The API selects the strategy internally.
-Scalars must satisfy the [field type's](../crates/udon/src/field/mod.rs)
-reduced-residue invariant, including when read from POD storage. The
+Scalars use the [field type's](../crates/udon/src/field/mod.rs) loose
+representation, including when read from POD storage. The
 [performance report](CURVE_PERFORMANCE.md#ordinary-multiplication) describes
 the current algorithm and its measured costs.
 
@@ -101,10 +104,9 @@ For direct embedded storage,
 [`PreparedAffinePoint<C>`](../crates/udon/src/curve/table_entry.rs) implement
 `bento::Pod`. Their type docs define the Montgomery layouts and mathematical
 invariants. Cached entries accelerate endomorphism lookups at the cost of
-additional storage. POD checks memory layout; arithmetic and encoding also
-require reduced coordinates on the curve and consistent cached coordinates.
-Use checked construction or table binding when the producer has not
-established these properties. See
+additional storage. Point construction establishes reduced coordinates on the
+curve and consistent cached coordinates. Bento preserves these values as bytes;
+embedded points are immediately usable without validation or conversion. See
 [POD storage](POD.md#storing-affine-points-and-fixed-base-tables) for the
 generator and consumer workflow.
 
@@ -127,7 +129,7 @@ sealed `CurveTableEntry<C>` parameter accepts `AffinePoint<C>` (the default)
 or `PreparedAffinePoint<C>` (cached endomorphism coordinates).
 Generic code initializes entry buffers through `CurveTableEntry::from_affine`;
 the [trait docs](../crates/udon/src/curve/table_entry.rs) define its construction,
-coordinate access, rotation, and cache-checking methods. Both table kinds report
+coordinate access, and rotation methods. Both table kinds report
 entry and scratch lengths through `CurveTableRequirements`.
 
 ### Compact tables
@@ -143,7 +145,7 @@ order and show preparation with cached entries.
 `EisensteinTable::<C, E>::REQUIREMENTS` reports eight entries and eight elements
 of each scratch type. Preparation shares one inversion across all entries. Use
 `prepare(base, entries, projective_scratch, field_scratch)` to fill the table,
-or `bind(base, entries)` for checked use of existing storage.
+or the const `bind(base, entries)` to borrow trusted stored entries.
 
 When one scalar acts on several bases, construct `EisensteinScalar::<C>::new`
 once and call each table's `mul_prepared(&scalar)`. The opaque value retains the
@@ -175,8 +177,8 @@ implementation from that fact and the available scratch. The multiplication
 scratch query reports the preferred size. Smaller scratch selects smaller
 batches or complete projective arithmetic, and empty scratch remains valid.
 
-Use `bind` or `bind_trusted` for stored entries, following the
-[table validation workflow](#preparation-binding-and-stored-formats). A single
+Use `bind` for stored entries, following the
+[table storage workflow](#preparation-binding-and-stored-formats). A single
 compact table's eight entries can also be bound as a one-base batch without
 changing the stored format. The
 [performance report](CURVE_PERFORMANCE.md#compact-table-batches-and-scalar-reuse)
@@ -231,13 +233,12 @@ and all table bindings require exact entry lengths; expanded preparation selects
 a prefix of the entry capacity. Scratch may be longer, and unused tails remain
 untouched. Preparation errors leave all buffers unchanged.
 
-Checked `bind` validates each entry against its specified multiple, including
-cached coordinates, without scratch or inversion. Use `bind_trusted`
-only when the owner has already established the full entry contract in the
-[expanded](../crates/udon/src/curve/fixed_base.rs) or
-[compact table docs](../crates/udon/src/curve/eisenstein.rs). Incorrect entries
-remain memory-safe but can make multiplication panic or return incorrect results.
-`validate()` performs the full entry check on an existing view.
+The const `bind` operations attach trusted entries to their base and table
+description. They assert lengths and check configuration without inspecting
+points, cached coordinates, or multiples. Preparation constructs the entries
+according to the [expanded](../crates/udon/src/curve/fixed_base.rs) or
+[compact table contract](../crates/udon/src/curve/eisenstein.rs); storing and
+embedding them preserves those values exactly.
 
 Artifact schemas, curve identification, table kind, entry representation, window
 metadata, and file generation belong to the downstream owner. See
@@ -261,8 +262,8 @@ data already owned by the caller:
 cached, and identity-capable base layouts. `Bases::Compact` and
 `Bases::CompactPrepared` borrow `EisensteinTableBatch` in either entry layout,
 including tables embedded with Bento. The compact ladder consumes those tables
-directly. Construction checks lengths and index bounds without gathering bases;
-the producer must establish the mathematical invariants documented on each type.
+directly. Construction checks lengths and index bounds without gathering bases.
+Each base already carries its point type's invariants.
 
 For prepared MSM over a retained base array, cache each nonidentity base with
 `PreparedAffinePoint::from_affine` and borrow the result through

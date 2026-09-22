@@ -14,7 +14,7 @@
 //! `a` is a nonsquare: rounding the exponent up gives a candidate whose square
 //! is `a * r`. The final square check distinguishes these cases.
 
-use super::{PastaField, PrimeModulus, field_elements};
+use super::{PastaField, PrimeModulus, Reduced, field_elements};
 
 /// Powers of `r` and inverse exponents for its order-256 subgroup.
 ///
@@ -41,7 +41,7 @@ const fn half_exponent(exponent: u32) -> u32 {
     ((exponent as u64 + 1) >> 1) as u32
 }
 
-impl<M: PrimeModulus> LargeSqrtTable<PastaField<M>> {
+impl<M: PrimeModulus> LargeSqrtTable<PastaField<M, Reduced>> {
     /// Builds power and inverse-exponent tables from Montgomery limbs.
     ///
     /// Requires `powers[i][j]` to represent `r^(j * 256^i)` for `i` in `0..4`
@@ -88,15 +88,14 @@ impl<M: PrimeModulus> LargeSqrtTable<PastaField<M>> {
     /// where `p` is the field modulus. Returns `None` for a nonsquare.
     pub(in crate::field) fn sqrt(
         &self,
-        value: &PastaField<M>,
+        value: &PastaField<M, Reduced>,
         w: PastaField<M>,
         multiplier: u32,
-    ) -> Option<PastaField<M>> {
+    ) -> Option<PastaField<M, Reduced>> {
         let inverse = |x: PastaField<M>| {
-            self.inverse[hash(x.montgomery_limbs()[0] as u32, multiplier)] as u32
+            self.inverse[hash(x.reduce().montgomery_limbs()[0] as u32, multiplier)] as u32
         };
-        // square_run reduces once at the end: hashing must see the unique
-        // reduced Montgomery representative, never a lazy intermediate.
+        // Squaring stays loose; only the hash key needs a unique representative.
         let square_eight = |x: PastaField<M>| {
             PastaField::from_montgomery(crate::field::montgomery::square_run::<M>(
                 &x.montgomery_limbs(),
@@ -133,7 +132,7 @@ impl<M: PrimeModulus> LargeSqrtTable<PastaField<M>> {
             .mul(&self.g3[(e >> 24) as usize]);
         // Reject candidates formed by rounding an odd inverse exponent; their
         // square is value * r rather than value.
-        (candidate.square() == *value).then_some(candidate)
+        (candidate.square().reduce() == *value).then(|| candidate.reduce())
     }
 }
 
@@ -143,7 +142,7 @@ mod tests {
     use crate::field::{PallasBase, PallasScalar};
     use num_bigint::BigUint;
 
-    fn check<M: PrimeModulus>(table: &LargeSqrtTable<PastaField<M>>, multiplier: u32) {
+    fn check<M: PrimeModulus>(table: &LargeSqrtTable<PastaField<M, Reduced>>, multiplier: u32) {
         assert_eq!(size_of_val(table), 897 * 32 + 1024);
         let modulus = BigUint::from_bytes_le(&M::MODULUS.map(u64::to_le_bytes).concat());
         let root = BigUint::from(5u8).modpow(&((&modulus - 1u8) >> 32usize), &modulus);
@@ -161,17 +160,17 @@ mod tests {
         let mut value = PastaField::ONE;
         let mut occupied = [false; 1024];
         for j in 0..256 {
-            let slot = hash(value.montgomery_limbs()[0] as u32, multiplier);
+            let slot = hash(value.reduce().montgomery_limbs()[0] as u32, multiplier);
             assert!(!occupied[slot]);
             occupied[slot] = true;
             assert_eq!(table.inverse[slot], (j as u8).wrapping_neg());
             assert_eq!(
-                value.mul(&step.pow_u64(table.inverse[slot] as u64)),
-                PastaField::ONE
+                (value.mul(&step.pow_u64(table.inverse[slot] as u64))).reduce(),
+                (PastaField::<_>::ONE).reduce()
             );
             value = value.mul(&step);
         }
-        assert_eq!(value, PastaField::ONE);
+        assert_eq!((value).reduce(), (PastaField::<_>::ONE).reduce());
     }
 
     #[test]
@@ -186,20 +185,23 @@ mod tests {
         let mut powers = [[[0; 4]; 256]; 4];
         for (digit, entries) in powers.iter_mut().enumerate() {
             for (j, entry) in entries.iter_mut().enumerate() {
-                *entry = root.pow_u64((j as u64) << (8 * digit)).montgomery_limbs();
+                *entry = root
+                    .pow_u64((j as u64) << (8 * digit))
+                    .reduce()
+                    .montgomery_limbs();
             }
         }
         powers
     }
 
     fn check_construction<M: PrimeModulus>(
-        shipped: &LargeSqrtTable<PastaField<M>>,
+        shipped: &LargeSqrtTable<PastaField<M, Reduced>>,
         multiplier: u32,
     ) {
         // Valid inputs must reproduce the shipped table exactly, so the
         // rejections below cannot hide an unrelated input problem.
         let powers = runtime_powers::<M>();
-        let table = LargeSqrtTable::<PastaField<M>>::from_powers(powers, multiplier);
+        let table = LargeSqrtTable::<PastaField<M, Reduced>>::from_powers(powers, multiplier);
         assert_eq!(table.g0, shipped.g0);
         assert_eq!(table.g1, shipped.g1);
         assert_eq!(table.g2, shipped.g2);
@@ -208,8 +210,10 @@ mod tests {
 
         // Multiplier zero hashes every subgroup element to one slot.
         assert!(
-            std::panic::catch_unwind(|| LargeSqrtTable::<PastaField<M>>::from_powers(powers, 0))
-                .is_err()
+            std::panic::catch_unwind(|| LargeSqrtTable::<PastaField<M, Reduced>>::from_powers(
+                powers, 0
+            ))
+            .is_err()
         );
         // An unreduced entry in any digit table is rejected, including in the
         // tables that construction checks after the hash loop.
@@ -217,7 +221,7 @@ mod tests {
             let mut unreduced = powers;
             unreduced[digit][7] = M::MODULUS;
             assert!(
-                std::panic::catch_unwind(|| LargeSqrtTable::<PastaField<M>>::from_powers(
+                std::panic::catch_unwind(|| LargeSqrtTable::<PastaField<M, Reduced>>::from_powers(
                     unreduced, multiplier
                 ))
                 .is_err()

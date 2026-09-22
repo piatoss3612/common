@@ -15,22 +15,22 @@ use crate::field::{
 /// modulus, where `k` is the canonical integer represented by `scalar` and
 /// `lambda` is the scalar field's [`PastaField::ZETA`] value. The corresponding
 /// point map is [`AffinePoint::endomorphism`](super::AffinePoint::endomorphism).
-/// The scalar must satisfy [`PastaField`]'s reduced-residue invariant.
+/// The scalar uses [`PastaField`]'s loose representation.
 /// This operation is variable-time and needs neither allocation nor caller
 /// scratch.
 ///
 /// ```
 /// use zakura_udon::{curve::{glv_decompose, Pallas}, field::Fq};
 ///
-/// let scalar = Fq::from_u64(42).sub(&Fq::ZETA);
+/// let scalar = <Fq>::from_u64(42).sub(&<Fq>::ZETA);
 /// let (a, b) = glv_decompose::<Pallas>(&scalar);
 /// assert!(a.unsigned_abs() < 1_u128 << 127);
 /// assert!(b.unsigned_abs() < 1_u128 << 127);
 /// let signed_field = |value: i128| {
-///     let magnitude = Fq::from_bytes_reduced(&value.unsigned_abs().to_le_bytes());
+///     let magnitude = <Fq>::from_bytes_reduced(&value.unsigned_abs().to_le_bytes());
 ///     if value < 0 { magnitude.neg() } else { magnitude }
 /// };
-/// assert_eq!(signed_field(a).add(&Fq::ZETA.mul(&signed_field(b))), scalar);
+/// assert_eq!(signed_field(a).add(&<Fq>::ZETA.mul(&signed_field(b))).reduce(), scalar.reduce());
 /// ```
 pub fn glv_decompose<C: PastaCurve>(scalar: &PastaField<C::Scalar>) -> (i128, i128) {
     decompose_canonical::<C>(scalar.to_canonical_uint())

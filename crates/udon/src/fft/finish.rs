@@ -18,7 +18,7 @@ pub(super) enum InverseFinish<M: PrimeModulus> {
 
 impl<M: PrimeModulus> InverseFinish<M> {
     pub fn select(domain: CosetDomain<M>, combined_table: bool) -> Self {
-        if domain.shift() == PastaField::ONE {
+        if domain.shift().reduce() == PastaField::<M>::ONE.reduce() {
             Self::Subgroup
         } else if domain.inverse_scale_cycle.is_some() && !combined_table {
             // Order-three shifts need only three untwisting factors. A combined

@@ -23,7 +23,7 @@ fn correct<M: PrimeModulus, const MASKED: bool>(
         butterfly(left, product, None);
         return;
     }
-    let modulus = PastaField::<M>::DOUBLE_MODULUS;
+    let modulus = M::TWICE_MODULUS;
     let (sum, carry) = super::super::word::add_limbs(&left.limbs, &product.limbs);
     let (reduced, borrow) = subtract_limbs(&sum, &modulus);
     let mask = 0u64.wrapping_sub(carry | (borrow ^ 1));
@@ -60,13 +60,13 @@ fn pair<M: PrimeModulus, const MASKED: bool, const INTERLEAVED: bool>(
 
 fn check<M: PrimeModulus>() {
     let minus_one = subtract_limbs(&M::MODULUS, &[1, 0, 0, 0]).0;
-    let max = subtract_limbs(&PastaField::<M>::DOUBLE_MODULUS, &[1, 0, 0, 0]).0;
+    let max = subtract_limbs(&M::TWICE_MODULUS, &[1, 0, 0, 0]).0;
     let values = [[0; 4], [1, 0, 0, 0], minus_one, M::MODULUS, max];
     for left in values {
         for right in values {
             for twiddle in [
                 PastaField::<M>::ONE,
-                PastaField::ONE.neg(),
+                PastaField::<_>::ONE.neg(),
                 PastaField::from_u64(7),
             ] {
                 let original = [left, right, right, left].map(loose::<M>);
@@ -77,13 +77,22 @@ fn check<M: PrimeModulus>() {
                 }
                 let mut masked = original;
                 pair::<M, true, false>(&mut masked, &twiddle);
-                assert_eq!(masked, expected);
+                assert_eq!(
+                    masked.map(|value| value.reduce()),
+                    expected.map(|value| value.reduce())
+                );
                 let mut interleaved = original;
                 pair::<M, false, true>(&mut interleaved, &twiddle);
-                assert_eq!(interleaved, expected);
+                assert_eq!(
+                    interleaved.map(|value| value.reduce()),
+                    expected.map(|value| value.reduce())
+                );
                 pair::<M, true, true>(&mut masked, &twiddle);
                 pair::<M, false, false>(&mut expected, &twiddle);
-                assert_eq!(masked, expected);
+                assert_eq!(
+                    masked.map(|value| value.reduce()),
+                    expected.map(|value| value.reduce())
+                );
             }
         }
     }
@@ -129,7 +138,7 @@ fn measure<M: PrimeModulus>(field: &str) {
             })
         })
         .collect();
-    let boundary = subtract_limbs(&PastaField::<M>::DOUBLE_MODULUS, &[1, 0, 0, 0]).0;
+    let boundary = subtract_limbs(&M::TWICE_MODULUS, &[1, 0, 0, 0]).0;
     for (distribution, input) in [
         ("zero", std::vec![[PastaField::ZERO; 4]; 1024]),
         ("loose_random", random),

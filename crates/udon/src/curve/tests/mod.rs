@@ -13,7 +13,11 @@ mod glv;
 pub(crate) mod reference;
 
 fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {
-    let mut values = vec![PastaField::ZERO, PastaField::ONE, PastaField::ONE.neg()];
+    let mut values = vec![
+        PastaField::<_>::ZERO,
+        PastaField::<_>::ONE,
+        PastaField::<_>::ONE.neg(),
+    ];
     for integer in [2, 3, 7, 8, 15, 16, 17, 127, 128, 255, 256, u64::MAX] {
         values.push(PastaField::from_u64(integer));
     }
@@ -21,9 +25,9 @@ fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {
         let power =
             PastaField::from_canonical_uint(CanonicalUint::power_of_two(bit).unwrap()).unwrap();
         values.extend([
-            power.sub(&PastaField::ONE),
+            power.sub(&PastaField::<_>::ONE),
             power,
-            power.add(&PastaField::ONE),
+            power.add(&PastaField::<_>::ONE),
         ]);
     }
     values.extend(field_samples::<C::Scalar>().take(8));
@@ -47,8 +51,4 @@ fn scaled<C: PastaCurve>(point: &Point<C>, scale: u64) -> ProjectivePoint<C> {
         z,
         marker: PhantomData,
     }
-}
-
-fn invalid_field<M: PrimeModulus>() -> PastaField<M> {
-    *bento::AlignedBytes([0xff; 32]).as_value()
 }

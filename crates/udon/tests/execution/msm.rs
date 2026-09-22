@@ -111,7 +111,7 @@ fn produced<C: PastaCurve>() {
             };
             let range = 17..619;
             let expected = ladder::<C>(range.clone().fold(PastaField::ZERO, |sum, i| {
-                sum.add(&scalars[i].mul(&PastaField::from_u64(if indexed {
+                sum.add(&scalars[i].mul(&PastaField::<_>::from_u64(if indexed {
                     indices[i] as u64 + 1
                 } else {
                     i as u64 + 1
@@ -372,7 +372,7 @@ fn cached_borrowed_partitions_preserve_global_scalar_and_index_offsets() {
         })
         .collect();
     let scalars: Vec<_> = (0..bases.len())
-        .map(|i| PastaField::from_u64(i as u64 + 3).invert().unwrap())
+        .map(|i| PastaField::<_>::from_u64(i as u64 + 3).invert().unwrap())
         .collect();
     let indices: Vec<_> = (0..bases.len())
         .map(|i| (i * 11 % bases.len()) as u32)
@@ -401,7 +401,7 @@ fn cached_borrowed_partitions_preserve_global_scalar_and_index_offsets() {
     ] {
         for range in [0..0, 17..619, 619..701] {
             let expected = ladder::<Vesta>(range.clone().fold(PastaField::ZERO, |sum, i| {
-                sum.add(&scalars[i].mul(&PastaField::from_u64(indices[i] as u64 + 1)))
+                sum.add(&scalars[i].mul(&PastaField::<_>::from_u64(indices[i] as u64 + 1)))
             }));
             let arena = Arena::new(plan);
             let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
@@ -694,7 +694,7 @@ fn batch_limits<C: PastaCurve>() {
                 assert_eq!(digits[r.digits()], u8::MAX);
                 assert_eq!(affine[r.affine()], AffinePoint::GENERATOR);
                 assert_eq!(projective[r.projective()], ProjectivePoint::GENERATOR);
-                assert_eq!(field[r.field()], PastaField::ONE);
+                assert_eq!((field[r.field()]).reduce(), (PastaField::<_>::ONE).reduce());
                 assert_eq!(indices[r.indices()], usize::MAX);
             }
             assert_eq!(jobs[j], JobStorage::EMPTY);
@@ -1018,8 +1018,7 @@ fn representations<C: PastaCurve>() {
         &mut vec![PastaField::ZERO; r.field_scratch],
         TaskBudget::SERIAL,
         &SerialExecutor,
-    )
-    .unwrap();
+    );
     let compact_cached = EisensteinTableBatch::prepare(
         &bases,
         &mut cached_entries,
@@ -1027,8 +1026,7 @@ fn representations<C: PastaCurve>() {
         &mut vec![PastaField::ZERO; r.field_scratch],
         TaskBudget::SERIAL,
         &SerialExecutor,
-    )
-    .unwrap();
+    );
     let indices: Vec<_> = (0..59).map(|i| (i * 7 % bases.len()) as u32).collect();
     for source in [
         Bases::Affine(&bases),
@@ -1086,7 +1084,7 @@ fn representations<C: PastaCurve>() {
                         } else {
                             index + 1
                         };
-                        sum.add(&scalar.mul(&PastaField::from_u64(weight as u64)))
+                        sum.add(&scalar.mul(&PastaField::<_>::from_u64(weight as u64)))
                     },
                 ))
             };
@@ -1162,7 +1160,7 @@ fn independent_chunks_reuse_all_scalar_and_base_representations() {
 fn independent_booth_chunks_and_empty_runs() {
     let bases = [AffinePoint::<Pallas>::GENERATOR; 385];
     let scalars: Vec<_> = (0..bases.len())
-        .map(|i| PastaField::from_u64(i as u64 + 2).invert().unwrap())
+        .map(|i| PastaField::<_>::from_u64(i as u64 + 2).invert().unwrap())
         .collect();
     let expected = ladder::<Pallas>(scalars.iter().fold(PastaField::ZERO, |sum, s| sum.add(s)));
     for width in 4..=12 {

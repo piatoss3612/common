@@ -588,7 +588,7 @@ fn scoped_impl<const CHECK: bool, O>(
                             let scalar = fixture.scalars[..n].iter().enumerate().fold(
                                 Fq::ZERO,
                                 |sum, (i, scalar)| {
-                                    sum.add(&scalar.mul(&Fq::from_u64(i as u64 + 1)))
+                                    sum.add(&scalar.mul(&<Fq>::from_u64(i as u64 + 1)))
                                 },
                             );
                             let mut expected = ProjectivePoint::IDENTITY;
@@ -612,8 +612,9 @@ fn scoped_impl<const CHECK: bool, O>(
                                         sum.mul(&point).add(coefficient)
                                     });
                                 assert_eq!(
-                                    fixture.fft[op].values[index / 1024].read()[index % 1024],
-                                    expected,
+                                    (fixture.fft[op].values[index / 1024].read()[index % 1024])
+                                        .reduce(),
+                                    (expected).reduce(),
                                     "FFT round {round}, operation {op}, row {index}"
                                 );
                             }

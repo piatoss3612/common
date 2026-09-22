@@ -155,8 +155,7 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
 
     /// Classifies and decomposes scalars into the required prefix of `storage`.
     ///
-    /// Scalars must satisfy [`PastaField`]'s reduced-residue invariant; see
-    /// [`super::Input`] for the consequences of invalid data. Provide initialized
+    /// Scalars use [`PastaField`]'s loose representation. Provide initialized
     /// storage with at least [`Self::storage_len`] entries for `scalars.len()`;
     /// entries beyond that prefix are untouched.
     ///

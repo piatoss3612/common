@@ -54,7 +54,7 @@
 //!         &mut projective, &mut field, &mut indices_scratch);
 //!     let mut output = [ProjectivePoint::IDENTITY];
 //!     plan.execute(&mut output, &SerialExecutor, scratch);
-//!     assert_eq!(output[0], bases[0].mul_projective(&PastaField::from_u64(3)));
+//!     assert_eq!(output[0], bases[0].mul_projective(&PastaField::<_>::from_u64(3)));
 //! }
 //! # Ok::<(), zakura_udon::curve::CurveError>(())
 //! ```
@@ -137,8 +137,7 @@ impl<C: PastaCurve> Bases<'_, C> {
 /// Cloning copies references. Immutable base and index borrows preserve index
 /// validation across scalar rows. Every binding requires exactly [`Self::len`] scalars
 /// and panics on a mismatch. Only [`Self::with_canonical`] additionally validates
-/// scalar values. The mathematical invariants of [`Bases`] remain the producer's
-/// responsibility.
+/// scalar values. Base values already carry their point type's invariants.
 #[derive(Clone, Copy, Debug)]
 pub struct Selection<'a, C: PastaCurve> {
     bases: Bases<'a, C>,
@@ -195,8 +194,8 @@ impl<'a, C: PastaCurve> Selection<'a, C> {
     }
     /// Binds a field scalar row with an O(1) length check.
     ///
-    /// Scalars must satisfy [`Input`]'s reduced-residue invariant. See
-    /// [`Selection`] for the exact-length requirement.
+    /// Scalars use the loose field representation. See [`Selection`] for the
+    /// exact-length requirement.
     pub fn with_scalars<'s>(&self, scalars: &'s [PastaField<C::Scalar>]) -> Input<'s, C>
     where
         'a: 's,
@@ -254,9 +253,8 @@ impl<'a, C: PastaCurve> Selection<'a, C> {
 
 /// Borrowed MSM terms with checked lengths and indices.
 ///
-/// Field scalars must satisfy [`PastaField`]'s reduced-residue invariant; stored
-/// bases must satisfy [`Bases`]' mathematical invariants. Violations remain
-/// memory-safe but may panic or produce incorrect results. Arithmetic is
+/// Field scalars use [`PastaField`]'s loose representation; stored bases are
+/// trusted values with their point type's invariants. Arithmetic is
 /// variable-time and gives no constant-time guarantee for secret inputs.
 #[derive(Clone, Copy, Debug)]
 pub struct Input<'a, C: PastaCurve> {

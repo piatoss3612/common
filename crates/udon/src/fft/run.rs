@@ -7,9 +7,10 @@
 //!
 //! Tasks operate on local tiles, pairs of tiles, or explicitly sized column
 //! panels. Stage barriers belong to a single run, so a small transform does not
-//! wait for other transforms. Fields are canonical whenever a task returns or
-//! unwinds. Reordering uses a declared retained snapshot with bounded copy and
-//! gather tasks, or bounded swaps when the provider can lease a contiguous bank.
+//! wait for other transforms. Fields preserve their loose representation bound
+//! throughout execution, including on unwind. Reordering uses a retained
+//! snapshot with bounded copy and gather tasks, or bounded swaps when the
+//! provider can lease a contiguous bank.
 
 use core::{num::NonZeroUsize, ops::Range};
 
@@ -18,15 +19,12 @@ use super::{
     PastaField, PrimeModulus, Transform, TransformRequest, TwiddleTable, reverse,
     stages::{StageKernel, twiddle_table},
 };
-use crate::{
-    exec::{
-        SerialExecutor,
-        run::{
-            Completion, Frontier, Identity, Kernel, Outcome, ReadView, Task, TaskError, TaskKey,
-            TaskStorage,
-        },
+use crate::exec::{
+    SerialExecutor,
+    run::{
+        Completion, Frontier, Identity, Kernel, Outcome, ReadView, Task, TaskError, TaskKey,
+        TaskStorage,
     },
-    field::fft::normalize,
 };
 
 mod expansion;
@@ -228,20 +226,20 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         {
             // The table already divides by the base size. Cancel that factor
             // here so the input's own normalization is applied exactly once.
-            scale = scale.mul(&PastaField::from_u64(self.size() as u64));
+            scale = scale.mul(&PastaField::<M>::from_u64(self.size() as u64));
         }
         self.with_input_scale(scale)
     }
 
-    /// Borrows validated forward coset powers without rescanning them.
+    /// Borrows constructed forward coset powers directly.
     ///
     /// The table must start at one, use this domain's shift, and contain exactly the
     /// transform size. Panics for an inverse transform or an incompatible table.
     pub fn with_forward_scales(mut self, table: super::PowerTable<'t, M>) -> Self {
         assert!(
             !self.inverse()
-                && table.first() == PastaField::ONE
-                && table.step() == self.plan.domain().shift(),
+                && table.first().reduce() == PastaField::<M>::ONE.reduce()
+                && table.step().reduce() == self.plan.domain().shift().reduce(),
             "incompatible forward scale table"
         );
         super::assert_length("forward_scales", self.size(), table.as_slice().len());
@@ -405,8 +403,8 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     fn twist(&self) -> bool {
         self.resume.is_none()
             && !self.inverse()
-            && (self.plan.domain().shift() != PastaField::ONE
-                || self.input_scale != PastaField::ONE
+            && (self.plan.domain().shift().reduce() != PastaField::<M>::ONE.reduce()
+                || self.input_scale.reduce() != PastaField::<M>::ONE.reduce()
                 || self.forward_scales.is_some())
     }
     fn twist_before_permute(&self) -> bool {
@@ -862,14 +860,12 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                                 plan.size().ilog2(),
                             );
                         }
-                        if scale != PastaField::ONE {
+                        if scale.reduce() != PastaField::<M>::ONE.reduce() {
                             *value = value.mul(&scale);
                         }
                         if natural && offset + 1 < tile {
                             power = factors.next(physical + 1, power);
                         }
-                    } else {
-                        *value = normalize(*value);
                     }
                     if self.product {
                         *value = value.mul(factor.get(offset).expect("invalid product view"));
@@ -942,7 +938,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     reverse(self.start + offset, plan.size().ilog2())
                 };
                 *value = value.mul(&scales[index]);
-                if plan.input_scale != PastaField::ONE {
+                if plan.input_scale.reduce() != PastaField::<M>::ONE.reduce() {
                     *value = value.mul(&plan.input_scale);
                 }
             }
@@ -959,7 +955,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
         } else {
             let powers = super::operation::CoefficientPowers::new(plan.plan.domain(), order);
             let mut power = powers.at(self.start);
-            if plan.input_scale != PastaField::ONE {
+            if plan.input_scale.reduce() != PastaField::<M>::ONE.reduce() {
                 power = power.mul(&plan.input_scale);
             }
             let len = values.len();
@@ -1035,7 +1031,11 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
         slots: &'a mut [TaskStorage],
     ) -> Self {
         let (kind, block) = plan.initial();
-        let total = if kind == WorkKind::Pair {
+        let complete =
+            kind == WorkKind::Finish && (!plan.inverse() || plan.column_normalized()) && !product;
+        let total = if complete {
+            0
+        } else if kind == WorkKind::Pair {
             plan.fragments() / 2
         } else {
             plan.fragments()
@@ -1047,7 +1047,7 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
             block,
             post: false,
             product,
-            complete: false,
+            complete,
             failed: false,
             column: 0,
         }

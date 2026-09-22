@@ -114,7 +114,9 @@ impl<M: PrimeModulus> CoefficientPowers<M> {
     pub(super) fn new(domain: super::CosetDomain<M>, order: ElementOrder) -> Self {
         let mut ratios = [PastaField::ONE; 32];
         let log_size = domain.domain().log_size();
-        if order == ElementOrder::BitReversed && domain.shift() != PastaField::ONE {
+        if order == ElementOrder::BitReversed
+            && domain.shift().reduce() != PastaField::<M>::ONE.reduce()
+        {
             let mut reciprocal = [PastaField::ONE; 32];
             let mut power = domain.shift();
             let mut inverse = domain.inverse_shift();
@@ -139,7 +141,7 @@ impl<M: PrimeModulus> CoefficientPowers<M> {
         }
     }
     pub(super) fn at(&self, index: usize) -> PastaField<M> {
-        if self.shift == PastaField::ONE {
+        if self.shift.reduce() == PastaField::<M>::ONE.reduce() {
             return PastaField::ONE;
         }
         let degree = if self.order == ElementOrder::Natural {
@@ -150,7 +152,7 @@ impl<M: PrimeModulus> CoefficientPowers<M> {
         self.shift.pow_u64(degree as u64)
     }
     pub(super) fn next(&self, index: usize, power: PastaField<M>) -> PastaField<M> {
-        if self.shift == PastaField::ONE {
+        if self.shift.reduce() == PastaField::<M>::ONE.reduce() {
             return power;
         }
         power.mul(if self.order == ElementOrder::Natural {

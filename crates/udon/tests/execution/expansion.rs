@@ -165,10 +165,26 @@ fn check<M: PrimeModulus>() {
                                     .iter()
                                     .map(|c| c.mul(&view.normalization_factor()))
                                     .collect();
-                                assert_eq!(normalized, coefficients);
+                                assert_eq!(
+                                    (normalized)
+                                        .iter()
+                                        .map(|value| value.reduce())
+                                        .collect::<Vec<_>>(),
+                                    (coefficients)
+                                        .iter()
+                                        .map(|value| value.reduce())
+                                        .collect::<Vec<_>>()
+                                );
                             }
                             assert_eq!(
-                                output, expected,
+                                (output)
+                                    .iter()
+                                    .map(|value| value.reduce())
+                                    .collect::<Vec<_>>(),
+                                (expected)
+                                    .iter()
+                                    .map(|value| value.reduce())
+                                    .collect::<Vec<_>>(),
                                 "contiguous size={size}, residues={residues}, shift={shift}, storage={storage:?}, order={order:?}, input={input_order:?}"
                             );
                         }
@@ -233,7 +249,14 @@ fn check<M: PrimeModulus>() {
                             .flat_map(|block| banks.read(2 + block))
                             .collect();
                         assert_eq!(
-                            result, expected,
+                            (result)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            (expected)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
                             "size={size}, residues={residues}, storage={storage:?}, order={order:?}, input={input_order:?}"
                         );
                         if matches!(
@@ -241,7 +264,7 @@ fn check<M: PrimeModulus>() {
                             ExpansionStorage::CoefficientWorkspace { .. }
                                 | ExpansionStorage::DisposableInput { .. }
                         ) {
-                            let scale = if matches!(
+                            let scale: PastaField<M> = if matches!(
                                 storage,
                                 ExpansionStorage::CoefficientWorkspace {
                                     scale: InverseScale::Unscaled
@@ -254,17 +277,23 @@ fn check<M: PrimeModulus>() {
                                 PastaField::ONE
                             };
                             assert_eq!(
-                                banks.read(
+                                (banks.read(
                                     if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
                                         0
                                     } else {
                                         1
                                     }
-                                ),
-                                coefficients
+                                ))
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                                (coefficients
                                     .iter()
                                     .map(|c| c.mul(&scale))
-                                    .collect::<Vec<_>>()
+                                    .collect::<Vec<_>>())
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>()
                             );
                         }
                     }

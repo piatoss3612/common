@@ -56,7 +56,9 @@ fn msm<C: PastaCurve>() {
     for count in [4095, 4096, 4097, 32767, 32768, 32769] {
         let bases = vec![AffinePoint::<C>::GENERATOR; count];
         let scalars: Vec<_> = (0..count)
-            .map(|i| PastaField::<C::Scalar>::from_u64(i as u64 + 1).mul(&PastaField::TWO_INVERSE))
+            .map(|i| {
+                PastaField::<C::Scalar>::from_u64(i as u64 + 1).mul(&PastaField::<_>::TWO_INVERSE)
+            })
             .collect();
         let sum = scalars
             .iter()
@@ -101,7 +103,7 @@ fn msm<C: PastaCurve>() {
     let required = input.requirements(bounded).unwrap();
     assert!(required.bytes::<C>().unwrap() <= 64 * 1024);
     let mut workspace = Workspace::new(required);
-    let expected = bases[0].mul_projective(&PastaField::from_u64(2048));
+    let expected = bases[0].mul_projective(&PastaField::<_>::from_u64(2048));
     // Actual typed capacities alone must induce a fitting implementation.
     assert_eq!(
         input
@@ -247,7 +249,7 @@ fn fft<M: PrimeModulus>() {
                         assert!(
                             scratch[plan.retained_fields()..]
                                 .iter()
-                                .all(|v| *v == PastaField::from_u64(99))
+                                .all(|v| v.reduce() == PastaField::from_u64(99))
                         );
                         for row in [0, 1, size / 3, size - 1] {
                             let point = domain
@@ -264,7 +266,7 @@ fn fft<M: PrimeModulus>() {
                             } else {
                                 row.reverse_bits() >> (usize::BITS - size.ilog2())
                             };
-                            assert_eq!(output[index], expected);
+                            assert_eq!((output[index]).reduce(), (expected).reduce());
                         }
                         let mut direct = vec![PastaField::ZERO; size];
                         transform
@@ -277,7 +279,16 @@ fn fft<M: PrimeModulus>() {
                                 &mut scratch,
                             )
                             .unwrap();
-                        assert_eq!(direct, output);
+                        assert_eq!(
+                            (direct)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            (output)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>()
+                        );
                     }
                 }
             }
@@ -344,7 +355,7 @@ fn fixed_base<C: PastaCurve>() {
         assert!(
             field[required.field_scratch..]
                 .iter()
-                .all(|v| *v == PastaField::from_u64(42))
+                .all(|v| v.reduce() == PastaField::from_u64(42))
         );
     }
 }

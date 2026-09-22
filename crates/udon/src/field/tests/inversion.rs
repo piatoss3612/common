@@ -7,11 +7,11 @@ fn check_inverses<M: PrimeModulus>() {
     let mut values = samples::<M>(4096);
     for small in 1u64..64 {
         values.push((PastaField::from_u64(small), BigUint::from(small)));
-        values.push((PastaField::from_u64(small).neg(), &p - small));
+        values.push((PastaField::<_>::from_u64(small).neg(), &p - small));
     }
     for (value, x) in values {
         if x == BigUint::from(0u8) {
-            assert_eq!(value.invert(), None);
+            assert_eq!((value.invert()).map(|value| value.reduce()), None);
         } else {
             let inverse = value.invert().unwrap();
             assert_value(inverse, &x.modpow(&exponent, &p));
@@ -112,7 +112,10 @@ fn check_bezout_rows<M: PrimeModulus>() {
                     &p,
                 ) * &inverse_radix
                     % &p;
-                assert_value(PastaField::<M>::bezout_row_update(u, a, v, b), &expected);
+                assert_value(
+                    PastaField::<M, Reduced>::bezout_row_update(u, &a.reduce(), v, &b.reduce()),
+                    &expected,
+                );
             }
         }
     }

@@ -5,8 +5,8 @@
 
 use udon::{
     curve::{
-        AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve,
-        Point, ProjectivePoint, Vesta,
+        AffinePoint, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve, Point,
+        ProjectivePoint, Vesta,
         msm::{
             Bases, Input, PreparedScalars, ScalarStorage, Scratch, Selection,
             run::{BatchPlan, JobStorage, WorkerStorage},
@@ -36,9 +36,11 @@ bento::embed_struct! {
         concat!(env!("OUT_DIR"), "/vesta-srs-", udon::stored_form!(), ".bin");
 }
 
-fn exercise_curve<C: PastaCurve>(record: &record::Record<C>) {
-    let (table, cached, compact, compact_cached) =
-        record.tables().expect("embedded table must match its base");
+const PALLAS_TABLES: record::Tables<'static, Pallas> = PALLAS.tables();
+const VESTA_TABLES: record::Tables<'static, Vesta> = VESTA.tables();
+
+fn exercise_curve<C: PastaCurve>(record: &record::Record<C>, tables: record::Tables<'_, C>) {
+    let (table, cached, compact, compact_cached) = tables;
     assert_eq!(table.as_slice().as_ptr(), record.entries.as_ptr());
     assert_eq!(cached.as_slice().as_ptr(), record.cached.as_ptr());
     assert_eq!(compact.as_slice().as_ptr(), record.compact.as_ptr());
@@ -49,7 +51,7 @@ fn exercise_curve<C: PastaCurve>(record: &record::Record<C>) {
     for scalar in [
         PastaField::ZERO,
         PastaField::ONE,
-        PastaField::ONE.neg(),
+        PastaField::<_>::ONE.neg(),
         PastaField::from_u64(128),
         PastaField::from_canonical_uint(CanonicalUint::from_limbs([
             u64::MAX,
@@ -69,7 +71,7 @@ fn exercise_curve<C: PastaCurve>(record: &record::Record<C>) {
         assert_eq!(compact_cached.mul_prepared(&prepared).to_point(), actual);
         assert_eq!(Point::<C>::from_bytes(actual.to_bytes()), Some(actual));
     }
-    let batch = EisensteinTableBatch::bind(&record.compact).unwrap();
+    let batch = EisensteinTableBatch::bind(&record.compact);
     assert_eq!(batch.as_slice().as_ptr(), record.compact.as_ptr());
     assert_eq!(batch.get(0).unwrap().as_slice(), compact.as_slice());
     exercise_msm(record);
@@ -80,7 +82,8 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
     const OPTIONS: ExecutionOptions = ExecutionOptions::DEFAULT.with_memory_limit(8192);
     // Fixed caller-owned capacity; BatchPlan validates its required prefixes.
     let indices: [u32; N] = core::array::from_fn(|i| (i % 37) as u32);
-    let scalars = core::array::from_fn::<_, N, _>(|i| PastaField::from_u64(i as u64 + 1).neg());
+    let scalars =
+        core::array::from_fn::<_, N, _>(|i| PastaField::<C::Scalar>::from_u64(i as u64 + 1).neg());
     let expected = indices
         .iter()
         .zip(&scalars)
@@ -120,8 +123,8 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
     let indices = [0; N];
     let mut retained = [ScalarStorage::ZERO; N];
     for bases in [
-        Bases::Compact(EisensteinTableBatch::bind(&record.compact).unwrap()),
-        Bases::CompactPrepared(EisensteinTableBatch::bind(&record.compact_cached).unwrap()),
+        Bases::Compact(EisensteinTableBatch::bind(&record.compact)),
+        Bases::CompactPrepared(EisensteinTableBatch::bind(&record.compact_cached)),
     ] {
         let selection = Selection::indexed(bases, &indices).unwrap();
         for row in [scalars, scalars.map(|s| s.neg())] {
@@ -141,11 +144,6 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
 
 fn exercise_srs<C: PastaCurve>(record: &record::SrsRecord<C>) {
     let domain = record.domain();
-    for entry in record.coefficient.iter().chain(&record.lagrange) {
-        let affine = entry.to_affine();
-        let (x, y) = affine.coordinates();
-        assert!(AffinePoint::<C>::from_xy(*x, *y).is_some() && entry.valid_cache());
-    }
     // A direct DFT checks each embedded Lagrange basis and natural row order
     // independently of the generator's in-place butterfly schedule.
     let mut step = PastaField::ONE;
@@ -178,7 +176,9 @@ fn exercise_srs<C: PastaCurve>(record: &record::SrsRecord<C>) {
         &mut indices,
     );
     let coefficient = core::array::from_fn::<_, { record::SRS_SIZE }, _>(|i| {
-        PastaField::from_u64(i as u64 + 3).invert().unwrap()
+        PastaField::<C::Scalar>::from_u64(i as u64 + 3)
+            .invert()
+            .unwrap()
     });
     let mut evaluations = coefficient;
     reference::transform(&mut evaluations, &domain.root());
@@ -204,8 +204,8 @@ fn exercise_srs<C: PastaCurve>(record: &record::SrsRecord<C>) {
 }
 
 pub fn exercise() {
-    exercise_curve(PALLAS);
-    exercise_curve(VESTA);
+    exercise_curve(PALLAS, PALLAS_TABLES);
+    exercise_curve(VESTA, VESTA_TABLES);
     exercise_srs(PALLAS_SRS);
     exercise_srs(VESTA_SRS);
 }

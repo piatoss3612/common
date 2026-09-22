@@ -1,8 +1,7 @@
 //! Stage schedules partition paired slices without aliasing.
 //!
-//! A guard owns all loose storage until terminal stores complete; executor joins
-//! never receive a field slice or callback that can observe a partially reduced
-//! region.
+//! Every butterfly preserves the loose field bound, including intermediate
+//! values visible when an executor unwinds.
 
 use super::finish::{Factors, InverseFinish};
 use super::{
@@ -10,9 +9,7 @@ use super::{
     TwiddleDescription, TwiddleStorage, TwiddleTable, reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-use crate::field::fft::{
-    Guard, butterfly, butterfly_dif, divide_by_power_of_two, normalize, scale,
-};
+use crate::field::fft::{butterfly, butterfly_dif, divide_by_power_of_two, scale};
 
 #[derive(Clone, Copy)]
 pub(super) struct StageKernel<'a, 'b, M: PrimeModulus> {
@@ -50,7 +47,6 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
         first_block: usize,
     ) {
         let rows = self.plan.domain.size() / tile;
-        let guard = Guard::new(values);
         let mut block = (tile * 2).max(first_block);
         while block <= self.plan.domain.size() {
             let table = twiddle_table(self.plan, self.twiddles, self.inverse, block).map(|table| {
@@ -64,7 +60,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
                     conjugate: description.inverse != self.inverse,
                 }
             });
-            let root = if self.inverse {
+            let root: PastaField<M> = if self.inverse {
                 PastaField::root_of_unity_inverse(block.ilog2())
             } else {
                 PastaField::root_of_unity(block.ilog2())
@@ -72,7 +68,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
             .unwrap();
             let row_step = root.pow_u64(tile as u64);
             let distance = block / tile / 2;
-            for (column, lane) in guard.values.chunks_exact_mut(rows).enumerate() {
+            for (column, lane) in values.chunks_exact_mut(rows).enumerate() {
                 let seed = table.map_or_else(
                     || root.pow_u64((first + column) as u64),
                     |powers| powers.at(first + column),
@@ -100,11 +96,11 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
         if self.inverse && self.scale == InverseScale::Normalized {
             let factors = Factors::untwist(self.plan.domain);
             let row_step = self.plan.domain.inverse_shift().pow_u64(tile as u64);
-            for (column, lane) in guard.values.chunks_exact_mut(rows).enumerate() {
+            for (column, lane) in values.chunks_exact_mut(rows).enumerate() {
                 let mut power = factors.at(first + column);
                 for value in lane {
                     *value = divide_by_power_of_two(*value, self.plan.domain.domain().log_size());
-                    if power != PastaField::ONE {
+                    if power.reduce() != PastaField::<M>::ONE.reduce() {
                         *value = value.mul(&power);
                     }
                     power = power.mul(&row_step);
@@ -221,7 +217,7 @@ pub(super) fn twiddle_table<'a, M: PrimeModulus>(
         .map(|values| (values, inverse))
         .or_else(|| opposite.map(|values| (values, !inverse)))?;
     Some(
-        TwiddleTable::bind_trusted(
+        TwiddleTable::bind(
             TwiddleDescription {
                 size: plan.domain.size(),
                 inverse: direction,
@@ -307,7 +303,7 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         MODE >= 2
     }
     fn table(&self, block: usize) -> Option<TwiddleTable<'a, M>> {
-        // Immutable table handles were validated at binding, not per task.
+        // Tasks borrow the transform's trusted table handles directly.
         twiddle_table(self.plan, self.twiddles, self.inverse(), block)
     }
     fn step(&self, block: usize) -> PastaField<M> {
@@ -325,10 +321,7 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         start: usize,
         block: usize,
     ) {
-        let left = Guard::new(left);
-        let right = Guard::new(right);
-        dispatch_powers!(self, block, pair_with, left.values, right.values, start);
-        // Both guards canonicalize even when an internal assertion unwinds.
+        dispatch_powers!(self, block, pair_with, left, right, start);
     }
 
     fn pair_with<P: Powers<M>>(
@@ -361,8 +354,7 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         tasks: usize,
         executor: &E,
     ) {
-        let guard = Guard::new(values);
-        let size = guard.values.len();
+        let size = values.len();
         let radix = match self.codelet {
             Codelet::Radix2 => 2,
             #[cfg(test)]
@@ -372,28 +364,27 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         }
         .min(size);
         if size == 1 || first > size {
-            self.finish_region(guard.values, 0, Self::DIF);
+            self.finish_region(values, 0, Self::DIF);
         } else if Self::DIF {
             let mut block = size;
             while block > radix || radix <= 2 && block >= 2 {
-                self.stage(guard.values, block, tasks, executor);
+                self.stage(values, block, tasks, executor);
                 block /= 2;
             }
             if radix > 2 {
-                self.codelets(guard.values, radix, tasks, executor);
+                self.codelets(values, radix, tasks, executor);
             }
         } else {
             let mut block = first;
             if first == 2 && radix > 2 {
-                self.codelets(guard.values, radix, tasks, executor);
+                self.codelets(values, radix, tasks, executor);
                 block = radix * 2;
             }
             while block <= size {
-                self.stage(guard.values, block, tasks, executor);
+                self.stage(values, block, tasks, executor);
                 block *= 2;
             }
         }
-        guard.disarm();
         let native = if Self::DIF {
             ElementOrder::BitReversed
         } else {
@@ -544,7 +535,7 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
                     let high = scale(*right, &high_scale);
                     *left = low.add(&high);
                     *right = low.sub(&high);
-                    if upper != PastaField::ONE {
+                    if upper.reduce() != PastaField::<M>::ONE.reduce() {
                         *right = right.mul(&upper);
                     }
                     if offset + 1 < len {
@@ -570,9 +561,9 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
             let value = if MODE == 2 {
                 divide_by_power_of_two(value, self.plan.domain.domain().log_size())
             } else {
-                normalize(value)
+                value
             };
-            if untwist == PastaField::ONE {
+            if untwist.reduce() == PastaField::<M>::ONE.reduce() {
                 value
             } else {
                 value.mul(&untwist)
@@ -586,11 +577,14 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
             };
             scale(value, &factor[index])
         } else {
-            normalize(value)
+            value
         }
     }
 
     fn finish_region(&self, values: &mut [PastaField<M>], start: usize, bit_reversed: bool) {
+        if !self.inverse() && self.factor.is_none() {
+            return;
+        }
         let scaled = MODE == 2
             && self.plan.tables.inverse_scales.is_some()
             && matches!(

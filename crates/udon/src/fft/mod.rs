@@ -18,9 +18,8 @@
 //! ordering. Their drivers execute synchronously or expose incremental tasks.
 //!
 //! Field arithmetic is variable-time, with no constant-time guarantee for
-//! secret inputs. Field buffers and table contents must satisfy
-//! [`PastaField`]'s reduced Montgomery representation contract for correct
-//! arithmetic; this is not a memory-safety requirement.
+//! secret inputs. Field buffers and table contents use [`PastaField`]'s loose
+//! Montgomery representation. Arithmetic preserves its bound at every step.
 //!
 //! # Validation and working storage
 //!
@@ -32,20 +31,17 @@
 //! poisons the run and permits outstanding receipts to drain. Invalid input prefixes
 //! report the supported length range separately from unsupported domain sizes.
 //!
-//! Checked table binding, such as [`Tables::bind`], validates dimensions and
-//! mathematical contents before returning a reusable handle. Native
-//! preparation returns the same immutable handles without rescanning entries.
-//! Explicit constructors such as [`Tables::bind_trusted`] rely on the caller
-//! for correct contents, as documented by each table family;
-//! invalid contents can cause incorrect results or panics. Configuration checks
-//! compatibility, and execution does not revalidate entries. The generic
+//! Table binding, such as [`Tables::bind`], checks dimensions and trusts contents
+//! constructed by the caller. Binding and execution use stored entries directly,
+//! without validating or reducing them. Preparation returns the same immutable
+//! handles. Configuration checks table compatibility; the generic
 //! [`mod@reference`] transforms have their own contracts.
 //!
 //! Scratch consists of initialized field elements. Its initial values do not
 //! affect the result, and it may be reused after execution. Elements beyond the
 //! reported requirement remain untouched. A panic may leave partial results;
-//! with valid input fields and tables, modified buffers contain reduced field
-//! representations after unwinding. Custom executors must uphold [`Executor`]'s
+//! modified buffers still contain loose field representations after unwinding,
+//! without a cleanup pass. Custom executors must uphold [`Executor`]'s
 //! completion contract on panic as well as on success.
 //!
 //! # Examples
@@ -64,7 +60,7 @@
 //! let mut values = original;
 //! transform.forward(&mut values, ExecutionOptions::default(), &SerialExecutor, &mut [])?;
 //! transform.inverse(&mut values, ExecutionOptions::default(), &SerialExecutor, &mut [])?;
-//! assert_eq!(values, original);
+//! assert_eq!(values.map(|value| value.reduce()), original.map(|value| value.reduce()));
 //! # Ok::<(), zakura_udon::fft::FftError>(())
 //! ```
 //!
@@ -95,7 +91,7 @@
 //! let mut values = coefficients;
 //! transform.forward(&mut values, ExecutionOptions::default(), &SerialExecutor, &mut [])?;
 //! transform.inverse(&mut values, ExecutionOptions::default(), &SerialExecutor, &mut [])?;
-//! assert_eq!(values, coefficients);
+//! assert_eq!(values.map(|value| value.reduce()), coefficients.map(|value| value.reduce()));
 //! # Ok::<(), zakura_udon::fft::FftError>(())
 //! ```
 //!
@@ -135,8 +131,11 @@
 //!     }, StorageLayout::Contiguous, options,
 //! )?;
 //! inverse.execute(None, &mut product, None, &mut [], &SerialExecutor);
-//! assert_eq!(&product[..3], &[Fp::ONE, Fp::from_u64(4), Fp::from_u64(4)]);
-//! assert!(product[3..].iter().all(|value| *value == Fp::ZERO));
+//! let expected = [Fp::ONE, Fp::from_u64(4), Fp::from_u64(4)];
+//! for (value, expected) in product[..3].iter().zip(expected) {
+//!     assert_eq!(value.reduce(), expected);
+//! }
+//! assert!(product[3..].iter().all(|value| value.is_zero()));
 //! # Ok::<(), zakura_udon::fft::FftError>(())
 //! ```
 
@@ -182,7 +181,7 @@ pub use powers::{PowerTable, TwiddleDescription, TwiddleStorage, TwiddleTable};
 pub use tables::{TableRequirements, Tables, TablesMut};
 pub use transform::Transform;
 
-/// An invalid FFT description, stored table, or workspace limit.
+/// An invalid FFT configuration or workspace limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FftError {
     /// A domain size is unsupported.
@@ -200,8 +199,6 @@ pub enum FftError {
     SizeOverflow,
     /// A coset shift is zero.
     ZeroShift,
-    /// A coset shift has an unreduced Montgomery representation.
-    InvalidShift,
     /// An execution setting or combination of request options is invalid.
     InvalidExecution,
     /// Required arithmetic workspace exceeds the caller's byte ceiling.
@@ -211,17 +208,6 @@ pub enum FftError {
         /// Caller-provided byte ceiling.
         limit: usize,
     },
-    /// An imported table has the wrong number of entries.
-    LengthMismatch {
-        /// Name of the table field with the wrong length.
-        buffer: &'static str,
-        /// Required length, in elements.
-        expected: usize,
-        /// Supplied length, in elements.
-        actual: usize,
-    },
-    /// A prepared table does not match its domain.
-    InvalidTables,
     /// A layout, range, or domain relationship is invalid.
     InvalidLayout,
     /// A class is larger than the output domain.
@@ -240,23 +226,11 @@ impl core::fmt::Display for FftError {
             ),
             Self::SizeOverflow => f.write_str("FFT storage or index size overflow"),
             Self::ZeroShift => f.write_str("coset shift must be nonzero"),
-            Self::InvalidShift => f.write_str("coset shift must have reduced Montgomery limbs"),
             Self::MemoryLimit { required, limit } => write!(
                 f,
                 "FFT workspace requires {required} bytes, limit is {limit}"
             ),
             Self::InvalidExecution => f.write_str("invalid FFT execution settings"),
-            Self::LengthMismatch {
-                buffer,
-                expected,
-                actual,
-            } => {
-                write!(
-                    f,
-                    "{buffer}: expected {expected} elements, received {actual}"
-                )
-            }
-            Self::InvalidTables => f.write_str("FFT table contents do not match the domain"),
             Self::InvalidLayout => f.write_str("invalid FFT layout or range"),
             Self::InvalidClass => f.write_str("interpolation class exceeds the output domain"),
             Self::InvalidClassState => f.write_str("class no longer contains evaluations"),
@@ -268,18 +242,6 @@ impl core::error::Error for FftError {}
 
 fn assert_length(buffer: &str, expected: usize, actual: usize) {
     assert_eq!(actual, expected, "{buffer} length");
-}
-
-fn validate_length(buffer: &'static str, expected: usize, actual: usize) -> Result<(), FftError> {
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(FftError::LengthMismatch {
-            buffer,
-            expected,
-            actual,
-        })
-    }
 }
 
 fn check_prefix(actual: usize, min: usize, max: usize) -> Result<(), FftError> {
@@ -300,7 +262,7 @@ const fn check_field_count(count: usize) -> Result<usize, FftError> {
 }
 
 const fn check_domain_size(size: usize) -> Result<(), FftError> {
-    if !size.is_power_of_two() || crate::field::Fp::root_of_unity(size.ilog2()).is_none() {
+    if !size.is_power_of_two() || <crate::field::Fp>::root_of_unity(size.ilog2()).is_none() {
         return Err(FftError::InvalidSize);
     }
     match check_field_count(size) {

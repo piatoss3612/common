@@ -198,7 +198,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                 }
             }
             let mut powers = vec![PastaField::ZERO; size];
-            let scales = PowerTable::prepare(PastaField::ONE, shift, &mut powers).unwrap();
+            let scales = PowerTable::prepare(PastaField::ONE, shift, &mut powers);
             bench(
                 "coefficient_scales",
                 runner
@@ -503,10 +503,11 @@ fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
         format!("coefficient_powers/bytes_{}", scales.len() * 32),
         |b| {
             b.iter(|| {
-                black_box(
-                    PowerTable::prepare(PastaField::ONE, extended.shift(), black_box(&mut scales))
-                        .unwrap(),
-                );
+                black_box(PowerTable::prepare(
+                    PastaField::ONE,
+                    extended.shift(),
+                    black_box(&mut scales),
+                ));
             })
         },
     );

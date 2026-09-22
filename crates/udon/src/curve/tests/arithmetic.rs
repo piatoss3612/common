@@ -17,7 +17,7 @@ fn group_laws<C: PastaCurve>() {
     assert_eq!(affine.to_projective(), projective);
     assert_eq!(generator.coordinates(), Some(affine.coordinates()));
     assert_eq!(identity.coordinates(), None);
-    assert_eq!(affine.x, PastaField::ONE.neg());
+    assert_eq!(affine.x, PastaField::<C::Base>::ONE.neg().reduce());
     assert_eq!(affine.y, PastaField::from_u64(2));
     assert_eq!(AffinePoint::<C>::from_xy(affine.x, affine.y), Some(affine));
     assert_eq!(
@@ -76,10 +76,10 @@ fn group_laws<C: PastaCurve>() {
     for a in 0..8 {
         for b in 0..8 {
             let lhs = generator
-                .mul_projective(&PastaField::from_u64(a))
+                .mul_projective(&PastaField::<_>::from_u64(a))
                 .to_point();
             let rhs = generator
-                .mul_projective(&PastaField::from_u64(b))
+                .mul_projective(&PastaField::<_>::from_u64(b))
                 .to_point();
             let expected = Reference::from_point(&lhs).add(&Reference::from_point(&rhs), &p);
             expected.assert_point(&scaled(&lhs, 7).add(&scaled(&rhs, 13)).to_point());
@@ -158,7 +158,7 @@ fn scalar_multiplication<C: PastaCurve>() {
     }
     assert!(result.is_identity());
     assert_eq!(
-        generator.mul_projective(&PastaField::ONE.neg()),
+        generator.mul_projective(&PastaField::<_>::ONE.neg()),
         generator.neg().to_projective()
     );
 }

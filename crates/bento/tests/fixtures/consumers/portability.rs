@@ -18,7 +18,9 @@ use udon::fft::{
     ResidueLayout, StorageLayout, TableRequirements, TablesMut, Transform, TransformRequest,
     run::{FftPlan, InterpolationPlan},
 };
-use udon::field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum};
+use udon::field::{
+    Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum, Reduced,
+};
 
 // Numeric word order is independent of the target's byte order. These
 // assertions run during compilation, including on targets we cannot execute.
@@ -53,12 +55,12 @@ fn field_operations<M: PrimeModulus>(
     log_size: u32,
 ) -> Option<[u8; 32]> {
     let value = PastaField::<M>::from_wide_bytes_reduced(wide);
-    let other = PastaField::from_bytes(bytes)?;
+    let other = PastaField::<M, Reduced>::from_bytes(bytes)?;
     let inverse = value.invert()?;
     let root = other
         .sqrt()?
-        .mul(&PastaField::root_of_unity(log_size)?)
-        .mul(&PastaField::root_of_unity_inverse(log_size)?);
+        .mul(&PastaField::<M>::root_of_unity(log_size)?)
+        .mul(&PastaField::<M>::root_of_unity_inverse(log_size)?);
     let mut sum = ProductSum::new();
     sum.add_product(&value, &other);
     sum.add_term(&value.mul_sub_double_product(&root, &other, &inverse));
@@ -87,8 +89,8 @@ pub const VESTA: VestaAffine = udon::vesta_affine!(
 fn curve_operations<C: PastaCurve>(
     bytes: [u8; 32],
     scalar: &PastaField<C::Scalar>,
-) -> Result<[u8; 32], CurveError> {
-    let base = AffinePoint::<C>::from_bytes(bytes).ok_or(CurveError::InvalidBase)?;
+) -> Option<[u8; 32]> {
+    let base = AffinePoint::<C>::from_bytes(bytes)?;
     let point = base.mul_projective(scalar).double().add_mixed(&base);
     let points = [point, point.neg().add(&point)];
     let mut output = [Point::IDENTITY; 2];
@@ -102,24 +104,24 @@ fn curve_operations<C: PastaCurve>(
     let mut entries = [AffinePoint::GENERATOR; REQUIREMENTS.table_entries];
     let mut projective = [ProjectivePoint::IDENTITY; REQUIREMENTS.projective_scratch];
     let mut field = [PastaField::ZERO; REQUIREMENTS.field_scratch];
-    let table = FixedBaseTable::prepare(&base, &mut entries, &mut projective, &mut field)?;
-    let bound = FixedBaseTable::bind(table.description(), &base, table.as_slice())?;
+    let table = FixedBaseTable::prepare(&base, &mut entries, &mut projective, &mut field).ok()?;
+    let bound = FixedBaseTable::bind(table.description(), &base, table.as_slice()).ok()?;
     let product = bound.mul(scalar);
     assert_eq!(product, base.to_projective().mul(scalar));
     let mut cached = [PreparedAffinePoint::from_affine(&base); REQUIREMENTS.table_entries];
-    let cached = FixedBaseTable::prepare(&base, &mut cached, &mut projective, &mut field)?;
+    let cached = FixedBaseTable::prepare(&base, &mut cached, &mut projective, &mut field).ok()?;
     assert_eq!(cached.mul(scalar), product);
     let mut compact_entries = [PreparedAffinePoint::from_affine(&base); 8];
     let compact =
-        EisensteinTable::prepare(&base, &mut compact_entries, &mut projective, &mut field)?;
-    EisensteinTable::bind(&base, compact.as_array())?.validate()?;
+        EisensteinTable::prepare(&base, &mut compact_entries, &mut projective, &mut field);
+    let compact = EisensteinTable::bind(&base, compact.as_array());
     assert_eq!(compact.mul(scalar), product);
     assert_eq!(
         compact.mul_prepared(&EisensteinScalar::new(scalar)),
         product
     );
-    table_batch_operations(&base, scalar, product)?;
-    msm_operations(&base, scalar)?;
+    table_batch_operations(&base, scalar, product);
+    msm_operations(&base, scalar).ok()?;
     let (a, b) = glv_decompose::<C>(scalar);
     assert!(a != i128::MIN && b != i128::MIN);
     assert_eq!(
@@ -135,14 +137,14 @@ fn curve_operations<C: PastaCurve>(
     );
     assert_eq!(point, output[0].to_projective());
     assert!(output[1].is_identity());
-    Ok(product.to_point().to_bytes())
+    Some(product.to_point().to_bytes())
 }
 
-pub fn pallas_operations(bytes: [u8; 32], scalar: &Fq) -> Result<[u8; 32], CurveError> {
+pub fn pallas_operations(bytes: [u8; 32], scalar: &Fq) -> Option<[u8; 32]> {
     curve_operations::<Pallas>(bytes, scalar)
 }
 
-pub fn vesta_operations(bytes: [u8; 32], scalar: &Fp) -> Result<[u8; 32], CurveError> {
+pub fn vesta_operations(bytes: [u8; 32], scalar: &Fp) -> Option<[u8; 32]> {
     curve_operations::<Vesta>(bytes, scalar)
 }
 
@@ -150,7 +152,7 @@ fn table_batch_operations<C: PastaCurve>(
     base: &AffinePoint<C>,
     scalar: &PastaField<C::Scalar>,
     expected: ProjectivePoint<C>,
-) -> Result<(), CurveError> {
+) {
     const N: usize = 64;
     const R: CurveTableRequirements = match EisensteinTableBatch::<Pallas>::requirements(N) {
         Ok(r) => r,
@@ -176,7 +178,7 @@ fn table_batch_operations<C: PastaCurve>(
         &mut field,
         TaskBudget::SERIAL,
         &SerialExecutor,
-    )?;
+    );
     let mut output = [ProjectivePoint::IDENTITY; N];
     batch.mul_prepared(
         &EisensteinScalar::new(scalar),
@@ -186,7 +188,6 @@ fn table_batch_operations<C: PastaCurve>(
         &SerialExecutor,
     );
     assert!(output.iter().all(|&p| p == expected));
-    Ok(())
 }
 
 const MSM_OPTIONS: ExecutionOptions = ExecutionOptions::DEFAULT.with_memory_limit(8192);
@@ -252,7 +253,7 @@ fn msm_operations<C: PastaCurve>(
     );
     assert_eq!(
         output[0],
-        base.mul_projective(&scalar.mul(&PastaField::from_u64(129)))
+        base.mul_projective(&scalar.mul(&PastaField::<C::Scalar>::from_u64(129)))
     );
     Ok(())
 }
@@ -447,6 +448,12 @@ pub static STORED_FP: &Fp = bento::AlignedBytes([0; 32]).as_value();
 
 #[cfg(feature = "field")]
 pub static STORED_FQ: &Fq = bento::AlignedBytes([0; 32]).as_value();
+
+#[cfg(feature = "field")]
+pub static STORED_FP_REDUCED: &Fp<Reduced> = bento::AlignedBytes([0; 32]).as_value();
+
+#[cfg(feature = "field")]
+pub static STORED_FQ_REDUCED: &Fq<Reduced> = bento::AlignedBytes([0; 32]).as_value();
 
 #[cfg(feature = "field-record")]
 pub static STORED_FIELDS: &FieldRecord = bento::AlignedBytes([0; 64]).as_value();

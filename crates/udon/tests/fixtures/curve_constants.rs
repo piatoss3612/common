@@ -14,8 +14,8 @@ mod literals {
 }
 
 // Re-exported macros and const lifts must work through the renamed dependency.
-const X: Fp = *PallasAffine::GENERATOR.coordinates().0;
-const Y: Fp = *PallasAffine::GENERATOR.coordinates().1;
+const X: Fp = PallasAffine::GENERATOR.coordinates().0.into_loose();
+const Y: Fp = PallasAffine::GENERATOR.coordinates().1.into_loose();
 const PALLAS: PallasAffine = literals::pallas!(X, Y,);
 const VESTA: VestaAffine = literals::vesta!(
     *VestaAffine::GENERATOR.coordinates().0,
@@ -39,8 +39,8 @@ fn main() {
     assert_eq!(PALLAS.mul_projective(&Fq::ONE), PALLAS_PROJECTIVE);
     assert_eq!(VESTA.mul_projective(&Fp::ONE), VESTA_PROJECTIVE);
 
-    assert_eq!(glv_decompose::<Pallas>(&Fq::ONE.neg()), (-1, 0));
-    assert_eq!(glv_decompose::<Vesta>(&Fp::ONE.neg()), (-1, 0));
+    assert_eq!(glv_decompose::<Pallas>(&<Fq>::ONE.neg()), (-1, 0));
+    assert_eq!(glv_decompose::<Vesta>(&<Fp>::ONE.neg()), (-1, 0));
     assert_eq!(
         PALLAS.endomorphism(),
         PALLAS
@@ -62,14 +62,13 @@ fn main() {
     let mut entries = [PreparedAffinePoint::from_affine(&PALLAS); 8];
     let mut projective = [PallasProjective::IDENTITY; 8];
     let mut field = [Fp::ZERO; 8];
-    let table =
-        EisensteinTable::prepare(&PALLAS, &mut entries, &mut projective, &mut field).unwrap();
-    assert_eq!(table.mul(&Fq::ONE.neg()), PALLAS_PROJECTIVE.neg());
+    let table = EisensteinTable::prepare(&PALLAS, &mut entries, &mut projective, &mut field);
+    assert_eq!(table.mul(&<Fq>::ONE.neg()), PALLAS_PROJECTIVE.neg());
 
     #[cfg(feature = "invalid-pallas")]
-    let _ = literals::pallas!(Fp::ZERO, Fp::ZERO);
+    let _ = literals::pallas!(<Fp>::ZERO, <Fp>::ZERO);
     #[cfg(feature = "invalid-vesta")]
-    let _ = literals::vesta!(Fq::ONE, Fq::ONE);
+    let _ = literals::vesta!(<Fq>::ONE, <Fq>::ONE);
 
     #[cfg(feature = "runtime-pallas")]
     {
@@ -83,9 +82,9 @@ fn main() {
     }
 
     #[cfg(feature = "wrong-pallas-field")]
-    let _ = literals::pallas!(Fq::ZERO, Fq::ZERO);
+    let _ = literals::pallas!(<Fq>::ZERO, <Fq>::ZERO);
     #[cfg(feature = "wrong-vesta-field")]
-    let _ = literals::vesta!(Fp::ZERO, Fp::ZERO);
+    let _ = literals::vesta!(<Fp>::ZERO, <Fp>::ZERO);
     #[cfg(feature = "wrong-curve")]
     let _ = PALLAS_PROJECTIVE.add(&VESTA_PROJECTIVE);
     #[cfg(feature = "wrong-scalar")]

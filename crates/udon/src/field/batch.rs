@@ -176,8 +176,8 @@ impl core::error::Error for BatchInversionError {}
 /// use zakura_udon::field::{Fp, batch_invert};
 /// let mut values = [Fp::from_u64(7), Fp::ZERO, Fp::from_u64(3)];
 /// batch_invert(&mut values, &mut [Fp::ZERO; 3]);
-/// assert_eq!(values[0].mul(&Fp::from_u64(7)), Fp::ONE);
-/// assert_eq!(values[1], Fp::ZERO);
+/// assert_eq!(values[0].mul(&<Fp>::from_u64(7)).reduce(), Fp::ONE);
+/// assert!(values[1].is_zero());
 /// ```
 pub fn batch_invert<M: PrimeModulus>(values: &mut [PastaField<M>], scratch: &mut [PastaField<M>]) {
     batch_invert_groups(&mut [values], scratch)
@@ -247,9 +247,8 @@ pub fn batch_invert_groups<M: PrimeModulus>(
 
 /// Inverts denominators read from immutable records and visits their inverses.
 ///
-/// `denominator` must return the same reduced field value for a record on every
-/// call. It may be evaluated more than once; stability and reducedness are not
-/// checked. Violations remain memory-safe but can cause wrong results or panics.
+/// `denominator` must return the same field value for a record on every
+/// call; the operation may evaluate it more than once.
 /// Every denominator is checked for zero before the first visitor call;
 /// a zero returns [`BatchInversionError::ZeroDenominator`]
 /// without changing scratch or invoking `visit`. Empty input does nothing.
@@ -267,7 +266,7 @@ pub fn batch_invert_groups<M: PrimeModulus>(
 /// ```
 /// use zakura_udon::field::{BatchInversionError, Fp, try_batch_invert_by};
 ///
-/// let records = [(Fp::from_u64(6), Fp::from_u64(2)),
+/// let records: [(Fp, Fp); 2] = [(Fp::from_u64(6), Fp::from_u64(2)),
 ///                (Fp::from_u64(20), Fp::from_u64(5))];
 /// let mut quotients = [Fp::ZERO; 2];
 /// try_batch_invert_by(&records, |record| record.1, &mut [Fp::ZERO; 2],
@@ -275,7 +274,7 @@ pub fn batch_invert_groups<M: PrimeModulus>(
 ///         quotients[index] = record.0.mul(&inverse);
 ///         Ok::<_, BatchInversionError>(())
 ///     }).unwrap();
-/// assert_eq!(quotients, [Fp::from_u64(3), Fp::from_u64(4)]);
+/// assert_eq!(quotients.map(|value| value.reduce()), [Fp::from_u64(3), Fp::from_u64(4)]);
 /// ```
 pub fn try_batch_invert_by<R, M: PrimeModulus, E: From<BatchInversionError>>(
     records: &[R],

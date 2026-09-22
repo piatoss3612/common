@@ -42,8 +42,8 @@ fn check_reduction<M: PrimeModulus>() {
         let uint = CanonicalUint::from_le_bytes(bytes);
         assert_eq!(PastaField::<M>::from_bytes(bytes).is_some(), x < p);
         assert_eq!(
-            PastaField::<M>::from_bytes(bytes),
-            PastaField::from_canonical_uint(uint)
+            (PastaField::<M>::from_bytes(bytes)).map(|value| value.reduce()),
+            (PastaField::<_>::from_canonical_uint(uint)).map(|value| value.reduce())
         );
         assert_value(PastaField::<M>::from_uint_reduced(uint), &x);
     }
@@ -73,11 +73,14 @@ fn check_encodings<M: PrimeModulus>() {
         assert_value(PastaField::<M>::from_uint_reduced(uint), &x);
     }
     for (value, x) in samples::<M>(64) {
-        assert_eq!(PastaField::<M>::from_bytes(value.to_bytes()), Some(value));
+        assert_eq!(
+            (PastaField::<M>::from_bytes(value.to_bytes())).map(|value| value.reduce()),
+            (Some(value)).map(|value| value.reduce())
+        );
         assert_eq!(integer(&value.to_canonical_uint().limbs()), x);
         assert_eq!(
-            PastaField::<M>::from_montgomery_limbs(value.montgomery_limbs()),
-            value
+            (PastaField::<M>::from_montgomery_limbs(value.montgomery_limbs())).reduce(),
+            (value).reduce()
         );
         assert_eq!(value.is_odd(), x.bit(0));
     }

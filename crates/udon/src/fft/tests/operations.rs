@@ -94,12 +94,16 @@ fn operations<M: PrimeModulus>() {
                                             &SerialExecutor,
                                         );
                                         assert_eq!(
-                                            output,
-                                            ordered(expected, output_order),
+                                            reduced(&output),
+                                            reduced(&ordered(expected, output_order)),
                                             "log={log}, columns={columns}, codelet={codelet:?}, request={request:?}"
                                         );
-                                        assert_canonical(&scratch);
-                                        assert_eq!(scratch.last(), Some(&PastaField::ONE));
+                                        assert_loose_bound(&scratch);
+                                        assert_eq!(
+                                            (scratch.last()).map(|value| value.reduce()),
+                                            (Some(&PastaField::<_>::ONE))
+                                                .map(|value| value.reduce())
+                                        );
                                     }
                                 }
                             }
@@ -157,12 +161,14 @@ fn interpreted_codelets<M: PrimeModulus>() {
                     direct(&input, domain)
                 };
                 assert_eq!(
-                    interpreted,
-                    if dif {
-                        ordered(&expected, ElementOrder::BitReversed)
-                    } else {
-                        expected
-                    }
+                    reduced(&interpreted),
+                    reduced(
+                        &(if dif {
+                            ordered(&expected, ElementOrder::BitReversed)
+                        } else {
+                            expected
+                        })
+                    )
                 );
             }
         }
@@ -230,8 +236,8 @@ fn prefixes_and_products<M: PrimeModulus>() {
                                 &SerialExecutor,
                             );
                             assert_eq!(
-                                output,
-                                ordered(&expected, output_order),
+                                reduced(&output),
+                                reduced(&ordered(&expected, output_order)),
                                 "len={len}, request={request:?}"
                             );
                             let factor = ordered(&factors, output_order);
@@ -249,8 +255,11 @@ fn prefixes_and_products<M: PrimeModulus>() {
                                 .zip(&factors)
                                 .map(|(a, b)| a.mul(b))
                                 .collect();
-                            assert_eq!(output, ordered(&product, output_order));
-                            assert_eq!(scratch.last(), Some(&PastaField::ONE));
+                            assert_eq!(reduced(&output), reduced(&ordered(&product, output_order)));
+                            assert_eq!(
+                                (scratch.last()).map(|value| value.reduce()),
+                                (Some(&PastaField::<_>::ONE)).map(|value| value.reduce())
+                            );
                         }
                     }
                 }
@@ -301,22 +310,16 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
                         inverse_direct(&input, domain, true)
                     };
                     assert_eq!(
-                        output, expected,
+                        reduced(&output),
+                        reduced(&expected),
                         "table={description:?}, direction={direction:?}"
                     );
-                }
-                if let Some(value) = values.first_mut() {
-                    *value = PastaField::ZERO;
-                    assert!(matches!(
-                        TwiddleTable::bind(description, &values),
-                        Err(FftError::InvalidTables)
-                    ));
                 }
             }
         }
     }
     let mut scales = vec![PastaField::ZERO; domain.size()];
-    let scales = PowerTable::prepare(PastaField::ONE, domain.shift(), &mut scales).unwrap();
+    let scales = PowerTable::prepare(PastaField::ONE, domain.shift(), &mut scales);
     let operation = FftPlan::with_strategy(
         plan,
         TransformRequest::new(Direction::Forward),
@@ -328,7 +331,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
     .with_contiguous_permutation();
     let mut output = input.clone();
     operation.execute_with(None, &mut output, None, &mut [], nz(3), &Threads);
-    assert_eq!(output, direct(&input, domain));
+    assert_eq!(reduced(&output), reduced(&direct(&input, domain)));
 }
 
 #[test]
@@ -360,8 +363,7 @@ fn bound_plan_tables<M: PrimeModulus>() {
                     inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
                     inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 }
-                .bind(domain)
-                .unwrap();
+                .bind(domain);
                 for (direction, inverse_scale, expected) in [
                     (Direction::Forward, InverseScale::Normalized, &forward),
                     (Direction::Inverse, InverseScale::Normalized, &inverse),
@@ -393,8 +395,8 @@ fn bound_plan_tables<M: PrimeModulus>() {
                                         &SerialExecutor,
                                     );
                                     assert_eq!(
-                                        output,
-                                        ordered(expected, output_order),
+                                        reduced(&output),
+                                        reduced(&ordered(expected, output_order)),
                                         "log={log}, mask={mask}, codelet={codelet:?}, tasks={tasks}, request={request:?}"
                                     );
                                 }
@@ -452,20 +454,20 @@ fn transform_configuration_and_scratch_are_checked_before_mutation() {
         }))
         .is_err()
     );
-    assert_eq!(values, original);
-    assert!(scratch.iter().all(|v| *v == Fp::ONE));
+    assert_eq!(bytes_of_slice(&values), bytes_of_slice(&original));
+    assert!(scratch.iter().all(|v| v.reduce() == Fp::ONE));
     assert_eq!(joins.take(), 0);
 }
 
 #[test]
-fn parallel_panics_restore_all_field_buffers() {
+fn parallel_panics_preserve_loose_field_bounds() {
     let domain = Domain::<PallasScalar>::new(8)
         .unwrap()
         .coset(PastaField::from_u64(7))
         .unwrap();
     let prepared = Prepared::new(domain);
     for tables in [Tables::default(), prepared.tables()] {
-        let plan = tables.bind(domain).unwrap();
+        let plan = tables.bind(domain);
         for columns in [false, true] {
             for codelet in [Codelet::Radix2, Codelet::Radix4, Codelet::Radix8] {
                 for direction in [Direction::Forward, Direction::Inverse] {
@@ -510,8 +512,8 @@ fn parallel_panics_restore_all_field_buffers() {
                                 )
                             }));
                             assert!(failed.is_err());
-                            assert_canonical(&values);
-                            assert_canonical(&scratch);
+                            assert_loose_bound(&values);
+                            assert_loose_bound(&scratch);
                         }
                     }
                 }
@@ -526,7 +528,7 @@ fn finish_tables_preserve_prefix_and_codelet_results() {
         for shift in [Fp::ONE, Fp::ZETA, Fp::ZETA_INVERSE, Fp::from_u64(7)] {
             let domain = Domain::new(log).unwrap().coset(shift).unwrap();
             let prepared = Prepared::new(domain);
-            let plan = prepared.tables().bind(domain).unwrap();
+            let plan = prepared.tables().bind(domain);
             let dense = TwiddleTable::bind(
                 TwiddleDescription {
                     size: domain.size(),
@@ -564,8 +566,11 @@ fn finish_tables_preserve_prefix_and_codelet_results() {
                                 nz(3),
                                 &SerialExecutor,
                             );
-                            assert_eq!(output, expected);
-                            assert_eq!(scratch.last(), Some(&Fp::ONE));
+                            assert_eq!(reduced(&output), reduced(&expected));
+                            assert_eq!(
+                                (scratch.last()).map(|value| value.reduce()),
+                                (Some(&<Fp>::ONE)).map(|value| value.reduce())
+                            );
                         }
                     }
                 }

@@ -1,9 +1,9 @@
 //! Aligned storage and the casts between records and their byte representation.
 //!
 //! Typed views borrow static storage; byte views borrow the original value or
-//! slice. [`AlignedBytes::as_value`] and [`bytes_of_slice`] validate the [`Pod`]
-//! contract before constructing shared references; the array and single-value
-//! helpers delegate to them.
+//! slice. [`AlignedBytes::as_value`] and [`bytes_of_slice`] check layout during
+//! compilation; the array and single-value helpers delegate to them. Stored
+//! values are trusted and are never inspected or transformed.
 
 use super::Pod;
 
@@ -25,12 +25,8 @@ impl<const N: usize> AlignedBytes<N> {
     /// Views the stored bytes as an array without copying them.
     ///
     /// The element type must pass [`Pod::ASSERT_LAYOUT`] during compilation,
-    /// including when `LEN` is zero.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the buffer does not contain exactly `size_of::<[T; LEN]>()`
-    /// bytes. In a static initializer, this is a compilation error.
+    /// including when `LEN` is zero. A byte length other than
+    /// `size_of::<[T; LEN]>()` is a compilation error, including in runtime calls.
     #[track_caller]
     pub const fn as_array<T: Pod, const LEN: usize>(&'static self) -> &'static [T; LEN] {
         self.as_value()
@@ -38,33 +34,30 @@ impl<const N: usize> AlignedBytes<N> {
 
     /// Views the stored bytes as a value without copying them.
     ///
-    /// The type must pass [`Pod::ASSERT_LAYOUT`] during compilation.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the buffer does not contain exactly `size_of::<T>()` bytes.
-    /// In a static initializer, this is a compilation error.
+    /// The type must pass [`Pod::ASSERT_LAYOUT`] during compilation. A byte
+    /// length other than `size_of::<T>()` is a compilation error, including in
+    /// runtime calls. The returned reference points directly into this buffer.
     #[track_caller]
     pub const fn as_value<T: Pod>(&'static self) -> &'static T {
-        // Make the length check consume the const result: an unused unit-valued
-        // assertion can be discarded during optimization.
-        let size = const {
+        // Consume the const result in the pointer expression: unused unit-valued
+        // assertions can be discarded during optimization, even for empty types.
+        let offset = const {
             super::assert_little_endian();
             let () = T::ASSERT_LAYOUT;
             assert!(align_of::<T>() <= MAX_ALIGN, "over-aligned Pod type");
-            size_of::<T>()
+            assert!(
+                size_of::<T>() == N,
+                "embedded byte length must equal the requested type's size"
+            );
+            0
         };
-        assert!(
-            size == N,
-            "embedded byte length must equal the requested type's size"
-        );
 
         // SAFETY: `repr(C)` puts the byte array at offset zero, so its pointer is
         // aligned to `MAX_ALIGN`. The assertions establish sufficient alignment
         // and exactly `size_of::<T>()` initialized bytes. The validated `Pod`
         // contract permits every bit pattern and shared access. The storage is
         // borrowed for `'static` and cannot be mutated while the view exists.
-        unsafe { &*self.0.as_ptr().cast::<T>() }
+        unsafe { &*self.0.as_ptr().add(offset).cast::<T>() }
     }
 }
 

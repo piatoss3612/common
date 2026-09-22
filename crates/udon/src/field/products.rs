@@ -1,13 +1,13 @@
 //! Wide product accumulation and signed product differences.
 //!
 //! The range arguments beside each kernel explain how much reduction its
-//! accumulator needs before returning a canonical field element.
+//! accumulator needs before returning a loose field element.
 
 use core::marker::PhantomData;
 
-use super::montgomery::montgomery_reduce;
+use super::montgomery::{montgomery_reduce_unreduced, reduce_once, reduce_twice_modulus};
 use super::word::{adc, mac, multiply_wide, sbb};
-use super::{PastaField, PrimeModulus};
+use super::{PastaField, PrimeModulus, ReductionState};
 
 #[cfg(test)]
 #[path = "tests/products.rs"]
@@ -47,15 +47,23 @@ impl<M: PrimeModulus> ProductSum<M> {
 
     /// Adds `lhs * rhs` to the sum.
     #[inline(always)]
-    pub fn add_product(&mut self, lhs: &PastaField<M>, rhs: &PastaField<M>) {
+    pub fn add_product(
+        &mut self,
+        lhs: &PastaField<M, impl ReductionState>,
+        rhs: &PastaField<M, impl ReductionState>,
+    ) {
         self.add_product_inner::<false>(lhs, rhs);
     }
 
     // Bounded callers start from zero and feed at most one physical slice.
     // On 32/64-bit targets its byte-size bound implies fewer than 2^59 terms;
-    // with each product below 2^510, the 576-bit accumulator cannot overflow.
+    // with each product below 2^512, the 576-bit accumulator cannot overflow.
     #[inline(always)]
-    fn add_product_inner<const BOUNDED: bool>(&mut self, lhs: &PastaField<M>, rhs: &PastaField<M>) {
+    fn add_product_inner<const BOUNDED: bool>(
+        &mut self,
+        lhs: &PastaField<M, impl ReductionState>,
+        rhs: &PastaField<M, impl ReductionState>,
+    ) {
         let (d0, carry) = mac(self.wide[0], lhs.limbs[0], rhs.limbs[0], 0);
         let (d1, carry) = mac(self.wide[1], lhs.limbs[0], rhs.limbs[1], carry);
         let (d2, carry) = mac(self.wide[2], lhs.limbs[0], rhs.limbs[2], carry);
@@ -93,7 +101,11 @@ impl<M: PrimeModulus> ProductSum<M> {
     // Column accumulation shares carry handoffs across terms in a block.
     // Only fresh, physically bounded slice sums call this path.
     #[cfg(target_arch = "aarch64")]
-    fn add_product_block(&mut self, lhs: &[PastaField<M>], rhs: &[PastaField<M>]) {
+    fn add_product_block(
+        &mut self,
+        lhs: &[PastaField<M, impl ReductionState>],
+        rhs: &[PastaField<M, impl ReductionState>],
+    ) {
         assert_eq!(lhs.len(), rhs.len());
 
         macro_rules! add_block {
@@ -188,7 +200,7 @@ impl<M: PrimeModulus> ProductSum<M> {
 
     /// Adds one field value to the sum.
     #[inline(always)]
-    pub fn add_term(&mut self, term: &PastaField<M>) {
+    pub fn add_term(&mut self, term: &PastaField<M, impl ReductionState>) {
         // Insert term * R so the final REDC returns the original stored value.
         let (d4, carry) = adc(self.wide[4], term.limbs[0], 0);
         let (d5, carry) = adc(self.wide[5], term.limbs[1], carry);
@@ -217,7 +229,7 @@ impl<M: PrimeModulus> ProductSum<M> {
     /// Returns the accumulated field value with one Montgomery reduction.
     #[inline(always)]
     pub fn finish(self) -> PastaField<M> {
-        PastaField::from_montgomery(montgomery_reduce::<M>(self.partial_reduce()))
+        PastaField::from_montgomery(montgomery_reduce_unreduced::<M>(self.partial_reduce()))
     }
 
     // Restore the bit lost when the 576-bit accumulator overflows. First
@@ -244,7 +256,7 @@ impl<M: PrimeModulus> ProductSum<M> {
 
     // Fold the top two limbs using B448 ≡ 2^448 and R2 ≡ 2^512 (mod p).
     // The result is below 2^448 + 2^65 * p < 2^449 < p * R, the input
-    // bound for Montgomery reduction with one conditional subtraction.
+    // bound for Montgomery reduction returning a loose value below 2p.
     #[inline(always)]
     fn partial_reduce(&self) -> [u64; 8] {
         let upper = self.wide[7];
@@ -275,30 +287,42 @@ impl<M: PrimeModulus> ProductSum<M> {
     }
 }
 
-impl<M: PrimeModulus> PastaField<M> {
+impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Computes `self * multiplier - 2 * doubled_lhs * doubled_rhs`.
-    pub fn mul_sub_double_product(
+    pub fn mul_sub_double_product<T: ReductionState, U: ReductionState, V: ReductionState>(
         &self,
-        multiplier: &Self,
-        doubled_lhs: &Self,
-        doubled_rhs: &Self,
-    ) -> Self {
-        self.product_difference::<true>(multiplier, doubled_lhs, doubled_rhs)
+        multiplier: &PastaField<M, T>,
+        doubled_lhs: &PastaField<M, U>,
+        doubled_rhs: &PastaField<M, V>,
+    ) -> PastaField<M> {
+        self.product_difference::<true, T, U, V>(multiplier, doubled_lhs, doubled_rhs)
     }
 
     /// Computes `self * multiplier - lhs * rhs` with one Montgomery reduction.
-    pub fn mul_sub_product(&self, multiplier: &Self, lhs: &Self, rhs: &Self) -> Self {
-        self.product_difference::<false>(multiplier, lhs, rhs)
+    pub fn mul_sub_product<T: ReductionState, U: ReductionState, V: ReductionState>(
+        &self,
+        multiplier: &PastaField<M, T>,
+        lhs: &PastaField<M, U>,
+        rhs: &PastaField<M, V>,
+    ) -> PastaField<M> {
+        self.product_difference::<false, T, U, V>(multiplier, lhs, rhs)
     }
 
-    fn product_difference<const DOUBLE: bool>(
+    fn product_difference<
+        const DOUBLE: bool,
+        T: ReductionState,
+        U: ReductionState,
+        V: ReductionState,
+    >(
         &self,
-        multiplier: &Self,
-        lhs: &Self,
-        rhs: &Self,
-    ) -> Self {
-        // Subtract first; only a negative difference needs pR. Since
-        // -2p² < delta < p² and p < R/3, either result lies in [0,pR).
+        multiplier: &PastaField<M, T>,
+        lhs: &PastaField<M, U>,
+        rhs: &PastaField<M, V>,
+    ) -> PastaField<M> {
+        // Reduced operands need only pR to restore a negative difference.
+        // Loose products are below 4p² < 2pR; a doubled product is below
+        // 8p² < 3pR. Restore with 2pR or 3pR, then fold the high half.
+        let reduced = S::REDUCED && T::REDUCED && U::REDUCED && V::REDUCED;
         let mut wide = multiply_wide(&self.limbs, &multiplier.limbs);
         let mut product = multiply_wide(&lhs.limbs, &rhs.limbs);
         if DOUBLE {
@@ -316,18 +340,31 @@ impl<M: PrimeModulus> PastaField<M> {
         }
         let mask = 0u64.wrapping_sub(borrow);
         let mut carry = 0;
-        for (upper, modulus) in wide[4..].iter_mut().zip(M::MODULUS) {
+        let offset = if reduced {
+            M::MODULUS
+        } else if DOUBLE {
+            super::word::add_limbs(&M::TWICE_MODULUS, &M::MODULUS).0
+        } else {
+            M::TWICE_MODULUS
+        };
+        for (upper, modulus) in wide[4..].iter_mut().zip(offset) {
             (*upper, carry) = adc(*upper, modulus & mask, carry);
         }
         // A negative subtraction wrapped modulo R²; restoration wraps once.
         debug_assert_eq!(carry, borrow);
-        Self::from_montgomery(montgomery_reduce::<M>(wide))
+        if !reduced {
+            fold_high::<M>(&mut wide, true);
+        }
+        PastaField::from_montgomery(montgomery_reduce_unreduced::<M>(wide))
     }
 
     /// Returns the inner product of two arrays, or zero for empty arrays.
     ///
     /// Products share one Montgomery reduction.
-    pub fn sum_of_products<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
+    pub fn sum_of_products<const N: usize>(
+        lhs: &[Self; N],
+        rhs: &[PastaField<M, impl ReductionState>; N],
+    ) -> PastaField<M> {
         Self::sum_of_products_slice(lhs, rhs)
     }
 
@@ -339,7 +376,10 @@ impl<M: PrimeModulus> PastaField<M> {
     ///
     /// Panics if the slices have different lengths.
     #[inline]
-    pub fn sum_of_products_slice(lhs: &[Self], rhs: &[Self]) -> Self {
+    pub fn sum_of_products_slice<T: ReductionState>(
+        lhs: &[Self],
+        rhs: &[PastaField<M, T>],
+    ) -> PastaField<M> {
         assert_eq!(lhs.len(), rhs.len(), "inner product lengths must agree");
         const {
             assert!(
@@ -348,14 +388,16 @@ impl<M: PrimeModulus> PastaField<M> {
             );
         }
         if lhs.is_empty() {
-            return Self::ZERO;
+            return PastaField::ZERO;
         }
         if lhs.len() == 1 {
             return lhs[0].mul(&rhs[0]);
         }
         if lhs.len() <= 3 {
-            // 3(p-1)² < pR for both Pasta primes. Four terms exceed this
-            // bound even though their sum still fits in eight limbs.
+            // Three loose products fit eight limbs, with high half < 4p.
+            // Folding only that half changes the integer by multiples of pR.
+            // Reduced/reduced inputs are already below pR; mixed states are
+            // below 2pR. State selection removes unnecessary corrections.
             let mut wide = [0; 8];
             for (lhs, rhs) in lhs.iter().zip(rhs) {
                 let product = multiply_wide(&lhs.limbs, &rhs.limbs);
@@ -365,7 +407,10 @@ impl<M: PrimeModulus> PastaField<M> {
                 }
                 debug_assert_eq!(carry, 0);
             }
-            return Self::from_montgomery(montgomery_reduce::<M>(wide));
+            if !S::REDUCED || !T::REDUCED {
+                fold_high::<M>(&mut wide, !S::REDUCED && !T::REDUCED);
+            }
+            return PastaField::from_montgomery(montgomery_reduce_unreduced::<M>(wide));
         }
         #[cfg(target_arch = "aarch64")]
         if lhs.len() >= 32 {
@@ -409,13 +454,27 @@ impl<M: PrimeModulus> PastaField<M> {
     ///
     /// Accepts pairs from noncontiguous sources, such as strided columns.
     /// Products share one Montgomery reduction.
-    pub fn sum_of_product_pairs<'a>(pairs: impl IntoIterator<Item = (&'a Self, &'a Self)>) -> Self {
+    pub fn sum_of_product_pairs<'a, T: ReductionState>(
+        pairs: impl IntoIterator<Item = (&'a Self, &'a PastaField<M, T>)>,
+    ) -> PastaField<M> {
         let mut sum = ProductSum::new();
         for (lhs, rhs) in pairs {
             sum.add_product(lhs, rhs);
         }
         sum.finish()
     }
+}
+
+// The caller's static representation states select whether H < 2p or H < 4p.
+// The low half is unchanged, so the field value after REDC is unchanged too.
+#[inline(always)]
+fn fold_high<M: PrimeModulus>(wide: &mut [u64; 8], subtract_twice: bool) {
+    let mut high = [wide[4], wide[5], wide[6], wide[7]];
+    if subtract_twice {
+        high = reduce_twice_modulus::<M>(high, 0);
+    }
+    high = reduce_once::<M>(high);
+    wide[4..].copy_from_slice(&high);
 }
 
 #[cfg(target_arch = "aarch64")]

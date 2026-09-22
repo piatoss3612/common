@@ -6,8 +6,8 @@
 //! cube root of unity maps these integer pairs to scalars.
 
 use super::{
-    AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, PastaCurve,
-    PreparedAffinePoint, ProjectivePoint, assert_scratch, batch, table_entry::check_entry,
+    AffinePoint, CurveTableEntry, CurveTableRequirements, PastaCurve, PreparedAffinePoint,
+    ProjectivePoint, assert_scratch, batch,
 };
 use crate::field::{CanonicalUint, PastaField};
 use core::marker::PhantomData;
@@ -39,8 +39,7 @@ impl<C: PastaCurve> EisensteinScalar<C> {
     /// multiplication need not perform it. Preparation is variable-time and
     /// allocates no storage.
     ///
-    /// The scalar must satisfy [`PastaField`]'s reduced-residue invariant.
-    /// Violations remain memory-safe but can cause panics or incorrect results.
+    /// The scalar uses [`PastaField`]'s loose representation.
     pub fn new(scalar: &PastaField<C::Scalar>) -> Self {
         Self::for_single(scalar).certify_batch()
     }
@@ -184,10 +183,10 @@ pub(super) fn representatives<C: PastaCurve>(base: &ProjectivePoint<C>) -> [Proj
 ///
 /// The default [`AffinePoint`] entries occupy 512 bytes; choose
 /// [`PreparedAffinePoint`] entries for 768 bytes and cheaper rotations.
-/// These sizes exclude the base and table handle. Preparation, validation,
+/// These sizes exclude the base and table handle. Preparation
 /// and multiplication are allocation-free and provide no constant-time
 /// guarantee for secret bases, scalars, or table contents.
-/// All constructors check the base and exact entry count.
+/// The entry count is encoded in the borrowed array type.
 #[derive(Clone, Copy)]
 pub struct EisensteinTable<'a, C: PastaCurve, E: CurveTableEntry<C> = AffinePoint<C>> {
     pub(super) base: AffinePoint<C>,
@@ -217,8 +216,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
     /// before any writes. Initial contents do not matter. Scratch tails are untouched
     /// and scratch can be reused as soon as this returns.
     ///
-    /// Returns [`CurveError::InvalidBase`] for an unreduced or off-curve base, leaving
-    /// all buffers unchanged. The returned view borrows only `entries`.
+    /// The returned view borrows only `entries`.
     ///
     /// ```
     /// use zakura_udon::{
@@ -234,7 +232,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
     /// let mut field = [Fp::ZERO; 8];
     /// let table = EisensteinTable::<Pallas, PreparedAffinePoint<Pallas>>::prepare(
     ///     &base, &mut entries, &mut projective, &mut field,
-    /// ).unwrap();
+    /// );
     /// let scalar = Fq::from_u64(42);
     /// assert_eq!(table.mul(&scalar), base.mul_projective(&scalar));
     /// ```
@@ -243,56 +241,26 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
         entries: &'a mut [E; 8],
         projective_scratch: &mut [ProjectivePoint<C>],
         field_scratch: &mut [PastaField<C::Base>],
-    ) -> Result<Self, CurveError> {
-        check_base(base)?;
+    ) -> Self {
         assert_scratch("projective", 8, projective_scratch.len());
         assert_scratch("field", 8, field_scratch.len());
         projective_scratch[..8].copy_from_slice(&representatives(&base.to_projective()));
         normalize(&projective_scratch[..8], &mut field_scratch[..8], entries);
-        Ok(Self {
+        Self {
             base: *base,
             entries,
-        })
-    }
-
-    /// Binds stored entries after checking the specified multiples and caches.
-    ///
-    /// Returns the base error from [`Self::bind_trusted`], or
-    /// [`CurveError::InvalidTable`] for unreduced, incorrect, or inconsistent entries.
-    /// Validation needs no inversion, allocation, or scratch.
-    pub fn bind(base: &AffinePoint<C>, entries: &'a [E; 8]) -> Result<Self, CurveError> {
-        let table = Self::bind_trusted(base, entries)?;
-        table.validate()?;
-        Ok(table)
-    }
-
-    /// Binds entries whose mathematical validity the owner has established.
-    ///
-    /// Returns [`CurveError::InvalidBase`] for unreduced or off-curve base coordinates.
-    /// Entries must be the reduced, on-curve multiples in this type's order, with
-    /// consistent cached coordinates. This method does not inspect them; invalid
-    /// entries may panic or give incorrect results during arithmetic, while remaining
-    /// memory-safe. Use [`Self::bind`] to validate stored data.
-    pub fn bind_trusted(base: &AffinePoint<C>, entries: &'a [E; 8]) -> Result<Self, CurveError> {
-        check_base(base)?;
-        Ok(Self {
-            base: *base,
-            entries,
-        })
-    }
-
-    /// Checks every specified multiple and cached coordinate without inversion.
-    ///
-    /// Returns [`CurveError::InvalidTable`] for invalid entries. Requires no
-    /// allocation or scratch, including for views from [`Self::bind_trusted`].
-    pub fn validate(&self) -> Result<(), CurveError> {
-        for (expected, entry) in representatives(&self.base.to_projective())
-            .iter()
-            .zip(self.entries)
-        {
-            check_entry(expected, entry)?;
         }
-        Ok(())
+    }
+
+    /// Borrows trusted entries in the representative order documented on this type.
+    ///
+    /// `entries` must have been prepared for `base`. Binding preserves the stored
+    /// representation and performs no field or curve arithmetic.
+    pub const fn bind(base: &AffinePoint<C>, entries: &'a [E; 8]) -> Self {
+        Self {
+            base: *base,
+            entries,
+        }
     }
 
     /// Borrows the nonidentity base.
@@ -310,11 +278,9 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
         self.entries
     }
 
-    /// Multiplies by a reduced scalar; zero returns identity.
+    /// Multiplies by a scalar; zero returns identity.
     ///
-    /// The scalar must satisfy [`PastaField`]'s reduced-residue invariant,
-    /// and a table created with [`Self::bind_trusted`] must satisfy its entry
-    /// requirements. Uses bounded stack storage without caller scratch or
+    /// Uses bounded stack storage without caller scratch or
     /// allocation. Execution is variable-time.
     pub fn mul(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
         self.mul_prepared(&EisensteinScalar::for_single(scalar))
@@ -327,13 +293,6 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
     pub fn mul_prepared(&self, scalar: &EisensteinScalar<C>) -> ProjectivePoint<C> {
         multiply(self.entries, scalar.digits())
     }
-}
-
-fn check_base<C: PastaCurve>(base: &AffinePoint<C>) -> Result<(), CurveError> {
-    if AffinePoint::<C>::from_xy(base.x, base.y).is_none() {
-        return Err(CurveError::InvalidBase);
-    }
-    Ok(())
 }
 
 pub(super) fn normalize<C: PastaCurve, E: CurveTableEntry<C>>(

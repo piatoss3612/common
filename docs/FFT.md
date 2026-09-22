@@ -18,9 +18,9 @@ canonical Pasta root for its size. Use `Domain::new(k)` for `2^k` elements or
 `Domain::for_size(n)` for an element count. The constructor documents supported
 orders and target address-space limits. Size one is supported.
 
-`domain.subgroup()` selects shift one. `domain.coset(shift)` accepts any nonzero,
-reduced field element, including shifts inside the subgroup; it rejects
-unreduced Montgomery representations before arithmetic. For size `n`, canonical
+`domain.subgroup()` selects shift one. `domain.coset(shift)` accepts any nonzero
+loose field element, including shifts inside the subgroup. Both representations
+of zero are rejected. For size `n`, canonical
 `root`, and coefficients `c[i]`, natural evaluation row `j` is
 
 ```text
@@ -111,29 +111,25 @@ and needs no domain construction. `TableRequirements::for_domain` is a
 convenience wrapper for an existing domain.
 
 `TablesMut::prepare` returns a `Transform` handle tied to the generating coset.
-For imported slices, `Tables::bind` checks lengths and every mathematical entry,
-including reduced Montgomery limbs, then returns the same handle.
-Native generation requires no content scan; checked
-imports require linear work, with no entry validation during execution.
-Use `bound.for_coset(other_coset)` to reuse validated ordinary forward
-and inverse twiddles on another coset of the same subgroup. This takes constant
-work and retains the original borrows, without inspecting entries again.
+For stored slices, `Tables::bind` asserts their lengths and returns the same
+handle. It is a const function and trusts the entries produced by preparation.
+Use `bound.for_coset(other_coset)` to reuse ordinary forward and inverse
+twiddles on another coset of the same subgroup. This takes constant work and
+retains the original borrows.
 Changing the shift drops inverse-finish and inverse-scaling tables, whose entries
 depend on that shift; the same domain retains every table. A different subgroup
 size is rejected.
 
-Every table family also offers `bind_trusted`, which relies on the caller to
-establish correct entries elsewhere. Each constructor documents the dimensions
-or seeds it still checks and the caller's obligations. Incorrect contents can
-cause wrong results or panics; these APIs remain memory safe. An explicit
-`validate` method remains available to check an existing handle. Bento checks the
-storage layout; artifact metadata identifies the field and conventions; checked
-binding establishes the mathematical contents. These are separate checks.
+Every table family has one `bind` operation. Binding attaches trusted entries
+to their domain or sequence description and checks only dimensions and
+configuration. It performs no field reduction or mathematical content scan.
+The artifact's schema identifies the field and table conventions; Bento preserves
+the exact representations generated with those types.
 
 Transform plans additionally accept
 [`TwiddleTable`](../crates/udon/src/fft/powers.rs) through `with_twiddles`.
 `TwiddleDescription::requirements` sizes each representation; `prepare` and
-`bind` produce handles from native generation or checked imports. For table
+`bind` produce handles from preparation or trusted stored entries. For table
 domain size `N > 1`, retained field counts are listed below; size one needs no
 entries in either representation.
 
@@ -151,9 +147,9 @@ explicit twiddle provider.
 
 `PowerTable` describes entry `i` as `first * step^i`, including deliberate scaling.
 Forward coefficient tables use `first = 1`, `step = shift`, and exactly the
-transform size. `PowerTable::prepare` and `bind` return checked handles;
+transform size. `PowerTable::prepare` and `bind` return handles directly;
 `with_forward_scales` checks their compatibility without rescanning contents.
-Both seeds must be reduced, even for empty sequences.
+Seeds and entries use loose field representations.
 
 Callers can prepare table arrays at runtime and lend their slices, or prepare
 them in a downstream build script and embed them through [Bento POD](POD.md).
@@ -169,13 +165,11 @@ shows the complete build-to-runtime path for both fields:
    uses `bento::embed_struct!` with `udon::stored_form!()`, borrows tables directly
    from the embedded record, and executes with stack-owned buffers.
 
-The owner chooses filenames, dimensions, format versions, and integrity checks.
-The fixture's header records the field modulus, Montgomery radix, domain sizes,
-root orientation, scale normalization, shift, and layout. Its consumer validates
-that metadata before binding the tables. These conventions belong to the
-artifact owner's schema; Udon supplies mathematical table handles.
-Consumers check semantic compatibility and mathematical entries separately from
-Bento's target-layout checks and the owner's transport-integrity policy.
+The owner chooses filenames, dimensions, and format versions. The fixture's
+shared schema fixes the field types, domain sizes, root orientation, scale
+normalization, shift, and layout. Its consumer borrows the generated entries
+directly. These conventions belong to the artifact owner's schema; Udon supplies
+mathematical table handles without rechecking the stored values.
 Native build-time and runtime preparation produce identical borrowed handles;
 use build scripts for large artifacts and const evaluation for small schedules
 or storage requirements.
@@ -255,9 +249,8 @@ caller buffers. Ordinary slice ranges provide coefficient tiles.
 
 `Expansion::coefficients` accepts any prefix fitting the base domain. An optional
 table holds exactly `extended_size` residue scales; `prepare_scales` fills caller
-storage and returns a checked `ExpansionScales` handle with `Coefficients`
-normalization. Pass the handle to `Expansion::new` or `with_scales`;
-`validate_scales` is an optional explicit audit.
+storage and returns an `ExpansionScales` handle with `Coefficients`
+normalization. Pass the handle to `Expansion::new` or `with_scales`.
 
 Direct expansion accepts the same `ExecutionOptions` as transforms. Udon divides
 one task allowance across residues and their inner transforms and fits their
@@ -280,7 +273,8 @@ scale convention and domain. `Expansion::new` accepts an optional handle, and
 | `UnscaledInverse` | `n^-1 * (g*w_N^s)^i` |
 
 Both need `N` fields. `ExpansionScales::prepare` writes either convention;
-`bind` checks imported entries before returning a handle. Both coefficient and
+`bind` checks the configuration and asserts the stored length without inspecting
+entries. Both coefficient and
 evaluation inputs can use either convention. Residue initialization accounts for
 the table's factor and the input's normalization; the table does not select the
 inverse's scale. See the
@@ -327,7 +321,7 @@ Use `execute` for immutable input, supplying a coefficient buffer for
 The two policies retaining coefficients select an explicit `InverseScale` and
 return a [`CoefficientView`](../crates/udon/src/fft/layout.rs) borrowing only that
 buffer. `Normalized` retains `c[i]`; `Unscaled` retains `n * c[i]`, where `n` is
-the source base size. Both use increasing degree order and reduced Montgomery
+the source base size. Both use increasing degree order and loose Montgomery
 representations. The view's `normalization_factor()` recovers `c[i]`; output and
 scratch can be reused while the view is live.
 

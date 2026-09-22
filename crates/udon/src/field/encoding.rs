@@ -5,9 +5,9 @@
 
 use core::marker::PhantomData;
 
-use super::montgomery::{montgomery_multiply, montgomery_reduce};
+use super::montgomery::{montgomery_multiply, montgomery_reduce, montgomery_reduce_unreduced};
 use super::word::{adc, compare_limbs, multiply_wide};
-use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus};
+use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus, ReductionState};
 
 /// Constructs an [`Fp`](crate::field::Fp) constant from hexadecimal text.
 ///
@@ -25,7 +25,7 @@ use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus};
 ///
 /// const VALUE: Fp =
 ///     fp_hex!("0x000000000000000000000000000000000000000000000000000000000000002a");
-/// assert_eq!(VALUE, Fp::from_u64(42));
+/// assert_eq!(VALUE.reduce(), Fp::from_u64(42));
 /// ```
 ///
 /// ```compile_fail
@@ -62,7 +62,7 @@ macro_rules! fp_hex {
                 !$crate::__u256_ge!(&CANONICAL, &MODULUS),
                 "field constants must be canonical residues"
             );
-            $crate::field::Fp::from_montgomery_limbs($crate::__m255_from_u256!(
+            <$crate::field::Fp>::from_montgomery_limbs($crate::__m255_from_u256!(
                 &MODULUS, &CANONICAL
             ))
         }
@@ -91,29 +91,17 @@ macro_rules! fq_hex {
                 !$crate::__u256_ge!(&CANONICAL, &MODULUS),
                 "field constants must be canonical residues"
             );
-            $crate::field::Fq::from_montgomery_limbs($crate::__m255_from_u256!(
+            <$crate::field::Fq>::from_montgomery_limbs($crate::__m255_from_u256!(
                 &MODULUS, &CANONICAL
             ))
         }
     };
 }
 
-impl<M: PrimeModulus> PastaField<M> {
-    /// Checks the reduced-residue invariant without field arithmetic.
-    ///
-    /// This accepts raw POD contents so validators can reject unreduced limbs
-    /// before calling arithmetic that assumes reduction.
-    pub(crate) fn is_reduced(&self) -> bool {
-        self.montgomery_limbs()
-            .iter()
-            .rev()
-            .cmp(M::MODULUS.iter().rev())
-            .is_lt()
-    }
-
+impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     pub(super) fn from_canonical_limbs(limbs: [u64; 4]) -> Self {
         debug_assert!(compare_limbs(&limbs, &M::MODULUS).is_lt());
-        Self::from_montgomery(montgomery_multiply::<M>(&limbs, &M::R2))
+        Self::from_loose(montgomery_multiply::<M>(&limbs, &M::R2))
     }
 
     pub(super) fn canonical_limbs(&self) -> [u64; 4] {
@@ -132,7 +120,7 @@ impl<M: PrimeModulus> PastaField<M> {
 
     /// Reduces an arbitrary 256-bit integer into this field.
     pub fn from_uint_reduced(value: CanonicalUint) -> Self {
-        Self::from_montgomery(montgomery_multiply::<M>(&value.limbs(), &M::R2))
+        Self::from_loose(montgomery_multiply::<M>(&value.limbs(), &M::R2))
     }
 
     /// Decodes a canonical 32-byte little-endian field representation.
@@ -163,18 +151,19 @@ impl<M: PrimeModulus> PastaField<M> {
         let high = chunks.next().unwrap();
         let mut high_bytes = [0; ENCODED_SIZE];
         high_bytes[..high.len()].copy_from_slice(high);
-        let mut value = Self::from_uint_reduced(CanonicalUint::from_le_bytes(high_bytes));
+        let mut value =
+            PastaField::<M>::from_uint_reduced(CanonicalUint::from_le_bytes(high_bytes));
         for chunk in chunks {
             let digit = CanonicalUint::from_le_bytes(chunk.try_into().unwrap());
             // Stored V=xR and ordinary D yield (V+D)R, representing xR+D.
-            value = Self::from_montgomery(raw_product_sum::<M>(
+            value = PastaField::from_montgomery(raw_product_sum::<M>(
                 &value.limbs,
                 &M::R2,
                 &digit.limbs(),
                 &M::R2,
             ));
         }
-        value
+        Self::from_loose(value.limbs)
     }
 
     /// Reduces a 64-byte little-endian integer into the field.
@@ -183,7 +172,7 @@ impl<M: PrimeModulus> PastaField<M> {
     pub fn from_wide_bytes_reduced(bytes: &[u8; 2 * ENCODED_SIZE]) -> Self {
         let low = CanonicalUint::from_le_bytes(bytes[..ENCODED_SIZE].try_into().unwrap());
         let high = CanonicalUint::from_le_bytes(bytes[ENCODED_SIZE..].try_into().unwrap());
-        Self::from_montgomery(raw_product_sum::<M>(
+        Self::from_loose(raw_product_sum::<M>(
             &low.limbs(),
             &M::R2,
             &high.limbs(),
@@ -201,7 +190,7 @@ impl<M: PrimeModulus> PastaField<M> {
         self.to_canonical_uint().to_le_bytes()
     }
 
-    /// Returns the reduced little-endian limbs of `self * 2^256 mod p`.
+    /// Returns the stored little-endian Montgomery limbs without changing them.
     ///
     /// These are storage words; use [`Self::to_bytes`] for protocol encoding.
     #[inline]
@@ -209,18 +198,18 @@ impl<M: PrimeModulus> PastaField<M> {
         self.limbs
     }
 
-    /// Constructs a field element from reduced Montgomery limbs.
+    /// Constructs a field element from Montgomery limbs within its type's bound.
     ///
     /// This reverses [`Self::montgomery_limbs`] without changing the limbs.
     ///
     /// # Panics
     ///
-    /// Panics if the integer in `limbs` is at least the modulus. In a const
-    /// expression this produces a compile error.
+    /// Panics if `limbs` is outside `[0, 2p)` for `Loose`, or `[0, p)` for
+    /// `Reduced`. In a const expression this produces a compile error.
     pub const fn from_montgomery_limbs(limbs: [u64; 4]) -> Self {
         assert!(
-            compare_limbs(&limbs, &M::MODULUS).is_lt(),
-            "Montgomery limbs must be a canonical residue"
+            compare_limbs(&limbs, &Self::BOUND).is_lt(),
+            "Montgomery limbs exceed the representation bound"
         );
         Self {
             limbs,
@@ -251,5 +240,5 @@ fn raw_product_sum<M: PrimeModulus>(
         (*limb, carry) = adc(*limb, term, carry);
     }
     debug_assert_eq!(carry, 0);
-    montgomery_reduce::<M>(sum)
+    montgomery_reduce_unreduced::<M>(sum)
 }

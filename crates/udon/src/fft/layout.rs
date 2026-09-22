@@ -79,10 +79,10 @@ pub enum InverseScale {
 /// }, Some(retained), &mut output, options, &SerialExecutor, &mut [])?;
 /// for (row, value) in output.iter().enumerate() {
 ///     let point = next.domain().domain().root().pow_u64(row as u64);
-///     assert_eq!(*value, Fp::ONE.add(&point));
+///     assert_eq!(value.reduce(), <Fp>::ONE.add(&point).reduce());
 /// }
-/// assert_eq!(retained.as_slice(), &[Fp::from_u64(2); 2]);
-/// assert_eq!(retained.normalization_factor(), Fp::power_of_two_inverse(1));
+/// assert!(retained.as_slice().iter().all(|value| value.reduce() == Fp::from_u64(2)));
+/// assert_eq!(retained.normalization_factor().reduce(), Fp::power_of_two_inverse(1));
 /// # Ok::<(), zakura_udon::fft::FftError>(())
 /// ```
 #[derive(Clone, Copy)]
@@ -255,7 +255,7 @@ impl<'a, M: PrimeModulus> EvaluationView<'a, M> {
     pub fn get_extended_row(self, row: usize, domain: CosetDomain<M>) -> Option<&'a PastaField<M>> {
         if domain.size() < self.domain.size()
             || row >= domain.size()
-            || domain.shift() != self.domain.shift()
+            || domain.shift().reduce() != self.domain.shift().reduce()
         {
             return None;
         }

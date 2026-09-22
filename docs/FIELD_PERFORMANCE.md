@@ -8,7 +8,9 @@ variable-time contracts.
 The initial measurements predate the Bento facade redesign and removal of
 runtime hex parsing. The [optional larger-table
 comparison](#optional-larger-square-root-tables) was measured after those
-changes; the earlier comparisons have not been repeated for them.
+changes; the earlier comparisons have not been repeated for them. These timings
+also predate the `Loose`/`Reduced` representation types and the removal of final
+field reductions from ordinary arithmetic.
 
 ## Method
 
@@ -98,8 +100,10 @@ uses Bento's compile-time macros, sharing setup within the root tables.
 Wide decoding combines two raw products with one REDC, with a compile-time
 check of `R2 + R3 < p`. Arbitrary-width decoding uses 32-byte Horner digits;
 its separate numerator bound is also checked. Runtime hex conversion reused
-`R2` in the measured implementation. Product differences add `pR` only after
-a negative subtraction, so one final correction suffices.
+`R2` in the measured implementation. Product differences restore a negative
+subtraction with `pR` for reduced operands, `2pR` for loose operands, or `3pR`
+for a doubled loose product. Folding the high half below `p` preserves the
+field value and permits one final REDC.
 
 Forward and inverse root ladders replace repeated root construction and supply
 Tonelli–Shanks corrections directly. Their combined raw payload is 4,224 bytes
@@ -108,13 +112,14 @@ through `sqrt-table-large`; see the [optional table
 measurements](#optional-larger-square-root-tables). The generic small-field
 square-root algorithm remains a test oracle.
 
-REDC cancels the low half before adding the high half once. The private batched
-squaring hook retains raw intermediates until the end of a run. Compile-time
-checks verify the integer bound recurrence for every run length through 256,
-including the final fused product; longer runs normalize between batches.
-Public field values remain reduced. This uses a finite bound check because
-both Pasta primes are slightly above `2^254`; treating arbitrary residues below
-`2p` as closed under lazy squaring would be incorrect.
+REDC cancels the low half before adding the high half once. Multiplication and
+squaring now preserve `[0, 2p)` directly, including arbitrary-length square
+runs. The generic REDC estimate alone does not prove closure because the Pasta
+primes are slightly above `2^254`. The
+[kernel proof](../crates/udon/src/field/montgomery.rs) uses `p = R/4 + c` and
+`16c² < R` to rule out an output at or above `2p`; parameter derivation checks
+these premises at compile time. Explicit `reduce()` converts a loose value to
+the reduced type required by equality, ordering, and square roots.
 
 The chain planner prefers smaller prepared tables on arithmetic-cost ties.
 Planned and supplied chains share one operation graph and compact, unrolled,
@@ -153,8 +158,10 @@ approximately 658–757 ns on dense fixtures, versus 530–550 ns before the
 changes. That implementation was also discarded.
 
 Contiguous arrays and slices share dispatch. Zero through three terms use
-specialized paths; the exact three-versus-four REDC cutoff is checked at compile
-time. Fresh slice accumulators exploit the physical slice-length bound while
+specialized paths. Three reduced products fit below `pR`; three loose products
+fit eight limbs and need only a high-half fold before REDC. Mixed states need
+one high-half subtraction, while two loose states need at most two. The bounds
+are checked at compile time. Fresh slice accumulators exploit the physical slice-length bound while
 the public `ProductSum` continues folding overflow for unrestricted additions
 and merges. On AArch64, blocks of 32 use independent Comba columns. This
 outperformed four accumulator lanes at large lengths: 1,024-term arrays took
@@ -172,14 +179,15 @@ path at 64 terms; cross-compilation does not establish its speed.
   tables](#optional-larger-square-root-tables).
 - **Unimplemented API suggestion:** a non-panicking
   `try_from_montgomery_limbs` returning `Option`. The existing const constructor
-  still rejects unreduced limbs by panicking. For the separate workflow of
+  rejects limbs at or above the selected representation state's bound by
+  panicking. For the separate workflow of
   embedding generated field values, see the [field storage
   guide](POD.md#storing-field-elements).
 - **Further arithmetic candidates:** interleaved lazy squaring on x86-64,
   batched runtime exponentiation, and direct multiplication by inverse powers
   of two remain unimplemented and unbenchmarked. An AArch64 assembly backend
   is also unimplemented; Udon retains its existing prohibition on unsafe code.
-  Low-half REDC, bounded lazy square runs, and AArch64 column accumulation use
+  Low-half REDC, loose square runs, and AArch64 column accumulation use
   safe Rust as described above.
 - **Further planner and validation work:** the planner now breaks arithmetic
   cost ties by prepared-table size; it does not search using peak liveness or
@@ -220,11 +228,11 @@ fn exercise<M: PrimeModulus>(input: &[u8; 64]) -> [u8; 32] {
     let a = PastaField::<M>::from_wide_bytes_reduced(black_box(input));
     let b = a.square();
     let inverse = a.invert().unwrap_or(PastaField::ZERO);
-    let root = b.sqrt().unwrap_or(PastaField::ZERO);
+    let root = b.reduce().sqrt().unwrap_or(PastaField::ZERO);
     let u = PastaField::<M>::root_of_unity(black_box(16)).unwrap();
     let v = PastaField::<M>::root_of_unity_inverse(black_box(16)).unwrap();
     let c = PastaField::sum_of_products(black_box(&[a; 64]), black_box(&[b; 64]));
-    let d = PastaField::from_bytes_reduced(black_box(&[0xa7; 129]));
+    let d = PastaField::<M>::from_bytes_reduced(black_box(&[0xa7; 129]));
     let mut sum = ProductSum::new();
     sum.add_product(&inverse, &root);
     sum.add_term(&u);

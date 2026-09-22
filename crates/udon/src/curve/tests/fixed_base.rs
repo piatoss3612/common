@@ -24,8 +24,16 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
         assert_eq!(*table.base(), base);
         assert_eq!(table.as_slice().len(), required.table_entries);
         assert_eq!(&projective[h..], &[ProjectivePoint::GENERATOR; 2]);
-        assert_eq!(&field[h..], &[PastaField::from_u64(77); 2]);
-        table.validate().unwrap();
+        assert_eq!(
+            field[h..]
+                .iter()
+                .map(|value| value.reduce())
+                .collect::<Vec<_>>(),
+            [PastaField::<_>::from_u64(77); 2]
+                .iter()
+                .map(|value| value.reduce())
+                .collect::<Vec<_>>()
+        );
         // Every stored entry is checked using ordinary-integer affine formulas,
         // including the carry point and every partially filled top window.
         let mut reference_base = Reference::from_point(&base.to_point());
@@ -52,9 +60,9 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
             let power =
                 PastaField::from_canonical_uint(CanonicalUint::power_of_two(bit).unwrap()).unwrap();
             scalars.extend([
-                power.sub(&PastaField::ONE),
+                power.sub(&PastaField::<_>::ONE),
                 power,
-                power.add(&PastaField::ONE),
+                power.add(&PastaField::<_>::ONE),
             ]);
         }
         // These even-bit powers reach the final width-2 carry through the
@@ -63,13 +71,12 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
             let power =
                 PastaField::from_canonical_uint(CanonicalUint::power_of_two(bit).unwrap()).unwrap();
             scalars.extend([
-                power.sub(&PastaField::ONE),
+                power.sub(&PastaField::<_>::ONE),
                 power,
-                power.add(&PastaField::ONE),
+                power.add(&PastaField::<_>::ONE),
             ]);
         }
         let bound = FixedBaseTable::bind(description, &base, table.as_slice()).unwrap();
-        let trusted = FixedBaseTable::bind_trusted(description, &base, table.as_slice()).unwrap();
         let mut carries = [[false; 2]; 2];
         for scalar in scalars {
             let (a, b) = glv_decompose::<C>(&scalar);
@@ -88,7 +95,6 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
                 "width {window_bits}, scalar {scalar:?}"
             );
             assert_eq!(bound.mul(&scalar), expected);
-            assert_eq!(trusted.mul(&scalar), expected);
         }
         assert_eq!(
             carries,
@@ -131,14 +137,6 @@ fn rejections<C: PastaCurve>() {
         }
     );
     let base = AffinePoint::<C>::GENERATOR;
-    let invalid = AffinePoint {
-        x: invalid_field(),
-        ..base
-    };
-    let off_curve = AffinePoint {
-        y: PastaField::ZERO,
-        ..base
-    };
     let mut entries = vec![base; required.table_entries];
     let mut projective = vec![ProjectivePoint::GENERATOR; required.projective_scratch];
     let mut field = vec![PastaField::from_u64(17); required.field_scratch];
@@ -161,8 +159,6 @@ fn rejections<C: PastaCurve>() {
             8,
             CurveError::InvalidWindowBits { bits: 9 },
         ),
-        (description, invalid, 257, 8, 8, CurveError::InvalidBase),
-        (description, off_curve, 257, 8, 8, CurveError::InvalidBase),
     ] {
         let old = (entries.clone(), projective.clone(), field.clone());
         assert_eq!(
@@ -176,7 +172,8 @@ fn rejections<C: PastaCurve>() {
             .unwrap_err(),
             expected
         );
-        assert_eq!((&entries, &projective, &field), (&old.0, &old.1, &old.2));
+        assert_eq!((&entries, &projective), (&old.0, &old.1));
+        assert_eq!(bento::bytes_of_slice(&field), bento::bytes_of_slice(&old.2));
     }
     for (entry_len, projective_len, field_len) in [(256, 8, 8), (257, 7, 8), (257, 8, 7)] {
         let old = (entries.clone(), projective.clone(), field.clone());
@@ -192,27 +189,14 @@ fn rejections<C: PastaCurve>() {
             }))
             .is_err()
         );
-        assert_eq!((&entries, &projective, &field), (&old.0, &old.1, &old.2));
+        assert_eq!((&entries, &projective), (&old.0, &old.1));
+        assert_eq!(bento::bytes_of_slice(&field), bento::bytes_of_slice(&old.2));
     }
     for bits in [0, 1, 9, u32::MAX] {
         let invalid_description = FixedBaseDescription { window_bits: bits };
         assert_eq!(
-            FixedBaseTable::bind_trusted(invalid_description, &base, &entries).unwrap_err(),
-            CurveError::InvalidWindowBits { bits }
-        );
-        assert_eq!(
             FixedBaseTable::bind(invalid_description, &base, &entries).unwrap_err(),
             CurveError::InvalidWindowBits { bits }
-        );
-    }
-    for invalid_base in [invalid, off_curve] {
-        assert_eq!(
-            FixedBaseTable::bind(description, &invalid_base, &entries).unwrap_err(),
-            CurveError::InvalidBase
-        );
-        assert_eq!(
-            FixedBaseTable::bind_trusted(description, &invalid_base, &entries).unwrap_err(),
-            CurveError::InvalidBase
         );
     }
     FixedBaseTable::prepare_with(
@@ -224,42 +208,12 @@ fn rejections<C: PastaCurve>() {
     )
     .unwrap();
     let valid = entries.clone();
-    for index in [0, 7, 8, required.table_entries - 1] {
-        for replacement in [invalid, off_curve, base.neg()] {
-            entries[index] = replacement;
-            assert_eq!(
-                FixedBaseTable::bind(description, &base, &entries).unwrap_err(),
-                CurveError::InvalidTable
-            );
-            let trusted = FixedBaseTable::bind_trusted(description, &base, &entries).unwrap();
-            assert_eq!(trusted.validate(), Err(CurveError::InvalidTable));
-            entries.copy_from_slice(&valid);
-        }
-    }
-    entries.swap(0, 1);
-    assert_eq!(
-        FixedBaseTable::bind(description, &base, &entries).unwrap_err(),
-        CurveError::InvalidTable
-    );
-    entries.copy_from_slice(&valid);
-    assert_eq!(
-        FixedBaseTable::bind(description, &base.neg(), &entries).unwrap_err(),
-        CurveError::InvalidTable
-    );
     for len in [0, 256, 258] {
         let mut wrong = valid.clone();
         wrong.resize(len, base);
-        assert_eq!(
-            FixedBaseTable::bind(description, &base, &wrong).unwrap_err(),
-            CurveError::LengthMismatch {
-                buffer: "entries",
-                expected: required.table_entries,
-                actual: len
-            }
-        );
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = FixedBaseTable::bind_trusted(description, &base, &wrong);
+                let _ = FixedBaseTable::bind(description, &base, &wrong);
             }))
             .is_err()
         );
@@ -272,14 +226,12 @@ fn rejections<C: PastaCurve>() {
         &mut projective,
         &mut field,
     )
-    .unwrap()
-    .validate()
     .unwrap();
     assert_eq!(entries, valid);
 }
 
 #[test]
-fn fixed_base_errors_preserve_buffers_and_reject_damaged_storage() {
+fn fixed_base_configuration_and_length_errors_preserve_buffers() {
     rejections::<Pallas>();
     rejections::<Vesta>();
 }

@@ -14,9 +14,9 @@
 //! [`msm`] sums dense or indexed scalar/base terms with caller-owned scratch
 //! and execution.
 //!
-//! Coordinates and scalars must satisfy [`PastaField`]'s reduced-residue
-//! invariant. Stored affine points must also satisfy [`AffinePoint`]'s curve
-//! invariant; POD layout checks alone do not establish either property.
+//! Affine coordinates use [`Reduced`] field elements; projective coordinates
+//! and scalars may use loose residues. Constructors establish the field and
+//! curve invariants, which trusted POD storage preserves byte for byte.
 //! Operations are variable-time and provide no constant-time guarantee for
 //! secret inputs, including bases, scalars, and table contents. Setup and
 //! execution require neither allocation nor a feature flag.
@@ -32,7 +32,7 @@
 
 use core::{fmt, marker::PhantomData};
 
-use crate::field::PastaField;
+use crate::field::{PastaField, Reduced, ReductionState};
 
 mod affine;
 mod batch;
@@ -63,12 +63,9 @@ mod tests;
 ///
 /// The stored layout is `x` followed by `y`, each in [`PastaField`]'s four-limb
 /// Montgomery representation: 64 bytes with alignment 8. Bento storage requires
-/// a little-endian target. [`bento::Pod`] checks memory layout, not the curve
-/// equation or reduced residues. Arithmetic, equality, and encoding assume
-/// reduced coordinates satisfying `y² = x³ + 5`; other stored bit patterns
-/// remain memory-safe but can panic or give incorrect results.
-/// Use [`from_xy`](Self::from_xy) or [`FixedBaseTable::bind`] to validate data
-/// whose mathematical validity is not established by its producer.
+/// a little-endian target. Coordinates use [`Reduced`] residues satisfying
+/// `y² = x³ + 5`. Constructors establish these invariants; trusted [`bento::Pod`]
+/// storage preserves them without runtime validation.
 ///
 /// Use [`Self::to_bytes`] for protocol encoding. [`crate::STORED_FORM`]
 /// identifies the field representation only; artifact owners must separately
@@ -81,8 +78,8 @@ mod tests;
 #[derive(Clone, Copy, Eq, PartialEq, bento::Pod)]
 #[repr(C)]
 pub struct AffinePoint<C: PastaCurve> {
-    x: PastaField<C::Base>,
-    y: PastaField<C::Base>,
+    x: PastaField<C::Base, Reduced>,
+    y: PastaField<C::Base, Reduced>,
     marker: PhantomData<C>,
 }
 
@@ -129,9 +126,7 @@ pub type VestaPoint = Point<Vesta>;
 pub type VestaProjective = ProjectivePoint<Vesta>;
 
 /// Returns `x³ + 5`, the right-hand side of both Pasta curve equations.
-///
-/// `x` must satisfy [`PastaField`]'s reduced-residue invariant.
-fn curve_rhs<C: PastaCurve>(x: &PastaField<C::Base>) -> PastaField<C::Base> {
+fn curve_rhs<C: PastaCurve>(x: &PastaField<C::Base, impl ReductionState>) -> PastaField<C::Base> {
     x.square().mul(x).add(&AffinePoint::<C>::B)
 }
 
@@ -166,14 +161,8 @@ pub enum CurveError {
         /// An unrepresentable total is reported as `usize::MAX`.
         required: usize,
     },
-    /// The base has unreduced coordinates or fails the curve equation.
-    InvalidBase,
-    /// A table entry is invalid or differs from its specified multiple.
-    InvalidTable,
     /// A requested buffer length cannot be represented by a Rust slice.
     SizeOverflow,
-    /// A batch table does not contain a whole number of eight-entry tables.
-    InvalidTableLayout,
     /// An indexed MSM refers past the end of its base slice.
     BaseIndexOutOfBounds {
         /// Position in the index slice.
@@ -182,15 +171,6 @@ pub enum CurveError {
         index: u32,
         /// Number of available bases.
         bases: usize,
-    },
-    /// An imported multiplication table has the wrong number of entries.
-    LengthMismatch {
-        /// The buffer's role.
-        buffer: &'static str,
-        /// Required length in elements.
-        expected: usize,
-        /// Supplied length in elements.
-        actual: usize,
     },
     /// No MSM implementation fits the supplied scratch capacities.
     ScratchTooSmall {
@@ -215,12 +195,7 @@ impl fmt::Display for CurveError {
             Self::MemoryLimit { limit, required } => {
                 write!(f, "MSM needs {required} temporary bytes, limit is {limit}")
             }
-            Self::InvalidBase => f.write_str("invalid curve base"),
-            Self::InvalidTable => f.write_str("invalid curve table entry"),
             Self::SizeOverflow => f.write_str("curve buffer size overflows a slice length"),
-            Self::InvalidTableLayout => {
-                f.write_str("batch table length is not a multiple of eight")
-            }
             Self::BaseIndexOutOfBounds {
                 position,
                 index,
@@ -230,13 +205,6 @@ impl fmt::Display for CurveError {
                     f,
                     "base index {index} at position {position} exceeds {bases} bases"
                 )
-            }
-            Self::LengthMismatch {
-                buffer,
-                expected,
-                actual,
-            } => {
-                write!(f, "{buffer} length is {actual}, expected {expected}")
             }
             Self::ScratchTooSmall {
                 buffer,
@@ -256,17 +224,6 @@ impl core::error::Error for CurveError {}
 
 fn assert_length(buffer: &str, expected: usize, actual: usize) {
     assert_eq!(actual, expected, "{buffer} length");
-}
-
-fn validate_length(buffer: &'static str, expected: usize, actual: usize) -> Result<(), CurveError> {
-    if actual != expected {
-        return Err(CurveError::LengthMismatch {
-            buffer,
-            expected,
-            actual,
-        });
-    }
-    Ok(())
 }
 
 fn assert_scratch(buffer: &str, required: usize, provided: usize) {

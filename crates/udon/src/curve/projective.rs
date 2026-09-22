@@ -29,8 +29,9 @@ impl<C: PastaCurve> PartialEq for ProjectivePoint<C> {
         // Cross-multiplication compares affine x and y without dividing by z.
         let z1_squared = self.z.square();
         let z2_squared = rhs.z.square();
-        self.x.mul(&z2_squared) == rhs.x.mul(&z1_squared)
-            && self.y.mul(&z2_squared).mul(&rhs.z) == rhs.y.mul(&z1_squared).mul(&self.z)
+        self.x.mul(&z2_squared).reduce() == rhs.x.mul(&z1_squared).reduce()
+            && self.y.mul(&z2_squared).mul(&rhs.z).reduce()
+                == rhs.y.mul(&z1_squared).mul(&self.z).reduce()
     }
 }
 
@@ -50,8 +51,8 @@ impl<C: PastaCurve> ProjectivePoint<C> {
     /// Lifts a nonidentity affine point with `z = 1`.
     pub const fn from_affine(point: &AffinePoint<C>) -> Self {
         Self {
-            x: point.x,
-            y: point.y,
+            x: point.x.into_loose(),
+            y: point.y.into_loose(),
             z: PastaField::ONE,
             marker: PhantomData,
         }
@@ -101,8 +102,8 @@ impl<C: PastaCurve> ProjectivePoint<C> {
     pub(super) fn normalize_with_inverse(&self, inverse: &PastaField<C::Base>) -> AffinePoint<C> {
         let squared = inverse.square();
         AffinePoint {
-            x: self.x.mul(&squared),
-            y: self.y.mul(&squared).mul(inverse),
+            x: self.x.mul(&squared).reduce(),
+            y: self.y.mul(&squared).mul(inverse).reduce(),
             marker: PhantomData,
         }
     }
@@ -113,7 +114,7 @@ impl<C: PastaCurve> ProjectivePoint<C> {
     /// leaving `y` and `z` unchanged. Preserves identity and projective scaling.
     pub fn endomorphism(&self) -> Self {
         Self {
-            x: self.x.mul(&PastaField::ZETA),
+            x: self.x.mul(&PastaField::<C::Base>::ZETA),
             ..*self
         }
     }
@@ -167,8 +168,8 @@ impl<C: PastaCurve> ProjectivePoint<C> {
         let s2 = rhs.y.mul(&z1_squared).mul(&self.z);
         // u1/u2 and s1/s2 use the common scale z1*z2. Equal x coordinates
         // require doubling or identity; the addition formula needs h != 0.
-        if u1 == u2 {
-            return if s1 == s2 {
+        if u1.reduce() == u2.reduce() {
+            return if s1.reduce() == s2.reduce() {
                 self.double()
             } else {
                 Self::IDENTITY
@@ -203,8 +204,8 @@ impl<C: PastaCurve> ProjectivePoint<C> {
         let u2 = rhs.x.mul(&z1_squared);
         let s2 = rhs.y.mul(&z1_squared).mul(&self.z);
         // This is the general addition formula with the affine operand's z = 1.
-        if self.x == u2 {
-            return if self.y == s2 {
+        if self.x.reduce() == u2.reduce() {
+            return if self.y.reduce() == s2.reduce() {
                 self.double()
             } else {
                 Self::IDENTITY
@@ -235,7 +236,7 @@ impl<C: PastaCurve> ProjectivePoint<C> {
     /// Multiplies by a scalar using variable-time doubling and addition.
     ///
     /// Processes the full canonical scalar; zero returns identity. The scalar
-    /// must satisfy [`PastaField`]'s reduced-residue invariant. Uses bounded
+    /// may use either reduced or loose residues. Uses bounded
     /// internal stack storage, with no caller table, scratch, or allocation.
     ///
     /// The current implementation uses an inversion-free binary ladder for

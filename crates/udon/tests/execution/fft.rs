@@ -45,7 +45,7 @@ fn reference_transform<M: PrimeModulus>(
             plan.inverse_with(output, options, &SerialExecutor, &mut [])
                 .unwrap();
             if request.inverse_scale == InverseScale::Unscaled {
-                let size = PastaField::from_u64(output.len() as u64);
+                let size = PastaField::<_>::from_u64(output.len() as u64);
                 for value in output.iter_mut() {
                     *value = value.mul(&size);
                 }
@@ -158,7 +158,14 @@ fn check<M: PrimeModulus>() {
                         let result: Vec<_> =
                             arena.values.iter().flat_map(|s| s.read().clone()).collect();
                         assert_eq!(
-                            result, expected,
+                            (result)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            (expected)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
                             "size={size}, request={request:?}, tile={tile}"
                         );
                     }
@@ -200,7 +207,7 @@ fn fused_scales<M: PrimeModulus>() {
             .map(|i| PastaField::from_u64((i * i + 3) as u64))
             .collect();
         let mut scales = vec![PastaField::ZERO; size];
-        let scales = PowerTable::prepare(PastaField::ONE, shift, &mut scales).unwrap();
+        let scales = PowerTable::prepare(PastaField::ONE, shift, &mut scales);
         for extra in [PastaField::ONE, PastaField::from_u64(13)] {
             let scaled: Vec<_> = original.iter().map(|v| v.mul(&extra)).collect();
             let request = TransformRequest::new(Direction::Forward);
@@ -243,7 +250,16 @@ fn fused_scales<M: PrimeModulus>() {
                     task.execute().unwrap();
                     assert_eq!(run.complete(task.finish()).unwrap().error, None);
                     assert!(run.is_complete());
-                    assert_eq!(values, expected);
+                    assert_eq!(
+                        (values)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>(),
+                        (expected)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>()
+                    );
                 }
             }
         }
@@ -320,7 +336,17 @@ fn blocked<M: PrimeModulus>() {
                                 drop(published);
                             }
                         });
-                        assert_eq!(banks.read(0), expected, "{request:?}, panels={panels}");
+                        assert_eq!(
+                            (banks.read(0))
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            (expected)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            "{request:?}, panels={panels}"
+                        );
                         let contiguous = arithmetic.with_contiguous_permutation();
                         let mut values = original.clone();
                         let mut scratch = vec![PastaField::ZERO; contiguous.retained_fields()];
@@ -332,7 +358,17 @@ fn blocked<M: PrimeModulus>() {
                             NonZeroUsize::new(3).unwrap(),
                             &SerialExecutor,
                         );
-                        assert_eq!(values, expected, "structured {request:?}, panels={panels}");
+                        assert_eq!(
+                            (values)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            (expected)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            "structured {request:?}, panels={panels}"
+                        );
                     }
                     let request = TransformRequest {
                         input_order,
@@ -359,7 +395,16 @@ fn blocked<M: PrimeModulus>() {
                     );
                     let mut expected = original.clone();
                     reference_transform(plan, request, &original, &mut expected);
-                    assert_eq!(values, expected);
+                    assert_eq!(
+                        (values)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>(),
+                        (expected)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>()
+                    );
                 }
             }
         }
@@ -434,7 +479,14 @@ fn sparse_tables<M: PrimeModulus>() {
                                     &SerialExecutor,
                                 );
                                 assert_eq!(
-                                    values, expected,
+                                    (values)
+                                        .iter()
+                                        .map(|value| value.reduce())
+                                        .collect::<Vec<_>>(),
+                                    (expected)
+                                        .iter()
+                                        .map(|value| value.reduce())
+                                        .collect::<Vec<_>>(),
                                     "{description:?}, {request:?}, tile={tile}, columns={columns}"
                                 );
                             }
@@ -557,7 +609,16 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
                         NonZeroUsize::new(1).unwrap(),
                         &SerialExecutor,
                     );
-                    assert_eq!(values, expected);
+                    assert_eq!(
+                        (values)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>(),
+                        (expected)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>()
+                    );
                 }
             }
         }
@@ -662,7 +723,10 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
         assert_eq!(run.inflight(), 0);
         assert!(!run.is_complete());
         for value in values {
-            assert_eq!(Fp::from_bytes(value.to_bytes()), Some(value));
+            assert_eq!(
+                <Fp>::from_bytes(value.to_bytes()).map(|value| value.reduce()),
+                Some(value.reduce())
+            );
         }
 
         // Returned leases permit refill and a fresh invocation of the same plan.
@@ -677,8 +741,12 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
             &SerialExecutor,
         );
         assert_eq!(
-            values[0],
-            source.0.iter().fold(Fp::ZERO, |sum, value| sum.add(value))
+            (values[0]).reduce(),
+            (source
+                .0
+                .iter()
+                .fold(<Fp>::ZERO, |sum, value| sum.add(value)))
+            .reduce()
         );
     }
 }
@@ -732,10 +800,28 @@ fn batch_planning_orders_panels_and_validation() {
                                 }))
                                 .is_err()
                             );
-                            assert_eq!(values, input);
+                            assert_eq!(
+                                (values)
+                                    .iter()
+                                    .map(|value| value.reduce())
+                                    .collect::<Vec<_>>(),
+                                (input)
+                                    .iter()
+                                    .map(|value| value.reduce())
+                                    .collect::<Vec<_>>()
+                            );
                         }
                         plan.execute_batch_with(&mut values, &mut scratch, tasks, &SerialExecutor);
-                        assert_eq!(values, expected);
+                        assert_eq!(
+                            (values)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            (expected)
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>()
+                        );
                     }
                 }
             }
@@ -796,7 +882,16 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
             }))
             .is_err()
         );
-        assert_eq!(values, [sentinel; 64]);
+        assert_eq!(
+            (values)
+                .iter()
+                .map(|value| value.reduce())
+                .collect::<Vec<_>>(),
+            ([sentinel; 64])
+                .iter()
+                .map(|value| value.reduce())
+                .collect::<Vec<_>>()
+        );
         let input = (storage == InputStorage::Preserve).then_some(source.as_slice());
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -811,7 +906,16 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
             }))
             .is_err()
         );
-        assert_eq!(values, [sentinel; 64]);
+        assert_eq!(
+            (values)
+                .iter()
+                .map(|value| value.reduce())
+                .collect::<Vec<_>>(),
+            ([sentinel; 64])
+                .iter()
+                .map(|value| value.reduce())
+                .collect::<Vec<_>>()
+        );
     }
     let plan = FftPlan::with_strategy(
         base,
@@ -842,7 +946,16 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
         .unwrap();
     first.execute().unwrap();
     assert_eq!(run.complete(first.finish()).unwrap().error, None);
-    assert_ne!(first_values, &[sentinel; 8]);
+    assert_ne!(
+        (first_values)
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>(),
+        [sentinel; 8]
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
     let written = first_values.to_vec();
 
     let (invalid_values, later_values) = rest.split_at_mut(8);
@@ -888,7 +1001,29 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
     );
     assert_eq!(run.inflight(), 0);
     assert!(!run.is_complete());
-    assert_eq!(first_values, written);
-    assert_eq!(invalid_values, &[sentinel; 8]);
-    assert!(later_values.iter().all(|v| *v == sentinel));
+    assert_eq!(
+        (first_values)
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>(),
+        (written)
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        (invalid_values)
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>(),
+        [sentinel; 8]
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        later_values
+            .iter()
+            .all(|v| v.montgomery_limbs() == sentinel.montgomery_limbs())
+    );
 }

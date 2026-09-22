@@ -4,7 +4,7 @@
 mod facade {
     pub use arithmetic::{
         curve::{AffinePoint, Pallas, PastaCurve, Vesta, glv_decompose},
-        field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus},
+        field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, Reduced},
     };
 }
 
@@ -25,20 +25,47 @@ const FP_PARAMETERS: [Fp; 4] = parameters::<PallasBase>();
 const FQ_PARAMETERS: [Fq; 4] = parameters::<PallasScalar>();
 
 fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4]) {
-    assert_eq!(half.double(), PastaField::<M>::ONE);
-    assert_eq!(delta, PastaField::<M>::from_u64(5).pow_u64(1 << 32));
+    assert_eq!(half.double().reduce(), PastaField::<M, Reduced>::ONE);
+    assert_eq!(
+        delta.reduce(),
+        PastaField::<M>::from_u64(5).pow_u64(1 << 32).reduce()
+    );
     let two = PastaField::<M>::from_u64(2);
     let four = two.square();
-    assert_eq!(four.sqrt().unwrap().square(), four);
-    assert_eq!(two.mul(&two.invert().unwrap()), PastaField::<M>::ONE);
+    assert_eq!(
+        four.reduce().sqrt().unwrap().square().reduce(),
+        four.reduce()
+    );
+    assert_eq!(
+        two.mul(&two.invert().unwrap()).reduce(),
+        PastaField::<M, Reduced>::ONE
+    );
     assert_eq!(M::MODULUS[3], 1 << 62);
     assert_eq!(
         PastaField::<M>::root_of_unity(4)
             .unwrap()
-            .mul(&PastaField::<M>::root_of_unity_inverse(4).unwrap()),
-        PastaField::<M>::ONE,
+            .mul(&PastaField::<M>::root_of_unity_inverse(4).unwrap())
+            .reduce(),
+        PastaField::<M, Reduced>::ONE,
     );
-    assert_eq!(zeta.mul(&zeta_inverse), PastaField::<M>::ONE);
+    assert_eq!(
+        zeta.mul(&zeta_inverse).reduce(),
+        PastaField::<M, Reduced>::ONE
+    );
+    let reduced: PastaField<M, Reduced> = two.reduce();
+    assert_eq!(
+        reduced.into_loose().montgomery_limbs(),
+        reduced.montgomery_limbs()
+    );
+    assert_eq!(reduced.mul(&two).reduce(), four.reduce());
+    assert!(reduced < four.reduce());
+
+    #[cfg(feature = "loose-equality")]
+    let _ = two == four;
+    #[cfg(feature = "loose-order")]
+    let _ = core::cmp::Ord::cmp(&two, &four);
+    #[cfg(feature = "loose-sqrt")]
+    let _ = four.sqrt();
 
     #[cfg(feature = "roots")]
     let _ = M::ROOTS;
@@ -85,6 +112,8 @@ fn curve<C: PastaCurve>() {
         exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     };
     let generator = AffinePoint::<C>::GENERATOR;
+    #[cfg(feature = "loose-coordinates")]
+    let _ = AffinePoint::<C>::from_xy(PastaField::<C::Base>::ONE, PastaField::<C::Base>::ONE);
     assert_eq!(
         generator.mul_projective(&PastaField::<C::Scalar>::from_u64(2)),
         generator.to_projective().double(),
@@ -138,9 +167,16 @@ fn curve<C: PastaCurve>() {
     let _ = prepared.cache_len(options);
 }
 
-#[cfg(any(feature = "foreign-modulus", feature = "foreign-curve"))]
+#[cfg(any(
+    feature = "foreign-modulus",
+    feature = "foreign-curve",
+    feature = "foreign-reduction"
+))]
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Foreign {}
+
+#[cfg(feature = "foreign-reduction")]
+impl arithmetic::field::ReductionState for Foreign {}
 
 #[cfg(feature = "foreign-modulus")]
 impl PrimeModulus for Foreign {
@@ -154,6 +190,10 @@ impl PastaCurve for Foreign {
 }
 
 fn main() {
+    #[cfg(feature = "invalid-reduced-limbs")]
+    let _ = const { Fp::<Reduced>::from_montgomery_limbs(PallasBase::MODULUS) };
+    #[cfg(feature = "invalid-loose-limbs")]
+    let _ = const { <Fp>::from_montgomery_limbs([u64::MAX; 4]) };
     #[cfg(feature = "empty-interpolation")]
     let _ = arithmetic::fft::run::InterpolationPlan::<PallasBase, 0>::new(
         [],

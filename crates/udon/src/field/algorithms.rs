@@ -3,26 +3,24 @@
 //! Callers supply field operations and parameters. The generic form also
 //! permits exhaustive testing over small fields with different two-adicities.
 
-/// Field operations used by exponentiation and square roots.
-///
-/// Implementations must obey field laws and compare by field value.
-pub(super) trait Field: Copy + Eq {
-    /// The additive identity.
-    #[cfg(any(test, not(feature = "sqrt-table-large")))]
-    const ZERO: Self;
+/// Field operations used by exponentiation, without a representation or
+/// equality requirement.
+pub(super) trait Field: Copy {
     /// The multiplicative identity.
     const ONE: Self;
-    /// Whether this is the additive identity.
-    #[cfg(any(test, not(feature = "sqrt-table-large")))]
-    fn is_zero(&self) -> bool {
-        *self == Self::ZERO
-    }
-    /// The field product.
     fn mul(&self, rhs: &Self) -> Self;
-    /// The field square; implementations can override with a specialized kernel.
     fn square(&self) -> Self {
         self.mul(self)
     }
+}
+
+/// Value tests needed by Tonelli–Shanks. Implementations with redundant
+/// representations explicitly reduce when testing against one.
+#[cfg(any(test, not(feature = "sqrt-table-large")))]
+pub(super) trait SqrtField: Field {
+    const ZERO: Self;
+    fn is_zero(&self) -> bool;
+    fn is_one(&self) -> bool;
 }
 
 /// Raises this value to an unsigned exponent; exponent zero returns one.
@@ -56,7 +54,7 @@ pub(super) fn pow_u64<F: Field>(value: &F, exponent: u64) -> F {
 /// Returns either square root, or `None` for a nonsquare; branches depend on
 /// the input.
 #[cfg(any(test, not(feature = "sqrt-table-large")))]
-pub(super) fn tonelli_shanks_with_roots<F: Field>(
+pub(super) fn tonelli_shanks_with_roots<F: SqrtField>(
     value: &F,
     w: F,
     root: impl Fn(u32) -> F,
@@ -73,10 +71,10 @@ pub(super) fn tonelli_shanks_with_roots<F: Field>(
     let mut t = x.mul(&w);
     let mut m = two_adicity;
 
-    while t != F::ONE {
+    while !t.is_one() {
         let mut i = 1u32;
         let mut t_squared = t.square();
-        while i < m && t_squared != F::ONE {
+        while i < m && !t_squared.is_one() {
             t_squared = t_squared.square();
             i += 1;
         }
@@ -98,7 +96,12 @@ pub(super) fn tonelli_shanks_with_roots<F: Field>(
 
 // Simple reference retains the independently evolving c ladder.
 #[cfg(test)]
-pub(super) fn tonelli_shanks<F: Field>(value: &F, w: F, root: F, two_adicity: u32) -> Option<F> {
+pub(super) fn tonelli_shanks<F: SqrtField>(
+    value: &F,
+    w: F,
+    root: F,
+    two_adicity: u32,
+) -> Option<F> {
     assert!(
         (1..=64).contains(&two_adicity),
         "two_adicity must be within 1..=64"
@@ -111,10 +114,10 @@ pub(super) fn tonelli_shanks<F: Field>(value: &F, w: F, root: F, two_adicity: u3
     let mut c = root;
     let mut m = two_adicity;
 
-    while t != F::ONE {
+    while !t.is_one() {
         let mut i = 1u32;
         let mut t_squared = t.square();
-        while i < m && t_squared != F::ONE {
+        while i < m && !t_squared.is_one() {
             t_squared = t_squared.square();
             i += 1;
         }
@@ -141,10 +144,19 @@ mod tests {
     struct SmallField<const P: u64>(u64);
 
     impl<const P: u64> Field for SmallField<P> {
-        const ZERO: Self = Self(0);
         const ONE: Self = Self(1);
         fn mul(&self, rhs: &Self) -> Self {
             Self(self.0 * rhs.0 % P)
+        }
+    }
+
+    impl<const P: u64> SqrtField for SmallField<P> {
+        const ZERO: Self = Self(0);
+        fn is_zero(&self) -> bool {
+            self.0 == 0
+        }
+        fn is_one(&self) -> bool {
+            self.0 == 1
         }
     }
 

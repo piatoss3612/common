@@ -71,9 +71,9 @@ fn decomposition<C: PastaCurve>() {
         let power =
             PastaField::from_canonical_uint(CanonicalUint::power_of_two(bit).unwrap()).unwrap();
         scalars.extend([
-            power.sub(&PastaField::ONE),
+            power.sub(&PastaField::<_>::ONE),
             power,
-            power.add(&PastaField::ONE),
+            power.add(&PastaField::<_>::ONE),
         ]);
     }
     for scalar in field_samples::<C::Scalar>().take(2048) {
@@ -203,8 +203,6 @@ fn endomorphisms<C: PastaCurve>() {
         assert_eq!(cached.rotated(rotation), rotated);
         rotated = rotated.endomorphism();
     }
-    assert!(generator.valid_cache());
-    assert!(cached.valid_cache());
     let reference = Reference::generator(&p);
     reference
         .mul(&lambda, &p)
@@ -219,8 +217,8 @@ fn endomorphisms<C: PastaCurve>() {
         let scaled = scaled(&point, 19);
         assert_eq!(scaled.endomorphism(), point.endomorphism().to_projective());
         assert_eq!(
-            scaled.endomorphism().coordinates().2,
-            scaled.coordinates().2
+            (scaled.endomorphism().coordinates().2).reduce(),
+            (scaled.coordinates().2).reduce()
         );
         for scalar in scalar_corpus::<C>() {
             // The retained binary ladder is independent of GLV and recoding.

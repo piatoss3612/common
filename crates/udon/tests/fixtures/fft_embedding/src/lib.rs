@@ -25,22 +25,11 @@ bento::embed_struct! {
 }
 
 pub fn exercise() {
-    exercise_field(
-        FP_TABLES.header,
-        FP_TABLES.tables(),
-        &FP_TABLES.residues,
-        &FP_TABLES.packed,
-    );
-    exercise_field(
-        FQ_TABLES.header,
-        FQ_TABLES.tables(),
-        &FQ_TABLES.residues,
-        &FQ_TABLES.packed,
-    );
+    exercise_field(FP_TABLES.tables(), &FP_TABLES.residues, &FP_TABLES.packed);
+    exercise_field(FQ_TABLES.tables(), &FQ_TABLES.residues, &FQ_TABLES.packed);
 }
 
 fn exercise_field<M: PrimeModulus>(
-    header: record::Header,
     tables: Tables<'_, M>,
     scales: &[PastaField<M>],
     packed: &[PastaField<M>],
@@ -50,14 +39,9 @@ fn exercise_field<M: PrimeModulus>(
         .unwrap()
         .coset(PastaField::ZETA)
         .unwrap();
-    header
-        .validate(extended)
-        .expect("embedded metadata must match the domain");
-    let plan = tables
-        .bind(domain)
-        .expect("embedded FFT tables must match the domain");
-    let twiddles = TwiddleTable::bind(record::TWIDDLES, packed)
-        .expect("embedded packed twiddles must match the domain");
+    let plan = tables.bind(domain);
+    let twiddles =
+        TwiddleTable::bind(record::TWIDDLES, packed).expect("supported twiddle description");
     const OPTIONS: ExecutionOptions =
         ExecutionOptions::DEFAULT.with_task_budget(TaskBudget::new(2).unwrap());
     let mut scratch = [PastaField::ZERO; record::SIZE];
@@ -90,7 +74,10 @@ fn exercise_field<M: PrimeModulus>(
         &mut scratch,
     )
     .unwrap();
-    assert_eq!(recovered, coefficients);
+    assert_eq!(
+        recovered.map(|value| value.reduce()),
+        coefficients.map(|value| value.reduce())
+    );
     FftPlan::new(
         plan,
         TransformRequest {
@@ -112,14 +99,17 @@ fn exercise_field<M: PrimeModulus>(
         &mut scratch,
         &SerialExecutor,
     );
-    assert_eq!(recovered, evaluations);
+    assert_eq!(
+        recovered.map(|value| value.reduce()),
+        evaluations.map(|value| value.reduce())
+    );
     let scales = ExpansionScales::bind(
         record::SIZE,
         extended,
         ExpansionScaleNormalization::UnscaledInverse,
         scales,
     )
-    .expect("embedded residue scales must match the domain");
+    .expect("supported expansion sizes");
     let expansion = Expansion::new(plan, extended, None)
         .unwrap()
         .with_scales(scales);
@@ -153,7 +143,7 @@ fn exercise_field<M: PrimeModulus>(
             .fold(PastaField::ZERO, |sum, coefficient| {
                 sum.mul(&point).add(coefficient)
             });
-        assert_eq!(*view.get(row).unwrap(), expected);
+        assert_eq!(view.get(row).unwrap().reduce(), expected.reduce());
         point = point.mul(&extended.domain().root());
     }
 }

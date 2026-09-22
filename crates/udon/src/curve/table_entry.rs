@@ -2,8 +2,8 @@
 
 use core::{fmt, marker::PhantomData};
 
-use super::{AffinePoint, CurveError, PastaCurve, ProjectivePoint};
-use crate::field::PastaField;
+use super::{AffinePoint, PastaCurve};
+use crate::field::{PastaField, Reduced};
 
 /// Exact table length and minimum scratch lengths for curve table preparation.
 ///
@@ -28,11 +28,8 @@ pub struct CurveTableRequirements {
 /// 96 bytes with alignment 8, where `zeta` is the coordinate field's
 /// [`PastaField::ZETA`] value. All coordinates must be reduced, `(x, y)` must
 /// satisfy the curve equation, and the cached coordinate must equal `zeta * x`.
-/// [`bento::Pod`] checks memory layout only and requires little endian.
-/// Invalid stored values remain memory-safe but arithmetic can panic or give
-/// incorrect results. [`EisensteinTable::bind`](super::EisensteinTable::bind)
-/// and [`FixedBaseTable::bind`](super::FixedBaseTable::bind) establish these
-/// invariants.
+/// Constructors establish these invariants. Trusted [`bento::Pod`] storage
+/// preserves the representation for direct runtime use on little-endian targets.
 ///
 /// Use [`AffinePoint`] entries to save storage, or this type to avoid field
 /// multiplication when a table lookup applies the endomorphism.
@@ -41,9 +38,9 @@ pub struct CurveTableRequirements {
 #[derive(Clone, Copy, Eq, PartialEq, bento::Pod)]
 #[repr(C)]
 pub struct PreparedAffinePoint<C: PastaCurve> {
-    x: PastaField<C::Base>,
-    endomorphism_x: PastaField<C::Base>,
-    y: PastaField<C::Base>,
+    x: PastaField<C::Base, Reduced>,
+    endomorphism_x: PastaField<C::Base, Reduced>,
+    y: PastaField<C::Base, Reduced>,
     marker: PhantomData<C>,
 }
 
@@ -63,17 +60,13 @@ impl<C: PastaCurve> PreparedAffinePoint<C> {
     pub fn from_affine(point: &AffinePoint<C>) -> Self {
         Self {
             x: point.x,
-            endomorphism_x: point.x.mul(&PastaField::ZETA),
+            endomorphism_x: point.x.mul(&PastaField::<C::Base>::ZETA).reduce(),
             y: point.y,
             marker: PhantomData,
         }
     }
 
-    /// Returns the underlying affine point without checking stored coordinates.
-    ///
-    /// Copies only `x` and `y`; the cached coordinate is ignored. The result
-    /// needs [`AffinePoint`]'s invariants before arithmetic or encoding. Use
-    /// [`AffinePoint::from_xy`] to validate untrusted coordinates.
+    /// Returns the underlying affine point by copying `x` and `y`.
     pub const fn to_affine(&self) -> AffinePoint<C> {
         AffinePoint {
             x: self.x,
@@ -92,7 +85,7 @@ pub(super) mod sealed {
 /// This trait is sealed to [`AffinePoint`] (64 bytes) and
 /// [`PreparedAffinePoint`] (96 bytes, cached endomorphism). Both implement
 /// [`bento::Pod`]. Select the entry type through the table's generic parameter;
-/// table preparation and validation enforce the same mathematical layout.
+/// table preparation constructs the same mathematical layout.
 /// Generic callers can initialize entry buffers with [`Self::from_affine`].
 ///
 /// ```
@@ -107,7 +100,6 @@ pub(super) mod sealed {
 /// let entries = buffer::<Pallas, PreparedAffinePoint<Pallas>>(&base);
 /// assert_eq!(entries[0].affine(), base);
 /// assert_eq!(entries[0].rotated(1), base.endomorphism());
-/// assert!(entries[0].valid_cache());
 /// ```
 pub trait CurveTableEntry<C: PastaCurve>: sealed::Entry + Copy + fmt::Debug + Send + Sync {
     /// Constructs an entry from a point satisfying [`AffinePoint`]'s invariants.
@@ -115,10 +107,7 @@ pub trait CurveTableEntry<C: PastaCurve>: sealed::Entry + Copy + fmt::Debug + Se
     /// Copies affine coordinates and computes any cached endomorphism coordinate.
     fn from_affine(point: &AffinePoint<C>) -> Self;
 
-    /// Copies affine coordinates without validating them or any cached value.
-    ///
-    /// The result needs [`AffinePoint`]'s invariants before arithmetic or encoding.
-    /// Use [`AffinePoint::from_xy`] to validate untrusted coordinates.
+    /// Copies the affine coordinates.
     fn affine(&self) -> AffinePoint<C>;
 
     /// Applies [`AffinePoint::endomorphism`] `rotation` times.
@@ -130,14 +119,6 @@ pub trait CurveTableEntry<C: PastaCurve>: sealed::Entry + Copy + fmt::Debug + Se
     ///
     /// Panics unless `rotation` is in `0..3`.
     fn rotated(&self, rotation: usize) -> AffinePoint<C>;
-
-    /// Checks cached coordinates, assuming the affine coordinates are reduced.
-    ///
-    /// Always returns `true` for [`AffinePoint`], which has no cache. For
-    /// [`PreparedAffinePoint`], checks that the cached coordinate is reduced and
-    /// equals `zeta * x`. Does not check the curve equation or table membership;
-    /// use checked table binding to establish the full table contract.
-    fn valid_cache(&self) -> bool;
 }
 
 impl<C: PastaCurve> sealed::Entry for AffinePoint<C> {}
@@ -155,14 +136,11 @@ impl<C: PastaCurve> CurveTableEntry<C> for AffinePoint<C> {
             0 => *self,
             1 => self.endomorphism(),
             2 => Self {
-                x: self.x.mul(&PastaField::ZETA_INVERSE),
+                x: self.x.mul(&PastaField::<C::Base>::ZETA_INVERSE).reduce(),
                 ..*self
             },
             _ => unreachable!("a cube root has three rotations"),
         }
-    }
-    fn valid_cache(&self) -> bool {
-        true
     }
 }
 
@@ -178,7 +156,7 @@ impl<C: PastaCurve> CurveTableEntry<C> for PreparedAffinePoint<C> {
         let x = match rotation {
             0 => self.x,
             1 => self.endomorphism_x,
-            2 => self.x.add(&self.endomorphism_x).neg(),
+            2 => self.x.add(&self.endomorphism_x).neg().reduce(),
             _ => unreachable!("a cube root has three rotations"),
         };
         AffinePoint {
@@ -187,24 +165,4 @@ impl<C: PastaCurve> CurveTableEntry<C> for PreparedAffinePoint<C> {
             marker: PhantomData,
         }
     }
-    fn valid_cache(&self) -> bool {
-        self.endomorphism_x.is_reduced() && self.endomorphism_x == self.x.mul(&PastaField::ZETA)
-    }
-}
-
-pub(super) fn check_entry<C: PastaCurve, E: CurveTableEntry<C>>(
-    expected: &ProjectivePoint<C>,
-    entry: &E,
-) -> Result<(), CurveError> {
-    let affine = entry.affine();
-    // Reject raw residues before any arithmetic, including cached-coordinate
-    // validation. Equality with a valid multiple establishes curve membership.
-    if !affine.x.is_reduced()
-        || !affine.y.is_reduced()
-        || !entry.valid_cache()
-        || *expected != affine.to_projective()
-    {
-        return Err(CurveError::InvalidTable);
-    }
-    Ok(())
 }

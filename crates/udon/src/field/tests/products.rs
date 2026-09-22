@@ -1,6 +1,19 @@
 use super::*;
 use crate::field::tests::*;
 
+fn check_sum_states<M: PrimeModulus, S: ReductionState, T: ReductionState, const N: usize>(
+    lhs: &[PastaField<M, S>; N],
+    rhs: &[PastaField<M, T>; N],
+    expected: &BigUint,
+) {
+    assert_value(PastaField::sum_of_products(lhs, rhs), expected);
+    assert_value(PastaField::sum_of_products_slice(lhs, rhs), expected);
+    assert_value(
+        PastaField::sum_of_product_pairs(lhs.iter().zip(rhs)),
+        expected,
+    );
+}
+
 fn check_products<M: PrimeModulus>() {
     let p = modulus::<M>();
     let mut values = samples::<M>(64);
@@ -24,7 +37,7 @@ fn check_products<M: PrimeModulus>() {
         }
         assert_value(a.mul_sub_product(a, a, a), &BigUint::from(0u8));
         assert_value(a.mul_sub_double_product(a, a, a), &(&p - x * x % &p));
-        assert_value(a.mul_sub_product(a, &PastaField::ZERO, a), &(x * x));
+        assert_value(a.mul_sub_product(a, &PastaField::<_>::ZERO, a), &(x * x));
     }
     for length in [
         0, 1, 2, 3, 4, 7, 11, 12, 23, 31, 32, 33, 63, 64, 65, 66, 67, 68, 69, 257, 4096,
@@ -57,7 +70,7 @@ fn check_products<M: PrimeModulus>() {
             &expected,
         );
         assert_value(mixed.finish(), &mixed_expected);
-        let maximal = PastaField::<M>::from_montgomery_limbs(limbs(&(&p - 1u8)));
+        let maximal = PastaField::<M>::from_montgomery_limbs(limbs(&(&p * 2u8 - 1u8)));
         let maximal_integer = BigUint::from_bytes_le(&maximal.to_bytes());
         let repeated = vec![maximal; length];
         assert_value(
@@ -67,13 +80,14 @@ fn check_products<M: PrimeModulus>() {
     }
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = PastaField::<M>::sum_of_products_slice(&[PastaField::ONE], &[]);
+            let _ =
+                PastaField::<M>::sum_of_products_slice(&[PastaField::ONE], &[] as &[PastaField<M>]);
         }))
         .is_err()
     );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _ = PastaField::<M>::sum_of_products_slice(&[], &[PastaField::ONE]);
+            let _ = PastaField::<M>::sum_of_products_slice(&[], &[PastaField::<M>::ONE]);
         }))
         .is_err()
     );
@@ -84,7 +98,21 @@ fn check_products<M: PrimeModulus>() {
             let lhs = core::array::from_fn::<_, $length, _>(|i| values[i % values.len()].0);
             let rhs = core::array::from_fn::<_, $length, _>(|i| values[(i * 7 + 1) % values.len()].0);
             let expected = (0..$length).fold(BigUint::from(0u8), |sum, i| sum + &values[i % values.len()].1 * &values[(i * 7 + 1) % values.len()].1);
-            assert_value(PastaField::<M>::sum_of_products(&lhs, &rhs), &expected);
+            check_sum_states(&lhs, &rhs, &expected);
+            check_sum_states(&lhs.map(PastaField::reduce), &rhs, &expected);
+            check_sum_states(&lhs, &rhs.map(PastaField::reduce), &expected);
+            check_sum_states(&lhs.map(PastaField::reduce), &rhs.map(PastaField::reduce), &expected);
+            // In particular, three maximal loose products exceed pR and need
+            // the high-half fold; reducing either operand selects another path.
+            let maximum = PastaField::<M>::from_montgomery_limbs(limbs(&(&p * 2u8 - 1u8)));
+            let integer = BigUint::from_bytes_le(&maximum.to_bytes());
+            let expected = &integer * &integer * ($length as usize);
+            let loose = [maximum; $length];
+            let reduced = loose.map(PastaField::reduce);
+            check_sum_states(&loose, &loose, &expected);
+            check_sum_states(&loose, &reduced, &expected);
+            check_sum_states(&reduced, &loose, &expected);
+            check_sum_states(&reduced, &reduced, &expected);
         )*};
     }
     check_arrays!(0, 1, 2, 3, 4, 11, 12, 23, 31, 32, 33, 64, 65);
@@ -94,6 +122,51 @@ fn check_products<M: PrimeModulus>() {
 fn product_differences_and_sums_match_integer_arithmetic() {
     check_products::<PallasBase>();
     check_products::<PallasScalar>();
+}
+
+fn check_difference<M: PrimeModulus>(
+    a: &PastaField<M, impl ReductionState>,
+    b: &PastaField<M, impl ReductionState>,
+    c: &PastaField<M, impl ReductionState>,
+    d: &PastaField<M, impl ReductionState>,
+    expected: &BigUint,
+    doubled: &BigUint,
+) {
+    assert_value(a.mul_sub_product(b, c, d), expected);
+    assert_value(a.mul_sub_double_product(b, c, d), doubled);
+}
+
+fn check_mixed_differences<M: PrimeModulus>() {
+    let p = modulus::<M>();
+    let values = samples::<M>(64);
+    for (index, (a, x)) in values.iter().enumerate() {
+        let (b, y) = &values[(index * 7 + 3) % values.len()];
+        let (c, z) = &values[(index * 13 + 5) % values.len()];
+        let (d, w) = &values[(index * 17 + 7) % values.len()];
+        let product = z * w % &p;
+        let expected = x * y + &p - &product;
+        let doubled = x * y + &p * 2u8 - &product * 2u8;
+        // Cover all sixteen static state combinations independently of the
+        // numeric representatives; each reduction preserves the oracle value.
+        macro_rules! check_right_states {
+            ($a:expr, $b:expr) => {
+                check_difference($a, $b, c, d, &expected, &doubled);
+                check_difference($a, $b, &c.reduce(), d, &expected, &doubled);
+                check_difference($a, $b, c, &d.reduce(), &expected, &doubled);
+                check_difference($a, $b, &c.reduce(), &d.reduce(), &expected, &doubled);
+            };
+        }
+        check_right_states!(a, b);
+        check_right_states!(&a.reduce(), b);
+        check_right_states!(a, &b.reduce());
+        check_right_states!(&a.reduce(), &b.reduce());
+    }
+}
+
+#[test]
+fn product_differences_accept_all_reduction_states() {
+    check_mixed_differences::<PallasBase>();
+    check_mixed_differences::<PallasScalar>();
 }
 
 fn check_overflow<M: PrimeModulus>() {
@@ -109,7 +182,7 @@ fn check_overflow<M: PrimeModulus>() {
         carry: u64::MAX,
         marker: PhantomData,
     };
-    let term = PastaField::<M>::from_montgomery_limbs(limbs(&(&p - 1u8)));
+    let term = PastaField::<M>::from_montgomery_limbs(limbs(&(&p * 2u8 - 1u8)));
     let stored = integer(&term.montgomery_limbs());
     let mut sum = full();
     sum.add_product(&term, &term);

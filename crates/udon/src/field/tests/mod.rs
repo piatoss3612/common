@@ -1,6 +1,8 @@
 //! Independent integer references for runtime field arithmetic.
 
-pub(super) use super::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus};
+pub(super) use super::{
+    CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus, Reduced, ReductionState,
+};
 use crate::test_support::xorshift64;
 pub(super) use crate::test_support::{integer, modulus};
 pub(super) use num_bigint::{BigInt, BigUint};
@@ -27,12 +29,16 @@ pub(super) fn field<M: PrimeModulus>(value: &BigUint) -> PastaField<M> {
     PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs(value))).unwrap()
 }
 
-pub(super) fn assert_value<M: PrimeModulus>(actual: PastaField<M>, expected: &BigUint) {
+pub(super) fn assert_value<M: PrimeModulus, S: ReductionState>(
+    actual: PastaField<M, S>,
+    expected: &BigUint,
+) {
     let p = modulus::<M>();
     let expected = expected % &p;
     let stored = integer(&actual.montgomery_limbs());
-    assert!(stored < p, "field operations must preserve reduced storage");
-    assert_eq!(stored, (&expected << 256usize) % &p);
+    assert!(stored < integer(&PastaField::<M, S>::BOUND));
+    assert_eq!(&stored % &p, (&expected << 256usize) % &p);
+    assert_eq!(integer(&actual.reduce().montgomery_limbs()), &stored % &p);
     assert_eq!(BigUint::from_bytes_le(&actual.to_bytes()), expected);
 }
 
@@ -63,7 +69,21 @@ pub(super) fn samples<M: PrimeModulus>(count: usize) -> Vec<(PastaField<M>, BigU
 
     // Canonical integer boundaries do not map to Montgomery limb boundaries.
     let inverse_r = (BigUint::from(1u8) << 256usize).modpow(&(&p - 2u8), &p);
-    for raw in [BigUint::from(1u8), &p - 2u8, &p - 1u8] {
+    let twice = &p * 2u8;
+    let raw_values = [
+        BigUint::from(1u8),
+        &p - 2u8,
+        &p - 1u8,
+        p.clone(),
+        &p + 1u8,
+        &twice - 2u8,
+        &twice - 1u8,
+    ]
+    .into_iter()
+    .chain(
+        (0..count).map(|_| BigUint::from_bytes_le(&deterministic_bytes::<32>(&mut state)) % &twice),
+    );
+    for raw in raw_values {
         samples.push((
             PastaField::from_montgomery_limbs(limbs(&raw)),
             raw * &inverse_r % &p,

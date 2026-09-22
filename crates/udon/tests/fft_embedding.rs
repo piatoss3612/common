@@ -13,30 +13,6 @@ fn generated_fft_tables_embed_in_a_downstream_consumer() {
         for (damage, diagnostic) in [
             ("", None),
             (
-                "field",
-                Some("embedded FFT tables must match the domain: InvalidTables"),
-            ),
-            (
-                "scales",
-                Some("embedded residue scales must match the domain: InvalidTables"),
-            ),
-            (
-                "metadata",
-                Some("embedded metadata must match the domain: InvalidTables"),
-            ),
-            (
-                "schema",
-                Some("embedded metadata must match the domain: InvalidTables"),
-            ),
-            (
-                "kind",
-                Some("embedded metadata must match the domain: InvalidTables"),
-            ),
-            (
-                "packed",
-                Some("embedded packed twiddles must match the domain: InvalidTables"),
-            ),
-            (
                 "truncate",
                 Some("embedded byte length must equal the requested type's size"),
             ),
@@ -46,7 +22,7 @@ fn generated_fft_tables_embed_in_a_downstream_consumer() {
                 features,
                 &[("FFT_ARTIFACT_DAMAGE", damage)],
                 diagnostic,
-                &["src/lib.rs"],
+                &["src/pod/storage.rs"],
             );
         }
     }

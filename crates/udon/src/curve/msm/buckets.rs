@@ -115,8 +115,8 @@ pub(super) fn reduce_fused<C: PastaCurve, const INCOMPLETE: bool>(
             let x = slope.square().sub(&p.x).sub(&q.x);
             let y = slope.mul(&p.x.sub(&x)).sub(&p.y);
             points[start + written] = AffinePoint {
-                x,
-                y,
+                x: x.reduce(),
+                y: y.reduce(),
                 marker: PhantomData,
             };
             written += 1;
@@ -202,8 +202,8 @@ pub(super) fn reduce_level<C: PastaCurve, const FUSED: bool>(
                 slope.mul(&p.x.sub(&x)).sub(&p.y)
             };
             points[start + written] = AffinePoint {
-                x,
-                y,
+                x: x.reduce(),
+                y: y.reduce(),
                 marker: PhantomData,
             };
             written += 1;
@@ -247,9 +247,9 @@ pub(super) fn reduce_original<C: PastaCurve>(
                 if p.x == q.x && p.y != q.y {
                     continue;
                 }
-                x1[staged] = p.x;
-                y1[staged] = p.y;
-                x2[staged] = q.x;
+                x1[staged] = p.x.into_loose();
+                y1[staged] = p.y.into_loose();
+                x2[staged] = q.x.into_loose();
                 if p.x == q.x {
                     let xx = p.x.square();
                     numerator[staged] = xx.double().add(&xx);
@@ -276,8 +276,8 @@ pub(super) fn reduce_original<C: PastaCurve>(
             let x = slope.square().sub(&x1[i]).sub(&x2[i]);
             let y = slope.mul(&x1[i].sub(&x)).sub(&y1[i]);
             points[writes[i]] = AffinePoint {
-                x,
-                y,
+                x: x.reduce(),
+                y: y.reduce(),
                 marker: PhantomData,
             };
         }

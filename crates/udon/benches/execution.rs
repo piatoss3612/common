@@ -310,7 +310,7 @@ fn isolated(c: &mut Criterion) {
         for terms in [32, 1024, 8192] {
             let bases = vec![AffinePoint::<Pallas>::GENERATOR; terms];
             let scalars: Vec<_> = (0..terms)
-                .map(|i| Fq::from_u64(i as u64 + 2).invert().unwrap())
+                .map(|i| <Fq>::from_u64(i as u64 + 2).invert().unwrap())
                 .collect();
             let input = Input::new(Bases::Affine(&bases), &scalars);
             let options =

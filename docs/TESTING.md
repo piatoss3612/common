@@ -117,7 +117,7 @@ The [curve suite](../crates/udon/benches/curve.rs) covers both curves, including
 complete arithmetic exceptions, encoding rejection, GLV/endomorphism operations,
 normalization, and ordinary and retained-table multiplication. Scalar corpora
 straddle short/full-width boundaries; table cases distinguish affine and cached
-entries, preparation, checked/trusted binding, validation, and multiplication.
+entries, preparation, binding, and multiplication.
 Compare the same 32-scalar corpus at equal width or similar storage budgets.
 Preparation fills allocated buffers; binding borrows existing entries; table
 multiplication includes recoding. Invalid table entries at the beginning and
@@ -129,7 +129,7 @@ cargo bench --locked -p zakura-udon --bench curve -- Pallas/fixed_base
 cargo bench --locked -p zakura-udon --bench curve -- Pallas/batch_normalize
 ```
 
-See the [curve guide](CURVES.md#fixed-base-multiplication) for validation and
+See the [curve guide](CURVES.md#fixed-base-multiplication) for binding and
 sizing contracts and the [performance report](CURVE_PERFORMANCE.md) for evidence.
 
 ## MSM and compact-table batch benchmarks
@@ -151,7 +151,7 @@ before timing; `mul` prepares them for each table inside timing.
 Fixture checks use independent scalar inner products over known generator
 multiples. Allocation, pool entry, and input length/index validation are outside
 timing. Execution scratch checks, recoding, initialization, scheduling, and
-arithmetic are inside. Compact preparation includes base validation.
+arithmetic are inside. Compact preparation takes constructed affine bases.
 
 ```console
 cargo bench --locked -p zakura-udon --bench msm
@@ -250,7 +250,7 @@ and in-process storage checks in the default suite.
 
 Run the slow consumers explicitly when changing their fixtures or harness,
 constant macros, public trait bounds, storage contracts, or artifact preparation
-and validation:
+and binding:
 
 ```console
 cargo test --release --locked -p zakura-udon \
@@ -275,16 +275,15 @@ building its consumer. Golden bytes alone do not exercise generation. The
 generate through Udon, and write through Bento POD. Consumers borrow embedded
 records directly, including `no_std` libraries with stack-owned scratch.
 
-Both feature configurations check real arithmetic and damaged artifacts.
-Truncation must fail during embedding compilation. Unreduced or mathematically
-invalid entries and incorrect schema/domain/table metadata must reach consumer
-validation and fail before arithmetic. This distinguishes memory layout from
-mathematical validity instead of treating a filename as validation.
+Both feature configurations exercise arithmetic directly on embedded values.
+Field fixtures preserve both loose and reduced limbs exactly, including loose
+zero represented by the modulus. Truncation must fail during embedding
+compilation. Compiler tests enforce the reduction-state API boundaries and
+reject raw constructor inputs outside their state's bound.
 
 The curve fixture also prepares both entry layouts, reuses scalar digits, and
 executes indexed MSMs from embedded bases. Its structured reference string
 stores coefficient and Lagrange bases generated with group-valued FFTs. A direct
 group DFT checks the basis conversion; polynomial coefficients and evaluations
-must give the same commitment. Damaged SRS root/order metadata must fail before
-commitment evaluation. Preserve this artifact-generation use when changing
-generic transform support.
+must give the same commitment. Preserve this artifact-generation use when
+changing generic transform support.

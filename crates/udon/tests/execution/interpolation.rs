@@ -125,9 +125,29 @@ fn check<M: PrimeModulus>() {
                         scratch.each_mut().map(Vec::as_mut_slice),
                         &SerialExecutor,
                     );
-                    assert_eq!(values[0], expected);
+                    assert_eq!(
+                        (values[0])
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>(),
+                        (expected)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>()
+                    );
                     if !consume {
-                        assert_eq!(&values[1..], &coefficients[1..]);
+                        for (actual, expected) in values[1..].iter().zip(&coefficients[1..]) {
+                            assert_eq!(
+                                actual
+                                    .iter()
+                                    .map(|value| value.reduce())
+                                    .collect::<Vec<_>>(),
+                                expected
+                                    .iter()
+                                    .map(|value| value.reduce())
+                                    .collect::<Vec<_>>(),
+                            );
+                        }
                     }
                 }
                 let mut ids = core::array::from_fn(|_| core::array::from_fn(|_| Identity::new()));
@@ -200,7 +220,16 @@ fn check<M: PrimeModulus>() {
                         drop(published);
                     }
                 });
-                assert_eq!(banks.read(0), expected);
+                assert_eq!(
+                    (banks.read(0))
+                        .iter()
+                        .map(|value| value.reduce())
+                        .collect::<Vec<_>>(),
+                    (expected)
+                        .iter()
+                        .map(|value| value.reduce())
+                        .collect::<Vec<_>>()
+                );
                 assert_eq!(run.state(0), Some(ClassState::Coefficients));
                 for class in 1..CLASSES {
                     assert!(released[class]);
@@ -213,7 +242,16 @@ fn check<M: PrimeModulus>() {
                         })
                     );
                     if !consume {
-                        assert_eq!(&banks.read(class)[..sizes[class]], &coefficients[class]);
+                        assert_eq!(
+                            banks.read(class)[..sizes[class]]
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>(),
+                            coefficients[class]
+                                .iter()
+                                .map(|value| value.reduce())
+                                .collect::<Vec<_>>()
+                        );
                     }
                 }
             }

@@ -1,6 +1,7 @@
 use zakura_udon::{
     field::{
         CanonicalUint, Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum,
+        Reduced,
     },
     fp_hex, fq_hex,
 };
@@ -10,8 +11,14 @@ fn hex_macros_match_checked_integer_constructors() {
     const FP: Fp = fp_hex!("0x0000000000000000000000000000000100000000000000000123456789abcdef");
     const FQ: Fq = fq_hex!("0x0000000000000000000000000000000100000000000000000123456789ABCDEF",);
     let integer = CanonicalUint::from_limbs([0x0123_4567_89ab_cdef, 0, 1, 0]);
-    assert_eq!(Fp::from_canonical_uint(integer), Some(FP));
-    assert_eq!(Fq::from_canonical_uint(integer), Some(FQ));
+    assert_eq!(
+        Fp::<Reduced>::from_canonical_uint(integer),
+        Some(FP.reduce())
+    );
+    assert_eq!(
+        Fq::<Reduced>::from_canonical_uint(integer),
+        Some(FQ.reduce())
+    );
     assert_eq!(FP.to_bytes(), FQ.to_bytes());
 }
 
@@ -31,8 +38,20 @@ fn reexported_hex_macros_cover_canonical_boundaries() {
         literals::fq!("0x0000000000000000000000000000000000000000000000000000000000000001"),
         literals::fq!("0x40000000000000000000000000000000224698FC0994A8DD8C46EB2100000000",),
     ];
-    assert_eq!(FP, [Fp::ZERO, Fp::ONE, Fp::ONE.neg()]);
-    assert_eq!(FQ, [Fq::ZERO, Fq::ONE, Fq::ONE.neg()]);
+    assert_eq!(
+        (FP).iter().map(|value| value.reduce()).collect::<Vec<_>>(),
+        ([<Fp>::ZERO, <Fp>::ONE, <Fp>::ONE.neg()])
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        (FQ).iter().map(|value| value.reduce()).collect::<Vec<_>>(),
+        ([<Fq>::ZERO, <Fq>::ONE, <Fq>::ONE.neg()])
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
 }
 
 fn check_encoding_boundaries<M: PrimeModulus>() {
@@ -40,21 +59,26 @@ fn check_encoding_boundaries<M: PrimeModulus>() {
     assert!(PastaField::<M>::from_canonical_uint(modulus).is_none());
     assert!(PastaField::<M>::from_bytes(modulus.to_le_bytes()).is_none());
     assert_eq!(
-        PastaField::<M>::from_uint_reduced(modulus),
-        PastaField::ZERO
+        (PastaField::<M>::from_uint_reduced(modulus)).reduce(),
+        (PastaField::<_>::ZERO).reduce()
     );
     assert!(
-        std::panic::catch_unwind(|| { PastaField::<M>::from_montgomery_limbs(M::MODULUS) })
-            .is_err()
+        std::panic::catch_unwind(|| {
+            PastaField::<M, Reduced>::from_montgomery_limbs(M::MODULUS)
+        })
+        .is_err()
     );
 
     for integer in [0, 1, 2, 3, u64::MAX] {
         let value = PastaField::<M>::from_u64(integer);
         assert_eq!(value.is_odd(), integer & 1 == 1);
-        assert_eq!(PastaField::<M>::from_bytes(value.to_bytes()), Some(value));
         assert_eq!(
-            PastaField::<M>::from_montgomery_limbs(value.montgomery_limbs()),
-            value
+            (PastaField::<M>::from_bytes(value.to_bytes())).map(|value| value.reduce()),
+            (Some(value)).map(|value| value.reduce())
+        );
+        assert_eq!(
+            (PastaField::<M>::from_montgomery_limbs(value.montgomery_limbs())).reduce(),
+            (value).reduce()
         );
     }
     assert!(!PastaField::<M>::ONE.neg().is_odd());
@@ -64,9 +88,12 @@ fn check_encoding_boundaries<M: PrimeModulus>() {
         let value = PastaField::<M>::from_i64(signed);
         let magnitude = PastaField::<M>::from_u64(signed.unsigned_abs());
         if signed < 0 {
-            assert_eq!(value.add(&magnitude), PastaField::ZERO);
+            assert_eq!(
+                (value.add(&magnitude)).reduce(),
+                (PastaField::<_>::ZERO).reduce()
+            );
         } else {
-            assert_eq!(value, magnitude);
+            assert_eq!((value).reduce(), (magnitude).reduce());
         }
     }
 }
@@ -89,19 +116,19 @@ fn root_accessors_remain_const() {
     ];
     const FP_NONE: Option<Fp> = Fp::root_of_unity(33);
     const FQ_NONE: Option<Fq> = Fq::root_of_unity_inverse(u32::MAX);
-    assert_eq!(FP[0].mul(&FP[1]), Fp::ONE);
-    assert_eq!(FQ[0].mul(&FQ[1]), Fq::ONE);
-    assert_ne!(FP[0].pow_u64(1 << 31), Fp::ONE);
-    assert_ne!(FQ[0].pow_u64(1 << 31), Fq::ONE);
-    assert_eq!(FP_NONE, None);
-    assert_eq!(FQ_NONE, None);
+    assert_eq!((FP[0].mul(&FP[1])).reduce(), (<Fp>::ONE).reduce());
+    assert_eq!((FQ[0].mul(&FQ[1])).reduce(), (<Fq>::ONE).reduce());
+    assert_ne!((FP[0].pow_u64(1 << 31)).reduce(), (<Fp>::ONE).reduce());
+    assert_ne!((FQ[0].pow_u64(1 << 31)).reduce(), (<Fq>::ONE).reduce());
+    assert_eq!((FP_NONE).map(|value| value.reduce()), None);
+    assert_eq!((FQ_NONE).map(|value| value.reduce()), None);
 }
 
 #[test]
 fn repeatedly_merging_product_sums_preserves_the_field_value() {
     fn check<M: PrimeModulus>() {
         let mut sum = ProductSum::<M>::new();
-        sum.add_term(&PastaField::ONE);
+        sum.add_term(&PastaField::<_>::ONE);
         let mut expected = PastaField::<M>::ONE;
         for _ in 0..1024 {
             let mut doubled = ProductSum::new();
@@ -110,7 +137,7 @@ fn repeatedly_merging_product_sums_preserves_the_field_value() {
             sum = doubled;
             expected = expected.double();
         }
-        assert_eq!(sum.finish(), expected);
+        assert_eq!((sum.finish()).reduce(), (expected).reduce());
     }
     check::<PallasBase>();
     check::<PallasScalar>();

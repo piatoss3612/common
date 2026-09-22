@@ -52,8 +52,7 @@ fn representations<C: PastaCurve>() {
         &mut vec![PastaField::ZERO; r.field_scratch],
         TaskBudget::SERIAL,
         &SerialExecutor,
-    )
-    .unwrap();
+    );
     let indices: Vec<_> = (0..37).map(|i| (i * 7 % 17) as u32).collect();
     let mut workspace = MsmWorkspace::new();
     for source in [
@@ -68,7 +67,7 @@ fn representations<C: PastaCurve>() {
             for round in 0..2 {
                 let scalars: Vec<_> = (0..selection.len())
                     .map(|i| {
-                        PastaField::from_u64((i + round + 2) as u64)
+                        PastaField::<_>::from_u64((i + round + 2) as u64)
                             .invert()
                             .unwrap()
                     })
@@ -83,7 +82,7 @@ fn representations<C: PastaCurve>() {
                         } else {
                             indices[i] as usize
                         };
-                        sum.add(&scalar.mul(&PastaField::from_u64(index as u64 + 1)))
+                        sum.add(&scalar.mul(&PastaField::<_>::from_u64(index as u64 + 1)))
                     });
                 let mut result = [ProjectivePoint::IDENTITY];
                 let mut run = workspace
@@ -127,12 +126,11 @@ fn shrinking_batches<C: PastaCurve>() {
             entries,
             &mut [ProjectivePoint::IDENTITY; 8],
             &mut [PastaField::ZERO; 8],
-        )
-        .unwrap();
+        );
     }
     let fixed = [
-        EisensteinTable::bind(&bases[3], &entries[0]).unwrap(),
-        EisensteinTable::bind(&bases[7], &entries[1]).unwrap(),
+        EisensteinTable::bind(&bases[3], &entries[0]),
+        EisensteinTable::bind(&bases[7], &entries[1]),
     ];
     for threads in [1, 3, 4] {
         let pool = rayon::ThreadPoolBuilder::new()
@@ -151,11 +149,11 @@ fn shrinking_batches<C: PastaCurve>() {
                     Selection::indexed(Bases::Prepared(&cached), &indices[..len]).unwrap()
                 });
                 let rows: [Vec<_>; 2] = core::array::from_fn(|side| {
-                    let step = PastaField::from_u64((round + side + repetition + 2) as u64)
+                    let step = PastaField::<_>::from_u64((round + side + repetition + 2) as u64)
                         .invert()
                         .unwrap();
                     (0..len)
-                        .map(|i| step.mul(&PastaField::from_u64(i as u64)))
+                        .map(|i| step.mul(&PastaField::<_>::from_u64(i as u64)))
                         .collect()
                 });
                 let inputs = [
@@ -196,10 +194,10 @@ fn shrinking_batches<C: PastaCurve>() {
                         .iter()
                         .zip(&indices[i])
                         .fold(PastaField::ZERO, |sum, (scalar, index)| {
-                            sum.add(&scalar.mul(&PastaField::from_u64(u64::from(*index) + 1)))
+                            sum.add(&scalar.mul(&PastaField::<_>::from_u64(u64::from(*index) + 1)))
                         })
-                        .add(&side_scalars[2 * i].mul(&PastaField::from_u64(4)))
-                        .add(&side_scalars[2 * i + 1].mul(&PastaField::from_u64(8)));
+                        .add(&side_scalars[2 * i].mul(&PastaField::<_>::from_u64(4)))
+                        .add(&side_scalars[2 * i + 1].mul(&PastaField::<_>::from_u64(8)));
                     assert_eq!(points[i], expected::<C>(sum).to_point());
                 }
             }

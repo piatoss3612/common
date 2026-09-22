@@ -33,9 +33,12 @@ fn compare<M: PrimeModulus>(c: &mut criterion::Criterion, name: &str) {
         let mut new = values.clone();
         legacy(&mut old, &mut prefix);
         crate::field::invert_nonzero(&mut new, &mut prefix);
-        assert_eq!(old, new);
+        assert_eq!(
+            (old).iter().map(|value| value.reduce()).collect::<Vec<_>>(),
+            (new).iter().map(|value| value.reduce()).collect::<Vec<_>>()
+        );
         for (v, inverse) in values.iter().zip(&new) {
-            assert_eq!(v.mul(inverse), PastaField::ONE);
+            assert_eq!((v.mul(inverse)).reduce(), (PastaField::<_>::ONE).reduce());
         }
         // Consecutive iterations alternate values and their inverses; both
         // schedules see the same operands, with no resetting inside timing.

@@ -67,7 +67,7 @@ fn check_montgomery<M: PrimeModulus>() {
             }
             let expected = &product * &inverse_r % &p;
             assert_eq!(
-                integer(&montgomery::montgomery_multiply::<M>(&limbs(a), &limbs(b))),
+                integer(&montgomery::montgomery_multiply::<M>(&limbs(a), &limbs(b))) % &p,
                 expected
             );
             assert_eq!(
@@ -106,25 +106,26 @@ fn check_lazy_squares<M: PrimeModulus>() {
     for (value, _) in samples::<M>(32) {
         let mut raw = value.limbs;
         let mut expected = integer(&raw);
-        for count in 0..=256 {
+        for count in 0..=1024 {
             assert_eq!(integer(&raw), expected);
             assert!(expected < &p * 2u8);
-            assert_eq!(
-                integer(&montgomery::square_run::<M>(&value.limbs, count, None)),
-                &expected % &p,
-            );
-            let factor = limbs(&(&p - 1u8));
-            assert_eq!(
-                integer(&montgomery::square_run::<M>(
-                    &value.limbs,
-                    count,
-                    Some(&factor)
-                )),
-                &expected * (&p - 1u8) * &inverse_r % &p,
-            );
-            if count != 256 {
+            if count <= 260 || count == 512 || count == 1024 {
+                assert_eq!(
+                    integer(&montgomery::square_run::<M>(&value.limbs, count, None)),
+                    expected,
+                );
+                let factor = limbs(&(&p - 1u8));
+                assert_eq!(
+                    integer(&montgomery::square_run::<M>(
+                        &value.limbs,
+                        count,
+                        Some(&factor)
+                    )) % &p,
+                    &expected * (&p - 1u8) * &inverse_r % &p,
+                );
+            }
+            if count != 1024 {
                 let square = &expected * &expected;
-                assert!(square < &p * &radix);
                 let q = &square * &negative_inverse % &radix;
                 expected = (&square + q * &p) / &radix;
                 raw = montgomery::montgomery_reduce_unreduced::<M>(word::square_wide(&raw));

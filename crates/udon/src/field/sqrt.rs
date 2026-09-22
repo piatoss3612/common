@@ -1,23 +1,23 @@
 //! Square roots and power-of-two roots of unity from compile-time field tables.
 
-use super::{PastaField, PrimeModulus, parameters::TWO_ADICITY};
+use super::{PastaField, PrimeModulus, Reduced, ReductionState, parameters::TWO_ADICITY};
 
 #[cfg(feature = "sqrt-table-large")]
 mod large;
 #[cfg(feature = "sqrt-table-large")]
 pub(super) use large::LargeSqrtTable;
 
-/// Validates and converts Montgomery limbs into field entries.
+/// Constructs reduced field entries from Montgomery limbs in constant tables.
 ///
-/// Table initializers call this during constant evaluation, establishing the
-/// reduced-residue invariant before runtime.
+/// Table initializers evaluate this at compile time. Runtime arithmetic borrows
+/// the resulting field values directly.
 ///
 /// # Panics
 ///
 /// Panics if any entry is at least [`M::MODULUS`](PrimeModulus::MODULUS).
 pub(super) const fn field_elements<M: PrimeModulus, const N: usize>(
     limbs: [[u64; 4]; N],
-) -> [PastaField<M>; N] {
+) -> [PastaField<M, Reduced>; N] {
     let mut fields = [PastaField::ZERO; N];
     let mut k = 0;
     while k < N {
@@ -27,7 +27,7 @@ pub(super) const fn field_elements<M: PrimeModulus, const N: usize>(
     fields
 }
 
-impl<M: PrimeModulus> PastaField<M> {
+impl<M: PrimeModulus> PastaField<M, Reduced> {
     /// Returns a square root, or `None` for a nonsquare.
     ///
     /// Zero returns `Some(Self::ZERO)`. Either root may be returned, and the
@@ -39,8 +39,8 @@ impl<M: PrimeModulus> PastaField<M> {
     /// ```
     /// use zakura_udon::field::Fp;
     ///
-    /// let square = Fp::from_u64(7).square();
-    /// assert_eq!(square.sqrt().unwrap().square(), square);
+    /// let square = <Fp>::from_u64(7).square().reduce();
+    /// assert_eq!(square.sqrt().unwrap().square().reduce(), square);
     /// assert_eq!(Fp::ZERO.sqrt(), Some(Fp::ZERO));
     /// assert_eq!(Fp::from_u64(5).sqrt(), None);
     /// ```
@@ -51,7 +51,7 @@ impl<M: PrimeModulus> PastaField<M> {
 
         // With p - 1 = t * 2^32, one fixed exponentiation initializes both
         // self^((t + 1)/2) and self^t. Both algorithms share this schedule.
-        let w = M::pow_sqrt_exponent(self);
+        let w = M::pow_sqrt_exponent(&self.into_loose());
         #[cfg(feature = "sqrt-table-large")]
         {
             M::sqrt_large(self, w)
@@ -59,14 +59,17 @@ impl<M: PrimeModulus> PastaField<M> {
         #[cfg(not(feature = "sqrt-table-large"))]
         {
             super::algorithms::tonelli_shanks_with_roots(
-                self,
+                &self.into_loose(),
                 w,
-                |k| M::ROOTS[k as usize],
+                |k| M::ROOTS[k as usize].into_loose(),
                 TWO_ADICITY,
             )
+            .map(PastaField::reduce)
         }
     }
+}
 
+impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Returns a primitive root of order `2^log_size`, or `None` above 32.
     ///
     /// The selected root is `5^((p - 1) / 2^log_size)`, where `p` is
@@ -75,7 +78,7 @@ impl<M: PrimeModulus> PastaField<M> {
         if log_size > TWO_ADICITY {
             return None;
         }
-        Some(M::ROOTS[log_size as usize])
+        Some(Self::from_montgomery(M::ROOTS[log_size as usize].limbs))
     }
 
     /// Returns the inverse of [`Self::root_of_unity`], or `None` above 32.
@@ -83,7 +86,9 @@ impl<M: PrimeModulus> PastaField<M> {
         if log_size > TWO_ADICITY {
             return None;
         }
-        Some(M::INVERSE_ROOTS[log_size as usize])
+        Some(Self::from_montgomery(
+            M::INVERSE_ROOTS[log_size as usize].limbs,
+        ))
     }
 }
 
@@ -100,16 +105,19 @@ mod tests {
             let small = algorithms::tonelli_shanks_with_roots(
                 &value,
                 w,
-                |k| M::ROOTS[k as usize],
+                |k| M::ROOTS[k as usize].into_loose(),
                 TWO_ADICITY,
             );
-            assert_eq!(small, reference);
-            let result = value.sqrt();
+            assert_eq!(
+                (small).map(|value| value.reduce()),
+                (reference).map(|value| value.reduce())
+            );
+            let result = value.reduce().sqrt();
             assert_eq!(result.is_some(), reference.is_some());
             if let Some(result) = result {
-                assert_eq!(result.square(), value);
+                assert_eq!(result.square().reduce(), value.reduce());
                 let reference = reference.unwrap();
-                assert!(result == reference || result == reference.neg());
+                assert!(result == reference.reduce() || result == reference.neg().reduce());
             }
         };
         compare(PastaField::ZERO);
@@ -127,7 +135,7 @@ mod tests {
             compare(root.pow_u64(exponent));
         }
         compare(PastaField::from_u64(5));
-        assert!(PastaField::<M>::from_u64(5).sqrt().is_none());
+        assert!(PastaField::<M, Reduced>::from_u64(5).sqrt().is_none());
     }
 
     #[test]

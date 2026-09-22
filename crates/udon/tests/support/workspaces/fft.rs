@@ -43,7 +43,7 @@ impl<M: PrimeModulus> OwnedTables<M> {
             inverse_scales: Some(&self.scales),
         }
         // The owner prepared these entries and exposes no mutation.
-        .bind_trusted(self.domain)
+        .bind(self.domain)
     }
 
     pub fn capacity_bytes(&self) -> usize {

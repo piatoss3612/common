@@ -129,7 +129,7 @@ impl Default for ExpansionStrategy {
 /// FFT. [`ExecutionOptions`] supplies one resource allowance shared across and
 /// within residues; every transform uses the caller's executor. All output
 /// buffers must have the extended domain's size. The module's
-/// [validation and working-storage rules](super) apply, including table validity
+/// [table and working-storage contracts](super) apply, including trusted tables
 /// and buffer state after errors or panics.
 ///
 /// ```
@@ -155,7 +155,7 @@ impl Default for ExpansionStrategy {
 ///     let root_power = extended.domain().root().pow_u64(row as u64);
 ///     let point = extended.shift().mul(&root_power);
 ///     let expected = coefficients[0].add(&coefficients[1].mul(&point));
-///     assert_eq!(view.get(row), Some(&expected));
+///     assert_eq!(view.get(row).map(|value| value.reduce()), Some(expected.reduce()));
 /// }
 /// ```
 #[derive(Clone, Copy)]
@@ -192,7 +192,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         extended: CosetDomain<M>,
         scales: Option<ExpansionScales<'a, M>>,
     ) -> Result<Self, FftError> {
-        if base.domain().shift() != PastaField::ONE || base.domain().size() > extended.size() {
+        if base.domain().shift().reduce() != PastaField::<M>::ONE.reduce()
+            || base.domain().size() > extended.size()
+        {
             return Err(FftError::InvalidLayout);
         }
         let expansion = Self {
@@ -271,24 +273,6 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             output,
         )
         .expect("validated expansion domains")
-    }
-
-    /// Checks every supplied residue scale without allocating or mutating it.
-    ///
-    /// Checks the declared [`ExpansionScaleNormalization`], returning
-    /// [`FftError::InvalidTables`] for an incorrect or unreduced entry.
-    /// Succeeds immediately if scales were omitted. This does not validate the
-    /// base plan's tables; their validity follows [`super::Tables`]' contract.
-    pub fn validate_scales(self) -> Result<(), FftError> {
-        if let Some(scales) = self.scales {
-            ExpansionScales::bind(
-                self.base.domain().size(),
-                self.extended,
-                self.normalization,
-                scales,
-            )?;
-        }
-        Ok(())
     }
 
     fn check(self, coefficients: usize, min: usize, output: usize) -> Result<(), FftError> {
@@ -565,7 +549,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         assert_length("output", self.extended.size(), output.len());
         let required = self.evaluation_scratch_with(options)?;
         required.check(scratch.len());
-        if self.extended.shift() == PastaField::ONE && output.len() == evaluations.len() {
+        if self.extended.shift().reduce() == PastaField::<M>::ONE.reduce()
+            && output.len() == evaluations.len()
+        {
             output.copy_from_slice(evaluations);
             return Ok(());
         }
@@ -604,7 +590,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             options.max_residue_tasks.min(self.layout.residues() - 1),
             scratch,
         );
-        if self.extended.shift() == PastaField::ONE {
+        if self.extended.shift().reduce() == PastaField::<M>::ONE.reduce() {
             first.copy_from_slice(evaluations);
             return Ok(());
         }
@@ -843,7 +829,7 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
             let (prefix, tail) = output.split_at_mut(self.coefficients.len());
             tail.fill(PastaField::ZERO);
             if let Some(scales) = scales {
-                if self.extra == PastaField::ONE {
+                if self.extra.reduce() == PastaField::<M>::ONE.reduce() {
                     for ((output, value), scale) in
                         prefix.iter_mut().zip(self.coefficients).zip(scales)
                     {

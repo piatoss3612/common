@@ -2,8 +2,8 @@
 
 use bento::const_arithmetic::{m255, u256};
 
-use super::PastaField;
 use super::word::{add_limbs, compare_limbs, multiply_wide, subtract_limbs};
+use super::{PastaField, Reduced, ReductionState};
 use crate::field::safegcd::{SAFEGCD_BATCHES, to_signed62};
 
 // Derive the remaining field constants from these inputs and each modulus.
@@ -21,15 +21,17 @@ pub enum PallasScalar {}
 
 // The sparse Montgomery kernels and divstep bounds require the Pasta moduli.
 mod sealed {
-    use super::{INVERSE_POWER_TABLE_LEN, PastaField, SAFEGCD_BATCHES};
+    use super::{INVERSE_POWER_TABLE_LEN, PastaField, Reduced, SAFEGCD_BATCHES};
 
     pub trait Sealed {}
 
     pub(crate) trait Parameters<M: super::PrimeModulus>: Sized {
         /// Field values for [`PastaField::root_of_unity`], indexed by `log_size`.
-        const ROOTS: &'static [PastaField<M>; INVERSE_POWER_TABLE_LEN];
+        const ROOTS: &'static [PastaField<M, Reduced>; INVERSE_POWER_TABLE_LEN];
         /// Inverses of the corresponding forward roots.
-        const INVERSE_ROOTS: &'static [PastaField<M>; INVERSE_POWER_TABLE_LEN];
+        const INVERSE_ROOTS: &'static [PastaField<M, Reduced>; INVERSE_POWER_TABLE_LEN];
+        /// Twice the modulus, the exclusive bound for loose residues.
+        const TWICE_MODULUS: [u64; 4];
         /// `-p^-1 mod 2^64`, used to cancel each low limb during reduction.
         const MONTGOMERY_INV: u64;
         /// `2^256 mod p`, also the Montgomery representation of one.
@@ -70,7 +72,10 @@ mod sealed {
         ///
         /// Requires a nonzero `value` and `w = pow_sqrt_exponent(value)`.
         #[cfg(feature = "sqrt-table-large")]
-        fn sqrt_large(value: &PastaField<M>, w: PastaField<M>) -> Option<PastaField<M>>;
+        fn sqrt_large(
+            value: &PastaField<M, Reduced>,
+            w: PastaField<M>,
+        ) -> Option<PastaField<M, Reduced>>;
     }
 }
 
@@ -129,12 +134,12 @@ macro_rules! pasta_field_parameters {
             // A named static shares one validated table across lookups; the
             // associated const only borrows it.
             const ROOT_TABLES: &'static (
-                [PastaField<Self>; INVERSE_POWER_TABLE_LEN],
-                [PastaField<Self>; INVERSE_POWER_TABLE_LEN],
+                [PastaField<Self, Reduced>; INVERSE_POWER_TABLE_LEN],
+                [PastaField<Self, Reduced>; INVERSE_POWER_TABLE_LEN],
             ) = {
                 static TABLES: (
-                    [PastaField<$marker>; INVERSE_POWER_TABLE_LEN],
-                    [PastaField<$marker>; INVERSE_POWER_TABLE_LEN],
+                    [PastaField<$marker, Reduced>; INVERSE_POWER_TABLE_LEN],
+                    [PastaField<$marker, Reduced>; INVERSE_POWER_TABLE_LEN],
                 ) = {
                     let roots = m255::two_adic_root_tables!(&<$marker>::MODULUS, GENERATOR, TWO_ADICITY);
                     (super::sqrt::field_elements(roots.0), super::sqrt::field_elements(roots.1))
@@ -143,8 +148,8 @@ macro_rules! pasta_field_parameters {
             };
 
             #[cfg(feature = "sqrt-table-large")]
-            pub(super) const SQRT_TABLE: &'static super::sqrt::LargeSqrtTable<PastaField<Self>> = {
-                static TABLE: super::sqrt::LargeSqrtTable<PastaField<$marker>> =
+            pub(super) const SQRT_TABLE: &'static super::sqrt::LargeSqrtTable<PastaField<Self, Reduced>> = {
+                static TABLE: super::sqrt::LargeSqrtTable<PastaField<$marker, Reduced>> =
                     super::sqrt::LargeSqrtTable::from_powers([
                         m255::powers!(&<$marker>::MODULUS, &<$marker>::ROOT_TABLES.0[32].montgomery_limbs(); 256),
                         m255::powers!(&<$marker>::MODULUS, &<$marker>::ROOT_TABLES.0[24].montgomery_limbs(); 256),
@@ -156,10 +161,11 @@ macro_rules! pasta_field_parameters {
         }
 
         impl sealed::Parameters<Self> for $marker {
-            const ROOTS: &'static [PastaField<Self>; INVERSE_POWER_TABLE_LEN] =
+            const ROOTS: &'static [PastaField<Self, Reduced>; INVERSE_POWER_TABLE_LEN] =
                 &Self::ROOT_TABLES.0;
-            const INVERSE_ROOTS: &'static [PastaField<Self>; INVERSE_POWER_TABLE_LEN] =
+            const INVERSE_ROOTS: &'static [PastaField<Self, Reduced>; INVERSE_POWER_TABLE_LEN] =
                 &Self::ROOT_TABLES.1;
+            const TWICE_MODULUS: [u64; 4] = add_limbs(&Self::MODULUS, &Self::MODULUS).0;
             const MONTGOMERY_INV: u64 = m255::reduction_coefficient!(Self::MODULUS[0]);
             const R: [u64; 4] = m255::one!(&Self::MODULUS);
             const R2: [u64; 4] = m255::r2!(&Self::MODULUS);
@@ -185,7 +191,7 @@ macro_rules! pasta_field_parameters {
             }
 
             #[cfg(feature = "sqrt-table-large")]
-            fn sqrt_large(value: &PastaField<Self>, w: PastaField<Self>) -> Option<PastaField<Self>> {
+            fn sqrt_large(value: &PastaField<Self, Reduced>, w: PastaField<Self>) -> Option<PastaField<Self, Reduced>> {
                 Self::SQRT_TABLE.sqrt(value, w, $hash)
             }
         }
@@ -247,7 +253,7 @@ pasta_field_parameters! {
 /// Number of inverse domain sizes from `2^0` through `2^TWO_ADICITY`.
 const INVERSE_POWER_TABLE_LEN: usize = TWO_ADICITY as usize + 1;
 
-impl<M: PrimeModulus> PastaField<M> {
+impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// The inverse of two.
     pub const TWO_INVERSE: Self = Self::from_montgomery(M::TWO_INVERSE);
 
@@ -258,7 +264,7 @@ impl<M: PrimeModulus> PastaField<M> {
         }
         // The table covers supported transform sizes. Exponentiation handles
         // the rest of the u32 input range without extending that table.
-        Self::TWO_INVERSE.pow_u64(u64::from(log_size))
+        Self::from_loose(Self::TWO_INVERSE.pow_u64(u64::from(log_size)).limbs)
     }
 
     /// `5^(2^32)`, a generator of the odd-order multiplicative subgroup.
@@ -308,14 +314,9 @@ impl<M: PrimeModulus> bento::addchain::AdditionChain for Power<M> {
 }
 
 impl<M: PrimeModulus> Power<M> {
-    fn double_n_add_impl(&self, mut count: usize, factor: Option<&[u64; 4]>) -> Self {
-        let mut limbs = self.0.limbs;
-        while count > 256 {
-            limbs = super::montgomery::square_run::<M>(&limbs, 256, None);
-            count -= 256;
-        }
+    fn double_n_add_impl(&self, count: usize, factor: Option<&[u64; 4]>) -> Self {
         Self(PastaField::from_montgomery(
-            super::montgomery::square_run::<M>(&limbs, count, factor),
+            super::montgomery::square_run::<M>(&self.0.limbs, count, factor),
         ))
     }
 }
@@ -351,52 +352,37 @@ const fn assert_kernel_bounds(modulus: &[u64; 4], r2: &[u64; 4], r3: &[u64; 4]) 
         carry == 0 && compare_limbs(&sum, modulus).is_lt(),
         "wide decoder requires R2 + R3 < p"
     );
-    // The Horner numerator is (V + D)*R2, V < p, D < R.
+    let (twice_p, carry) = add_limbs(modulus, modulus);
+    assert!(carry == 0);
+    let (_, carry) = add_limbs(&twice_p, modulus);
+    assert!(carry == 0, "loose kernels require 3p < R");
+    let loose_max = subtract_limbs(&twice_p, &[1, 0, 0, 0]).0;
+    // The Horner numerator is (V + D)*R2, V < 2p, D < R.
     assert_redc_bound(
         add_wide(
-            multiply_wide(&minus_one, r2),
+            multiply_wide(&loose_max, r2),
             multiply_wide(&[u64::MAX; 4], r2),
         ),
         modulus,
     );
     let product = multiply_wide(&minus_one, &minus_one);
-    let three_products = add_wide(add_wide(product, product), product);
-    assert_redc_bound(three_products, modulus);
-    let four_products = add_wide(three_products, product);
+    assert_redc_bound(add_wide(add_wide(product, product), product), modulus);
+    // Three loose products fit eight limbs. Their high half is below 4p;
+    // mixed reduced/loose products have a high half below 2p.
+    let loose_product = multiply_wide(&loose_max, &loose_max);
+    let _ = add_wide(add_wide(loose_product, loose_product), loose_product);
+    let mixed = multiply_wide(&minus_one, &loose_max);
+    let mixed = add_wide(add_wide(mixed, mixed), mixed);
+    assert!(compare_limbs(&[mixed[4], mixed[5], mixed[6], mixed[7]], &twice_p).is_lt());
+    // This exact parameter bound proves closure of REDC(a*b) for a,b < 2p;
+    // see montgomery::square_run. c occupies only the low 128 bits.
+    let c = [modulus[0], modulus[1], 0, 0];
+    let c_squared = multiply_wide(&c, &c);
+    assert!(c_squared[4] == 0 && c_squared[5] == 0 && c_squared[6] == 0 && c_squared[7] == 0);
     assert!(
-        compare_limbs(
-            &[
-                four_products[4],
-                four_products[5],
-                four_products[6],
-                four_products[7]
-            ],
-            modulus
-        )
-        .is_ge(),
-        "four products require a wider reduction bound"
+        c_squared[3] < 1 << 60,
+        "loose Montgomery closure requires 16c² < R"
     );
-    // Bound every lazy square by floor((B² + (R-1)p)/R), starting
-    // from B=p-1. Checking all 256 steps avoids an asymptotic argument.
-    let correction = multiply_wide(&[u64::MAX; 4], modulus);
-    let (twice_p, carry) = add_limbs(modulus, modulus);
-    assert!(carry == 0);
-    let mut bound = minus_one;
-    let mut i = 0;
-    while i < 256 {
-        let square = multiply_wide(&bound, &bound);
-        assert_redc_bound(square, modulus);
-        let next = add_wide(square, correction);
-        let next_bound = [next[4], next[5], next[6], next[7]];
-        assert!(
-            compare_limbs(&next_bound, &bound).is_ge(),
-            "lazy bounds must be monotone"
-        );
-        bound = next_bound;
-        assert!(compare_limbs(&bound, &twice_p).is_lt());
-        i += 1;
-    }
-    assert_redc_bound(multiply_wide(&bound, &minus_one), modulus);
 }
 
 #[cfg(test)]
@@ -410,10 +396,10 @@ mod tests {
         let mut expected = value.0;
         for count in 0..=513 {
             if [0, 1, 255, 256, 257, 512, 513].contains(&count) {
-                assert_eq!(value.double_n(count).0, expected);
+                assert_eq!((value.double_n(count).0).reduce(), (expected).reduce());
                 assert_eq!(
-                    value.double_n_add(count, &factor).0,
-                    expected.mul(&factor.0)
+                    (value.double_n_add(count, &factor).0).reduce(),
+                    (expected.mul(&factor.0)).reduce()
                 );
             }
             expected = expected.square();
@@ -421,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn power_hooks_normalize_between_bounded_runs() {
+    fn power_hooks_preserve_loose_bounds_across_long_runs() {
         check_runs::<PallasBase>();
         check_runs::<PallasScalar>();
     }

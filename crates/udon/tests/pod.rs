@@ -8,34 +8,63 @@ use bento::{AlignedBytes, bytes_of, bytes_of_slice};
 use zakura_udon::{
     STORED_FORM,
     curve::{
-        AffinePoint, EisensteinTable, Pallas, PallasAffine, PastaCurve, PreparedAffinePoint, Vesta,
-        VestaAffine,
+        AffinePoint, Pallas, PallasAffine, PastaCurve, PreparedAffinePoint, Vesta, VestaAffine,
     },
-    field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus},
+    field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, Reduced, ReductionState},
     stored_form,
 };
 
+fn borrow_field<M: PrimeModulus, S: ReductionState>(
+    value: PastaField<M, S>,
+    bytes: &'static AlignedBytes<32>,
+) {
+    assert_eq!(size_of::<PastaField<M, S>>(), 32);
+    assert_eq!(align_of::<PastaField<M, S>>(), 8);
+    let expected: Vec<_> = value
+        .montgomery_limbs()
+        .into_iter()
+        .flat_map(u64::to_le_bytes)
+        .collect();
+    assert_eq!(bytes_of(&value), expected);
+    let stored: &PastaField<M, S> = bytes.as_value();
+    assert_eq!(stored.montgomery_limbs(), value.montgomery_limbs());
+    assert_eq!(bytes_of(stored).as_ptr(), bytes.0.as_ptr());
+    assert_eq!(stored.mul(&PastaField::<M>::ONE).reduce(), value.reduce());
+}
+
 #[test]
-fn fields_borrow_their_reduced_montgomery_bytes() {
-    fn check<M: PrimeModulus>() {
-        assert_eq!(size_of::<PastaField<M>>(), 32);
-        assert_eq!(align_of::<PastaField<M>>(), 8);
-        for value in [
+fn fields_borrow_exact_bytes_in_both_reduction_states() {
+    type FieldBytes = [[AlignedBytes<32>; 2]; 6];
+
+    fn check<M: PrimeModulus>(storage: &'static OnceLock<FieldBytes>) {
+        // Preserve the largest loose representative without normalizing it.
+        let mut upper = M::MODULUS;
+        let mut carry = 0;
+        for limb in &mut upper {
+            let sum = u128::from(*limb) * 2 + carry;
+            *limb = sum as u64;
+            carry = sum >> 64;
+        }
+        upper[0] -= 1;
+        let values = [
             PastaField::<M>::ZERO,
             PastaField::ONE,
             PastaField::from_u64(7),
-            PastaField::ONE.neg(),
-        ] {
-            let expected: Vec<_> = value
-                .montgomery_limbs()
-                .into_iter()
-                .flat_map(u64::to_le_bytes)
-                .collect();
-            assert_eq!(bytes_of(&value), expected);
-            assert_eq!(
-                bytes_of(&value).as_ptr(),
-                core::ptr::from_ref(&value).cast()
-            );
+            PastaField::<M>::ONE.neg(),
+            PastaField::from_montgomery_limbs(M::MODULUS),
+            PastaField::from_montgomery_limbs(upper),
+        ];
+        let bytes = storage.get_or_init(|| {
+            values.map(|value| {
+                [
+                    AlignedBytes(bytes_of(&value).try_into().unwrap()),
+                    AlignedBytes(bytes_of(&value.reduce()).try_into().unwrap()),
+                ]
+            })
+        });
+        for (value, [loose, reduced]) in values.into_iter().zip(bytes) {
+            borrow_field(value, loose);
+            borrow_field(value.reduce(), reduced);
         }
 
         // A stored residue of one represents R^-1, not the field's one.
@@ -44,19 +73,20 @@ fn fields_borrow_their_reduced_montgomery_bytes() {
             bytes[0] = 1;
             bytes
         });
-        let value: &PastaField<M> = BYTES.as_value();
+        let value: &PastaField<M, Reduced> = BYTES.as_value();
         assert_eq!(value.montgomery_limbs(), [1, 0, 0, 0]);
         assert_ne!(*value, PastaField::ONE);
-        assert_eq!(value.mul(&PastaField::ONE), *value);
         assert_eq!(bytes_of(value).as_ptr(), BYTES.0.as_ptr());
     }
-    check::<PallasBase>();
-    check::<PallasScalar>();
+    static FP_BYTES: OnceLock<FieldBytes> = OnceLock::new();
+    static FQ_BYTES: OnceLock<FieldBytes> = OnceLock::new();
+    check::<PallasBase>(&FP_BYTES);
+    check::<PallasScalar>(&FQ_BYTES);
 }
 
 #[test]
-fn affine_points_borrow_coordinate_bytes_and_reject_invalid_values() {
-    fn check<C: PastaCurve>() {
+fn affine_points_borrow_ready_to_use_coordinate_bytes() {
+    fn check<C: PastaCurve>(storage: &'static OnceLock<AlignedBytes<64>>) {
         assert_eq!(size_of::<AffinePoint<C>>(), 64);
         assert_eq!(align_of::<AffinePoint<C>>(), 8);
         let generator = AffinePoint::<C>::GENERATOR;
@@ -65,20 +95,19 @@ fn affine_points_borrow_coordinate_bytes_and_reject_invalid_values() {
         expected.extend_from_slice(bytes_of(y));
         assert_eq!(bytes_of(&generator), expected);
         assert!(bytes_of_slice::<AffinePoint<C>>(&[]).is_empty());
-        static INVALID: AlignedBytes<64> = AlignedBytes([0xff; 64]);
-        let invalid: &AffinePoint<C> = INVALID.as_value();
-        let (x, y) = invalid.coordinates();
-        assert_eq!(x.montgomery_limbs(), [u64::MAX; 4]);
-        assert_eq!(y.montgomery_limbs(), [u64::MAX; 4]);
-        assert!(AffinePoint::<C>::from_xy(*x, *y).is_none());
-        assert_eq!(bytes_of(invalid).as_ptr(), INVALID.0.as_ptr());
-        static ZERO: AlignedBytes<64> = AlignedBytes([0; 64]);
-        let zero: &AffinePoint<C> = ZERO.as_value();
-        let (x, y) = zero.coordinates();
-        assert!(AffinePoint::<C>::from_xy(*x, *y).is_none());
+        let bytes = storage.get_or_init(|| AlignedBytes(bytes_of(&generator).try_into().unwrap()));
+        let stored: &AffinePoint<C> = bytes.as_value();
+        assert_eq!(*stored, generator);
+        assert_eq!(
+            stored.to_projective().double(),
+            generator.to_projective().double()
+        );
+        assert_eq!(bytes_of(stored).as_ptr(), bytes.0.as_ptr());
     }
-    check::<Pallas>();
-    check::<Vesta>();
+    static PALLAS_BYTES: OnceLock<AlignedBytes<64>> = OnceLock::new();
+    static VESTA_BYTES: OnceLock<AlignedBytes<64>> = OnceLock::new();
+    check::<Pallas>(&PALLAS_BYTES);
+    check::<Vesta>(&VESTA_BYTES);
 }
 
 #[repr(C)]
@@ -115,10 +144,10 @@ fn affine_arrays_in_nested_records_round_trip() {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, bento::Pod)]
+#[derive(Clone, Copy, Debug, bento::Pod)]
 struct Record {
     fp: Fp,
-    fq: Fq,
+    fq: Fq<Reduced>,
     values: [Fp; 2],
 }
 
@@ -126,23 +155,35 @@ struct Record {
 fn field_arrays_and_nested_records_round_trip() {
     let record = Record {
         fp: Fp::from_u64(7),
-        fq: Fq::ONE.neg(),
+        fq: <Fq>::ONE.neg().reduce(),
         values: [Fp::ONE, Fp::from_u64(u64::MAX)],
     };
     assert_eq!(size_of::<Record>(), 128);
     static RECORD: OnceLock<AlignedBytes<128>> = OnceLock::new();
     let bytes = RECORD.get_or_init(|| AlignedBytes(bytes_of(&record).try_into().unwrap()));
     let stored: &Record = bytes.as_value();
-    assert_eq!(*stored, record);
+    assert_eq!(bytes_of(stored), bytes_of(&record));
     assert_eq!(bytes_of(stored).as_ptr(), bytes.0.as_ptr());
-    assert_eq!(stored.fp.add(&stored.values[0]), Fp::from_u64(8));
-    assert_eq!(stored.fq.add(&Fq::ONE), Fq::ZERO);
+    assert_eq!(
+        (stored.fp.add(&stored.values[0])).reduce(),
+        (<Fp>::from_u64(8)).reduce()
+    );
+    assert_eq!((stored.fq.add(&<Fq>::ONE)).reduce(), (<Fq>::ZERO).reduce());
 
     static ARRAY: OnceLock<AlignedBytes<64>> = OnceLock::new();
     let bytes =
         ARRAY.get_or_init(|| AlignedBytes(bytes_of_slice(&record.values).try_into().unwrap()));
     let stored: &[Fp; 2] = bytes.as_array();
-    assert_eq!(*stored, record.values);
+    assert_eq!(
+        (*stored)
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>(),
+        (record.values)
+            .iter()
+            .map(|value| value.reduce())
+            .collect::<Vec<_>>()
+    );
     assert_eq!(bytes_of_slice(stored).as_ptr(), bytes.0.as_ptr());
     assert!(bytes_of_slice::<Fp>(&[]).is_empty());
     assert!(bytes_of_slice::<Fq>(&[]).is_empty());
@@ -164,8 +205,8 @@ struct CachedCurveRecord {
 }
 
 #[test]
-fn cached_point_arrays_borrow_bytes_and_validate_mathematical_invariants() {
-    fn check<C: PastaCurve>() {
+fn cached_point_arrays_borrow_ready_to_use_bytes() {
+    fn check<C: PastaCurve>(storage: &'static OnceLock<AlignedBytes<96>>) {
         assert_eq!(size_of::<PreparedAffinePoint<C>>(), 96);
         assert_eq!(align_of::<PreparedAffinePoint<C>>(), 8);
         let base = AffinePoint::<C>::GENERATOR;
@@ -173,20 +214,20 @@ fn cached_point_arrays_borrow_bytes_and_validate_mathematical_invariants() {
         assert_eq!(cached.to_affine(), base);
         let (x, y) = base.coordinates();
         let mut expected = Vec::from(bytes_of(x));
-        expected.extend_from_slice(bytes_of(&x.mul(&PastaField::ZETA)));
+        expected.extend_from_slice(bytes_of(&x.mul(&PastaField::<C::Base>::ZETA).reduce()));
         expected.extend_from_slice(bytes_of(y));
         assert_eq!(bytes_of(&cached), expected);
         assert!(bytes_of_slice::<PreparedAffinePoint<C>>(&[]).is_empty());
-        static INVALID: AlignedBytes<768> = AlignedBytes([0xff; 768]);
-        let entries: &[PreparedAffinePoint<C>; 8] = INVALID.as_array();
-        assert_eq!(bytes_of_slice(entries).as_ptr(), INVALID.0.as_ptr());
-        assert!(EisensteinTable::bind(&base, entries).is_err());
-        static ZERO: AlignedBytes<768> = AlignedBytes([0; 768]);
-        let entries: &[PreparedAffinePoint<C>; 8] = ZERO.as_array();
-        assert!(EisensteinTable::bind(&base, entries).is_err());
+        let bytes = storage.get_or_init(|| AlignedBytes(bytes_of(&cached).try_into().unwrap()));
+        let stored: &PreparedAffinePoint<C> = bytes.as_value();
+        assert_eq!(*stored, cached);
+        assert_eq!(stored.to_affine(), base);
+        assert_eq!(bytes_of(stored).as_ptr(), bytes.0.as_ptr());
     }
-    check::<Pallas>();
-    check::<Vesta>();
+    static PALLAS_BYTES: OnceLock<AlignedBytes<96>> = OnceLock::new();
+    static VESTA_BYTES: OnceLock<AlignedBytes<96>> = OnceLock::new();
+    check::<Pallas>(&PALLAS_BYTES);
+    check::<Vesta>(&VESTA_BYTES);
     let pallas = PallasAffine::GENERATOR;
     let vesta = VestaAffine::GENERATOR;
     let record = CachedCurveRecord {

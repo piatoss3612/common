@@ -2,7 +2,7 @@
 
 use super::{
     AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, PastaCurve, ProjectivePoint,
-    assert_length, assert_scratch, batch, glv_decompose, table_entry::check_entry, validate_length,
+    assert_length, assert_scratch, batch, glv_decompose,
 };
 use crate::field::PastaField;
 
@@ -15,7 +15,7 @@ use crate::field::PastaField;
 /// `window` in `0..n` and `m` in `1..=h`. The final entry at `n * h` is
 /// `[2^(w * n)] base`, used for the last signed-digit carry.
 /// Pasta's GLV bounds allow this carry only at width 2; widths 3 through 8
-/// retain and validate the final entry for a uniform layout.
+/// retain the final entry for a uniform layout.
 ///
 /// The two halves from [`glv_decompose`] share this table; the second applies
 /// [`AffinePoint::endomorphism`].
@@ -62,13 +62,11 @@ impl FixedBaseDescription {
 /// [`PreparedAffinePoint`](super::PreparedAffinePoint) to cache endomorphism
 /// coordinates, using 96 bytes per entry instead of 64.
 ///
-/// [`prepare`](Self::prepare) fills caller buffers. [`bind`](Self::bind) checks
-/// stored entries; [`bind_trusted`](Self::bind_trusted) skips entry validation
-/// when the caller has already established their mathematical validity.
-/// Binding checks the base, description, and exact table length.
-/// Multiplication is variable-time, performs no doublings, and uses no caller
-/// scratch or allocation. Table preparation, validation, and multiplication
-/// provide no constant-time guarantee for secret inputs.
+/// [`prepare`](Self::prepare) fills caller buffers. [`bind`](Self::bind) borrows
+/// trusted stored entries and checks their description and length. Multiplication
+/// is variable-time, performs no doublings, and uses no caller scratch or
+/// allocation. Preparation and multiplication provide no constant-time guarantee
+/// for secret inputs.
 #[derive(Clone, Copy)]
 pub struct FixedBaseTable<'a, C: PastaCurve, E: CurveTableEntry<C> = AffinePoint<C>> {
     description: FixedBaseDescription,
@@ -96,8 +94,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
     /// their format through [`Self::description`]. Scratch can be reused
     /// immediately.
     ///
-    /// Returns [`CurveError::InvalidBase`] for an invalid base. Insufficient capacity
-    /// panics. These checks precede writes. Preparation is variable-time and performs
+    /// Insufficient capacity panics before writes. Preparation is variable-time and performs
     /// no allocation.
     ///
     /// ```
@@ -157,7 +154,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
         projective_scratch: &mut [ProjectivePoint<C>],
         field_scratch: &mut [PastaField<C::Base>],
     ) -> Result<Self, CurveError> {
-        let requirements = check_inputs(description, base, entries.len())?;
+        let requirements = check_inputs(description, entries.len())?;
         assert_scratch(
             "projective",
             requirements.projective_scratch,
@@ -202,76 +199,30 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
         })
     }
 
-    /// Binds stored entries after checking every specified multiple of `base`.
+    /// Borrows trusted entries in [`FixedBaseDescription`]'s storage order.
     ///
-    /// Uses [`FixedBaseDescription`]'s layout. Returns the description and base errors
-    /// from [`Self::bind_trusted`], [`CurveError::LengthMismatch`] for an incorrect
-    /// stored length, or [`CurveError::InvalidTable`] if an entry has unreduced
-    /// coordinates, differs from its specified multiple, or has an inconsistent cache.
-    /// Validation uses no scratch, allocation, or inversion.
-    pub fn bind(
+    /// Entries must have been prepared for this description and `base`. Binding
+    /// checks the description and storage length without inspecting entries.
+    /// Returns [`CurveError::InvalidWindowBits`] for unsupported widths. Panics
+    /// unless the entry count matches [`FixedBaseDescription::requirements`].
+    pub const fn bind(
         description: FixedBaseDescription,
         base: &AffinePoint<C>,
         entries: &'a [E],
     ) -> Result<Self, CurveError> {
-        validate_length(
-            "entries",
-            description.requirements()?.table_entries,
-            entries.len(),
-        )?;
-        let table = Self::bind_trusted(description, base, entries)?;
-        table.validate()?;
-        Ok(table)
-    }
-
-    /// Binds a table whose entries have already been validated by its owner.
-    ///
-    /// Checks the description, base, and exact length, but does not inspect table
-    /// entries. They must be the reduced, on-curve multiples in
-    /// [`FixedBaseDescription`]'s layout, including the final carry entry.
-    /// Cached coordinates must satisfy
-    /// [`PreparedAffinePoint`](super::PreparedAffinePoint)'s invariants.
-    /// Incorrect entries can make [`Self::mul`] panic or give incorrect results
-    /// but remain memory-safe. Use [`Self::bind`] for unvalidated data, or call
-    /// [`Self::validate`] before multiplication.
-    ///
-    /// Returns [`CurveError::InvalidWindowBits`] for an unsupported width, or
-    /// [`CurveError::InvalidBase`] for unreduced or off-curve base coordinates. Panics
-    /// unless `entries` has exactly the length reported by
-    /// [`FixedBaseDescription::requirements`].
-    pub fn bind_trusted(
-        description: FixedBaseDescription,
-        base: &AffinePoint<C>,
-        entries: &'a [E],
-    ) -> Result<Self, CurveError> {
-        check_inputs(description, base, entries.len())?;
+        let requirements = match description.requirements() {
+            Ok(requirements) => requirements,
+            Err(error) => return Err(error),
+        };
+        assert!(
+            entries.len() == requirements.table_entries,
+            "fixed-base table length mismatch"
+        );
         Ok(Self {
             description,
             base: *base,
             entries,
         })
-    }
-
-    /// Checks every entry against its specified multiple without inversion.
-    ///
-    /// Returns [`CurveError::InvalidTable`] for unreduced or incorrect entries,
-    /// including inconsistent cached coordinates. This also checks views
-    /// created by [`Self::bind_trusted`] and requires neither scratch nor
-    /// allocation.
-    pub fn validate(&self) -> Result<(), CurveError> {
-        let h = self.description.requirements()?.projective_scratch;
-        let mut window_base = self.base.to_projective();
-        for window in self.entries[..self.entries.len() - 1].chunks_exact(h) {
-            let mut expected = window_base;
-            for (i, entry) in window.iter().enumerate() {
-                check_entry(&expected, entry)?;
-                if i + 1 < h {
-                    expected = expected.add(&window_base);
-                }
-            }
-            window_base = expected.double();
-        }
-        check_entry(&window_base, &self.entries[self.entries.len() - 1])
     }
 
     /// Returns the table layout.
@@ -291,9 +242,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
 
     /// Multiplies the base by a scalar using signed digits and mixed additions.
     ///
-    /// Processes the full canonical scalar; zero returns identity. The scalar
-    /// must satisfy [`PastaField`]'s reduced-residue invariant, and a table
-    /// created with [`Self::bind_trusted`] must satisfy its entry requirements.
+    /// Processes the full canonical scalar; zero returns identity.
     /// Execution is variable-time and uses bounded stack storage without
     /// doubling, allocation, or caller scratch.
     pub fn mul(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
@@ -321,16 +270,12 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
     }
 }
 
-fn check_inputs<C: PastaCurve>(
+fn check_inputs(
     description: FixedBaseDescription,
-    base: &AffinePoint<C>,
     length: usize,
 ) -> Result<CurveTableRequirements, CurveError> {
     let requirements = description.requirements()?;
     assert_length("entries", requirements.table_entries, length);
-    if AffinePoint::<C>::from_xy(base.x, base.y).is_none() {
-        return Err(CurveError::InvalidBase);
-    }
     Ok(requirements)
 }
 

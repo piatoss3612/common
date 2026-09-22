@@ -177,42 +177,7 @@ impl<C: PastaCurve> AffinePoint<C> {
 #[macro_export]
 macro_rules! pallas_affine {
     ($x:expr, $y:expr $(,)?) => {
-        const {
-            $crate::curve::PallasAffine::__from_montgomery_coordinates::<
-                {
-                    let value: $crate::field::Fp = ($x).reduce().into_loose();
-                    value.montgomery_limbs()[0]
-                },
-                {
-                    let value: $crate::field::Fp = ($x).reduce().into_loose();
-                    value.montgomery_limbs()[1]
-                },
-                {
-                    let value: $crate::field::Fp = ($x).reduce().into_loose();
-                    value.montgomery_limbs()[2]
-                },
-                {
-                    let value: $crate::field::Fp = ($x).reduce().into_loose();
-                    value.montgomery_limbs()[3]
-                },
-                {
-                    let value: $crate::field::Fp = ($y).reduce().into_loose();
-                    value.montgomery_limbs()[0]
-                },
-                {
-                    let value: $crate::field::Fp = ($y).reduce().into_loose();
-                    value.montgomery_limbs()[1]
-                },
-                {
-                    let value: $crate::field::Fp = ($y).reduce().into_loose();
-                    value.montgomery_limbs()[2]
-                },
-                {
-                    let value: $crate::field::Fp = ($y).reduce().into_loose();
-                    value.montgomery_limbs()[3]
-                },
-            >()
-        }
+        $crate::__pasta_affine!($crate::field::Fp, $crate::curve::PallasAffine, $x, $y)
     };
 }
 
@@ -223,38 +188,47 @@ macro_rules! pallas_affine {
 #[macro_export]
 macro_rules! vesta_affine {
     ($x:expr, $y:expr $(,)?) => {
+        $crate::__pasta_affine!($crate::field::Fq, $crate::curve::VestaAffine, $x, $y)
+    };
+}
+
+/// Expansion support for checked constant Pasta coordinates.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __pasta_affine {
+    ($field:ty, $point:ty, $x:expr, $y:expr) => {
         const {
-            $crate::curve::VestaAffine::__from_montgomery_coordinates::<
+            <$point>::__from_montgomery_coordinates::<
                 {
-                    let value: $crate::field::Fq = ($x).reduce().into_loose();
+                    let value: $field = ($x).reduce().into_loose();
                     value.montgomery_limbs()[0]
                 },
                 {
-                    let value: $crate::field::Fq = ($x).reduce().into_loose();
+                    let value: $field = ($x).reduce().into_loose();
                     value.montgomery_limbs()[1]
                 },
                 {
-                    let value: $crate::field::Fq = ($x).reduce().into_loose();
+                    let value: $field = ($x).reduce().into_loose();
                     value.montgomery_limbs()[2]
                 },
                 {
-                    let value: $crate::field::Fq = ($x).reduce().into_loose();
+                    let value: $field = ($x).reduce().into_loose();
                     value.montgomery_limbs()[3]
                 },
                 {
-                    let value: $crate::field::Fq = ($y).reduce().into_loose();
+                    let value: $field = ($y).reduce().into_loose();
                     value.montgomery_limbs()[0]
                 },
                 {
-                    let value: $crate::field::Fq = ($y).reduce().into_loose();
+                    let value: $field = ($y).reduce().into_loose();
                     value.montgomery_limbs()[1]
                 },
                 {
-                    let value: $crate::field::Fq = ($y).reduce().into_loose();
+                    let value: $field = ($y).reduce().into_loose();
                     value.montgomery_limbs()[2]
                 },
                 {
-                    let value: $crate::field::Fq = ($y).reduce().into_loose();
+                    let value: $field = ($y).reduce().into_loose();
                     value.montgomery_limbs()[3]
                 },
             >()

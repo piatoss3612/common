@@ -54,18 +54,7 @@ use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus, ReductionStat
 #[macro_export]
 macro_rules! fp_hex {
     ($value:literal $(,)?) => {
-        const {
-            const MODULUS: [::core::primitive::u64; 4] =
-                <$crate::field::PallasBase as $crate::field::PrimeModulus>::MODULUS;
-            const CANONICAL: [::core::primitive::u64; 4] = $crate::__u256_from_hex!($value);
-            ::core::assert!(
-                !$crate::__u256_ge!(&CANONICAL, &MODULUS),
-                "field constants must be canonical residues"
-            );
-            <$crate::field::Fp>::from_montgomery_limbs($crate::__m255_from_u256!(
-                &MODULUS, &CANONICAL
-            ))
-        }
+        $crate::__pasta_hex!($crate::field::PallasBase, $crate::field::Fp, $value)
     };
 }
 
@@ -83,17 +72,24 @@ macro_rules! fp_hex {
 #[macro_export]
 macro_rules! fq_hex {
     ($value:literal $(,)?) => {
+        $crate::__pasta_hex!($crate::field::PallasScalar, $crate::field::Fq, $value)
+    };
+}
+
+/// Expansion support for canonical Pasta field literals.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __pasta_hex {
+    ($modulus:ty, $field:ty, $value:literal) => {
         const {
             const MODULUS: [::core::primitive::u64; 4] =
-                <$crate::field::PallasScalar as $crate::field::PrimeModulus>::MODULUS;
+                <$modulus as $crate::field::PrimeModulus>::MODULUS;
             const CANONICAL: [::core::primitive::u64; 4] = $crate::__u256_from_hex!($value);
             ::core::assert!(
                 !$crate::__u256_ge!(&CANONICAL, &MODULUS),
                 "field constants must be canonical residues"
             );
-            <$crate::field::Fq>::from_montgomery_limbs($crate::__m255_from_u256!(
-                &MODULUS, &CANONICAL
-            ))
+            <$field>::from_montgomery_limbs($crate::__m255_from_u256!(&MODULUS, &CANONICAL))
         }
     };
 }

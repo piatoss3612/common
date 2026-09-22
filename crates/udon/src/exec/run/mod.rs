@@ -18,7 +18,9 @@
 //! before reuse. No destructor is responsible for establishing memory safety.
 //!
 pub(crate) mod frontier;
+mod structured;
 mod task;
+pub(crate) use structured::dispatch;
 pub(crate) use task::Reserved;
 
 pub(crate) use frontier::Frontier;

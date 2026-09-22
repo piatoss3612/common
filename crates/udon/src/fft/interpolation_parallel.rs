@@ -1,33 +1,7 @@
-use super::transform::Run;
 use super::{
-    Class, ClassState, ElementOrder, Executor, FftError, PastaField, PrimeModulus, Strategy,
+    Class, ClassState, Executor, FftError, PastaField, PrimeModulus, Strategy,
     interpolation_scratch,
 };
-fn inverse<M: PrimeModulus, E: Executor>(
-    class: &mut Class<'_, M>,
-    options: Strategy,
-    executor: &E,
-    scratch: &mut [PastaField<M>],
-) {
-    class.state = ClassState::Consumed;
-    if class.order == ElementOrder::Natural {
-        class.plan.permute(class.values);
-    }
-    let fields = class
-        .plan
-        .scratch_requirements_with(options)
-        .unwrap()
-        .field_elements;
-    class.plan.run(
-        class.values,
-        options,
-        executor,
-        &mut scratch[..fields],
-        Run::inverse(&[]),
-    );
-    class.order = ElementOrder::Natural;
-    class.state = ClassState::Coefficients;
-}
 
 fn add_coefficients<M: PrimeModulus>(output: &mut Class<'_, M>, lifts: &[Class<'_, M>]) {
     for lift in lifts
@@ -80,9 +54,9 @@ pub fn interpolate_sum<M: PrimeModulus, E: Executor>(
                 merge_evaluations(class, lift);
             }
         }
-        inverse(class, options, executor, scratch);
+        class.inverse(&[], options, executor, scratch)?;
     }
-    inverse(output, options, executor, scratch);
+    output.inverse(&[], options, executor, scratch)?;
     add_coefficients(output, lifts);
     for lift in lifts {
         lift.state = ClassState::Consumed;

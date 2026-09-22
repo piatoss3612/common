@@ -1,5 +1,5 @@
 use super::*;
-use crate::exec::{Executor, for_each_task_mut};
+use crate::exec::Executor;
 
 struct Lease<'a, M: PrimeModulus> {
     values: &'a mut [PastaField<M>],
@@ -21,41 +21,16 @@ impl<M: PrimeModulus> Resources<M> for Lease<'_, M> {
 fn dispatch<'a, 't, 'b, M: PrimeModulus, E: Executor>(
     run: &mut FftRun<'a, 't, M>,
     requests: &mut [Option<Request<'a>>],
-    mut leases: impl Iterator<Item = Lease<'b, M>>,
+    leases: impl Iterator<Item = Lease<'b, M>>,
     executor: &E,
 ) {
-    if requests.len() == 1 {
-        let mut task = run
-            .try_claim(requests[0].take().unwrap(), || leases.next())
-            .expect("structured claim")
-            .expect("complete resource iterator");
-        task.execute().expect("fresh task");
-        let published = run.complete(task.finish()).expect("structured receipt");
-        assert!(published.error.is_none(), "validated transform phases");
-        return;
-    }
-    let mut tasks: [Option<Task<'a, FftKernel<'t, M>, Lease<'b, M>>>; 32] =
-        core::array::from_fn(|_| None);
-    let count = requests.len();
-    for ((slot, request), lease) in tasks.iter_mut().zip(requests).zip(leases) {
-        *slot = run
-            .try_claim(request.take().expect("ready request"), || Some(lease))
-            .expect("structured task claim");
-    }
-    for_each_task_mut(&mut tasks[..count], executor, |_, task| {
-        task.as_mut()
-            .expect("complete resource iterator")
-            .execute()
-            .expect("fresh task")
-    });
-    let mut error = None;
-    for task in &mut tasks[..count] {
-        let published = run
-            .complete(task.take().unwrap().finish())
-            .expect("structured receipt");
-        error = error.or(published.error);
-    }
-    assert!(error.is_none(), "validated transform phases");
+    crate::exec::run::dispatch!(
+        run,
+        requests,
+        leases,
+        executor,
+        "validated transform phases"
+    );
 }
 
 impl<M: PrimeModulus> FftPlan<'_, M> {

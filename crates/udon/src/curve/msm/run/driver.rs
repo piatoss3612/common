@@ -1,6 +1,6 @@
 use super::*;
+use crate::exec::Executor;
 use crate::exec::run::Reserved;
-use crate::exec::{Executor, for_each_task_mut};
 
 struct Lease<'a, C: PastaCurve> {
     records: &'a [ScalarStorage<C>],
@@ -31,44 +31,16 @@ fn empty<C: PastaCurve>() -> Scratch<'static, C> {
 fn dispatch<'a, 'i, 'b, C: PastaCurve, E: Executor>(
     run: &mut MsmRun<'a, 'i, C>,
     requests: &mut [Option<Request<'a>>],
-    mut leases: impl Iterator<Item = Lease<'b, C>>,
+    leases: impl Iterator<Item = Lease<'b, C>>,
     executor: &E,
 ) {
-    if requests.len() == 1 {
-        let mut task = run
-            .try_claim(requests[0].take().unwrap(), || leases.next())
-            .expect("structured claim")
-            .expect("complete resource iterator");
-        task.execute().expect("fresh task");
-        let published = run.complete(task.finish()).expect("structured receipt");
-        assert!(
-            published.error.is_none(),
-            "validated input and complete resources"
-        );
-        return;
-    }
-    let mut tasks: [Option<Task<'a, MsmKernel<'i, C>, Lease<'b, C>>>; 32] =
-        core::array::from_fn(|_| None);
-    let count = requests.len();
-    for ((slot, request), lease) in tasks.iter_mut().zip(requests).zip(leases) {
-        *slot = run
-            .try_claim(request.take().expect("ready request"), || Some(lease))
-            .expect("structured task claim");
-    }
-    for_each_task_mut(&mut tasks[..count], executor, |_, task| {
-        task.as_mut()
-            .expect("complete resource iterator")
-            .execute()
-            .expect("fresh task")
-    });
-    let mut error = None;
-    for task in &mut tasks[..count] {
-        let published = run
-            .complete(task.take().unwrap().finish())
-            .expect("structured receipt");
-        error = error.or(published.error);
-    }
-    assert!(error.is_none(), "validated input and complete resources");
+    crate::exec::run::dispatch!(
+        run,
+        requests,
+        leases,
+        executor,
+        "validated input and complete resources"
+    );
 }
 
 // A structured join owns every window output and the requested scratch bank

@@ -26,11 +26,10 @@
 #[macro_export]
 macro_rules! embed_array {
     ($(#[$attribute:meta])* $vis:vis static $name:ident: [$element:ty; $len:expr] = $path:expr;) => {
-        $(#[$attribute])*
-        $vis static $name: &'static [$element; $len] = {
-            const { &$crate::AlignedBytes(*::core::include_bytes!($path)) }
-                .as_array::<$element, { $len }>()
-        };
+        $crate::embed_struct! {
+            $(#[$attribute])*
+            $vis static $name: [$element; $len] = $path;
+        }
     };
 }
 

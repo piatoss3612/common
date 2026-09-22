@@ -329,6 +329,34 @@ pub(super) fn collapse_projective<C: PastaCurve>(
     }
     sum
 }
+#[inline]
+fn accumulate_projective<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
+    view: &View<'_, B, INDEXED>,
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
+    terms: core::ops::Range<usize>,
+    task: Task,
+    sums: &mut [ProjectivePoint<C>],
+) {
+    recode::window_views::<C, DIRECT>(
+        records,
+        digits,
+        terms,
+        task.geometry,
+        task.window,
+        &mut |term, a: i16, b: i16| {
+            for (half, digit) in [a, b].into_iter().enumerate() {
+                if digit != 0
+                    && let Some(p) = view.at(term).point(half)
+                {
+                    let i = usize::from(digit.unsigned_abs()) - 1;
+                    sums[i] = sums[i].add_mixed(&if digit < 0 { p.neg() } else { p });
+                }
+            }
+        },
+    );
+}
+
 fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
     view: View<'_, B, INDEXED>,
     records: impl Storage<ScalarStorage<C>>,
@@ -341,22 +369,13 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
     if task.accumulation == Accumulation::Projective {
         let sums = &mut work.projective[..buckets];
         sums.fill(ProjectivePoint::IDENTITY);
-        recode::window_views::<C, DIRECT>(
+        accumulate_projective::<C, B, INDEXED, DIRECT>(
+            &view,
             records,
             digits,
             0..terms,
-            task.geometry,
-            task.window,
-            &mut |term, a: i16, b: i16| {
-                for (half, digit) in [a, b].into_iter().enumerate() {
-                    if digit != 0
-                        && let Some(p) = view.at(term).point(half)
-                    {
-                        let i = usize::from(digit.unsigned_abs()) - 1;
-                        sums[i] = sums[i].add_mixed(&if digit < 0 { p.neg() } else { p });
-                    }
-                }
-            },
+            task,
+            sums,
         );
         return collapse_projective(sums);
     }
@@ -378,22 +397,13 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
                     survivors[i].to_projective()
                 };
             }
-            recode::window_views::<C, DIRECT>(
+            accumulate_projective::<C, B, INDEXED, DIRECT>(
+                &view,
                 records,
                 digits,
                 first..end,
-                task.geometry,
-                task.window,
-                &mut |term, a: i16, b: i16| {
-                    for (half, digit) in [a, b].into_iter().enumerate() {
-                        if digit != 0
-                            && let Some(p) = view.at(term).point(half)
-                        {
-                            let i = usize::from(digit.unsigned_abs()) - 1;
-                            sums[i] = sums[i].add_mixed(&if digit < 0 { p.neg() } else { p });
-                        }
-                    }
-                },
+                task,
+                sums,
             );
             return collapse_projective(sums);
         }

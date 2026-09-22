@@ -10,10 +10,16 @@ use arithmetic::{
 };
 
 mod literals {
-    pub use arithmetic::{pallas_affine as pallas, vesta_affine as vesta};
+    pub use arithmetic::{
+        fp_hex as fp, fq_hex as fq, pallas_affine as pallas, vesta_affine as vesta,
+    };
 }
 
 // Re-exported macros and const lifts must work through the renamed dependency.
+const FP_LITERAL: Fp =
+    literals::fp!("0x000000000000000000000000000000000000000000000000000000000000002a",);
+const FQ_LITERAL: Fq =
+    literals::fq!("0x000000000000000000000000000000000000000000000000000000000000002a");
 const X: Fp = PallasAffine::GENERATOR.coordinates().0.into_loose();
 const Y: Fp = PallasAffine::GENERATOR.coordinates().1.into_loose();
 const PALLAS: PallasAffine = literals::pallas!(X, Y,);
@@ -27,6 +33,8 @@ const PALLAS_PROJECTIVE: PallasProjective = PALLAS_POINT.to_projective();
 const VESTA_PROJECTIVE: VestaProjective = VESTA_POINT.to_projective();
 
 fn main() {
+    assert_eq!(FP_LITERAL.reduce(), Fp::from_u64(42));
+    assert_eq!(FQ_LITERAL.reduce(), Fq::from_u64(42));
     assert_eq!(PALLAS, PallasAffine::GENERATOR);
     assert_eq!(VESTA, VestaAffine::GENERATOR);
     assert_eq!(PALLAS_PROJECTIVE, PallasProjective::GENERATOR);

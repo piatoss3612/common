@@ -57,6 +57,32 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
             Err(FftError::InvalidClassState)
         }
     }
+
+    // Entry points validate before mutation. Sum interpolation can then merge
+    // evaluations into consumed storage before calling this inverse.
+    pub(super) fn inverse<E: Executor>(
+        &mut self,
+        lifts: &[Class<'_, M>],
+        options: Strategy,
+        executor: &E,
+        scratch: &mut [PastaField<M>],
+    ) -> Result<(), FftError> {
+        self.state = ClassState::Consumed;
+        if self.order == ElementOrder::Natural {
+            self.plan.permute(self.values);
+        }
+        let required = self.plan.scratch_requirements_with(options)?.field_elements;
+        self.plan.run(
+            self.values,
+            options,
+            executor,
+            &mut scratch[..required],
+            Run::inverse(lifts),
+        );
+        self.order = ElementOrder::Natural;
+        self.state = ClassState::Coefficients;
+        Ok(())
+    }
 }
 
 const fn include_lift(
@@ -115,37 +141,7 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
 ) -> Result<(), FftError> {
     interpolation_scratch(output, lifts, options)?.check(scratch.len());
     for lift in lifts.iter_mut() {
-        lift.state = ClassState::Consumed;
-        if lift.order == ElementOrder::Natural {
-            lift.plan.permute(lift.values);
-        }
-        let required = lift.plan.scratch_requirements_with(options)?.field_elements;
-        lift.plan.run(
-            lift.values,
-            options,
-            executor,
-            &mut scratch[..required],
-            Run::inverse(&[]),
-        );
-        lift.order = ElementOrder::Natural;
-        lift.state = ClassState::Coefficients;
+        lift.inverse(&[], options, executor, scratch)?;
     }
-    output.state = ClassState::Consumed;
-    if output.order == ElementOrder::Natural {
-        output.plan.permute(output.values);
-    }
-    let required = output
-        .plan
-        .scratch_requirements_with(options)?
-        .field_elements;
-    output.plan.run(
-        output.values,
-        options,
-        executor,
-        &mut scratch[..required],
-        Run::inverse(lifts),
-    );
-    output.order = ElementOrder::Natural;
-    output.state = ClassState::Coefficients;
-    Ok(())
+    output.inverse(lifts, options, executor, scratch)
 }

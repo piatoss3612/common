@@ -33,6 +33,8 @@ pub(crate) mod word;
 
 pub use batch::{BatchInversionError, batch_invert, batch_invert_groups, try_batch_invert_by};
 pub(crate) use batch::{NonzeroInversionLanes, invert_nonzero};
+#[cfg(test)]
+pub(crate) use inversion::count_inversions;
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub use products::ProductSum;
 pub use representation::{Loose, Reduced, ReductionState};

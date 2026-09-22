@@ -214,32 +214,38 @@ describes when shared preparation and same-scalar multiplication pay off.
 multiplication. Select the curve with `FixedBaseTable<Pallas>` or
 `FixedBaseTable<Vesta>`, and optionally specify a prepared entry type.
 
-`FixedBaseTable::prepare` selects a representation from the supplied entry and
-scratch capacities, using only the required prefixes. More retained entries
-can reduce repeated multiplication work; the caller owns that storage tradeoff.
-The returned table's `description()` identifies its stored representation.
+`FixedBaseTable::prepare_with(description, ...)` prepares an explicit layout
+independently of the supplied scratch capacity. `FixedBaseTable::prepare`
+optionally selects a layout from the entry and scratch capacities. Both borrow
+only the used entry prefix, and `description()` identifies the stored layout.
 
-For binding existing artifacts, `FixedBaseDescription { window_bits: w }`
-describes widths `2..=8`. The two GLV halves share `ceil(128 / w)` windows, each storing
-`2^(w - 1)` shifted multiples of the base. An additional entry handles the final
-carry from signed-digit recoding; the second half applies the endomorphism to
-its lookups. The [description docs](../crates/udon/src/curve/fixed_base.rs)
+`FixedBaseDescription { window_bits: w }` describes widths `2..=8`. The two GLV
+halves share `ceil(128 / w)` windows, each storing `2^(w - 1)` shifted multiples
+of the base. Only width 2 needs an additional entry for the final carry from
+signed-digit recoding; the second half applies the endomorphism to its lookups.
+The [description docs](../crates/udon/src/curve/fixed_base.rs)
 define the entry order and multiples required for binding stored tables.
 
 The const query `description.requirements()` reports the exact stored entry
-count and preparation scratch for an existing format. Binding requires exactly
-that entry count. Preparation chooses a format that fits all supplied buffers
-and leaves unused tails untouched.
+count and minimum preparation scratch. Binding requires exactly that entry
+count; preparation accepts larger buffers and leaves unused tails untouched.
+The shorter scratch buffer determines how many whole windows share a batch
+normalization. Minimum scratch normalizes one window at a time. With
+`table_entries` elements of each scratch type, the entire table shares one
+inversion, including the width-2 carry. Intermediate capacities batch as many
+whole windows as fit and include the carry in the last batch when space permits.
 
 | Window bits | Entries | Affine bytes | Cached bytes | Projective scratch | Field scratch | Total scratch bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 4 | 257 | 16,448 | 24,672 | 8 | 8 | 1,024 |
-| 8 | 2,049 | 131,136 | 196,704 | 128 | 128 | 16,384 |
+| 4 | 256 | 16,384 | 24,576 | 8 | 8 | 1,024 |
+| 8 | 2,048 | 131,072 | 196,608 | 128 | 128 | 16,384 |
 
 Bytes exclude the base and table handle. Scratch byte counts describe the
-current implementation: each projective element is 96 bytes and each field
-element is 32 bytes. Larger windows trade additional stored multiples for
-fewer additions during execution.
+minimum allowance: each projective element is 96 bytes and each field element
+is 32 bytes. At width 4, increasing total scratch from 1,024 to 32,768 bytes
+reduces preparation from 32 inversions to one; at width 8, increasing it from
+16,384 to 262,144 bytes reduces 16 inversions to one. Larger windows trade
+additional stored multiples for fewer additions during execution.
 
 The executable [preparation example](../crates/udon/src/curve/fixed_base.rs)
 shows multiplication and rebinding with the selected description and entries.

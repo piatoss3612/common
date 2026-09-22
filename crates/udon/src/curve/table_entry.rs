@@ -7,9 +7,11 @@ use crate::field::{PastaField, Reduced};
 
 /// Exact table length and minimum scratch lengths for curve table preparation.
 ///
-/// All lengths count elements, not bytes. Preparation leaves scratch tails
-/// beyond these lengths untouched. Batch multiplication reports its scratch
-/// through [`EisensteinTableBatch::multiplication_scratch`][batch_scratch].
+/// All lengths count elements, not bytes. Expanded table preparation can use
+/// larger scratch buffers to share inversions across windows; see
+/// [`FixedBaseTable::prepare_with`](super::FixedBaseTable::prepare_with).
+/// Batch multiplication reports its scratch through
+/// [`EisensteinTableBatch::multiplication_scratch`][batch_scratch].
 ///
 /// [batch_scratch]: super::EisensteinTableBatch::multiplication_scratch
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

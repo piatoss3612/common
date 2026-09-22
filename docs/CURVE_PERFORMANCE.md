@@ -29,6 +29,7 @@ Measure the current implementation with:
 ```console
 cargo bench --locked -p zakura-udon --bench curve -- 'scalar_mul/corpus' --save-baseline candidate --sample-size 20 --measurement-time 1 --warm-up-time 1
 cargo bench --locked -p zakura-udon --bench curve -- '(fixed_base(_cached)?/w(3|4|7|8)|eisenstein(_cached)?)/(prepare|mul/corpus)$' --save-baseline candidate --sample-size 20 --measurement-time 1 --warm-up-time 1
+cargo bench --locked -p zakura-udon --bench curve -- 'fixed_base(_cached)?/w(4|8)/prepare' --sample-size 20 --measurement-time 1 --warm-up-time 1
 ```
 
 ## Ordinary multiplication
@@ -46,6 +47,12 @@ and the target determine the actual stack requirement. Neither one-shot method
 offers a strategy override or an inversion-free path for large scalars.
 
 ## Retained tables
+
+The expanded preparation cases compare minimum scratch (`prepare`), four
+windows (`prepare/four_windows`), and the entire table (`prepare/full`) at an
+explicit width. See the [scratch tradeoff](CURVES.md#expanded-tables) for current
+storage and inversion counts. The historical measurements below include the
+extra carry entry at every width and use one window of preparation scratch.
 
 Times below are microseconds. Preparation covers one table; multiplication
 covers 32 products. Values are Criterion point estimates. Storage counts only

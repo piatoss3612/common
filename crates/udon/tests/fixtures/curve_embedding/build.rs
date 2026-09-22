@@ -18,16 +18,18 @@ pub mod record;
 
 fn generate<C: PastaCurve>(name: &str, truncate: bool) {
     let mut record = record::Record::<C>::empty();
-    let mut projective = [ProjectivePoint::IDENTITY; record::REQUIREMENTS.projective_scratch];
-    let mut field = [PastaField::ZERO; record::REQUIREMENTS.field_scratch];
-    FixedBaseTable::prepare(
+    let mut projective = [ProjectivePoint::IDENTITY; record::REQUIREMENTS.table_entries];
+    let mut field = [PastaField::ZERO; record::REQUIREMENTS.table_entries];
+    FixedBaseTable::prepare_with(
+        record::DESCRIPTION,
         &record.base,
         &mut record.entries,
         &mut projective,
         &mut field,
     )
     .unwrap();
-    FixedBaseTable::prepare(
+    FixedBaseTable::prepare_with(
+        record::DESCRIPTION,
         &record.base,
         &mut record.cached,
         &mut projective,

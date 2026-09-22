@@ -329,7 +329,13 @@ fn transform_selection_obeys_constraints_and_mathematical_layouts() {
 fn fixed_base<C: PastaCurve>() {
     let base = AffinePoint::<C>::GENERATOR;
     let scalar = PastaField::<C::Scalar>::TWO_INVERSE;
-    for (capacity, scratch) in [(129, 2), (2049, 2), (2048, 128), (2049, 128)] {
+    for (capacity, scratch, window_bits) in [
+        (129, 2, 2),
+        (2048, 2, 2),
+        (2047, 128, 7),
+        (2048, 128, 8),
+        (2048, 2048, 8),
+    ] {
         let mut entries = vec![base.neg(); capacity + 1];
         let mut projective = vec![base.to_projective(); scratch + 1];
         let mut field = vec![PastaField::from_u64(42); scratch + 1];
@@ -340,6 +346,7 @@ fn fixed_base<C: PastaCurve>() {
             &mut field[..scratch],
         )
         .unwrap();
+        assert_eq!(table.description().window_bits, window_bits);
         assert_eq!(table.mul(&scalar), base.mul_projective(&scalar));
         let required = table.description().requirements().unwrap();
         assert!(
@@ -348,12 +355,12 @@ fn fixed_base<C: PastaCurve>() {
                 .all(|v| *v == base.neg())
         );
         assert!(
-            projective[required.projective_scratch..]
+            projective[scratch..]
                 .iter()
                 .all(|v| *v == base.to_projective())
         );
         assert!(
-            field[required.field_scratch..]
+            field[scratch..]
                 .iter()
                 .all(|v| v.reduce() == PastaField::from_u64(42))
         );

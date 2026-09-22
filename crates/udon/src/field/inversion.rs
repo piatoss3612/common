@@ -21,7 +21,7 @@ std::thread_local! {
 }
 
 #[cfg(test)]
-pub(super) fn count_inversions(f: impl FnOnce()) -> usize {
+pub(crate) fn count_inversions(f: impl FnOnce()) -> usize {
     INVERSION_COUNT.with(|count| {
         let before = count.get();
         f();

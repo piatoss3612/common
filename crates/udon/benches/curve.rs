@@ -659,20 +659,35 @@ fn expanded<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
         // Allocation and buffer initialization are outside timed preparation.
         // Execution then borrows this expanded storage without setup per scalar.
         let mut group = criterion.benchmark_group(format!("{name}/{layout}/w{window_bits}"));
-        group.bench_function("prepare", |b| {
-            b.iter(|| {
-                let table = FixedBaseTable::prepare(
-                    black_box(affine),
-                    black_box(&mut entries),
-                    black_box(&mut projective),
-                    black_box(&mut field),
-                )
-                .unwrap();
-                black_box(table.as_slice());
-            })
-        });
-        let table =
-            FixedBaseTable::prepare(affine, &mut entries, &mut projective, &mut field).unwrap();
+        for (case, scratch_len) in [
+            ("prepare", required.projective_scratch),
+            ("prepare/four_windows", 4 * required.projective_scratch),
+            ("prepare/full", required.table_entries),
+        ] {
+            projective.resize(scratch_len, ProjectivePoint::IDENTITY);
+            field.resize(scratch_len, PastaField::ZERO);
+            group.bench_function(case, |b| {
+                b.iter(|| {
+                    let table = FixedBaseTable::prepare_with(
+                        black_box(description),
+                        black_box(affine),
+                        black_box(&mut entries),
+                        black_box(&mut projective),
+                        black_box(&mut field),
+                    )
+                    .unwrap();
+                    black_box(table.as_slice());
+                })
+            });
+        }
+        let table = FixedBaseTable::prepare_with(
+            description,
+            affine,
+            &mut entries,
+            &mut projective,
+            &mut field,
+        )
+        .unwrap();
         assert_eq!(table.mul(&dense), affine.mul_projective(&dense));
         assert_eq!(
             table.mul(&PastaField::<_>::ONE.neg()),

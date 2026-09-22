@@ -122,6 +122,8 @@ Compare the same 32-scalar corpus at equal width or similar storage budgets.
 Preparation fills allocated buffers; binding borrows existing entries; table
 multiplication includes recoding. Invalid table entries at the beginning and
 end distinguish early rejection from full scans.
+Expanded preparation compares one-window, four-window, and full-table scratch
+allowances at an explicitly selected width.
 
 ```console
 cargo bench --locked -p zakura-udon --bench curve

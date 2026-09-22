@@ -20,8 +20,8 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
             description,
             &base,
             &mut entries,
-            &mut projective,
-            &mut field,
+            &mut projective[..h],
+            &mut field[..h],
         )
         .unwrap();
         assert_eq!(table.description(), description);
@@ -41,7 +41,8 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
         // Every stored entry is checked using ordinary-integer affine formulas,
         // including the carry point and every partially filled top window.
         let mut reference_base = Reference::from_point(&base.to_point());
-        for window in table.as_slice()[..required.table_entries - 1].chunks_exact(h) {
+        let window_entries = 128_usize.div_ceil(window_bits as usize) * h;
+        for window in table.as_slice()[..window_entries].chunks_exact(h) {
             let mut multiple = Reference::identity();
             for entry in window {
                 multiple = multiple.add(&reference_base, &p);
@@ -51,11 +52,9 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
                 reference_base = reference_base.add(&reference_base, &p);
             }
         }
-        reference_base.assert_point(
-            &table.as_slice()[required.table_entries - 1]
-                .affine()
-                .to_point(),
-        );
+        if window_bits == 2 {
+            reference_base.assert_point(&table.as_slice()[window_entries].affine().to_point());
+        }
         let mut scalars = scalar_corpus::<C>();
         // Sample full scalars around signed-window thresholds, including limb
         // boundaries. GLV changes their digits; direct recoder tests separately
@@ -125,7 +124,7 @@ fn rejections<C: PastaCurve>() {
     assert_eq!(
         required,
         CurveTableRequirements {
-            table_entries: 257,
+            table_entries: 256,
             projective_scratch: 8,
             field_scratch: 8
         }
@@ -135,7 +134,7 @@ fn rejections<C: PastaCurve>() {
             .requirements()
             .unwrap(),
         CurveTableRequirements {
-            table_entries: 2049,
+            table_entries: 2048,
             projective_scratch: 128,
             field_scratch: 128
         }
@@ -150,7 +149,7 @@ fn rejections<C: PastaCurve>() {
         (
             FixedBaseDescription { window_bits: 0 },
             base,
-            257,
+            256,
             8,
             8,
             CurveError::InvalidWindowBits { bits: 0 },
@@ -158,7 +157,7 @@ fn rejections<C: PastaCurve>() {
         (
             FixedBaseDescription { window_bits: 9 },
             base,
-            257,
+            256,
             8,
             8,
             CurveError::InvalidWindowBits { bits: 9 },
@@ -179,7 +178,7 @@ fn rejections<C: PastaCurve>() {
         assert_eq!((&entries, &projective), (&old.0, &old.1));
         assert_eq!(bento::bytes_of_slice(&field), bento::bytes_of_slice(&old.2));
     }
-    for (entry_len, projective_len, field_len) in [(256, 8, 8), (257, 7, 8), (257, 8, 7)] {
+    for (entry_len, projective_len, field_len) in [(255, 8, 8), (256, 7, 8), (256, 8, 7)] {
         let old = (entries.clone(), projective.clone(), field.clone());
         assert!(
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -212,7 +211,7 @@ fn rejections<C: PastaCurve>() {
     )
     .unwrap();
     let valid = entries.clone();
-    for len in [0, 256, 258] {
+    for len in [0, 255, 257] {
         let mut wrong = valid.clone();
         wrong.resize(len, base);
         assert!(
@@ -238,4 +237,95 @@ fn rejections<C: PastaCurve>() {
 fn fixed_base_configuration_and_length_errors_preserve_buffers() {
     rejections::<Pallas>();
     rejections::<Vesta>();
+}
+
+fn preparation_batches<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>() {
+    let base = *Point::<C>::GENERATOR
+        .double()
+        .to_point()
+        .as_affine()
+        .unwrap();
+    for window_bits in 2..=8 {
+        let description = FixedBaseDescription { window_bits };
+        let required = description.requirements().unwrap();
+        let n = 128_usize.div_ceil(window_bits as usize);
+        let h = required.projective_scratch;
+        let carry = usize::from(window_bits == 2);
+        let total = required.table_entries;
+        let sentinel = E::from_affine(&AffinePoint::GENERATOR);
+        let mut reference = vec![sentinel; total];
+        FixedBaseTable::prepare_with(
+            description,
+            &base,
+            &mut reference,
+            &mut vec![ProjectivePoint::IDENTITY; h],
+            &mut vec![PastaField::ZERO; h],
+        )
+        .unwrap();
+        // Cross window boundaries, exercise a short final batch, and include
+        // width 2's carry both alone and alongside the last windows. Unequal
+        // buffers must use the smaller allowance without changing the layout.
+        for (projective_len, field_len, expected_inversions) in [
+            (h, h, n + carry),
+            (h + 1, h + 1, n),
+            (2 * h, 2 * h, n.div_ceil(2) + carry),
+            (2 * h + 1, 2 * h + 1, n.div_ceil(2)),
+            (3 * h, 3 * h, n.div_ceil(3)),
+            (n * h - 1, n * h - 1, 2),
+            (n * h, n * h, 1 + carry),
+            (total, total, 1),
+            (total + 3, total + 5, 1),
+            (total, h, n + carry),
+            (h, total, n + carry),
+        ] {
+            let capacity = projective_len.min(field_len).min(total);
+            // Enough retained capacity for width 8 must not override the
+            // explicitly selected layout when extra scratch also fits it.
+            let mut entries = vec![sentinel; 2050];
+            let mut projective = vec![ProjectivePoint::GENERATOR; projective_len + 2];
+            let mut field = vec![PastaField::from_u64(77); field_len + 2];
+            let inversions = crate::field::count_inversions(|| {
+                let table = FixedBaseTable::prepare_with(
+                    description,
+                    &base,
+                    &mut entries,
+                    &mut projective[..projective_len],
+                    &mut field[..field_len],
+                )
+                .unwrap();
+                assert_eq!(table.description(), description);
+                assert_eq!(
+                    bento::bytes_of_slice(table.as_slice()),
+                    bento::bytes_of_slice(&reference)
+                );
+            });
+            assert_eq!(
+                inversions, expected_inversions,
+                "width {window_bits}, projective {projective_len}, field {field_len}"
+            );
+            assert!(
+                entries[total..]
+                    .iter()
+                    .all(|entry| bento::bytes_of(entry) == bento::bytes_of(&sentinel))
+            );
+            assert!(
+                projective[capacity..]
+                    .iter()
+                    .all(|p| *p == ProjectivePoint::GENERATOR)
+            );
+            assert!(
+                field[capacity..]
+                    .iter()
+                    .all(|f| f.reduce() == PastaField::from_u64(77))
+            );
+        }
+    }
+}
+
+#[test]
+fn fixed_base_scratch_allowance_controls_inversions_without_changing_entries() {
+    preparation_batches::<Pallas, PallasAffine>();
+    preparation_batches::<Pallas, PreparedAffinePoint<Pallas>>();
+    preparation_batches::<Vesta, VestaAffine>();
+    preparation_batches::<Vesta, PreparedAffinePoint<Vesta>>();
 }

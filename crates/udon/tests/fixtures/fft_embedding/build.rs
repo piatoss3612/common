@@ -26,7 +26,7 @@ fn main() {
                 .coset(<$field>::ZETA)
                 .unwrap();
             let mut record = <$record>::empty();
-            record.destinations().prepare(domain).unwrap();
+            record.destinations().prepare(domain);
             TwiddleTable::prepare(record::TWIDDLES, &mut record.packed).unwrap();
             ExpansionScales::prepare(
                 record::SIZE,

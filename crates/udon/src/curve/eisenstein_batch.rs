@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 
 use super::{
     AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, EisensteinScalar,
-    EisensteinTable, PastaCurve, ProjectivePoint, check_length, check_scratch, checked_count,
+    EisensteinTable, PastaCurve, ProjectivePoint, assert_length, assert_scratch, checked_count,
     eisenstein,
 };
 use crate::{
@@ -68,7 +68,7 @@ const LADDER_AFFINE_MIN: usize = 64;
 ///     &mut field,
 ///     TaskBudget::SERIAL,
 ///     &SerialExecutor,
-/// )?;
+/// );
 /// for (i, product) in output.iter().enumerate() {
 ///     assert_eq!(*product, tables.get(i).unwrap().mul_prepared(&scalar));
 /// }
@@ -121,16 +121,14 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
     ///
     /// # Errors
     ///
-    /// Returns [`CurveError::InvalidBase`] for invalid coordinates or caches,
-    /// [`CurveError::LengthMismatch`] for an incorrect entry count,
-    /// [`CurveError::ScratchTooSmall`] for insufficient scratch, or
-    /// [`CurveError::SizeOverflow`] if sizing exceeds slice limits. All checks
-    /// precede writes, so returned errors leave every buffer unchanged.
+    /// Returns [`CurveError::InvalidBase`] for invalid coordinates or caches, leaving
+    /// every buffer unchanged.
     ///
     /// # Panics
     ///
-    /// An executor panic may leave buffers partially written. All scoped jobs
-    /// finish or unwind before it propagates, as required by [`Executor`].
+    /// Incorrect buffer lengths panic before writes. An executor panic may leave
+    /// buffers partially written. All scoped jobs finish or unwind before it
+    /// propagates, as required by [`Executor`].
     pub fn prepare<B: CurveTableEntry<C>, X: Executor>(
         bases: &[B],
         entries: &'a mut [E],
@@ -139,10 +137,15 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         budget: TaskBudget,
         executor: &X,
     ) -> Result<Self, CurveError> {
-        let r = Self::requirements(bases.len())?;
-        check_length("entries", r.table_entries, entries.len())?;
-        check_scratch("projective", r.projective_scratch, projective.len())?;
-        check_scratch("field", r.field_scratch, field.len())?;
+        assert_eq!(entries.len() / 8, bases.len(), "one table per base");
+        assert!(
+            entries.len().is_multiple_of(8),
+            "incomplete Eisenstein table"
+        );
+        let r = Self::requirements(bases.len()).expect("entry storage bounds preparation scratch");
+        assert_length("entries", r.table_entries, entries.len());
+        assert_scratch("projective", r.projective_scratch, projective.len());
+        assert_scratch("field", r.field_scratch, field.len());
         for base in bases {
             let p = base.affine();
             if AffinePoint::<C>::from_xy(p.x, p.y).is_none() || !base.valid_cache() {
@@ -170,6 +173,9 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
     /// or [`CurveError::InvalidTable`] for an incorrect multiple or cache,
     /// including entry zero's cache. Uses no scratch.
     pub fn bind(entries: &'a [E]) -> Result<Self, CurveError> {
+        if !entries.len().is_multiple_of(8) {
+            return Err(CurveError::InvalidTableLayout);
+        }
         let batch = Self::bind_trusted(entries)?;
         batch.validate()?;
         Ok(batch)
@@ -177,16 +183,17 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
 
     /// Binds tables whose multiples and caches the owner has established.
     ///
-    /// Checks the flat layout and entry zero's affine coordinates in each group,
-    /// returning [`CurveError::InvalidTableLayout`] or [`CurveError::InvalidBase`]
-    /// as described by [`Self::bind`]. All multiples and cached coordinates,
-    /// including entry zero's cache, must already satisfy [`EisensteinTable`]'s
-    /// mathematical contract. Violations remain memory-safe but may make
-    /// arithmetic panic or return incorrect results.
+    /// Panics unless the storage consists of complete eight-entry tables. Checks entry
+    /// zero's affine coordinates in each group, returning [`CurveError::InvalidBase`]
+    /// as described by [`Self::bind`]. All multiples and cached coordinates, including
+    /// entry zero's cache, must already satisfy [`EisensteinTable`]'s mathematical
+    /// contract. Violations remain memory-safe but may make arithmetic panic or return
+    /// incorrect results.
     pub fn bind_trusted(entries: &'a [E]) -> Result<Self, CurveError> {
-        if !entries.len().is_multiple_of(8) {
-            return Err(CurveError::InvalidTableLayout);
-        }
+        assert!(
+            entries.len().is_multiple_of(8),
+            "incomplete Eisenstein table"
+        );
         for group in entries.chunks_exact(8) {
             let p = group[0].affine();
             if AffinePoint::<C>::from_xy(p.x, p.y).is_none() {
@@ -234,7 +241,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         let entries = &self.entries[index * 8..(index + 1) * 8];
         Some(EisensteinTable {
             base: entries[0].affine(),
-            entries,
+            entries: entries.try_into().expect("one complete table"),
         })
     }
 
@@ -251,10 +258,10 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
 
     /// Multiplies every base by the same reduced scalar, in table order.
     ///
-    /// Has the mathematical result and buffer, error, and panic contracts of
+    /// Has the mathematical result and buffer and panic contracts of
     /// [`Self::mul_prepared`]. Retain an [`EisensteinScalar`] to reuse scalar
-    /// preparation and its batch eligibility check across calls.
-    /// The scalar must satisfy [`PastaField`]'s reduced-residue invariant.
+    /// preparation and its batch eligibility check across calls. The scalar must
+    /// satisfy [`PastaField`]'s reduced-residue invariant.
     pub fn mul<X: Executor>(
         &self,
         scalar: &PastaField<C::Scalar>,
@@ -262,7 +269,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         field: &mut [PastaField<C::Base>],
         budget: TaskBudget,
         executor: &X,
-    ) -> Result<(), CurveError> {
+    ) {
         self.mul_prepared(
             &EisensteinScalar::for_single(scalar),
             output,
@@ -281,13 +288,9 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
     /// Scalar preparation retains the eligibility check for affine arithmetic.
     /// Smaller scratch uses bounded batches or complete projective arithmetic.
     ///
-    /// # Errors
-    ///
-    /// Returns [`CurveError::LengthMismatch`] unless `output.len() == self.len()`,
-    /// or [`CurveError::SizeOverflow`] if sizing exceeds slice limits. All checks
-    /// precede writes, so returned errors leave output and scratch unchanged.
-    ///
     /// # Panics
+    ///
+    /// Panics before writes unless `output.len() == self.len()`.
     ///
     /// An executor panic may leave output and scratch partially written. All
     /// scoped jobs finish or unwind before it propagates, as required by
@@ -299,10 +302,9 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         field: &mut [PastaField<C::Base>],
         budget: TaskBudget,
         executor: &X,
-    ) -> Result<(), CurveError> {
+    ) {
         let n = self.len();
-        Self::multiplication_scratch(n)?;
-        check_length("output", n, output.len())?;
+        assert_length("output", n, output.len());
         let digits = scalar.digits();
         // The exceptional-intermediate check depends only on the scalar, so its
         // result applies to every base. A certificate also reuses it across calls.
@@ -332,7 +334,6 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
                 executor,
             );
         }
-        Ok(())
     }
 }
 

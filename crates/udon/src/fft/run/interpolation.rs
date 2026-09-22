@@ -31,18 +31,19 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     /// concurrently retained transform scratch. Tables remain borrowed; no
     /// working storage is bound or written.
     ///
-    /// Returns [`FftError::InvalidExecution`] for no classes or a fragment length
-    /// that is not a power of two, [`FftError::InvalidLayout`] for a class larger
-    /// than class zero, [`FftError::SizeOverflow`] for unrepresentable workspace,
-    /// or [`FftError::MemoryLimit`] if required scratch exceeds the byte ceiling.
+    /// `CLASSES` must be nonzero. Returns [`FftError::InvalidExecution`] for a fragment
+    /// length that is not a power of two, [`FftError::InvalidLayout`] for a class
+    /// larger than class zero, [`FftError::SizeOverflow`] for unrepresentable
+    /// workspace, or [`FftError::MemoryLimit`] if required scratch exceeds the byte
+    /// ceiling.
     pub fn new(
         classes: [(Transform<'t, M>, ElementOrder); CLASSES],
         consume: bool,
         layout: super::super::StorageLayout,
         options: crate::exec::ExecutionOptions,
     ) -> Result<Self, FftError> {
-        if CLASSES == 0 {
-            return Err(FftError::InvalidExecution);
+        const {
+            assert!(CLASSES > 0, "interpolation needs an output class");
         }
         if classes
             .iter()
@@ -116,39 +117,33 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
         for (i, target) in transforms.iter_mut().enumerate().skip(1) {
             *target = build(i, layout)?;
         }
-        let mut result = Self::with_transforms(transforms, consume)?;
+        let mut result = Self::with_transforms(transforms, consume);
         result.budget = options.task_budget();
         Ok(result)
     }
 
-    /// Validates the class transforms and selects whether lifts may be consumed.
+    /// Binds compatible class transforms and selects whether lifts may be consumed.
     ///
     /// Every plan must describe an in-place, full-support, normalized inverse
     /// FFT with natural output. All classes must fit the output; their fragment
     /// sizes must equal the output tile or their smaller entire class size.
     ///
-    /// Returns [`FftError::InvalidExecution`] for other requests or no classes,
-    /// and [`FftError::InvalidLayout`] for a lift larger than the output.
-    pub(crate) fn with_transforms(
-        transforms: [FftPlan<'t, M>; CLASSES],
-        consume: bool,
-    ) -> Result<Self, FftError> {
-        if CLASSES == 0 {
-            return Err(FftError::InvalidExecution);
+    /// `CLASSES` must be nonzero. Incompatible plans panic.
+    pub(crate) fn with_transforms(transforms: [FftPlan<'t, M>; CLASSES], consume: bool) -> Self {
+        const {
+            assert!(CLASSES > 0, "interpolation needs an output class");
         }
         for plan in &transforms {
-            if plan.size() > transforms[0].size() {
-                return Err(FftError::InvalidLayout);
-            }
-            if !plan.inverse()
-                || plan.separate()
-                || plan.request.support != InputSupport::Full
-                || plan.request.inverse_scale != InverseScale::Normalized
-                || plan.request.output_order != ElementOrder::Natural
-                || plan.tile != transforms[0].tile.min(plan.size())
-            {
-                return Err(FftError::InvalidExecution);
-            }
+            assert!(plan.size() <= transforms[0].size(), "class exceeds output");
+            assert!(
+                plan.inverse()
+                    && !plan.separate()
+                    && plan.request.support == InputSupport::Full
+                    && plan.request.inverse_scale == InverseScale::Normalized
+                    && plan.request.output_order == ElementOrder::Natural
+                    && plan.tile == transforms[0].tile.min(plan.size()),
+                "incompatible class transform"
+            );
         }
         let merge_into = core::array::from_fn(|i| {
             if consume {
@@ -162,12 +157,12 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                 None
             }
         });
-        Ok(Self {
+        Self {
             transforms,
             merge_into,
             consume,
             budget: crate::exec::TaskBudget::SERIAL,
-        })
+        }
     }
 
     /// Retained scratch field count for one class.
@@ -196,10 +191,9 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     /// unspecified. The total task budget covers concurrent classes and their
     /// inner transforms.
     ///
-    /// Returns [`FftError::LengthMismatch`] for an incorrect class length or
-    /// [`FftError::ScratchTooSmall`] for insufficient scratch. These checks
-    /// precede mutation. No allocation occurs; a panic leaves canonical fields
-    /// but requires refilling affected evaluations before retrying.
+    /// Buffer requirement violations panic before any mutation. No allocation occurs;
+    /// an executor panic leaves canonical fields but requires refilling affected
+    /// evaluations before retrying.
     ///
     /// This example adds a constant polynomial to a linear polynomial evaluated
     /// on a different coset, retaining the constant's coefficients:
@@ -224,7 +218,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     /// plan.execute(
     ///     [&mut output, &mut lift], [&mut [], &mut []],
     ///     &SerialExecutor,
-    /// ).unwrap();
+    /// );
     /// assert_eq!(output, [Fp::from_u64(6), Fp::ONE]); // 6 + x
     /// assert_eq!(lift, [Fp::from_u64(5)]);
     /// ```
@@ -233,7 +227,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
         values: [&mut [PastaField<M>]; CLASSES],
         scratch: [&mut [PastaField<M>]; CLASSES],
         executor: &E,
-    ) -> Result<(), FftError> {
+    ) {
         self.execute_with(
             values,
             scratch,
@@ -248,13 +242,13 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
         mut scratch: [&mut [PastaField<M>]; CLASSES],
         max_tasks: NonZeroUsize,
         executor: &E,
-    ) -> Result<(), FftError> {
+    ) {
         for i in 0..CLASSES {
-            super::super::check_length("class", self.transforms[i].size(), values[i].len())?;
+            super::super::assert_length("class", self.transforms[i].size(), values[i].len());
             super::super::ScratchRequirements {
                 field_elements: self.snapshot_fields(i).unwrap(),
             }
-            .check(scratch[i].len())?;
+            .check(scratch[i].len());
         }
         // Preserve terminal inverse/add fusion for the contiguous radix-2 path.
         // Other geometries use the same plan through independently scoped runs.
@@ -270,15 +264,16 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                     buffers.next().unwrap(),
                     self.transforms[i].request.input_order,
                 )
-                .expect("validated class")
             });
             let (output, lifts) = classes.split_first_mut().unwrap();
             let options = super::super::Strategy::SERIAL;
-            return if self.consume {
+            let result = if self.consume {
                 super::super::interpolate_sum(output, lifts, options, executor, &mut [])
             } else {
                 super::super::interpolate_classes(output, lifts, options, executor, &mut [])
             };
+            result.expect("validated interpolation classes");
+            return;
         }
         for i in 1..CLASSES {
             if let Some(target) = self.merge_into[i] {
@@ -308,8 +303,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                     plans.iter().zip(merged).zip(values).zip(scratch)
                 {
                     if merged.is_none() {
-                        plan.execute_with(None, values, None, scratch, tasks, executor)
-                            .expect("validated interpolation buffers");
+                        plan.execute_with(None, values, None, scratch, tasks, executor);
                     }
                 }
             } else {
@@ -357,7 +351,6 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                 }
             }
         }
-        Ok(())
     }
 }
 
@@ -391,28 +384,28 @@ pub struct AdditionKernel<M: PrimeModulus> {
 }
 
 impl<M: PrimeModulus, R: Resources<M>> Kernel<R> for AdditionKernel<M> {
-    type Output = Result<(), FftError>;
+    type Output = ();
     fn execute(&mut self, resources: &mut R) -> Self::Output {
         self.run(resources.buffers())
     }
 }
 
 impl<M: PrimeModulus> AdditionKernel<M> {
-    fn run(&self, buffers: Buffers<'_, M>) -> Result<(), FftError> {
+    fn run(&self, buffers: Buffers<'_, M>) {
         let Buffers {
             values,
             pair,
             source,
             factor,
         } = buffers;
-        super::super::check_length("addition output", self.len, values.len())?;
-        super::super::check_length(
+        super::super::assert_length("addition output", self.len, values.len());
+        super::super::assert_length(
             "addition source",
             if self.reversed { self.size } else { self.len },
             source.len(),
-        )?;
-        super::super::check_length("addition pair", 0, pair.len())?;
-        super::super::check_length("addition factor", 0, factor.len())?;
+        );
+        super::super::assert_length("addition pair", 0, pair.len());
+        super::super::assert_length("addition factor", 0, factor.len());
         for (offset, value) in values.iter_mut().enumerate() {
             let index = if self.reversed {
                 reverse(self.start + offset, self.size.ilog2())
@@ -421,7 +414,6 @@ impl<M: PrimeModulus> AdditionKernel<M> {
             };
             *value = value.add(source.get(index).expect("invalid class source view"));
         }
-        Ok(())
     }
 }
 
@@ -429,8 +421,8 @@ impl<M: PrimeModulus> AdditionKernel<M> {
 pub struct InterpolationPublished<R> {
     /// Returned resource envelope, to release before dispatching successors.
     pub resources: R,
-    /// Resource validation error, if any.
-    pub error: Option<FftError>,
+    /// Phase transition error, if any.
+    pub error: Option<TaskError>,
     /// Normal return, cancellation, or caught unwind.
     pub outcome: Outcome,
     /// The class whose inverse just produced normalized coefficients.
@@ -463,17 +455,14 @@ pub struct InterpolationRun<'a, 't, M: PrimeModulus, const CLASSES: usize> {
 impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, CLASSES> {
     /// Binds two frontiers per class: transform then addition.
     ///
-    /// Zero frontier capacity returns [`TaskError::Storage`]. Metadata is
-    /// proportional to classes times frontier capacity, independent of total
-    /// stage task count.
+    /// `TASKS` must be nonzero. Metadata is proportional to classes times frontier
+    /// capacity, independent of total stage task count.
     pub fn new<const TASKS: usize>(
         plan: InterpolationPlan<'t, M, CLASSES>,
         identities: &'a mut [[Identity; 2]; CLASSES],
         storage: &'a mut [[[TaskStorage; TASKS]; 2]; CLASSES],
-    ) -> Result<Self, TaskError> {
-        if TASKS == 0 {
-            return Err(TaskError::Storage);
-        }
+    ) -> Self {
+        const { assert!(TASKS > 0, "task capacity must be nonzero") };
         let mut metadata = identities.iter_mut().zip(storage).enumerate();
         let pairs: [_; CLASSES] = core::array::from_fn(|_| {
             let (class, ([transform_id, add_id], [transform_slots, add_slots])) =
@@ -482,8 +471,7 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
                 FftRun::empty(plan.transforms[class], transform_id, transform_slots)
             } else {
                 FftRun::new(plan.transforms[class], false, transform_id, transform_slots)
-            }
-            .expect("validated metadata");
+            };
             let frontier = Frontier::new(
                 add_id,
                 add_slots,
@@ -492,20 +480,19 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
                 } else {
                     plan.transforms[class].fragments()
                 },
-            )
-            .expect("validated metadata");
+            );
             (Some(run), Some(frontier))
         });
         let mut pairs = pairs;
         let runs = core::array::from_fn(|i| pairs[i].0.take().unwrap());
         let additions = core::array::from_fn(|i| pairs[i].1.take().unwrap());
-        Ok(Self {
+        Self {
             plan,
             runs,
             additions,
             started: [false; CLASSES],
             failed: false,
-        })
+        }
     }
 
     fn merged(&self, class: usize) -> bool {
@@ -663,11 +650,8 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
     pub fn complete_transform<R>(
         &mut self,
         class: usize,
-        receipt: Completion<'a, R, Result<(), FftError>>,
-    ) -> Result<
-        InterpolationPublished<R>,
-        crate::exec::run::PublishError<'a, R, Result<(), FftError>>,
-    > {
+        receipt: Completion<'a, R, ()>,
+    ) -> Result<InterpolationPublished<R>, crate::exec::run::PublishError<'a, R, ()>> {
         let Some(run) = self.runs.get_mut(class) else {
             return Err((TaskError::Stale, receipt));
         };
@@ -689,21 +673,17 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
     pub fn complete_addition<R>(
         &mut self,
         class: usize,
-        receipt: Completion<'a, R, Result<(), FftError>>,
-    ) -> Result<
-        InterpolationPublished<R>,
-        crate::exec::run::PublishError<'a, R, Result<(), FftError>>,
-    > {
+        receipt: Completion<'a, R, ()>,
+    ) -> Result<InterpolationPublished<R>, crate::exec::run::PublishError<'a, R, ()>> {
         let Some(frontier) = self.additions.get_mut(class) else {
             return Err((TaskError::Stale, receipt));
         };
         let task = frontier.complete(receipt)?;
-        let error = task.output.and_then(Result::err);
-        self.failed |= task.outcome != Outcome::Success || error.is_some();
+        self.failed |= task.outcome != Outcome::Success;
         let released = (frontier.is_complete() && !self.failed).then_some(class);
         Ok(InterpolationPublished {
             resources: task.resources,
-            error,
+            error: None,
             outcome: task.outcome,
             coefficients: None,
             released,
@@ -737,7 +717,7 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
             && self.additions.iter().all(Frontier::is_complete)
     }
 
-    /// Whether any task failed or returned invalid resources.
+    /// Whether any task was cancelled, panicked, or failed to advance its phase.
     pub fn is_failed(&self) -> bool {
         self.failed
     }

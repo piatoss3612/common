@@ -60,7 +60,7 @@ pub fn interpolate_sum<M: PrimeModulus, E: Executor>(
     executor: &E,
     scratch: &mut [PastaField<M>],
 ) -> Result<(), FftError> {
-    interpolation_scratch(output, lifts, options)?.check(scratch.len())?;
+    interpolation_scratch(output, lifts, options)?.check(scratch.len());
     output.state = ClassState::Consumed;
     for lift in lifts.iter_mut() {
         if lift.plan.domain().same_domain(output.plan.domain()) {

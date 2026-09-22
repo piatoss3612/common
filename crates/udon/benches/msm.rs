@@ -143,15 +143,13 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C>>(
             PastaField::ZERO;
             EisensteinTableBatch::<C, E>::multiplication_scratch(n).unwrap()
         ];
-        tables
-            .mul_prepared(
-                &prepared,
-                &mut output,
-                &mut scratch,
-                TaskBudget::SERIAL,
-                &SerialExecutor,
-            )
-            .unwrap();
+        tables.mul_prepared(
+            &prepared,
+            &mut output,
+            &mut scratch,
+            TaskBudget::SERIAL,
+            &SerialExecutor,
+        );
         for (i, result) in output.iter().enumerate() {
             assert_eq!(*result, bases[i].mul_projective(scalar));
             assert_eq!(*result, tables.get(i).unwrap().mul_prepared(&prepared));
@@ -174,15 +172,13 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C>>(
         });
         group.bench_with_input(BenchmarkId::new("mul_same_scalar", &case), &n, |b, _| {
             b.iter(|| {
-                tables
-                    .mul_prepared(
-                        black_box(&prepared),
-                        &mut output,
-                        &mut scratch,
-                        TaskBudget::SERIAL,
-                        &SerialExecutor,
-                    )
-                    .unwrap();
+                tables.mul_prepared(
+                    black_box(&prepared),
+                    &mut output,
+                    &mut scratch,
+                    TaskBudget::SERIAL,
+                    &SerialExecutor,
+                );
                 black_box(&output);
             })
         });
@@ -242,7 +238,7 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                     let input = if indexed {
                         Input::indexed(bases, &ix, scalars)
                     } else {
-                        Input::new(bases, scalars)
+                        Ok(Input::new(bases, scalars))
                     }
                     .unwrap();
                     let mut buffers =
@@ -308,7 +304,7 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
                         Input::indexed(Bases::Prepared(&prepared), &indices[..n], &full[..n])
                             .unwrap()
                     } else {
-                        Input::new(Bases::Prepared(&prepared[..n]), &full[..n]).unwrap()
+                        Input::new(Bases::Prepared(&prepared[..n]), &full[..n])
                     }
                 })
                 .collect();
@@ -448,7 +444,7 @@ fn corpus<C: PastaCurve>(
             ("inverse", &inverse[..n], &full[..n]),
             ("cancellation", &inverse[..n], &ones[..n]),
         ] {
-            let input = Input::new(Bases::Affine(bases), scalars).unwrap();
+            let input = Input::new(Bases::Affine(bases), scalars);
             let mut buffers =
                 Buffers::new(input.requirements(ExecutionOptions::default()).unwrap());
             let expected = scalars
@@ -493,15 +489,12 @@ fn corpus<C: PastaCurve>(
                     BenchmarkId::new(format!("{name}/prepare_scalars"), n),
                     |b| {
                         b.iter(|| {
-                            black_box(
-                                PreparedScalars::<C>::prepare(
-                                    black_box(scalars),
-                                    &mut storage,
-                                    TaskBudget::SERIAL,
-                                    &SerialExecutor,
-                                )
-                                .unwrap(),
-                            );
+                            black_box(PreparedScalars::<C>::prepare(
+                                black_box(scalars),
+                                &mut storage,
+                                TaskBudget::SERIAL,
+                                &SerialExecutor,
+                            ));
                         })
                     },
                 );
@@ -510,9 +503,8 @@ fn corpus<C: PastaCurve>(
                     &mut storage,
                     TaskBudget::SERIAL,
                     &SerialExecutor,
-                )
-                .unwrap();
-                let reused = Input::new_prepared(Bases::Affine(bases), retained).unwrap();
+                );
+                let reused = Input::new_prepared(Bases::Affine(bases), retained);
                 let mut buffers =
                     Buffers::new(reused.requirements(ExecutionOptions::default()).unwrap());
                 assert_eq!(

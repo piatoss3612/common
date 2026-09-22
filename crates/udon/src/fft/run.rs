@@ -204,14 +204,14 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Multiplies forward coefficients by a common factor before transforming.
     ///
     /// This supports retained unscaled inverse coefficients without a separate
-    /// normalization pass. Inverse transforms return
-    /// [`FftError::InvalidExecution`].
-    pub fn with_input_scale(mut self, scale: PastaField<M>) -> Result<Self, FftError> {
-        if self.inverse() {
-            return Err(FftError::InvalidExecution);
-        }
+    /// normalization pass. Panics for an inverse transform.
+    pub fn with_input_scale(mut self, scale: PastaField<M>) -> Self {
+        assert!(
+            !self.inverse(),
+            "input scaling requires a forward transform"
+        );
         self.input_scale = scale;
-        Ok(self)
+        self
     }
 
     pub(in crate::fft) fn with_residue_scales(
@@ -219,7 +219,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         expansion: super::Expansion<'t, M>,
         residue: usize,
         mut scale: PastaField<M>,
-    ) -> Result<Self, FftError> {
+    ) -> Self {
         self.forward_scales = expansion
             .scales
             .map(|scales| &scales[residue * self.size()..(residue + 1) * self.size()]);
@@ -235,23 +235,18 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
 
     /// Borrows validated forward coset powers without rescanning them.
     ///
-    /// The table must start at one, use this domain's shift, and contain exactly
-    /// the transform size. An inverse transform or incompatible table seeds
-    /// return [`FftError::InvalidTables`]; a wrong length returns
-    /// [`FftError::LengthMismatch`].
-    pub fn with_forward_scales(
-        mut self,
-        table: super::PowerTable<'t, M>,
-    ) -> Result<Self, FftError> {
-        if self.inverse()
-            || table.first() != PastaField::ONE
-            || table.step() != self.plan.domain().shift()
-        {
-            return Err(FftError::InvalidTables);
-        }
-        super::check_length("forward_scales", self.size(), table.as_slice().len())?;
+    /// The table must start at one, use this domain's shift, and contain exactly the
+    /// transform size. Panics for an inverse transform or an incompatible table.
+    pub fn with_forward_scales(mut self, table: super::PowerTable<'t, M>) -> Self {
+        assert!(
+            !self.inverse()
+                && table.first() == PastaField::ONE
+                && table.step() == self.plan.domain().shift(),
+            "incompatible forward scale table"
+        );
+        super::assert_length("forward_scales", self.size(), table.as_slice().len());
         self.forward_scales = Some(table.as_slice());
-        Ok(self)
+        self
     }
 
     /// Selects bounded column panels after local transforms.
@@ -536,8 +531,7 @@ pub struct Buffers<'a, M: PrimeModulus> {
 /// Owned safe fragments or movable application lease guards.
 ///
 /// Views must name the initialized banks and ranges in the claimed request.
-/// Wrong lengths are rejected before writes. Incorrect contents or slot
-/// identity can invalidate arithmetic but cannot violate memory safety.
+/// Violations can panic or invalidate arithmetic but cannot violate memory safety.
 pub trait Resources<M: PrimeModulus> {
     /// Borrows this task's complete bundle until the bounded kernel returns.
     fn buffers(&mut self) -> Buffers<'_, M>;
@@ -566,7 +560,7 @@ pub struct FftKernel<'t, M: PrimeModulus> {
 }
 
 impl<M: PrimeModulus> FftKernel<'_, M> {
-    fn run(&self, buffers: Buffers<'_, M>) -> Result<(), FftError> {
+    fn run(&self, buffers: Buffers<'_, M>) {
         let Buffers {
             values,
             pair,
@@ -581,12 +575,12 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
             WorkKind::Scatter => self.band,
             _ => tile,
         };
-        super::check_length("task fragment", fields, values.len())?;
-        super::check_length(
+        super::assert_length("task fragment", fields, values.len());
+        super::assert_length(
             "paired fragment",
             if self.kind == WorkKind::Pair { tile } else { 0 },
             pair.len(),
-        )?;
+        );
         let required = match self.kind {
             WorkKind::Snapshot => tile,
             WorkKind::Reorder => plan.size(),
@@ -599,8 +593,8 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
             WorkKind::Scatter => self.band * plan.fragments(),
             _ => 0,
         };
-        super::check_length("task source", required, source.len())?;
-        super::check_length(
+        super::assert_length("task source", required, source.len());
+        super::assert_length(
             "task factor",
             if matches!(self.kind, WorkKind::Finish | WorkKind::Fused) && self.product {
                 tile
@@ -608,7 +602,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 0
             },
             factor.len(),
-        )?;
+        );
         match self.kind {
             WorkKind::Fused => {
                 // Full inputs also benefit from visiting coefficients in
@@ -692,7 +686,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
             WorkKind::Initialize => {
                 if plan.sparse() {
                     self.initialize_prefix(values, source);
-                    return Ok(());
+                    return;
                 }
                 let support = plan.request.input_len(plan.size());
                 for (offset, value) in values.iter_mut().enumerate() {
@@ -757,7 +751,11 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     plan.plan.local(values, plan.inverse(), plan.first());
                 } else {
                     StageKernel {
-                        plan: Transform::new(Domain::for_size(tile)?.subgroup()),
+                        plan: Transform::new(
+                            Domain::for_size(tile)
+                                .expect("validated tile domain")
+                                .subgroup(),
+                        ),
                         inverse: plan.inverse(),
                         dif: plan.native_input() == ElementOrder::Natural,
                         scale: InverseScale::Unscaled,
@@ -879,7 +877,6 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 }
             }
         }
-        Ok(())
     }
 
     fn initialize_scatter(
@@ -977,7 +974,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
 }
 
 impl<M: PrimeModulus, R: Resources<M>> Kernel<R> for FftKernel<'_, M> {
-    type Output = Result<(), FftError>;
+    type Output = ();
     fn execute(&mut self, resources: &mut R) -> Self::Output {
         self.run(resources.buffers())
     }
@@ -987,8 +984,8 @@ impl<M: PrimeModulus, R: Resources<M>> Kernel<R> for FftKernel<'_, M> {
 pub struct Published<R> {
     /// Entire resource envelope for immediate release.
     pub resources: R,
-    /// Resource validation error, which poisons this run.
-    pub error: Option<FftError>,
+    /// Scheduler transition error, which poisons this run.
+    pub error: Option<TaskError>,
     /// Execution status, including cancellation or unwind.
     pub outcome: Outcome,
     /// Whether this receipt finishes the transform and readies consumers.
@@ -1013,10 +1010,10 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
         plan: FftPlan<'t, M>,
         identity: &'a mut Identity,
         slots: &'a mut [TaskStorage],
-    ) -> Result<Self, TaskError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             plan,
-            frontier: Frontier::new(identity, slots, 0)?,
+            frontier: Frontier::new(identity, slots, 0),
             kind: WorkKind::Finish,
             block: 0,
             post: false,
@@ -1024,26 +1021,28 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
             complete: true,
             failed: false,
             column: 0,
-        })
+        }
     }
-    /// Binds exclusive metadata. `product` adds a terminal elementwise factor
-    /// in requested output order. Arithmetic buffers are bound only by claims.
-    /// Returns [`TaskError::Storage`] for an empty frontier.
+    /// Binds exclusive metadata.
+    ///
+    /// `product` adds a terminal elementwise factor in requested output order.
+    /// Arithmetic buffers are bound only by claims. Panics if frontier storage
+    /// is empty.
     pub fn new(
         plan: FftPlan<'t, M>,
         product: bool,
         identity: &'a mut Identity,
         slots: &'a mut [TaskStorage],
-    ) -> Result<Self, TaskError> {
+    ) -> Self {
         let (kind, block) = plan.initial();
         let total = if kind == WorkKind::Pair {
             plan.fragments() / 2
         } else {
             plan.fragments()
         };
-        Ok(Self {
+        Self {
             plan,
-            frontier: Frontier::new(identity, slots, total)?,
+            frontier: Frontier::new(identity, slots, total),
             kind,
             block,
             post: false,
@@ -1051,7 +1050,7 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
             complete: false,
             failed: false,
             column: 0,
-        })
+        }
     }
 
     fn band(&self) -> usize {
@@ -1226,11 +1225,11 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
     /// new work. Foreign receipts are returned intact.
     pub fn complete<R>(
         &mut self,
-        receipt: Completion<'a, R, Result<(), FftError>>,
-    ) -> Result<Published<R>, crate::exec::run::PublishError<'a, R, Result<(), FftError>>> {
+        receipt: Completion<'a, R, ()>,
+    ) -> Result<Published<R>, crate::exec::run::PublishError<'a, R, ()>> {
         let completed = self.frontier.complete(receipt)?;
-        let mut error = completed.output.and_then(Result::err);
-        self.failed |= completed.outcome != Outcome::Success || error.is_some();
+        let mut error = None;
+        self.failed |= completed.outcome != Outcome::Success;
         if !self.failed && self.frontier.is_complete() {
             match self.kind {
                 WorkKind::Initialize | WorkKind::InitializeScatter => {
@@ -1298,9 +1297,9 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
                     }
                 }
             }
-            if self.frontier.restart(self.task_count()).is_err() {
+            if let Err(transition) = self.frontier.restart(self.task_count()) {
                 self.failed = true;
-                error = Some(FftError::SizeOverflow);
+                error = Some(transition);
             }
         }
         Ok(Published {

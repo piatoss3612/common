@@ -121,16 +121,12 @@ fn pipeline<M: PrimeModulus>() {
             geometry(inner).with_memory_limit(0),
         )
         .unwrap();
-        let scratch = retained
-            .scratch_fields()
-            .unwrap()
-            .max(forward.scratch_fields().unwrap())
-            .max(
-                plans[3]
-                    .scratch_requirements(geometry(inner))
-                    .unwrap()
-                    .field_elements,
-            );
+        let scratch = retained.scratch_fields().max(forward.scratch_fields()).max(
+            plans[3]
+                .scratch_requirements(geometry(inner))
+                .unwrap()
+                .field_elements,
+        );
         assert_eq!(retained.coefficient_fields(), N);
         let mut workspaces: [_; 2] = core::array::from_fn(|_| {
             FftWorkspace::<M>::new(N, output_size, class_sizes.iter().sum(), scratch)
@@ -153,7 +149,6 @@ fn pipeline<M: PrimeModulus>() {
                             &mut work.scratch,
                             &executor,
                         )
-                        .unwrap()
                         .unwrap();
                     assert_eq!(
                         view.normalization_factor(),
@@ -166,8 +161,7 @@ fn pipeline<M: PrimeModulus>() {
                         &work.output,
                         plans[3].domain(),
                         EvaluationLayout::Residues(expansion.layout()),
-                    )
-                    .unwrap();
+                    );
                     for (row, value) in expected.iter().enumerate() {
                         assert_eq!(output.get(row), Some(value));
                     }
@@ -176,7 +170,6 @@ fn pipeline<M: PrimeModulus>() {
                     // and into a normal forward-prefix transform.
                     forward
                         .with_coefficient_scale(view.normalization_factor())
-                        .unwrap()
                         .execute(
                             view.as_slice(),
                             &mut work.product,
@@ -184,8 +177,7 @@ fn pipeline<M: PrimeModulus>() {
                             None,
                             &mut work.scratch,
                             &executor,
-                        )
-                        .unwrap();
+                        );
                     assert_eq!(work.output, work.product);
                     plans[3]
                         .execute(
@@ -220,14 +212,12 @@ fn pipeline<M: PrimeModulus>() {
                         Some(&work.output),
                         &mut work.scratch,
                         &executor,
-                    )
-                    .unwrap();
+                    );
                     let product = EvaluationView::bind(
                         &work.product,
                         plans[3].domain(),
                         EvaluationLayout::Residues(expansion.layout()),
-                    )
-                    .unwrap();
+                    );
                     for row in 0..output_size {
                         assert_eq!(product.get(row), Some(&short[row].mul(&expected[row])));
                     }
@@ -260,13 +250,11 @@ fn pipeline<M: PrimeModulus>() {
                         }
                     }
                     let [a, b, c, output] = builders.map(|builder| builder.finish().unwrap());
-                    interpolation
-                        .execute(
-                            [output, a, b, c],
-                            [&mut [], &mut [], &mut [], &mut []],
-                            &executor,
-                        )
-                        .unwrap();
+                    interpolation.execute(
+                        [output, a, b, c],
+                        [&mut [], &mut [], &mut [], &mut []],
+                        &executor,
+                    );
                     for (lift, (polynomial, _)) in [a, b, c].iter().zip(class_cases) {
                         assert_eq!(*lift, polynomial);
                     }
@@ -342,26 +330,22 @@ fn incomplete_producers_and_panics_require_refill() {
     storage.fill(PastaField::ONE);
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
-            interpolation
-                .execute(
-                    [&mut storage, &mut lift_storage],
-                    [&mut [], &mut []],
-                    &PanicExecutor,
-                )
-                .unwrap();
+            interpolation.execute(
+                [&mut storage, &mut lift_storage],
+                [&mut [], &mut []],
+                &PanicExecutor,
+            );
         }))
         .is_err()
     );
     // After an unwind, the owner refills evaluations before reusing either bank.
     storage.fill(PastaField::ONE);
     lift_storage.fill(PastaField::ONE);
-    interpolation
-        .execute(
-            [&mut storage, &mut lift_storage],
-            [&mut [], &mut []],
-            &SerialExecutor,
-        )
-        .unwrap();
+    interpolation.execute(
+        [&mut storage, &mut lift_storage],
+        [&mut [], &mut []],
+        &SerialExecutor,
+    );
     assert_eq!(storage[0], PastaField::from_u64(2));
     assert!(storage[1..].iter().all(PastaField::is_zero));
 }

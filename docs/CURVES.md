@@ -116,7 +116,7 @@ nonidentity points and preserves input order and identity positions. Provide
 one output point per input point. One field scratch element per input permits a
 single shared inversion; smaller scratch works in chunks, including individual
 inversion with empty scratch. The function
-docs include an executable example and the complete buffer and error contract.
+docs include an executable example and the complete buffer contract.
 
 ## Fixed-base multiplication
 

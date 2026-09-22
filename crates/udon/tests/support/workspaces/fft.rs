@@ -31,8 +31,7 @@ impl<M: PrimeModulus> OwnedTables<M> {
             inverse_finish: Some(&mut result.finish),
             inverse_scales: Some(&mut result.scales),
         }
-        .prepare(domain)
-        .unwrap();
+        .prepare(domain);
         result
     }
 
@@ -45,7 +44,6 @@ impl<M: PrimeModulus> OwnedTables<M> {
         }
         // The owner prepared these entries and exposes no mutation.
         .bind_trusted(self.domain)
-        .unwrap()
     }
 
     pub fn capacity_bytes(&self) -> usize {

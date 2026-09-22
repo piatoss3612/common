@@ -111,8 +111,7 @@ fn exercise_field<M: PrimeModulus>(
         None,
         &mut scratch,
         &SerialExecutor,
-    )
-    .unwrap();
+    );
     assert_eq!(recovered, evaluations);
     let scales = ExpansionScales::bind(
         record::SIZE,
@@ -123,8 +122,7 @@ fn exercise_field<M: PrimeModulus>(
     .expect("embedded residue scales must match the domain");
     let expansion = Expansion::new(plan, extended, None)
         .unwrap()
-        .with_scales(scales)
-        .unwrap();
+        .with_scales(scales);
     let mut output = [PastaField::ZERO; record::EXTENDED_SIZE];
     assert!(
         expansion
@@ -146,8 +144,7 @@ fn exercise_field<M: PrimeModulus>(
         &output,
         extended,
         EvaluationLayout::Residues(expansion.layout()),
-    )
-    .unwrap();
+    );
     let mut point = extended.shift();
     for row in 0..extended.size() {
         let expected = coefficients

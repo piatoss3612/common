@@ -1,5 +1,6 @@
 use super::{
-    CosetDomain, Domain, FftError, PastaField, PrimeModulus, check_domain_size, check_length,
+    CosetDomain, Domain, FftError, PastaField, PrimeModulus, assert_length, check_domain_size,
+    validate_length,
 };
 
 /// Coefficient normalization expected by a residue power table.
@@ -44,23 +45,28 @@ impl<M: PrimeModulus> core::fmt::Debug for ExpansionScales<'_, M> {
 impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
     /// Checks entries against the declared domain, base size, and normalization.
     ///
-    /// Shape errors follow [`Self::bind_trusted`]. Incorrect or unreduced entries
-    /// return [`FftError::InvalidTables`]. Validation takes linear field work.
+    /// Configuration errors follow [`Self::requirements`]. A wrong stored length
+    /// returns [`FftError::LengthMismatch`]; incorrect or unreduced entries return
+    /// [`FftError::InvalidTables`]. Validation takes linear field work.
     pub fn bind(
         base_size: usize,
         extended: CosetDomain<M>,
         normalization: ExpansionScaleNormalization,
         values: &'a [PastaField<M>],
     ) -> Result<Self, FftError> {
+        validate_length(
+            "scales",
+            Self::requirements(base_size, extended.size())?,
+            values.len(),
+        )?;
         Self::bind_trusted(base_size, extended, normalization, values)?.validate()
     }
 
     /// Binds caller-trusted entries after checking the base size and slice length.
     ///
-    /// Errors follow [`Self::requirements`], with [`FftError::LengthMismatch`]
-    /// if `values` does not have the extended domain size.
-    /// The caller must establish the reduced Montgomery entries described by
-    /// [`ExpansionScaleNormalization`]. Incorrect contents can cause wrong
+    /// Errors follow [`Self::requirements`]. Panics if `values` does not have the
+    /// extended domain size. The caller must establish the reduced Montgomery entries
+    /// described by [`ExpansionScaleNormalization`]. Incorrect contents can cause wrong
     /// results or panics, but not memory unsafety.
     pub fn bind_trusted(
         base_size: usize,
@@ -68,11 +74,11 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
         normalization: ExpansionScaleNormalization,
         values: &'a [PastaField<M>],
     ) -> Result<Self, FftError> {
-        check_length(
+        assert_length(
             "scales",
             Self::requirements(base_size, extended.size())?,
             values.len(),
-        )?;
+        );
         Ok(Self {
             base_size,
             extended,
@@ -101,19 +107,20 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
     /// Generates residue powers into exactly sized caller storage.
     ///
     /// Entries follow [`ExpansionScaleNormalization`] and use reduced Montgomery
-    /// representations. Lengths and errors follow [`Self::bind_trusted`]. All
-    /// checks precede writes; initial destination values are overwritten.
+    /// representations. Storage, error, and panic contracts follow
+    /// [`Self::bind_trusted`]. All checks precede writes; initial destination values
+    /// are overwritten.
     pub fn prepare(
         base_size: usize,
         extended: CosetDomain<M>,
         normalization: ExpansionScaleNormalization,
         values: &'a mut [PastaField<M>],
     ) -> Result<Self, FftError> {
-        check_length(
+        assert_length(
             "scales",
             Self::requirements(base_size, extended.size())?,
             values.len(),
-        )?;
+        );
         let first = match normalization {
             ExpansionScaleNormalization::Coefficients => PastaField::ONE,
             ExpansionScaleNormalization::UnscaledInverse => {

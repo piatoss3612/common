@@ -56,8 +56,7 @@ impl<M: PrimeModulus> Prepared<M> {
             inverse_finish: (self.mask & 4 != 0).then_some(&mut self.finish),
             inverse_scales: (self.mask & 8 != 0).then_some(&mut self.scales),
         }
-        .prepare(domain)
-        .unwrap();
+        .prepare(domain);
     }
 
     fn bytes(&self) -> usize {
@@ -378,20 +377,19 @@ fn expansions<M: PrimeModulus>(
         let mut setup = criterion.benchmark_group(format!("{field}/fft_setup/{shift_name}"));
         setup.bench_function(BenchmarkId::new("residue_scales", extended.size()), |b| {
             b.iter(|| {
-                black_box(expansion.prepare_scales(black_box(&mut scales)).unwrap());
+                black_box(expansion.prepare_scales(black_box(&mut scales)));
             });
         });
         setup.finish();
-        let scales = expansion.prepare_scales(&mut scales).unwrap();
+        let scales = expansion.prepare_scales(&mut scales);
         let dense_tables = Prepared::selected(extended, 1);
         let dense_plan = dense_tables.tables().bind(extended).unwrap();
         let factor_values = inputs::<M>(extended.size());
-        let factor = expansion.view(&factor_values).unwrap();
+        let factor = expansion.view(&factor_values);
         let mut natural_factor = vec![PastaField::ZERO; extended.size()];
         expansion
             .layout()
-            .copy_to_natural(&factor_values, &mut natural_factor)
-            .unwrap();
+            .copy_to_natural(&factor_values, &mut natural_factor);
         let mut output = vec![PastaField::ZERO; extended.size()];
         let mut natural = output.clone();
         let mut group = criterion.benchmark_group(format!(
@@ -474,10 +472,7 @@ fn expansions<M: PrimeModulus>(
                                     }
                                 }
                                 if natural_output {
-                                    expansion
-                                        .layout()
-                                        .copy_to_natural(&output, &mut natural)
-                                        .unwrap();
+                                    expansion.layout().copy_to_natural(&output, &mut natural);
                                     black_box(&natural);
                                 } else {
                                     black_box(&output);
@@ -609,8 +604,7 @@ fn interpolation<M: PrimeModulus>(
                     [black_box(output), black_box(a), black_box(b)],
                     [&mut [], &mut [], &mut []],
                     &SerialExecutor,
-                )
-                .unwrap();
+                );
                 black_box(output);
             },
             BatchSize::PerIteration,

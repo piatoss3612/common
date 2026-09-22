@@ -136,23 +136,19 @@ fn check<M: PrimeModulus>() {
                             )
                             .unwrap();
                             let mut output = vec![PastaField::ZERO; expected.len()];
-                            let mut scratch =
-                                vec![PastaField::ZERO; plan.scratch_fields().unwrap()];
+                            let mut scratch = vec![PastaField::ZERO; plan.scratch_fields()];
                             let mut workspace = vec![PastaField::ZERO; plan.coefficient_fields()];
                             let mut disposable = input[..count].to_vec();
                             let factors = factor.repeat(residues);
                             let view =
                                 if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
-                                    Some(
-                                        plan.execute_disposable(
-                                            &mut disposable,
-                                            &mut output,
-                                            Some(&factors),
-                                            &mut scratch,
-                                            &SerialExecutor,
-                                        )
-                                        .unwrap(),
-                                    )
+                                    Some(plan.execute_disposable(
+                                        &mut disposable,
+                                        &mut output,
+                                        Some(&factors),
+                                        &mut scratch,
+                                        &SerialExecutor,
+                                    ))
                                 } else {
                                     plan.execute(
                                         &input[..count],
@@ -162,7 +158,6 @@ fn check<M: PrimeModulus>() {
                                         &mut scratch,
                                         &SerialExecutor,
                                     )
-                                    .unwrap()
                                 };
                             if let Some(view) = view {
                                 let normalized: Vec<_> = view

@@ -1,5 +1,5 @@
 use super::{
-    CosetDomain, FftError, PastaField, PrimeModulus, Transform, check_domain_size, check_length,
+    CosetDomain, FftError, PastaField, PrimeModulus, Transform, check_domain_size, validate_length,
 };
 
 /// Lengths of independently optional prepared tables for one domain.
@@ -106,18 +106,19 @@ impl<'a, M: PrimeModulus> Tables<'a, M> {
 
     /// Binds caller-trusted contents after checking all supplied lengths.
     ///
-    /// Length errors follow [`Self::validate`]. The caller must establish that
-    /// every entry matches [`Tables`]' formulas for this domain. Incorrect or
-    /// unreduced entries can cause wrong results or panics, but not memory
-    /// unsafety. Prefer [`Self::bind`] when importing unchecked artifacts.
-    pub fn bind_trusted(self, domain: CosetDomain<M>) -> Result<Transform<'a, M>, FftError> {
-        self.check_shape(domain)?;
-        Ok(Transform {
+    /// Panics if table lengths differ from [`TableRequirements::for_domain`]. The
+    /// caller must establish that every entry matches [`Tables`]' formulas for this
+    /// domain. Incorrect or unreduced entries can cause wrong results or panics, but
+    /// not memory unsafety. Prefer [`Self::bind`] when importing unchecked artifacts.
+    pub fn bind_trusted(self, domain: CosetDomain<M>) -> Transform<'a, M> {
+        self.validate_shape(domain)
+            .expect("table lengths must match the domain");
+        Transform {
             domain,
             tables: self,
-        })
+        }
     }
-    pub(super) fn check_shape(self, domain: CosetDomain<M>) -> Result<(), FftError> {
+    pub(super) fn validate_shape(self, domain: CosetDomain<M>) -> Result<(), FftError> {
         let requirements = TableRequirements::for_domain(domain);
         for (buffer, table) in [
             ("forward", self.forward),
@@ -125,11 +126,11 @@ impl<'a, M: PrimeModulus> Tables<'a, M> {
             ("inverse_finish", self.inverse_finish),
         ] {
             if let Some(table) = table {
-                check_length(buffer, requirements.twiddles, table.len())?;
+                validate_length(buffer, requirements.twiddles, table.len())?;
             }
         }
         if let Some(table) = self.inverse_scales {
-            check_length("inverse_scales", requirements.inverse_scales, table.len())?;
+            validate_length("inverse_scales", requirements.inverse_scales, table.len())?;
         }
         Ok(())
     }
@@ -143,7 +144,7 @@ impl<'a, M: PrimeModulus> Tables<'a, M> {
     /// [`FftError::InvalidTables`] for a wrong entry. Omitted tables need no
     /// validation and are accepted.
     pub fn validate(self, domain: CosetDomain<M>) -> Result<(), FftError> {
-        self.check_shape(domain)?;
+        self.validate_shape(domain)?;
         let generators = generators(domain);
         for (table, (first, step)) in [
             (self.forward, generators.forward),
@@ -207,18 +208,19 @@ impl<M: PrimeModulus> Default for TablesMut<'_, M> {
 impl<'a, M: PrimeModulus> TablesMut<'a, M> {
     /// Fills the supplied tables and returns a handle bound to their coset.
     ///
-    /// Entries follow the formulas in [`Tables`]. Returns
-    /// [`FftError::LengthMismatch`] without writing any table if a supplied
-    /// slice has the wrong length. Omitted destinations remain omitted in the
-    /// result; preparing the default descriptor succeeds without writing.
-    pub fn prepare(self, domain: CosetDomain<M>) -> Result<Transform<'a, M>, FftError> {
+    /// Entries follow the formulas in [`Tables`]. Panics before writes if the
+    /// destinations violate [`TablesMut`]'s contract. Omitted destinations remain
+    /// omitted in the result; preparing the default descriptor succeeds without
+    /// writing.
+    pub fn prepare(self, domain: CosetDomain<M>) -> Transform<'a, M> {
         Tables {
             forward: self.forward.as_deref(),
             inverse: self.inverse.as_deref(),
             inverse_finish: self.inverse_finish.as_deref(),
             inverse_scales: self.inverse_scales.as_deref(),
         }
-        .check_shape(domain)?;
+        .validate_shape(domain)
+        .expect("table lengths must match the domain");
         fn fill<M: PrimeModulus>(
             table: Option<&mut [PastaField<M>]>,
             (first, step): (PastaField<M>, PastaField<M>),
@@ -236,7 +238,7 @@ impl<'a, M: PrimeModulus> TablesMut<'a, M> {
             })
         }
         let generators = generators(domain);
-        Ok(Transform {
+        Transform {
             domain,
             tables: Tables {
                 forward: fill(self.forward, generators.forward),
@@ -244,7 +246,7 @@ impl<'a, M: PrimeModulus> TablesMut<'a, M> {
                 inverse_finish: fill(self.inverse_finish, generators.inverse_finish),
                 inverse_scales: fill(self.inverse_scales, generators.inverse_scales),
             },
-        })
+        }
     }
 }
 
@@ -257,17 +259,19 @@ impl<'a, M: PrimeModulus> super::Transform<'a, M> {
     /// omitted because their entries depend on that shift. An unchanged domain
     /// retains every table. This takes constant work without scanning entries.
     ///
-    /// Returns [`FftError::InvalidTables`] if the subgroup sizes differ.
-    pub fn for_coset(mut self, domain: CosetDomain<M>) -> Result<Self, FftError> {
-        if self.domain.size() != domain.size() {
-            return Err(FftError::InvalidTables);
-        }
+    /// Panics if the cosets have different subgroups.
+    pub fn for_coset(mut self, domain: CosetDomain<M>) -> Self {
+        assert_eq!(
+            self.domain.size(),
+            domain.size(),
+            "cosets must share a subgroup"
+        );
         if !self.domain.same_domain(domain) {
             self.tables.inverse_finish = None;
             self.tables.inverse_scales = None;
         }
         self.domain = domain;
-        Ok(self)
+        self
     }
 
     /// Rechecks every supplied entry against the bound domain.

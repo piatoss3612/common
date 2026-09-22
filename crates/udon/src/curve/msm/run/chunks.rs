@@ -38,12 +38,15 @@ pub struct ParallelMsmRun<'a, 'i, C: PastaCurve, const SLOTS: usize> {
 impl<'a, 'i, C: PastaCurve, const SLOTS: usize> ParallelMsmRun<'a, 'i, C, SLOTS> {
     /// Binds independent chunks without allocating or writing arithmetic data.
     ///
-    /// Returns [`TaskError::Storage`] for zero slots or frontier capacity, or
-    /// slots exceeding the plan's workspace ceiling; [`TaskError::InvalidRequest`]
-    /// for incompatible input or streaming; and [`TaskError::Overflow`] for
-    /// unrepresentable retained storage counts or bytes. Frontiers can contain
-    /// a single task entry; more entries
-    /// allow more windows from each prepared chunk to be detached at once.
+    /// `SLOTS` and `TASKS` must be nonzero. The input must satisfy the plan's
+    /// requirements, and the plan must support independent chunks rather than
+    /// streaming. Incompatible input or a streaming plan panics before metadata is
+    /// written.
+    ///
+    /// Returns [`TaskError::Storage`] if the slots exceed the plan's workspace ceiling,
+    /// or [`TaskError::Overflow`] for unrepresentable retained storage counts or bytes.
+    /// More frontier entries allow more windows from each prepared chunk to be detached
+    /// at once.
     pub fn new<const TASKS: usize>(
         plan: MsmPlan<C>,
         input: Input<'i, C>,
@@ -51,8 +54,8 @@ impl<'a, 'i, C: PastaCurve, const SLOTS: usize> ParallelMsmRun<'a, 'i, C, SLOTS>
         storage: &'a mut [[TaskStorage; TASKS]; SLOTS],
     ) -> Result<Self, TaskError> {
         Self::validate(plan, input)?;
-        if TASKS == 0 {
-            return Err(TaskError::Storage);
+        const {
+            assert!(TASKS > 0, "frontier capacity must be nonzero");
         }
         let chunks = input.len().div_ceil(plan.cap.max(1));
         let mut metadata = identities.iter_mut().zip(storage);
@@ -60,7 +63,6 @@ impl<'a, 'i, C: PastaCurve, const SLOTS: usize> ParallelMsmRun<'a, 'i, C, SLOTS>
             let (identity, storage) = metadata.next().unwrap();
             let range = Self::range(plan, chunks, slot);
             MsmRun::bind_range(plan, input, range, identity, storage)
-                .expect("validated chunk metadata")
         });
         Ok(Self {
             runs,
@@ -75,10 +77,18 @@ impl<'a, 'i, C: PastaCurve, const SLOTS: usize> ParallelMsmRun<'a, 'i, C, SLOTS>
     }
 
     fn validate(plan: MsmPlan<C>, input: Input<'i, C>) -> Result<(), TaskError> {
-        let slots = NonZeroUsize::new(SLOTS).ok_or(TaskError::Storage)?;
-        if input.len() != plan.terms || plan.options.streaming() || !plan.accepts(input) {
-            return Err(TaskError::InvalidRequest);
+        const {
+            assert!(SLOTS > 0, "parallel slots must be nonzero");
         }
+        let slots = NonZeroUsize::new(SLOTS).unwrap();
+        assert!(
+            input.len() == plan.terms && plan.accepts(input),
+            "input must match the plan"
+        );
+        assert!(
+            !plan.options.streaming(),
+            "parallel chunks require a nonstreaming plan"
+        );
         plan.retained_for_slots(slots)
             .map_err(|error| match error {
                 CurveError::MemoryLimit { .. } => TaskError::Storage,
@@ -225,8 +235,8 @@ impl<'a, 'i, C: PastaCurve, const SLOTS: usize> ParallelMsmRun<'a, 'i, C, SLOTS>
         self.runs.iter().map(MsmRun::inflight).sum()
     }
 
-    /// Reuses all metadata for another preplanned invocation after completion.
-    /// Old keys remain stale. Errors match [`Self::new`], with
+    /// Reuses all metadata for another preplanned invocation after completion. Old keys
+    /// remain stale. Input, error, and panic contracts match [`Self::new`], with
     /// [`TaskError::Busy`] before completion and [`TaskError::Failed`] on failure.
     pub fn rebind(&mut self, plan: MsmPlan<C>, input: Input<'i, C>) -> Result<(), TaskError> {
         if self.failed {

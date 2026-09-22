@@ -31,30 +31,28 @@ fn batches<C: PastaCurve>() {
             let sentinel = PastaField::from_u64(987);
             let mut scratch = vec![sentinel; size + 3];
             for _ in 0..2 {
-                batch_normalize(&points, &mut output, &mut scratch).unwrap();
+                batch_normalize(&points, &mut output, &mut scratch);
                 assert_eq!(output, expected);
                 assert_eq!(&scratch[size..], &[sentinel; 3]);
             }
             let identities = vec![ProjectivePoint::IDENTITY; size];
-            batch_normalize(&identities, &mut output, &mut scratch).unwrap();
+            batch_normalize(&identities, &mut output, &mut scratch);
             assert!(output.iter().all(Point::is_identity));
             assert_eq!(&scratch[size..], &[sentinel; 3]);
 
             let old_scratch = scratch.clone();
             let mut wrong = vec![generator; size + 1];
             let old_output = wrong.clone();
-            assert_eq!(
-                batch_normalize(&points, &mut wrong, &mut scratch),
-                Err(CurveError::LengthMismatch {
-                    buffer: "output",
-                    expected: size,
-                    actual: size + 1,
-                })
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    batch_normalize(&points, &mut wrong, &mut scratch);
+                }))
+                .is_err()
             );
             assert_eq!(wrong, old_output);
             assert_eq!(scratch, old_scratch);
             for capacity in [0, size / 2, size.saturating_sub(1)] {
-                batch_normalize(&points, &mut output, &mut scratch[..capacity]).unwrap();
+                batch_normalize(&points, &mut output, &mut scratch[..capacity]);
                 assert_eq!(output, expected);
                 assert_eq!(&scratch[size..], &[sentinel; 3]);
             }

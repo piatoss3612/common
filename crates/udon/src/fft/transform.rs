@@ -5,7 +5,7 @@ use super::{
     ScratchRequirements, Strategy, Tables, reverse,
 };
 #[cfg(test)]
-use super::{check_length, check_prefix};
+use super::{assert_length, check_prefix};
 use crate::exec::{TaskBudget, for_each_chunk_mut};
 use crate::field::fft::{
     Guard, butterfly, divide_by_power_of_two, normalize, scale as scale_loose,
@@ -22,16 +22,14 @@ use crate::field::fft::{
 /// methods accepting other orders document them. A singleton transform preserves
 /// its sole value.
 ///
-/// Transforms can be shared across executions with independent mutable buffers.
-/// Every full input and output slice must contain exactly `n` fields.
-/// [`Self::execute`] accepts shorter coefficient or evaluation inputs through
+/// Transforms can be shared across executions with independent mutable buffers. Every
+/// full input and output slice must contain exactly `n` fields. [`Self::execute`]
+/// accepts shorter coefficient or evaluation inputs through
 /// [`super::TransformRequest`]. Direct transforms adapt to scratch capacity;
-/// [`Self::scratch_requirements`] reports the preferred size under the given
-/// resource limits. [`super::run::FftPlan::retained_fields`] sizes the fixed
-/// workspace of a resolved plan.
-/// Direct transforms accept empty scratch. Resolved plans require their declared
-/// workspace, returning [`FftError::ScratchTooSmall`] when it is absent.
-/// Incorrect full buffer lengths return [`FftError::LengthMismatch`]; request
+/// [`Self::scratch_requirements`] reports the preferred size under the given resource
+/// limits. [`super::run::FftPlan::retained_fields`] sizes the fixed workspace of a
+/// resolved plan. Direct transforms accept empty scratch. Resolved plans require their
+/// declared workspace. Buffer contract violations panic before writes; request
 /// validation follows [`Self::execute`].
 ///
 /// Table contents follow [`Tables`]' validity contract. The module's
@@ -195,11 +193,10 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     /// Scratch, including an empty slice, limits the implementation selected for
     /// this call; unused scratch tails are untouched.
     ///
-    /// Request errors follow [`super::run::FftPlan::new`]. Missing or unexpected
-    /// input, or scaled inverse input, returns [`FftError::InvalidExecution`].
-    /// Incorrect slice lengths return [`FftError::LengthMismatch`]. All returned
-    /// errors precede writes. A panic may partially change data; the module's
-    /// [working-storage rules](super) describe validity during unwinding.
+    /// Request errors follow [`super::run::FftPlan::new`]. Violating the input or
+    /// buffer requirements panics. These checks and returned errors precede writes. An
+    /// executor panic may partially change data; the module's [working-storage
+    /// rules](super) describe validity during unwinding.
     pub fn execute<E: Executor>(
         self,
         request: super::TransformRequest,
@@ -214,9 +211,13 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
             super::run::FftPlan::new(self, request, super::StorageLayout::Contiguous, options)?;
         if let Some(input) = input {
             if request.direction == super::Direction::Forward {
-                plan = plan.with_input_scale(input.normalization_factor())?;
-            } else if input.normalization_factor() != PastaField::ONE {
-                return Err(FftError::InvalidExecution);
+                plan = plan.with_input_scale(input.normalization_factor());
+            } else {
+                assert_eq!(
+                    input.normalization_factor(),
+                    PastaField::ONE,
+                    "inverse input must be normalized"
+                );
             }
         }
         plan.execute(
@@ -225,7 +226,8 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
             None,
             scratch,
             executor,
-        )
+        );
+        Ok(())
     }
 
     /// Required temporary field storage for either transform direction.
@@ -251,9 +253,9 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         options: Strategy,
         scratch_len: usize,
     ) -> Result<usize, FftError> {
-        check_length(buffer, self.domain.size(), len)?;
+        assert_length(buffer, self.domain.size(), len);
         let required = self.scratch_requirements_with(options)?;
-        required.check(scratch_len)?;
+        required.check(scratch_len);
         Ok(required.field_elements)
     }
 
@@ -281,7 +283,8 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
             &mut scratch[..required],
             core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
             executor,
-        )
+        );
+        Ok(())
     }
 
     /// Replaces natural-order evaluations with normalized polynomial coefficients.
@@ -308,7 +311,8 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
             &mut scratch[..required],
             core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
             executor,
-        )
+        );
+        Ok(())
     }
 
     /// Interpolates evaluations already stored in bit-reversed order.
@@ -336,7 +340,8 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
             &mut scratch[..required],
             core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
             executor,
-        )
+        );
+        Ok(())
     }
 
     /// Preserves the coefficients and writes their transform into `output`.
@@ -357,14 +362,14 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         let input = input.into();
         let extra = input.normalization_factor();
         let input = input.as_slice();
-        check_length("input", self.domain.size(), input.len())?;
+        assert_length("input", self.domain.size(), input.len());
         let required = self.check("output", output.len(), options, scratch.len())?;
         self.bounded(
             options,
             super::TransformRequest::new(super::Direction::Forward),
             true,
         )?
-        .with_input_scale(extra)?
+        .with_input_scale(extra)
         .execute_with(
             Some(input),
             output,
@@ -372,7 +377,8 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
             &mut scratch[..required],
             core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
             executor,
-        )
+        );
+        Ok(())
     }
 
     /// Preserves the evaluations and writes their interpolation into `output`.
@@ -388,7 +394,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
-        check_length("input", self.domain.size(), input.len())?;
+        assert_length("input", self.domain.size(), input.len());
         let required = self.check("output", output.len(), options, scratch.len())?;
         self.bounded(
             options,
@@ -402,7 +408,8 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
             &mut scratch[..required],
             core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
             executor,
-        )
+        );
+        Ok(())
     }
 
     /// Evaluates a coefficient prefix, treating the remaining coefficients as zero.
@@ -432,7 +439,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         let mut request = super::TransformRequest::new(super::Direction::Forward);
         request.support = super::InputSupport::Prefix(coefficients.len());
         self.bounded(options, request, true)?
-            .with_input_scale(extra)?
+            .with_input_scale(extra)
             .execute_with(
                 Some(coefficients),
                 output,
@@ -440,7 +447,8 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
                 &mut scratch[..required],
                 core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
                 executor,
-            )
+            );
+        Ok(())
     }
 
     fn bounded(
@@ -609,8 +617,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
                 scratch,
                 core::num::NonZeroUsize::new(options.max_tasks).unwrap(),
                 executor,
-            )
-            .expect("validated transform storage");
+            );
         for lift in run.lifts {
             for_each_chunk_mut(
                 values,

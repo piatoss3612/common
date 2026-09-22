@@ -1,7 +1,7 @@
 use super::transform::Run;
 use super::{
     ElementOrder, Executor, FftError, PastaField, PrimeModulus, ScratchRequirements, Strategy,
-    Transform, check_length,
+    Transform, assert_length,
 };
 
 /// Meaning of an interpolation class's current working storage.
@@ -41,14 +41,14 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
         plan: Transform<'a, M>,
         values: &'a mut [PastaField<M>],
         order: ElementOrder,
-    ) -> Result<Self, FftError> {
-        check_length("values", plan.domain().size(), values.len())?;
-        Ok(Self {
+    ) -> Self {
+        assert_length("values", plan.domain().size(), values.len());
+        Self {
             plan,
             values,
             order,
             state: ClassState::Evaluations,
-        })
+        }
     }
     pub(super) const fn check_evaluations(&self) -> Result<(), FftError> {
         if matches!(self.state, ClassState::Evaluations) {
@@ -113,7 +113,7 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
     executor: &E,
     scratch: &mut [PastaField<M>],
 ) -> Result<(), FftError> {
-    interpolation_scratch(output, lifts, options)?.check(scratch.len())?;
+    interpolation_scratch(output, lifts, options)?.check(scratch.len());
     for lift in lifts.iter_mut() {
         lift.state = ClassState::Consumed;
         if lift.order == ElementOrder::Natural {

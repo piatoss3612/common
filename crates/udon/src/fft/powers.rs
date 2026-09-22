@@ -1,5 +1,6 @@
 use super::{
-    FftError, PastaField, PrimeModulus, check_domain_size, check_field_count, check_length,
+    FftError, PastaField, PrimeModulus, assert_length, check_domain_size, check_field_count,
+    validate_length,
 };
 
 /// Retained representation of subgroup powers, independent of value ordering.
@@ -96,26 +97,28 @@ impl<M: PrimeModulus> core::fmt::Debug for TwiddleTable<'_, M> {
 impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
     /// Checks every entry and binds its subgroup, direction, and storage order.
     ///
-    /// Shape errors follow [`Self::bind_trusted`]. Incorrect or unreduced entries
+    /// Configuration errors follow [`TwiddleDescription::requirements`]. A wrong stored
+    /// length returns [`FftError::LengthMismatch`]; incorrect or unreduced entries
     /// return [`FftError::InvalidTables`]. Validation takes linear field work.
     pub fn bind(
         description: TwiddleDescription,
         values: &'a [PastaField<M>],
     ) -> Result<Self, FftError> {
+        validate_length("twiddles", description.requirements()?, values.len())?;
         Self::bind_trusted(description, values)?.validate()
     }
 
     /// Binds caller-trusted entries after checking dimensions and length.
     ///
-    /// Errors follow [`TwiddleDescription::requirements`], with
-    /// [`FftError::LengthMismatch`] for a wrong length. The caller must establish
-    /// reduced Montgomery entries described by [`TwiddleStorage`]. Incorrect
-    /// contents can cause wrong results or panics, but not memory unsafety.
+    /// Configuration errors follow [`TwiddleDescription::requirements`]. Panics unless
+    /// `values` has the reported length. The caller must establish the reduced
+    /// Montgomery entries described by [`TwiddleStorage`]. Incorrect contents can cause
+    /// wrong results or panics, but not memory unsafety.
     pub fn bind_trusted(
         description: TwiddleDescription,
         values: &'a [PastaField<M>],
     ) -> Result<Self, FftError> {
-        check_length("twiddles", description.requirements()?, values.len())?;
+        assert_length("twiddles", description.requirements()?, values.len());
         Ok(Self {
             description,
             values,
@@ -125,13 +128,14 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
     /// Generates subgroup twiddles into exactly sized caller storage.
     ///
     /// Entries follow [`TwiddleStorage`]'s formulas and use reduced Montgomery
-    /// representations. Dimensions and errors follow [`Self::bind_trusted`].
-    /// All checks precede writes; initial destination values are overwritten.
+    /// representations. Storage, error, and panic contracts follow
+    /// [`Self::bind_trusted`]. All checks precede writes; initial destination values
+    /// are overwritten.
     pub fn prepare(
         description: TwiddleDescription,
         values: &'a mut [PastaField<M>],
     ) -> Result<Self, FftError> {
-        check_length("twiddles", description.requirements()?, values.len())?;
+        assert_length("twiddles", description.requirements()?, values.len());
         let mut remaining = &mut *values;
         for (len, step) in description.stages::<M>() {
             let (stage, rest) = remaining.split_at_mut(len);

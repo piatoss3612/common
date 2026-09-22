@@ -95,7 +95,7 @@ fn phases() {
                     })
                     .unwrap(),
             );
-            let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
+            let input = Input::new(Bases::Affine(&bases), &scalars);
             let mut records = vec![ScalarStorage::ZERO; n];
             prepared::prepare(
                 input.scalars,
@@ -416,7 +416,7 @@ fn native_controls() {
             }
         }
         for n in [128, 1024, 8192] {
-            let input = Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap();
+            let input = Input::new(Bases::Affine(&bases[..n]), &scalars[..n]);
             let options = BatchOptions::default();
             let mut buffers = tests::Buffers::new(input.requirements_with(options).unwrap());
             let expected = input

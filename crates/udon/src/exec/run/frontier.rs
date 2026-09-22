@@ -152,19 +152,13 @@ impl<'a> Frontier<'a> {
         ))
     }
 
-    /// Binds a nonempty frontier. Returns [`TaskError::Storage`] for no slots.
-    pub fn new(
-        identity: &'a mut Identity,
-        storage: &'a mut [TaskStorage],
-        total: usize,
-    ) -> Result<Self, TaskError> {
-        if storage.is_empty() {
-            return Err(TaskError::Storage);
-        }
+    /// Binds a frontier, panicking if no storage is supplied.
+    pub fn new(identity: &'a mut Identity, storage: &'a mut [TaskStorage], total: usize) -> Self {
+        assert!(!storage.is_empty(), "frontier storage must be nonempty");
         for slot in storage.iter_mut() {
             *slot = TaskStorage::EMPTY;
         }
-        Ok(Self {
+        Self {
             identity,
             storage,
             epoch: 0,
@@ -172,7 +166,7 @@ impl<'a> Frontier<'a> {
             total,
             inflight: 0,
             failed: false,
-        })
+        }
     }
 
     /// Writes at most `output.len()` ready ranges and returns the written count.

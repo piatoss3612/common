@@ -61,9 +61,7 @@ fn batches<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
             let mut output = vec![ProjectivePoint::GENERATOR; n];
             for scalar in scalar_corpus::<C>().into_iter().step_by(7) {
                 let prepared = EisensteinScalar::new(&scalar);
-                tables
-                    .mul_prepared(&prepared, &mut output, &mut scratch, budget, &Pool)
-                    .unwrap();
+                tables.mul_prepared(&prepared, &mut output, &mut scratch, budget, &Pool);
                 assert_eq!(scratch[required], PastaField::ONE);
                 for (i, base) in bases[..n].iter().enumerate() {
                     let expected =
@@ -123,17 +121,22 @@ fn errors_preserve_preparation_and_multiplication_buffers() {
             if failure == 3 {
                 bases[n - 1].x = invalid_field();
             }
-            assert!(
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 EisensteinTableBatch::prepare(
                     &bases,
                     &mut entries,
                     &mut projective,
                     &mut field,
                     TaskBudget::SERIAL,
-                    &SerialExecutor
+                    &SerialExecutor,
                 )
-                .is_err()
-            );
+                .map(|_| ())
+            }));
+            if failure == 3 {
+                assert_eq!(result.unwrap(), Err(CurveError::InvalidBase));
+            } else {
+                assert!(result.is_err());
+            }
             assert!(entries.iter().all(|&p| p == g));
             assert!(projective.iter().all(|&p| p == ProjectivePoint::GENERATOR));
             assert!(field.iter().all(|&f| f == PastaField::ONE));
@@ -154,30 +157,29 @@ fn errors_preserve_preparation_and_multiplication_buffers() {
         let mut field = vec![PastaField::ONE; required];
         let mut output = vec![ProjectivePoint::GENERATOR; n + 1];
         assert!(
-            tables
-                .mul(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                tables.mul(
                     &PastaField::ONE,
                     &mut output,
                     &mut field,
                     TaskBudget::SERIAL,
-                    &SerialExecutor
-                )
-                .is_err()
+                    &SerialExecutor,
+                );
+            }))
+            .is_err()
         );
         assert!(output.iter().all(|&p| p == ProjectivePoint::GENERATOR));
         assert!(field.iter().all(|&f| f == PastaField::ONE));
         let scalar = PastaField::from_u64(1234567).invert().unwrap();
         let expected = g.mul_projective(&scalar);
         for capacity in [0, required / 2, required.saturating_sub(1), required] {
-            tables
-                .mul(
-                    &scalar,
-                    &mut output[..n],
-                    &mut field[..capacity],
-                    TaskBudget::new(3).unwrap(),
-                    &SerialExecutor,
-                )
-                .unwrap();
+            tables.mul(
+                &scalar,
+                &mut output[..n],
+                &mut field[..capacity],
+                TaskBudget::new(3).unwrap(),
+                &SerialExecutor,
+            );
             assert!(output[..n].iter().all(|p| *p == expected));
             assert_eq!(output[n], ProjectivePoint::GENERATOR);
         }

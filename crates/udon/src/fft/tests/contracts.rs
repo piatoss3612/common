@@ -47,7 +47,7 @@ fn imports<M: PrimeModulus>() {
             Err(FftError::InvalidTables)
         ));
         // The explicit trust path checks shape but intentionally skips contents.
-        let trusted = prepared.tables().bind_trusted(domain).unwrap();
+        let trusted = prepared.tables().bind_trusted(domain);
         assert!(matches!(trusted.validate(), Err(FftError::InvalidTables)));
     }
     let short = Tables {
@@ -58,10 +58,12 @@ fn imports<M: PrimeModulus>() {
         short.bind(domain),
         Err(FftError::LengthMismatch { .. })
     ));
-    assert!(matches!(
-        short.bind_trusted(domain),
-        Err(FftError::LengthMismatch { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = short.bind_trusted(domain);
+        }))
+        .is_err()
+    );
 
     for first in [PastaField::ZERO, PastaField::ONE, PastaField::from_u64(3)] {
         for step in [PastaField::ZERO, PastaField::ONE, domain.shift()] {
@@ -152,10 +154,17 @@ fn imports<M: PrimeModulus>() {
             assert!(
                 ExpansionScales::bind_trusted(base_size, domain, normalization, &values).is_ok()
             );
-            assert!(matches!(
-                ExpansionScales::bind_trusted(base_size, domain, normalization, &values[..3]),
-                Err(FftError::LengthMismatch { .. })
-            ));
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = ExpansionScales::bind_trusted(
+                        base_size,
+                        domain,
+                        normalization,
+                        &values[..3],
+                    );
+                }))
+                .is_err()
+            );
         }
     }
 }
@@ -219,10 +228,12 @@ fn twiddle_oracle<M: PrimeModulus>() {
                         TwiddleTable::bind(description, &values),
                         Err(FftError::InvalidTables)
                     ));
-                    assert!(matches!(
-                        TwiddleTable::bind_trusted(description, &values[1..]),
-                        Err(FftError::LengthMismatch { .. })
-                    ));
+                    assert!(
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let _ = TwiddleTable::bind_trusted(description, &values[1..]);
+                        }))
+                        .is_err()
+                    );
                 }
             }
         }
@@ -272,48 +283,51 @@ fn product_domain<M: PrimeModulus>() {
             &values,
             other,
             EvaluationLayout::Residues(expansion.layout()),
-        )
-        .unwrap();
-        assert_eq!(
-            expansion.short_product_with(
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = expansion.short_product_with(
+                    &coefficients,
+                    factor,
+                    &mut output,
+                    options,
+                    &joins,
+                    &mut scratch,
+                );
+            }))
+            .is_err()
+        );
+        assert!(output.iter().chain(&scratch).all(|v| *v == PastaField::ONE));
+        assert_eq!(joins.take(), 0);
+    }
+    let factor = EvaluationView::bind(&values, domain, EvaluationLayout::Natural);
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = expansion.short_product_with(
                 &coefficients,
                 factor,
                 &mut output,
                 options,
                 &joins,
-                &mut scratch
-            ),
-            Err(FftError::InvalidLayout)
-        );
-        assert!(output.iter().chain(&scratch).all(|v| *v == PastaField::ONE));
-        assert_eq!(joins.take(), 0);
-    }
-    let factor = EvaluationView::bind(&values, domain, EvaluationLayout::Natural).unwrap();
-    assert_eq!(
-        expansion.short_product_with(
-            &coefficients,
-            factor,
-            &mut output,
-            options,
-            &joins,
-            &mut scratch
-        ),
-        Err(FftError::InvalidLayout)
+                &mut scratch,
+            );
+        }))
+        .is_err()
     );
     assert!(output.iter().chain(&scratch).all(|v| *v == PastaField::ONE));
     assert_eq!(joins.take(), 0);
     expansion
         .short_product_with(
             &coefficients,
-            expansion.view(&values).unwrap(),
+            expansion.view(&values),
             &mut output,
             options,
             &joins,
             &mut scratch,
         )
         .unwrap();
-    let result = expansion.view(&output).unwrap();
-    let factor = expansion.view(&values).unwrap();
+    let result = expansion.view(&output);
+    let factor = expansion.view(&values);
     for (row, evaluation) in direct(&coefficients, domain).iter().enumerate() {
         assert_eq!(
             result.get(row),
@@ -380,13 +394,10 @@ fn retained_with_base_tables<M: PrimeModulus>() {
                             NonZeroUsize::MIN,
                             &SerialExecutor,
                         )
-                        .unwrap()
                         .unwrap();
                     for (row, value) in expected.iter().enumerate() {
                         assert_eq!(
-                            EvaluationView::bind(&output, extended, layout)
-                                .unwrap()
-                                .get(row),
+                            EvaluationView::bind(&output, extended, layout).get(row),
                             Some(value)
                         );
                     }
@@ -427,7 +438,7 @@ fn reused_cosets<M: PrimeModulus>() {
             .unwrap();
             for shift in [PastaField::from_u64(7), PastaField::ONE, PastaField::ZETA] {
                 let domain = subgroup.coset(shift).unwrap();
-                let rebound = bound.for_coset(domain).unwrap();
+                let rebound = bound.for_coset(domain);
                 let tables = rebound.tables;
                 assert_eq!(
                     tables.forward.map(|s| s.as_ptr()),
@@ -456,10 +467,12 @@ fn reused_cosets<M: PrimeModulus>() {
                     .unwrap();
                 assert_eq!(output, coefficients);
             }
-            assert!(matches!(
-                bound.for_coset(Domain::new(log + 1).unwrap().subgroup()),
-                Err(FftError::InvalidTables)
-            ));
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = bound.for_coset(Domain::new(log + 1).unwrap().subgroup());
+                }))
+                .is_err()
+            );
         }
     }
 }

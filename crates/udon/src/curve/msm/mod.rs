@@ -40,7 +40,7 @@
 //! let mut jobs = [JobStorage::EMPTY; 1];
 //! let mut workers = [WorkerStorage::EMPTY; 1];
 //! for row in [[1_i128, -1, 3], [0, 2, 1]] {
-//!     let inputs = [selection.with_signed(&row)?];
+//!     let inputs = [selection.with_signed(&row)];
 //!     let plan = BatchPlan::new(&inputs, ExecutionOptions::default(),
 //!         &mut jobs, &mut workers)?;
 //!     let r = plan.requirements();
@@ -53,7 +53,7 @@
 //!     let scratch = Scratch::new(&mut records, &mut digits, &mut affine,
 //!         &mut projective, &mut field, &mut indices_scratch);
 //!     let mut output = [ProjectivePoint::IDENTITY];
-//!     plan.execute(&mut output, &SerialExecutor, scratch)?;
+//!     plan.execute(&mut output, &SerialExecutor, scratch);
 //!     assert_eq!(output[0], bases[0].mul_projective(&PastaField::from_u64(3)));
 //! }
 //! # Ok::<(), zakura_udon::curve::CurveError>(())
@@ -61,7 +61,7 @@
 
 use super::{
     AffinePoint, CurveError, EisensteinTableBatch, PastaCurve, Point, PreparedAffinePoint,
-    ProjectivePoint, check_length, check_scratch, checked_count,
+    ProjectivePoint, assert_length, assert_scratch, checked_count,
 };
 use crate::exec::{ExecutionOptions, Executor};
 use crate::field::{CanonicalUint, PastaField};
@@ -135,10 +135,10 @@ impl<C: PastaCurve> Bases<'_, C> {
 /// and base preparation remain reusable after each scalar row is dropped.
 ///
 /// Cloning copies references. Immutable base and index borrows preserve index
-/// validation across scalar rows. Every binding requires exactly [`Self::len`]
-/// scalars, returning [`CurveError::LengthMismatch`] otherwise. Only
-/// [`Self::with_canonical`] additionally validates scalar values.
-/// The mathematical invariants of [`Bases`] remain the producer's responsibility.
+/// validation across scalar rows. Every binding requires exactly [`Self::len`] scalars
+/// and panics on a mismatch. Only [`Self::with_canonical`] additionally validates
+/// scalar values. The mathematical invariants of [`Bases`] remain the producer's
+/// responsibility.
 #[derive(Clone, Copy, Debug)]
 pub struct Selection<'a, C: PastaCurve> {
     bases: Bases<'a, C>,
@@ -182,25 +182,22 @@ impl<'a, C: PastaCurve> Selection<'a, C> {
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
-    fn bind<'s>(&self, scalars: Scalars<'s, C>) -> Result<Input<'s, C>, CurveError>
+    fn bind<'s>(&self, scalars: Scalars<'s, C>) -> Input<'s, C>
     where
         'a: 's,
     {
-        check_length("scalars", self.len(), scalars.len())?;
-        Ok(Input {
+        assert_length("scalars", self.len(), scalars.len());
+        Input {
             bases: self.bases,
             indices: self.indices,
             scalars,
-        })
+        }
     }
     /// Binds a field scalar row with an O(1) length check.
     ///
     /// Scalars must satisfy [`Input`]'s reduced-residue invariant. See
     /// [`Selection`] for the exact-length requirement.
-    pub fn with_scalars<'s>(
-        &self,
-        scalars: &'s [PastaField<C::Scalar>],
-    ) -> Result<Input<'s, C>, CurveError>
+    pub fn with_scalars<'s>(&self, scalars: &'s [PastaField<C::Scalar>]) -> Input<'s, C>
     where
         'a: 's,
     {
@@ -209,10 +206,7 @@ impl<'a, C: PastaCurve> Selection<'a, C> {
     /// Binds prepared scalars with an O(1) length check.
     ///
     /// See [`Selection`] for the exact-length requirement.
-    pub fn with_prepared_scalars<'s>(
-        &self,
-        scalars: PreparedScalars<'s, C>,
-    ) -> Result<Input<'s, C>, CurveError>
+    pub fn with_prepared_scalars<'s>(&self, scalars: PreparedScalars<'s, C>) -> Input<'s, C>
     where
         'a: 's,
     {
@@ -221,7 +215,7 @@ impl<'a, C: PastaCurve> Selection<'a, C> {
     /// Binds unsigned coefficients whose type guarantees the 128-bit bound.
     ///
     /// See [`Selection`] for the exact-length requirement.
-    pub fn with_unsigned<'s>(&self, scalars: &'s [u128]) -> Result<Input<'s, C>, CurveError>
+    pub fn with_unsigned<'s>(&self, scalars: &'s [u128]) -> Input<'s, C>
     where
         'a: 's,
     {
@@ -231,7 +225,7 @@ impl<'a, C: PastaCurve> Selection<'a, C> {
     ///
     /// A negative coefficient subtracts its magnitude's base multiple. See
     /// [`Selection`] for the exact-length requirement.
-    pub fn with_signed<'s>(&self, scalars: &'s [i128]) -> Result<Input<'s, C>, CurveError>
+    pub fn with_signed<'s>(&self, scalars: &'s [i128]) -> Input<'s, C>
     where
         'a: 's,
     {
@@ -252,9 +246,9 @@ impl<'a, C: PastaCurve> Selection<'a, C> {
     where
         'a: 's,
     {
-        check_length("scalars", self.len(), scalars.len())?;
+        assert_length("scalars", self.len(), scalars.len());
         prepared::validate_canonical::<C>(scalars, bits)?;
-        self.bind(Scalars::Canonical(scalars))
+        Ok(self.bind(Scalars::Canonical(scalars)))
     }
 }
 
@@ -314,45 +308,39 @@ impl<'a, C: PastaCurve> Scalars<'a, C> {
 impl<'a, C: PastaCurve> Input<'a, C> {
     /// Borrows one field scalar per base in storage order.
     ///
-    /// Returns [`CurveError::LengthMismatch`] unless the lengths are equal.
-    pub fn new(
-        bases: Bases<'a, C>,
-        scalars: &'a [PastaField<C::Scalar>],
-    ) -> Result<Self, CurveError> {
+    /// Panics unless the lengths are equal.
+    pub fn new(bases: Bases<'a, C>, scalars: &'a [PastaField<C::Scalar>]) -> Self {
         Selection::new(bases).with_scalars(scalars)
     }
     /// Checks indices and scalar length, without gathering bases.
     ///
-    /// Returns [`CurveError::LengthMismatch`] unless each scalar has an index.
-    /// Index bounds and repeated indices follow [`Selection::indexed`].
+    /// Panics unless each scalar has an index. Index bounds and repeated indices follow
+    /// [`Selection::indexed`].
     pub fn indexed(
         bases: Bases<'a, C>,
         indices: &'a [u32],
         scalars: &'a [PastaField<C::Scalar>],
     ) -> Result<Self, CurveError> {
-        check_length("indices", scalars.len(), indices.len())?;
-        Selection::indexed(bases, indices)?.with_scalars(scalars)
+        assert_length("indices", scalars.len(), indices.len());
+        Ok(Selection::indexed(bases, indices)?.with_scalars(scalars))
     }
     /// Binds one prepared scalar per base.
     ///
-    /// Returns [`CurveError::LengthMismatch`] unless the lengths are equal.
-    pub fn new_prepared(
-        bases: Bases<'a, C>,
-        scalars: PreparedScalars<'a, C>,
-    ) -> Result<Self, CurveError> {
+    /// Panics unless the lengths are equal.
+    pub fn new_prepared(bases: Bases<'a, C>, scalars: PreparedScalars<'a, C>) -> Self {
         Selection::new(bases).with_prepared_scalars(scalars)
     }
     /// Checks indices and binds prepared scalars.
     ///
-    /// Returns [`CurveError::LengthMismatch`] unless each scalar has an index.
-    /// Index bounds and repeated indices follow [`Selection::indexed`].
+    /// Panics unless each scalar has an index. Index bounds and repeated indices follow
+    /// [`Selection::indexed`].
     pub fn indexed_prepared(
         bases: Bases<'a, C>,
         indices: &'a [u32],
         scalars: PreparedScalars<'a, C>,
     ) -> Result<Self, CurveError> {
-        check_length("indices", scalars.len(), indices.len())?;
-        Selection::indexed(bases, indices)?.with_prepared_scalars(scalars)
+        assert_length("indices", scalars.len(), indices.len());
+        Ok(Selection::indexed(bases, indices)?.with_prepared_scalars(scalars))
     }
     /// Retains this input's validated base mapping for another scalar row.
     pub const fn selection(&self) -> Selection<'a, C> {
@@ -398,7 +386,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
             options.into(),
             scratch.capacity(),
         )?;
-        let scratch = scratch.checked(plan.requirements)?;
+        let scratch = scratch.checked(plan.requirements);
         let mut output = [ProjectivePoint::IDENTITY];
         schedule::execute(
             &plan,
@@ -497,8 +485,12 @@ impl Requirements {
             ("field", self.field, available.field),
             ("indices", self.indices, available.indices),
         ] {
-            if let Err(error) = check_scratch(buffer, required, provided) {
-                return error;
+            if provided < required {
+                return CurveError::ScratchTooSmall {
+                    buffer,
+                    required,
+                    provided,
+                };
             }
         }
         unreachable!("capacity is insufficient")
@@ -624,21 +616,21 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
             indices: self.indices.len(),
         }
     }
-    fn checked(self, r: Requirements) -> Result<Self, CurveError> {
-        check_scratch("scalars", r.scalars, self.scalars.len())?;
-        check_scratch("digits", r.digits, self.digits.len())?;
-        check_scratch("affine", r.affine, self.affine.len())?;
-        check_scratch("projective", r.projective, self.projective.len())?;
-        check_scratch("field", r.field, self.field.len())?;
-        check_scratch("indices", r.indices, self.indices.len())?;
-        Ok(Self {
+    fn checked(self, r: Requirements) -> Self {
+        assert_scratch("scalars", r.scalars, self.scalars.len());
+        assert_scratch("digits", r.digits, self.digits.len());
+        assert_scratch("affine", r.affine, self.affine.len());
+        assert_scratch("projective", r.projective, self.projective.len());
+        assert_scratch("field", r.field, self.field.len());
+        assert_scratch("indices", r.indices, self.indices.len());
+        Self {
             scalars: &mut self.scalars[..r.scalars],
             digits: &mut self.digits[..r.digits],
             affine: &mut self.affine[..r.affine],
             projective: &mut self.projective[..r.projective],
             field: &mut self.field[..r.field],
             indices: &mut self.indices[..r.indices],
-        })
+        }
     }
 }
 /// Returns scratch counts for inputs sharing one task budget and memory ceiling.
@@ -659,11 +651,11 @@ pub(crate) fn batch_requirements<C: PastaCurve>(
 }
 /// Computes one result per input, in input order.
 ///
-/// Size scratch with [`batch_requirements`] for the same inputs and options.
-/// Returns [`CurveError::LengthMismatch`] unless `output.len() == inputs.len()`;
-/// sizing and scratch errors match [`Input::execute`]. All returned errors
-/// precede writes. An executor panic may partially write output and scratch;
-/// reuse after unwinding follows [`Input::execute`].
+/// Size scratch with [`batch_requirements`] for the same inputs and options. Panics
+/// before writes unless `output.len() == inputs.len()` and scratch meets the
+/// requirement. Planning errors match [`batch_requirements`] and precede writes. An
+/// executor panic may partially write output and scratch; reuse after unwinding follows
+/// [`Input::execute`].
 #[cfg(test)]
 pub(crate) fn execute_batch<C: PastaCurve, X: Executor>(
     inputs: &[Input<'_, C>],
@@ -672,9 +664,9 @@ pub(crate) fn execute_batch<C: PastaCurve, X: Executor>(
     executor: &X,
     scratch: Scratch<'_, C>,
 ) -> Result<(), CurveError> {
-    check_length("output", inputs.len(), output.len())?;
+    assert_length("output", inputs.len(), output.len());
     let plan = schedule::Plan::new(inputs, options)?;
-    let scratch = scratch.checked(plan.requirements)?;
+    let scratch = scratch.checked(plan.requirements);
     schedule::execute(&plan, inputs, output, executor, scratch);
     Ok(())
 }

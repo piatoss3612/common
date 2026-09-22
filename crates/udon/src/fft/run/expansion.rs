@@ -71,10 +71,10 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
             }
             result.execution = Some((layout, inner_options));
             let validation = result
-                .transform(0, storage == ExpansionStorage::ReuseOutput)
+                .try_transform(0, storage == ExpansionStorage::ReuseOutput)
                 .and_then(|transform| {
                     if storage != ExpansionStorage::Coefficients {
-                        result.inverse()?;
+                        result.try_inverse()?;
                     }
                     Ok(transform)
                 });
@@ -137,25 +137,27 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
             memory_limit: None,
             budget: crate::exec::TaskBudget::SERIAL,
         };
-        result.transform(0, false)?;
+        result.try_transform(0, false)?;
         if storage != ExpansionStorage::Coefficients {
-            result.inverse()?;
+            result.try_inverse()?;
         }
         Ok(result)
     }
 
     /// Multiplies preserved coefficients by a common normalization factor.
     ///
-    /// For a [`super::super::CoefficientView`], pass its `normalization_factor()`
-    /// to recover ordinary polynomial evaluations. Evaluation storage modes
-    /// derive this from their inverse scale and reject this override with
-    /// [`FftError::InvalidExecution`].
-    pub fn with_coefficient_scale(mut self, scale: PastaField<M>) -> Result<Self, FftError> {
-        if self.storage != ExpansionStorage::Coefficients {
-            return Err(FftError::InvalidExecution);
-        }
+    /// For a [`super::super::CoefficientView`], pass its `normalization_factor()` to
+    /// recover ordinary polynomial evaluations. Evaluation storage modes derive this
+    /// from their inverse scale. Panics unless the plan selects
+    /// [`ExpansionStorage::Coefficients`].
+    pub fn with_coefficient_scale(mut self, scale: PastaField<M>) -> Self {
+        assert_eq!(
+            self.storage,
+            ExpansionStorage::Coefficients,
+            "coefficient scale requires coefficient input"
+        );
         self.coefficient_scale = scale;
-        Ok(self)
+        self
     }
 
     /// Number of independently completed output residue blocks.
@@ -190,12 +192,11 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
     pub fn snapshot_fields(&self) -> usize {
         let residue = self
             .transform(0, self.storage == ExpansionStorage::ReuseOutput)
-            .expect("validated expansion geometry")
             .retained_fields();
         let inverse = if self.storage == ExpansionStorage::Coefficients {
             0
         } else {
-            self.inverse().expect("validated inverse").retained_fields()
+            self.inverse().retained_fields()
         };
         residue.max(inverse)
     }
@@ -210,7 +211,16 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         }
     }
 
-    pub(super) fn inverse(&self) -> Result<FftPlan<'t, M>, FftError> {
+    pub(super) fn inverse(&self) -> FftPlan<'t, M> {
+        self.try_inverse().expect("validated inverse geometry")
+    }
+
+    pub(super) fn transform(&self, block: usize, in_place: bool) -> FftPlan<'t, M> {
+        self.try_transform(block, in_place)
+            .expect("validated residue geometry")
+    }
+
+    fn try_inverse(&self) -> Result<FftPlan<'t, M>, FftError> {
         let scale = match self.storage {
             ExpansionStorage::CoefficientWorkspace { scale }
             | ExpansionStorage::DisposableInput { scale } => scale,
@@ -232,11 +242,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         )
     }
 
-    pub(super) fn transform(
-        &self,
-        block: usize,
-        in_place: bool,
-    ) -> Result<FftPlan<'t, M>, FftError> {
+    fn try_transform(&self, block: usize, in_place: bool) -> Result<FftPlan<'t, M>, FftError> {
         let residue = if self.order == ExpansionOrder::BitReversed {
             reverse(block, self.residues().ilog2())
         } else {
@@ -256,29 +262,30 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         } else {
             self.expansion.base.domain().domain().size_inverse()
         };
-        self.resolve(
-            base,
-            TransformRequest {
-                input_storage: if !in_place {
-                    crate::fft::InputStorage::Preserve
-                } else {
-                    crate::fft::InputStorage::InPlace
+        Ok(self
+            .resolve(
+                base,
+                TransformRequest {
+                    input_storage: if !in_place {
+                        crate::fft::InputStorage::Preserve
+                    } else {
+                        crate::fft::InputStorage::InPlace
+                    },
+                    support: self.support,
+                    input_order: if self.storage == ExpansionStorage::Coefficients {
+                        self.input_order
+                    } else {
+                        ElementOrder::Natural
+                    },
+                    output_order: if self.order == ExpansionOrder::Residues {
+                        ElementOrder::Natural
+                    } else {
+                        ElementOrder::BitReversed
+                    },
+                    ..TransformRequest::new(Direction::Forward)
                 },
-                support: self.support,
-                input_order: if self.storage == ExpansionStorage::Coefficients {
-                    self.input_order
-                } else {
-                    ElementOrder::Natural
-                },
-                output_order: if self.order == ExpansionOrder::Residues {
-                    ElementOrder::Natural
-                } else {
-                    ElementOrder::BitReversed
-                },
-                ..TransformRequest::new(Direction::Forward)
-            },
-        )?
-        .with_residue_scales(self.expansion, residue, extra)
+            )?
+            .with_residue_scales(self.expansion, residue, extra))
     }
 }
 
@@ -337,22 +344,24 @@ pub struct ExpansionRun<'a, 't, M: PrimeModulus, const SLOTS: usize> {
 impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS> {
     /// Binds fixed metadata for incremental expansion.
     ///
-    /// Returns [`TaskError::Storage`] for zero slots or frontier capacity, or
-    /// when all slots' snapshots and the separate coefficient bank exceed the
-    /// plan's workspace ceiling. Unrepresentable workspace returns
-    /// [`TaskError::Overflow`]. These checks precede metadata writes.
-    /// `product` requests factors in physical output residue order.
-    /// All banks and queue capacity must be admitted together
-    /// through the last coefficient and residue consumer before dispatch.
+    /// `SLOTS` and `TASKS` must be nonzero. Returns [`TaskError::Storage`] when all
+    /// slots' snapshots and the separate coefficient bank exceed the plan's workspace
+    /// ceiling. Unrepresentable workspace returns [`TaskError::Overflow`]. These checks
+    /// precede metadata writes. `product` requests factors in physical output residue
+    /// order. All banks and queue capacity must be admitted together through the last
+    /// coefficient and residue consumer before dispatch.
     pub fn new<const TASKS: usize>(
         plan: ExpansionPlan<'t, M>,
         product: bool,
         identities: &'a mut [Identity; SLOTS],
         storage: &'a mut [[TaskStorage; TASKS]; SLOTS],
     ) -> Result<Self, TaskError> {
-        if SLOTS == 0 || TASKS == 0 {
-            return Err(TaskError::Storage);
-        }
+        const {
+            assert!(
+                SLOTS > 0 && TASKS > 0,
+                "slot and task capacities must be nonzero"
+            )
+        };
         let fields = plan
             .snapshot_fields()
             .checked_mul(SLOTS)
@@ -364,11 +373,11 @@ impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS>
         if plan.memory_limit.is_some_and(|limit| bytes > limit) {
             return Err(TaskError::Storage);
         }
-        let dummy = plan.transform(0, false).expect("validated expansion");
+        let dummy = plan.transform(0, false);
         let mut metadata = identities.iter_mut().zip(storage);
         let runs = core::array::from_fn(|_| {
             let (id, slots) = metadata.next().unwrap();
-            FftRun::empty(dummy, id, slots).expect("nonempty metadata")
+            FftRun::empty(dummy, id, slots)
         });
         let mut run = Self {
             plan,
@@ -381,7 +390,7 @@ impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS>
             failed: false,
         };
         if run.inverse {
-            run.runs[0].rebind(plan.inverse().expect("validated inverse"), false)?;
+            run.runs[0].rebind(plan.inverse(), false)?;
         } else {
             run.refill()?;
         }
@@ -406,12 +415,7 @@ impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS>
                 break;
             };
             let in_place = block == 0 && self.plan.storage == ExpansionStorage::ReuseOutput;
-            self.runs[slot].rebind(
-                self.plan
-                    .transform(block, in_place)
-                    .expect("validated residue"),
-                self.product,
-            )?;
+            self.runs[slot].rebind(self.plan.transform(block, in_place), self.product)?;
             self.blocks[slot] = Some(block);
         }
         Ok(())
@@ -481,9 +485,8 @@ impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS>
     pub fn complete<R>(
         &mut self,
         slot: usize,
-        receipt: Completion<'a, R, Result<(), FftError>>,
-    ) -> Result<ExpansionPublished<R>, crate::exec::run::PublishError<'a, R, Result<(), FftError>>>
-    {
+        receipt: Completion<'a, R, ()>,
+    ) -> Result<ExpansionPublished<R>, crate::exec::run::PublishError<'a, R, ()>> {
         let Some(run) = self.runs.get_mut(slot) else {
             return Err((TaskError::Stale, receipt));
         };
@@ -497,9 +500,9 @@ impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS>
                 residue = self.blocks[slot].take();
                 self.completed += 1;
             }
-            if self.refill().is_err() {
+            if let Err(error) = self.refill() {
                 self.failed = true;
-                task.error = Some(FftError::SizeOverflow);
+                task.error = Some(error);
             }
         }
         Ok(ExpansionPublished {
@@ -514,7 +517,7 @@ impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS>
         !self.failed && self.completed == self.plan.residues()
     }
 
-    /// Whether arithmetic validation, cancellation, or unwind failed a task.
+    /// Whether cancellation, unwind, or a phase transition failed a task.
     pub fn is_failed(&self) -> bool {
         self.failed
     }

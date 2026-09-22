@@ -8,7 +8,7 @@ fn exercise<M: PrimeModulus>() {
     let mut values = original.clone();
     let sentinel = PastaField::from_u64(19);
     let mut scratch = vec![sentinel; values.len() + 3];
-    batch_invert(&mut values, &mut scratch).unwrap();
+    batch_invert(&mut values, &mut scratch);
     let p = modulus::<M>();
     for ((actual, (value, integer)), expected) in values.iter().zip(&samples).zip(&original) {
         assert_eq!(*actual, value.invert().unwrap_or(PastaField::ZERO));
@@ -19,7 +19,7 @@ fn exercise<M: PrimeModulus>() {
     // Reuse dirty prefixes, crossing both odd and empty group boundaries.
     let (a, rest) = values.split_at_mut(3);
     let (b, c) = rest.split_at_mut(4);
-    batch_invert_groups(&mut [&mut [][..], a, &mut [], b, c, &mut []], &mut scratch).unwrap();
+    batch_invert_groups(&mut [&mut [][..], a, &mut [], b, c, &mut []], &mut scratch);
     assert_eq!(values, original);
     assert_eq!(&scratch[values.len()..], &[sentinel; 3]);
 
@@ -27,26 +27,26 @@ fn exercise<M: PrimeModulus>() {
         let mut short = vec![sentinel; capacity];
         let mut values = original.clone();
         let (a, b) = values.split_at_mut(1);
-        batch_invert_groups(&mut [a, b], &mut short).unwrap();
+        batch_invert_groups(&mut [a, b], &mut short);
         for (value, original) in values.iter().zip(&original) {
             assert_eq!(*value, original.invert().unwrap_or(PastaField::ZERO));
         }
-        batch_invert(&mut values, &mut short).unwrap();
+        batch_invert(&mut values, &mut short);
         assert_eq!(values, original);
     }
 
     for len in [0, 1, 2, 7] {
         let mut zeros = vec![PastaField::<M>::ZERO; len];
-        batch_invert(&mut zeros, &mut scratch).unwrap();
+        batch_invert(&mut zeros, &mut scratch);
         assert!(zeros.iter().all(PastaField::is_zero));
     }
-    batch_invert_groups::<M>(&mut [] as &mut [&mut [PastaField<M>]], &mut []).unwrap();
+    batch_invert_groups::<M>(&mut [] as &mut [&mut [PastaField<M>]], &mut []);
     let mut singleton = [sentinel];
-    batch_invert(&mut singleton, &mut scratch).unwrap();
+    batch_invert(&mut singleton, &mut scratch);
     assert_eq!(singleton[0].mul(&sentinel), PastaField::ONE);
     let mut a = [PastaField::ZERO, sentinel, PastaField::ZERO];
     let mut b = [PastaField::ZERO, sentinel];
-    batch_invert_groups(&mut [&mut a[..], &mut b[..]], &mut scratch).unwrap();
+    batch_invert_groups(&mut [&mut a[..], &mut b[..]], &mut scratch);
     assert_eq!(a, [PastaField::ZERO, singleton[0], PastaField::ZERO]);
     assert_eq!(b, [PastaField::ZERO, singleton[0]]);
 }
@@ -82,8 +82,7 @@ fn group_boundaries<M: PrimeModulus>() {
                 batch_invert_groups(
                     &mut [&mut [][..], left, &mut [], right, &mut []],
                     &mut scratch,
-                )
-                .unwrap();
+                );
                 assert_eq!(
                     values, expected,
                     "length {len}, zeros {zeros}, split {split}"

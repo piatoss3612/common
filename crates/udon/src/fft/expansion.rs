@@ -5,7 +5,7 @@ use super::{Codelet, InverseScale, Strategy, check_domain_size, check_field_coun
 use super::{
     CosetDomain, EvaluationLayout, EvaluationView, Executor, ExpansionOrder,
     ExpansionScaleNormalization, ExpansionScales, FftError, PastaField, PrimeModulus,
-    ResidueLayout, ScratchRequirements, Transform, check_length, check_prefix,
+    ResidueLayout, ScratchRequirements, Transform, assert_length, check_prefix,
 };
 use super::{ElementOrder, ExpansionStorage, InputSupport, StorageLayout, run::ExpansionPlan};
 use crate::exec::ExecutionOptions;
@@ -150,7 +150,7 @@ impl Default for ExpansionStrategy {
 /// ).unwrap();
 /// let view = EvaluationView::bind(
 ///     &output, extended, EvaluationLayout::Residues(expansion.layout()),
-/// ).unwrap();
+/// );
 /// for row in 0..extended.size() {
 ///     let root_power = extended.domain().root().pow_u64(row as u64);
 ///     let point = extended.shift().mul(&root_power);
@@ -203,32 +203,32 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             layout: ResidueLayout::new(extended.size(), extended.size() / base.domain().size())?,
         };
         match scales {
-            Some(scales) => expansion.with_scales(scales),
+            Some(scales) => Ok(expansion.with_scales(scales)),
             None => Ok(expansion),
         }
     }
 
     /// Replaces the scaling table after checking its domain and base size.
     ///
-    /// A domain or base-size mismatch returns [`FftError::InvalidTables`].
+    /// Panics unless the scales describe this expansion's base and extended domains.
     /// Coefficient input, including an unscaled
     /// [`CoefficientView`](super::CoefficientView), can use either convention.
-    /// Initialization accounts for the view's source base size and any factor
-    /// already present in the table. [`Self::evaluations`] accepts either
-    /// convention. [`super::run::ExpansionPlan`] also accounts for the retained
-    /// coefficient scale during residue initialization.
+    /// Initialization accounts for the view's source base size and any factor already
+    /// present in the table. [`Self::evaluations`] accepts either convention.
+    /// [`super::run::ExpansionPlan`] also accounts for the retained coefficient scale
+    /// during residue initialization.
     ///
     /// Table contents follow [`ExpansionScales`]' preparation and binding
     /// contract. Attachment does not rescan entries.
-    pub fn with_scales(mut self, scales: ExpansionScales<'a, M>) -> Result<Self, FftError> {
-        if scales.base_size != self.base.domain().size()
-            || !scales.extended.same_domain(self.extended)
-        {
-            return Err(FftError::InvalidTables);
-        }
+    pub fn with_scales(mut self, scales: ExpansionScales<'a, M>) -> Self {
+        assert!(
+            scales.base_size == self.base.domain().size()
+                && scales.extended.same_domain(self.extended),
+            "scales must match the expansion"
+        );
         self.scales = Some(scales.values);
         self.normalization = scales.normalization;
-        Ok(self)
+        self
     }
 
     /// Layout used by direct expansion methods and their factor inputs.
@@ -242,9 +242,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Binds values to the extended domain and direct methods' residue layout.
     ///
-    /// Returns [`FftError::LengthMismatch`] unless `values` has the extended
-    /// size. Contents are not checked; see [`EvaluationView::bind`].
-    pub fn view(self, values: &[PastaField<M>]) -> Result<EvaluationView<'_, M>, FftError> {
+    /// Panics unless `values` has the extended domain's size. Contents are not checked;
+    /// see [`EvaluationView::bind`].
+    pub fn view(self, values: &[PastaField<M>]) -> EvaluationView<'_, M> {
         EvaluationView::bind(
             values,
             self.extended,
@@ -258,21 +258,19 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Prepares residue scales into caller storage after checking its exact length.
     ///
-    /// Entries use [`ExpansionScaleNormalization::Coefficients`], regardless
-    /// of any already borrowed scales. Use [`ExpansionScales::prepare`] to
-    /// select another normalization. Returns [`FftError::LengthMismatch`]
-    /// without writing if `output.len()` differs from [`Self::scale_count`].
-    pub fn prepare_scales(
-        self,
-        output: &mut [PastaField<M>],
-    ) -> Result<ExpansionScales<'_, M>, FftError> {
-        check_length("output", self.scale_count(), output.len())?;
+    /// Entries use [`ExpansionScaleNormalization::Coefficients`], regardless of any
+    /// already borrowed scales. Use [`ExpansionScales::prepare`] to select another
+    /// normalization. Panics before writing if `output.len()` differs from
+    /// [`Self::scale_count`].
+    pub fn prepare_scales(self, output: &mut [PastaField<M>]) -> ExpansionScales<'_, M> {
+        assert_length("output", self.scale_count(), output.len());
         ExpansionScales::prepare(
             self.base.domain().size(),
             self.extended,
             ExpansionScaleNormalization::Coefficients,
             output,
         )
+        .expect("validated expansion domains")
     }
 
     /// Checks every supplied residue scale without allocating or mutating it.
@@ -294,15 +292,15 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     }
 
     fn check(self, coefficients: usize, min: usize, output: usize) -> Result<(), FftError> {
-        check_length("output", self.extended.size(), output)?;
+        assert_length("output", self.extended.size(), output);
         check_prefix(coefficients, min, self.base.domain().size())
     }
 
     /// Scratch selected for coefficient expansion and short products.
     ///
-    /// Resolves full natural-order coefficients through
-    /// [`ExpansionPlan::new`] and [`ExpansionPlan::scratch_fields`], with their
-    /// sizing errors. Direct execution can adapt to smaller or empty scratch.
+    /// Resolves full natural-order coefficients through [`ExpansionPlan::new`] and
+    /// [`ExpansionPlan::scratch_fields`], with their planning errors. Direct execution
+    /// can adapt to smaller or empty scratch.
     pub fn coefficient_scratch(
         self,
         options: ExecutionOptions,
@@ -312,9 +310,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Scratch selected for expansion from base evaluations.
     ///
-    /// Resolves [`ExpansionStorage::ReuseOutput`] through [`ExpansionPlan::new`]
-    /// and [`ExpansionPlan::scratch_fields`], with their sizing errors. Direct
-    /// execution can adapt to smaller or empty scratch.
+    /// Resolves [`ExpansionStorage::ReuseOutput`] through [`ExpansionPlan::new`] and
+    /// [`ExpansionPlan::scratch_fields`], with planning errors from construction.
+    /// Direct execution can adapt to smaller or empty scratch.
     pub fn evaluation_scratch(
         self,
         options: ExecutionOptions,
@@ -330,7 +328,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         Ok(ScratchRequirements {
             field_elements: self
                 .plan(storage, InputSupport::Full, options)?
-                .scratch_fields()?,
+                .scratch_fields(),
         })
     }
 
@@ -360,10 +358,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// the task budget across residues and their transforms, adapting to
     /// scratch capacity, including empty scratch. Surplus scratch is untouched.
     ///
-    /// Returns [`FftError::InvalidPrefix`] for oversized input or
-    /// [`FftError::LengthMismatch`] for an incorrect output length. Planning and
-    /// sizing errors follow [`Self::coefficient_scratch`]. All returned errors
-    /// precede writes; panic behavior follows the module's
+    /// Returns [`FftError::InvalidPrefix`] for oversized input. Planning errors follow
+    /// [`Self::coefficient_scratch`]. Panics for an incorrect output length. These
+    /// checks precede writes; executor panic behavior follows the module's
     /// [working-storage rules](super).
     pub fn coefficients<'input, E: Executor>(
         self,
@@ -379,19 +376,18 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             InputSupport::Prefix(input.as_slice().len()),
             options.for_scratch::<PastaField<M>>(scratch.len()),
         )?
-        .with_coefficient_scale(input.normalization_factor())?
-        .execute(input.as_slice(), output, &mut [], None, scratch, executor)?;
+        .with_coefficient_scale(input.normalization_factor())
+        .execute(input.as_slice(), output, &mut [], None, scratch, executor);
         Ok(())
     }
 
     /// Preserves base evaluations and writes residue-major extended evaluations.
     ///
-    /// Input must contain exactly the base size's evaluations in natural order;
-    /// output must have the extended domain's size. Incorrect lengths return
-    /// [`FftError::LengthMismatch`] before writes. Output also holds intermediate
-    /// coefficients. Scratch adapts as in [`Self::coefficients`], with sizing
-    /// errors from [`Self::evaluation_scratch`]. Its error and panic guarantees
-    /// apply here too.
+    /// Input must contain exactly the base size's evaluations in natural order; output
+    /// must have the extended domain's size. Incorrect lengths panic before writes.
+    /// Output also holds intermediate coefficients. Scratch adapts as in
+    /// [`Self::coefficients`], with planning errors from [`Self::evaluation_scratch`].
+    /// Its error and panic guarantees apply here too.
     pub fn evaluations<E: Executor>(
         self,
         input: &[PastaField<M>],
@@ -405,19 +401,19 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             InputSupport::Full,
             options.for_scratch::<PastaField<M>>(scratch.len()),
         )?
-        .execute(input, output, &mut [], None, scratch, executor)?;
+        .execute(input, output, &mut [], None, scratch, executor);
         Ok(())
     }
 
     /// Fuses coefficient expansion with multiplication by extended-domain factors.
     ///
-    /// The coefficient prefix contains one through the base size's entries and
-    /// is preserved. Scaling, output length, scratch, and panic behavior follow
-    /// [`Self::coefficients`]. Factors must use this expansion's extended domain
-    /// and [`Self::layout`], or this returns [`FftError::InvalidLayout`]. An empty
-    /// or oversized prefix returns [`FftError::InvalidPrefix`]. All returned
-    /// errors precede writes. Interpolating the full product requires its degree
-    /// to be below the extended domain size; that degree bound is not checked.
+    /// The coefficient prefix contains one through the base size's entries and is
+    /// preserved. Scaling, output length, scratch, and panic behavior follow
+    /// [`Self::coefficients`]. Factors must use this expansion's extended domain and
+    /// [`Self::layout`], or this panics before writes. An empty or oversized prefix
+    /// returns [`FftError::InvalidPrefix`]. All returned errors precede writes.
+    /// Interpolating the full product requires its degree to be below the extended
+    /// domain size; that degree bound is not checked.
     pub fn short_product<'input, E: Executor>(
         self,
         input: impl Into<super::CoefficientView<'input, M>>,
@@ -429,17 +425,17 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     ) -> Result<(), FftError> {
         let input = input.into();
         self.check(input.as_slice().len(), 1, output.len())?;
-        if factor.layout() != EvaluationLayout::Residues(self.layout)
-            || !factor.domain().same_domain(self.extended)
-        {
-            return Err(FftError::InvalidLayout);
-        }
+        assert!(
+            factor.layout() == EvaluationLayout::Residues(self.layout)
+                && factor.domain().same_domain(self.extended),
+            "factors must match the expansion domain and layout"
+        );
         self.plan(
             ExpansionStorage::Coefficients,
             InputSupport::Prefix(input.as_slice().len()),
             options.for_scratch::<PastaField<M>>(scratch.len()),
         )?
-        .with_coefficient_scale(input.normalization_factor())?
+        .with_coefficient_scale(input.normalization_factor())
         .execute(
             input.as_slice(),
             output,
@@ -447,7 +443,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             Some(factor.as_slice()),
             scratch,
             executor,
-        )?;
+        );
         Ok(())
     }
 
@@ -491,10 +487,10 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// [`ExpansionStrategy`] across and within residues; scratch must meet
     /// [`Self::coefficient_scratch`].
     ///
-    /// Returns [`FftError::InvalidPrefix`] if the prefix exceeds the base size,
-    /// [`FftError::LengthMismatch`] if the output length differs from the
-    /// extended size, or [`FftError::ScratchTooSmall`] for insufficient scratch.
-    /// Options and storage limits have the errors of [`Self::coefficient_scratch`].
+    /// Returns [`FftError::InvalidPrefix`] if the prefix exceeds the base size. Panics
+    /// before writes unless output has the extended size and scratch meets the
+    /// requirement. Options and storage limits have the errors of
+    /// [`Self::coefficient_scratch`].
     #[cfg(test)]
     pub(crate) fn coefficients_with<'input, E: Executor>(
         self,
@@ -509,7 +505,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         let coefficients = coefficients.as_slice();
         self.check(coefficients.len(), 0, output.len())?;
         let required = self.coefficient_scratch_with(options)?;
-        required.check(scratch.len())?;
+        required.check(scratch.len());
         if coefficients.len() <= 1 {
             output.fill(coefficients.first().copied().unwrap_or(PastaField::ZERO));
             return Ok(());
@@ -547,11 +543,10 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Preserves base-subgroup evaluations and expands them into the coset.
     ///
-    /// Input must contain exactly the base size in natural evaluation order;
-    /// output must contain exactly the extended size and uses residue order.
-    /// A wrong length returns [`FftError::LengthMismatch`]. Insufficient scratch
-    /// returns [`FftError::ScratchTooSmall`]; options and storage limits have
-    /// the errors described by [`Self::evaluation_scratch`].
+    /// Input must contain exactly the base size in natural evaluation order; output
+    /// must contain exactly the extended size and uses residue order. Scratch must meet
+    /// [`Self::evaluation_scratch`]. Incorrect buffer lengths panic before writes;
+    /// options and storage limits have the errors described by that query.
     ///
     /// `options.transform` controls the inverse base transform and every
     /// residue transform. After the inverse, at most `options.max_residue_tasks`
@@ -566,10 +561,10 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
-        check_length("evaluations", self.base.domain().size(), evaluations.len())?;
-        check_length("output", self.extended.size(), output.len())?;
+        assert_length("evaluations", self.base.domain().size(), evaluations.len());
+        assert_length("output", self.extended.size(), output.len());
         let required = self.evaluation_scratch_with(options)?;
-        required.check(scratch.len())?;
+        required.check(scratch.len());
         if self.extended.shift() == PastaField::ONE && output.len() == evaluations.len() {
             output.copy_from_slice(evaluations);
             return Ok(());
@@ -664,12 +659,10 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// The factor must use this expansion's layout and exact ordered evaluation
     /// domain; both are checked.
     ///
-    /// Scheduling, scratch requirements, and output-length errors are those of
-    /// [`Self::coefficients`].
-    /// An empty or oversized prefix returns [`FftError::InvalidPrefix`], and a
-    /// different factor layout or domain returns [`FftError::InvalidLayout`].
-    /// Recovering the full product by interpolation additionally requires its
-    /// degree to be below the extended domain size.
+    /// Scheduling and buffer contracts follow [`Self::coefficients`]. An empty or
+    /// oversized prefix returns [`FftError::InvalidPrefix`]. An incompatible factor
+    /// panics before writes. Recovering the full product by interpolation additionally
+    /// requires its degree to be below the extended domain size.
     #[cfg(test)]
     pub(crate) fn short_product_with<'input, E: Executor>(
         self,
@@ -684,13 +677,13 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         let (normalized_coefficients, extra) = self.coefficient_input(short);
         let short = short.as_slice();
         self.check(short.len(), 1, output.len())?;
-        if factor.layout() != EvaluationLayout::Residues(self.layout)
-            || !factor.domain().same_domain(self.extended)
-        {
-            return Err(FftError::InvalidLayout);
-        }
+        assert!(
+            factor.layout() == EvaluationLayout::Residues(self.layout)
+                && factor.domain().same_domain(self.extended),
+            "factors must match the expansion domain and layout"
+        );
         let required = self.coefficient_scratch_with(options)?;
-        required.check(scratch.len())?;
+        required.check(scratch.len());
         ResidueJobs {
             expansion: self,
             coefficients: short,

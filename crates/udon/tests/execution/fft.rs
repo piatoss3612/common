@@ -129,8 +129,7 @@ fn check<M: PrimeModulus>() {
                         assert!(arena.bytes() < 256 * 1024);
                         let mut identity = Identity::new();
                         let mut slots = [const { TaskStorage::EMPTY }; 5];
-                        let mut run =
-                            FftRun::new(arithmetic, product, &mut identity, &mut slots).unwrap();
+                        let mut run = FftRun::new(arithmetic, product, &mut identity, &mut slots);
                         run_pool::scoped(workers, 3, |pool| {
                             let mut ready = core::array::from_fn::<_, 5, _>(|_| None);
                             while !run.is_complete() {
@@ -218,15 +217,14 @@ fn fused_scales<M: PrimeModulus>() {
                     Codelet::Radix2,
                 )
                 .unwrap()
-                .with_input_scale(extra)
-                .unwrap();
+                .with_input_scale(extra);
                 if table {
-                    arithmetic = arithmetic.with_forward_scales(scales).unwrap();
+                    arithmetic = arithmetic.with_forward_scales(scales);
                 }
                 for contiguous in [false, true] {
                     let mut id = Identity::new();
                     let mut slots = [TaskStorage::EMPTY];
-                    let mut run = FftRun::new(arithmetic, false, &mut id, &mut slots).unwrap();
+                    let mut run = FftRun::new(arithmetic, false, &mut id, &mut slots);
                     let mut ready = [None];
                     assert_eq!(run.ready(&mut ready), 1);
                     let mut values = vec![PastaField::ZERO; size];
@@ -294,7 +292,7 @@ fn blocked<M: PrimeModulus>() {
                         banks.write(0, &original);
                         let mut id = Identity::new();
                         let mut slots = [const { TaskStorage::EMPTY }; 5];
-                        let mut run = FftRun::new(arithmetic, false, &mut id, &mut slots).unwrap();
+                        let mut run = FftRun::new(arithmetic, false, &mut id, &mut slots);
                         run_pool::scoped(4, 3, |pool| {
                             while !run.is_complete() {
                                 let mut cursor = 0;
@@ -326,16 +324,14 @@ fn blocked<M: PrimeModulus>() {
                         let contiguous = arithmetic.with_contiguous_permutation();
                         let mut values = original.clone();
                         let mut scratch = vec![PastaField::ZERO; contiguous.retained_fields()];
-                        contiguous
-                            .execute_with(
-                                None,
-                                &mut values,
-                                None,
-                                &mut scratch,
-                                NonZeroUsize::new(3).unwrap(),
-                                &SerialExecutor,
-                            )
-                            .unwrap();
+                        contiguous.execute_with(
+                            None,
+                            &mut values,
+                            None,
+                            &mut scratch,
+                            NonZeroUsize::new(3).unwrap(),
+                            &SerialExecutor,
+                        );
                         assert_eq!(values, expected, "structured {request:?}, panels={panels}");
                     }
                     let request = TransformRequest {
@@ -353,16 +349,14 @@ fn blocked<M: PrimeModulus>() {
                     .with_contiguous_permutation();
                     assert_eq!(stage.retained_fields(), 0);
                     let mut values = original.clone();
-                    stage
-                        .execute_with(
-                            None,
-                            &mut values,
-                            None,
-                            &mut [],
-                            NonZeroUsize::new(4).unwrap(),
-                            &SerialExecutor,
-                        )
-                        .unwrap();
+                    stage.execute_with(
+                        None,
+                        &mut values,
+                        None,
+                        &mut [],
+                        NonZeroUsize::new(4).unwrap(),
+                        &SerialExecutor,
+                    );
                     let mut expected = original.clone();
                     reference_transform(plan, request, &original, &mut expected);
                     assert_eq!(values, expected);
@@ -431,16 +425,14 @@ fn sparse_tables<M: PrimeModulus>() {
                                 let mut values = vec![PastaField::ZERO; size];
                                 let mut scratch =
                                     vec![PastaField::ZERO; arithmetic.retained_fields()];
-                                arithmetic
-                                    .execute_with(
-                                        Some(&original[..prefix]),
-                                        &mut values,
-                                        None,
-                                        &mut scratch,
-                                        nz(4),
-                                        &SerialExecutor,
-                                    )
-                                    .unwrap();
+                                arithmetic.execute_with(
+                                    Some(&original[..prefix]),
+                                    &mut values,
+                                    None,
+                                    &mut scratch,
+                                    nz(4),
+                                    &SerialExecutor,
+                                );
                                 assert_eq!(
                                     values, expected,
                                     "{description:?}, {request:?}, tile={tile}, columns={columns}"
@@ -502,7 +494,7 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
     let mut values = [Fp::ZERO; 64];
     let mut identity = Identity::new();
     let mut slots = [const { TaskStorage::EMPTY }; 3];
-    let mut run = FftRun::new(arithmetic, false, &mut identity, &mut slots).unwrap();
+    let mut run = FftRun::new(arithmetic, false, &mut identity, &mut slots);
     for tile in 0..8 {
         let mut ready = [None];
         assert_eq!(run.ready(&mut ready), 1);
@@ -564,8 +556,7 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
                         &mut [],
                         NonZeroUsize::new(1).unwrap(),
                         &SerialExecutor,
-                    )
-                    .unwrap();
+                    );
                     assert_eq!(values, expected);
                 }
             }
@@ -623,7 +614,7 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
         let mut values = [Fp::ZERO; 64];
         let mut id = Identity::new();
         let mut slots = [const { TaskStorage::EMPTY }; 2];
-        let mut run = FftRun::new(arithmetic, false, &mut id, &mut slots).unwrap();
+        let mut run = FftRun::new(arithmetic, false, &mut id, &mut slots);
         let mut ready = [None, None];
         assert_eq!(run.ready(&mut ready), 2);
         let (left, right) = values.split_at_mut(8);
@@ -677,16 +668,14 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
         // Returned leases permit refill and a fresh invocation of the same plan.
         values.fill(Fp::ZERO);
         let mut scratch = vec![Fp::ZERO; arithmetic.retained_fields()];
-        arithmetic
-            .execute_with(
-                Some(&source.0),
-                &mut values,
-                None,
-                &mut scratch,
-                NonZeroUsize::MIN,
-                &SerialExecutor,
-            )
-            .unwrap();
+        arithmetic.execute_with(
+            Some(&source.0),
+            &mut values,
+            None,
+            &mut scratch,
+            NonZeroUsize::MIN,
+            &SerialExecutor,
+        );
         assert_eq!(
             values[0],
             source.0.iter().fold(Fp::ZERO, |sum, value| sum.add(value))
@@ -696,10 +685,7 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
 
 #[test]
 fn batch_planning_orders_panels_and_validation() {
-    use zakura_udon::{
-        fft::{FftError, InputStorage},
-        field::Fp,
-    };
+    use zakura_udon::{fft::InputStorage, field::Fp};
     let nz = |n| NonZeroUsize::new(n).unwrap();
     let base = Transform::new(
         Domain::for_size(64)
@@ -735,19 +721,20 @@ fn batch_planning_orders_panels_and_validation() {
                         let mut scratch = vec![Fp::ZERO; required];
                         let mut values = input.clone();
                         if required != 0 {
-                            assert!(matches!(
-                                plan.execute_batch_with(
-                                    &mut values,
-                                    &mut scratch[..required - 1],
-                                    tasks,
-                                    &SerialExecutor
-                                ),
-                                Err(FftError::ScratchTooSmall { .. })
-                            ));
+                            assert!(
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    plan.execute_batch_with(
+                                        &mut values,
+                                        &mut scratch[..required - 1],
+                                        tasks,
+                                        &SerialExecutor,
+                                    );
+                                }))
+                                .is_err()
+                            );
                             assert_eq!(values, input);
                         }
-                        plan.execute_batch_with(&mut values, &mut scratch, tasks, &SerialExecutor)
-                            .unwrap();
+                        plan.execute_batch_with(&mut values, &mut scratch, tasks, &SerialExecutor);
                         assert_eq!(values, expected);
                     }
                 }
@@ -764,9 +751,11 @@ fn batch_planning_orders_panels_and_validation() {
         Codelet::Radix2,
     )
     .unwrap();
-    assert_eq!(
-        plan.execute_batch_with(&mut [], &mut [], nz(1), &SerialExecutor),
-        Err(FftError::InvalidExecution)
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            plan.execute_batch_with(&mut [], &mut [], nz(1), &SerialExecutor);
+        }))
+        .is_err()
     );
 }
 
@@ -774,7 +763,7 @@ fn batch_planning_orders_panels_and_validation() {
 fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
     use zakura_udon::{
         exec::run::{Outcome, TaskError},
-        fft::{FftError, InputStorage, run::Buffers},
+        fft::{InputStorage, run::Buffers},
         field::Fp,
     };
     let nz = |n| NonZeroUsize::new(n).unwrap();
@@ -794,30 +783,34 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
         )
         .unwrap();
         let wrong_input = (storage == InputStorage::InPlace).then_some(source.as_slice());
-        assert_eq!(
-            plan.execute_with(
-                wrong_input,
-                &mut values,
-                None,
-                &mut [],
-                nz(1),
-                &SerialExecutor
-            ),
-            Err(FftError::InvalidExecution)
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                plan.execute_with(
+                    wrong_input,
+                    &mut values,
+                    None,
+                    &mut [],
+                    nz(1),
+                    &SerialExecutor,
+                );
+            }))
+            .is_err()
         );
         assert_eq!(values, [sentinel; 64]);
         let input = (storage == InputStorage::Preserve).then_some(source.as_slice());
-        assert!(matches!(
-            plan.execute_with(
-                input,
-                &mut values[..63],
-                None,
-                &mut [],
-                nz(1),
-                &SerialExecutor
-            ),
-            Err(FftError::LengthMismatch { .. })
-        ));
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                plan.execute_with(
+                    input,
+                    &mut values[..63],
+                    None,
+                    &mut [],
+                    nz(1),
+                    &SerialExecutor,
+                );
+            }))
+            .is_err()
+        );
         assert_eq!(values, [sentinel; 64]);
     }
     let plan = FftPlan::with_strategy(
@@ -832,7 +825,7 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
     .unwrap();
     let mut identity = Identity::new();
     let mut slots = [const { TaskStorage::EMPTY }; 3];
-    let mut run = FftRun::new(plan, false, &mut identity, &mut slots).unwrap();
+    let mut run = FftRun::new(plan, false, &mut identity, &mut slots);
     let mut ready = [None, None, None];
     assert_eq!(run.ready(&mut ready), 3);
     let (first_values, rest) = values.split_at_mut(8);
@@ -876,14 +869,10 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
         })
         .unwrap()
         .unwrap();
-    invalid.execute().unwrap();
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| invalid.execute())).is_err());
     let published = run.complete(invalid.finish()).unwrap();
-    // A normal kernel return can carry an arithmetic validation error.
-    assert_eq!(published.outcome, Outcome::Success);
-    assert!(matches!(
-        published.error,
-        Some(FftError::LengthMismatch { .. })
-    ));
+    assert_eq!(published.outcome, Outcome::Failed);
+    assert!(published.error.is_none());
     assert!(run.is_failed());
     assert_eq!(run.inflight(), 1);
     assert_eq!(run.ready(&mut ready), 0);

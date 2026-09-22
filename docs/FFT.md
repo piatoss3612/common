@@ -115,7 +115,7 @@ For imported slices, `Tables::bind` checks lengths and every mathematical entry,
 including reduced Montgomery limbs, then returns the same handle.
 Native generation requires no content scan; checked
 imports require linear work, with no entry validation during execution.
-Use `bound.for_coset(other_coset)?` to reuse validated ordinary forward
+Use `bound.for_coset(other_coset)` to reuse validated ordinary forward
 and inverse twiddles on another coset of the same subgroup. This takes constant
 work and retains the original borrows, without inspecting entries again.
 Changing the shift drops inverse-finish and inverse-scaling tables, whose entries

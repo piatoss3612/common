@@ -14,7 +14,7 @@ use core::{marker::PhantomData, num::NonZeroUsize};
 
 use super::{
     ArithmeticOptions, Bases, CurveError, Input, PastaCurve, ProjectivePoint, Requirements,
-    ScalarStorage, Scalars, Scratch, check_scratch, kernels, prepared,
+    ScalarStorage, Scalars, Scratch, assert_scratch, kernels, prepared,
     recode::{self, Geometry, Shape},
     schedule,
 };
@@ -137,8 +137,6 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// corresponding retained records or matching cache. A plan specialized
     /// for short scalars requires prepared scalars with no larger bit width;
     /// a plan relying on compact bases requires compact bases again.
-    /// Incompatible inputs return [`CurveError::IncompatibleMsmInput`] from
-    /// [`Self::execute`] or [`TaskError::InvalidRequest`] when binding a run.
     /// Use [`Self::new`] for reuse across arbitrary scalar rows and bases.
     ///
     /// Construction does not write storage. Size and workspace errors follow
@@ -504,11 +502,11 @@ pub struct Buffers<'a, C: PastaCurve> {
 
 /// An owned bundle of safe fragments or application-provided lease guards.
 ///
-/// The views must represent the prefixes and window named by the claimed
-/// [`Request`]. Lengths are checked before writes; semantic slot identity and
-/// initialized retained contents belong to the application provider's contract.
-/// Incorrect contents can produce incorrect arithmetic but cannot violate Rust
-/// memory safety. Guards remain owned by the task through unwinding.
+/// The views must represent the prefixes and window named by the claimed [`Request`].
+/// Incorrect capacities panic before writes; semantic slot identity and initialized
+/// retained contents belong to the application provider's contract. Incorrect contents
+/// can produce incorrect arithmetic but cannot violate Rust memory safety. Guards
+/// remain owned by the task through unwinding.
 pub trait Resources<C: PastaCurve> {
     /// Borrows all disjoint mutable and shared views for this bounded kernel.
     fn buffers(&mut self) -> Buffers<'_, C>;
@@ -580,10 +578,10 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
         let mut result = ProjectivePoint::IDENTITY;
         if let Some(input) = self.produced {
             if self.kind == WorkKind::Prepare {
-                check_scratch("source scalars", self.terms, source.scalars.len())?;
+                assert_scratch("source scalars", self.terms, source.scalars.len());
             }
             if input.indexed && matches!(self.kind, WorkKind::Prepare | WorkKind::Window) {
-                check_scratch("source indices", self.terms, source.indices.len())?;
+                assert_scratch("source indices", self.terms, source.indices.len());
                 for position in 0..self.terms {
                     let index = *source.indices.get(position).expect("invalid source view");
                     if u64::from(index) >= input.bases.len() as u64 {
@@ -598,8 +596,15 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
         }
         match self.kind {
             WorkKind::Prepare => {
+                let digit_len = self.plan.cached(self.input, geometry).is_none().then(|| {
+                    let len = geometry
+                        .storage_len(self.terms)
+                        .expect("bounded plan geometry");
+                    assert_scratch("digits", len, scratch.digits.len());
+                    len
+                });
                 let records = if self.produced.is_some() {
-                    check_scratch("scalars", self.terms, scratch.scalars.len())?;
+                    assert_scratch("scalars", self.terms, scratch.scalars.len());
                     let records = &mut scratch.scalars[..self.terms];
                     let mut first = 0;
                     while first < self.terms {
@@ -629,7 +634,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                     match source {
                         Scalars::Prepared(s) => s.records,
                         _ => {
-                            check_scratch("scalars", self.terms, scratch.scalars.len())?;
+                            assert_scratch("scalars", self.terms, scratch.scalars.len());
                             let records = &mut scratch.scalars[..self.terms];
                             prepared::prepare_chunk(source, records);
                             records
@@ -637,9 +642,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                     }
                 };
                 shape = Shape::of(records);
-                if self.plan.cached(self.input, geometry).is_none() {
-                    let len = geometry.storage_len(self.terms)?;
-                    check_scratch("digits", len, scratch.digits.len())?;
+                if let Some(len) = digit_len {
                     recode::write(records, geometry, &mut scratch.digits[..len]);
                 }
             }
@@ -654,8 +657,11 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                 let cache = self.plan.cached(self.input, geometry);
                 let digits: &dyn ReadView<u8> =
                     cache.as_ref().map_or(digits, |d| d as &dyn ReadView<_>);
-                check_scratch("scalars", self.terms, records.len())?;
-                check_scratch("digits", geometry.storage_len(self.terms)?, digits.len())?;
+                assert_scratch("scalars", self.terms, records.len());
+                let digit_len = geometry
+                    .storage_len(self.terms)
+                    .expect("bounded plan geometry");
+                assert_scratch("digits", digit_len, digits.len());
                 let task = kernels::Task {
                     offset: self.offset,
                     window: self.window,
@@ -663,9 +669,8 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                     geometry,
                     accumulation: self.plan.job.accumulation,
                 };
-                let digit_len = geometry.storage_len(self.terms)?;
                 if self.plan.options.streaming() {
-                    check_scratch("projective", geometry.buckets(), buckets.len())?;
+                    assert_scratch("projective", geometry.buckets(), buckets.len());
                     let buckets = &mut buckets[..geometry.buckets()];
                     if self.first_chunk {
                         buckets.fill(ProjectivePoint::IDENTITY);
@@ -696,8 +701,8 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                         );
                     }
                 } else {
-                    check_scratch("partial output", 1, output.len())?;
-                    let scratch = scratch.checked(self.plan.temporary())?;
+                    assert_scratch("partial output", 1, output.len());
+                    let scratch = scratch.checked(self.plan.temporary());
                     let work = &mut kernels::Work {
                         affine: scratch.affine,
                         projective: scratch.projective,
@@ -738,12 +743,12 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                 }
             }
             WorkKind::Collapse => {
-                check_scratch("projective", geometry.buckets(), buckets.len())?;
-                check_scratch("partial output", 1, output.len())?;
+                assert_scratch("projective", geometry.buckets(), buckets.len());
+                assert_scratch("partial output", 1, output.len());
                 output[0] = kernels::collapse_projective(&buckets[..geometry.buckets()]);
             }
             WorkKind::Reduce => {
-                check_scratch("partial inputs", geometry.windows(), partials.len())?;
+                assert_scratch("partial inputs", geometry.windows(), partials.len());
                 for window in (0..geometry.windows()).rev() {
                     let partial = partials
                         .get(window)
@@ -805,73 +810,75 @@ pub struct MsmRun<'a, 'i, C: PastaCurve> {
 impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
     /// Binds an input and exclusive run metadata without touching arithmetic buffers.
     ///
-    /// Returns [`TaskError::InvalidRequest`] if the term count differs or the
-    /// input lacks preparation required by [`MsmPlan::for_input`], or
-    /// [`TaskError::Storage`] if no frontier storage is supplied.
+    /// The input must satisfy the plan's requirements (see [`MsmPlan::for_input`]),
+    /// and frontier storage must be nonempty. Panics for incompatible input or
+    /// empty frontier storage.
     pub fn new(
         plan: MsmPlan<C>,
         input: Input<'i, C>,
         identity: &'a mut Identity,
         storage: &'a mut [TaskStorage],
-    ) -> Result<Self, TaskError> {
-        if input.len() != plan.terms {
-            return Err(TaskError::InvalidRequest);
-        }
+    ) -> Self {
+        assert_eq!(input.len(), plan.terms, "input must match the plan");
         Self::bind_range(plan, input, 0..input.len(), identity, storage)
     }
 
     /// Binds an independently scheduled partition of a validated input.
     ///
-    /// The plan describes the full input and fixes geometry; `range` selects
-    /// the terms contributed by this run. Partition results can be reduced
-    /// outside the scheduler. Each live partition needs its own retained
-    /// storage and metadata. Nonempty partial ranges discard a whole-input digit
-    /// cache; plans that require that cache cannot bind those ranges. Empty
-    /// ranges complete with the identity. Scalar records remain reusable.
-    /// A mismatched input length, incompatible preparation, or
-    /// invalid/reversed range returns [`TaskError::InvalidRequest`]; an empty
-    /// frontier returns [`TaskError::Storage`].
+    /// The plan describes the full input and fixes geometry; `range` selects the terms
+    /// contributed by this run. Partition results can be reduced outside the scheduler.
+    /// Each live partition needs its own retained storage and metadata. Nonempty
+    /// partial ranges discard a whole-input digit cache; plans that require that cache
+    /// cannot bind those ranges. Empty ranges complete with the identity. Scalar
+    /// records remain reusable. Panics if the range is reversed or outside the input.
+    /// Input and frontier requirements follow [`Self::new`].
     pub fn new_partition(
         plan: MsmPlan<C>,
         input: Input<'i, C>,
         range: core::ops::Range<usize>,
         identity: &'a mut Identity,
         storage: &'a mut [TaskStorage],
-    ) -> Result<Self, TaskError> {
-        if input.len() != plan.terms || range.start > range.end || range.end > input.len() {
-            return Err(TaskError::InvalidRequest);
-        }
+    ) -> Self {
+        assert_eq!(input.len(), plan.terms, "input must match the plan");
+        assert!(
+            range.start <= range.end && range.end <= input.len(),
+            "invalid partition"
+        );
         Self::bind_range(plan, input, range, identity, storage)
     }
 
     /// Binds source metadata before producer tasks have filled scalar rows.
-    /// Source availability is enforced by the provider at `try_claim`.
-    /// Length and storage errors match [`Self::new`].
+    ///
+    /// Source availability is enforced by the provider at `try_claim`. Plan
+    /// compatibility and frontier requirements follow [`Self::new`].
     pub fn new_produced(
         plan: MsmPlan<C>,
         input: ProducedInput<'i, C>,
         identity: &'a mut Identity,
         storage: &'a mut [TaskStorage],
-    ) -> Result<Self, TaskError> {
+    ) -> Self {
         Self::new_produced_partition(plan, input, 0..input.len(), identity, storage)
     }
 
     /// Binds an independent partition whose sources arrive from producers.
-    /// Length, range, and storage errors match [`Self::new_partition`] and
-    /// precede all resource acquisition.
+    ///
+    /// Plan compatibility, range, and frontier requirements follow
+    /// [`Self::new_partition`]. No resources are acquired here.
     pub fn new_produced_partition(
         plan: MsmPlan<C>,
         input: ProducedInput<'i, C>,
         range: core::ops::Range<usize>,
         identity: &'a mut Identity,
         storage: &'a mut [TaskStorage],
-    ) -> Result<Self, TaskError> {
-        if input.len() != plan.terms || range.start > range.end || range.end > input.len() {
-            return Err(TaskError::InvalidRequest);
-        }
-        let mut run = Self::bind_range(plan, input.metadata(), range, identity, storage)?;
+    ) -> Self {
+        assert_eq!(input.len(), plan.terms, "input must match the plan");
+        assert!(
+            range.start <= range.end && range.end <= input.len(),
+            "invalid partition"
+        );
+        let mut run = Self::bind_range(plan, input.metadata(), range, identity, storage);
         run.produced = Some(input);
-        Ok(run)
+        run
     }
 
     fn bind_range(
@@ -880,7 +887,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         range: core::ops::Range<usize>,
         identity: &'a mut Identity,
         storage: &'a mut [TaskStorage],
-    ) -> Result<Self, TaskError> {
+    ) -> Self {
         // Empty parallel slots do no arithmetic and can retain a required cache.
         if !range.is_empty()
             && range != (0..input.len())
@@ -888,16 +895,17 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         {
             prepared.cached = None;
         }
-        if !plan.accepts(input) {
-            return Err(TaskError::InvalidRequest);
-        }
+        assert!(
+            plan.accepts(input),
+            "input must match the plan's preparation"
+        );
         let complete = range.is_empty();
         let frontier = Frontier::new(
             identity,
             storage,
             range.len().min(plan.cap).div_ceil(recode::CHUNK),
-        )?;
-        Ok(Self {
+        );
+        Self {
             input,
             produced: None,
             plan,
@@ -911,7 +919,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
             result: ProjectivePoint::IDENTITY,
             complete,
             failed: false,
-        })
+        }
     }
 
     /// Writes a bounded number of ready requests, with no task allocation.
@@ -1177,23 +1185,23 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         self.frontier.inflight()
     }
 
-    /// Rebinds completed metadata to another planned invocation, preserving
-    /// epochs so old task keys remain stale. Consumers must release retained
-    /// buffers before the application reuses their storage. Returns
-    /// [`TaskError::Busy`] before completion, [`TaskError::Failed`] on failure,
-    /// or [`TaskError::InvalidRequest`] for a mismatched input length or
-    /// preparation incompatible with [`MsmPlan::for_input`].
-    /// Epoch overflow returns [`TaskError::Overflow`].
+    /// Rebinds completed metadata to another planned invocation.
+    ///
+    /// Epochs are preserved so old task keys remain stale. Consumers must release
+    /// retained buffers before the application reuses their storage. The input
+    /// must satisfy the plan's requirements, as for [`Self::new`].
+    ///
+    /// Returns [`TaskError::Busy`] before completion, [`TaskError::Failed`] on failure,
+    /// or [`TaskError::Overflow`] if the epoch cannot advance.
     pub fn rebind(&mut self, plan: MsmPlan<C>, input: Input<'i, C>) -> Result<(), TaskError> {
-        if input.len() != plan.terms {
-            return Err(TaskError::InvalidRequest);
-        }
+        assert_eq!(input.len(), plan.terms, "input must match the plan");
         self.rebind_range(plan, input, 0..input.len())
     }
 
     /// Reuses completed metadata for another produced scalar row.
+    ///
     /// The old row's consumers must have released their source leases.
-    /// Errors match [`Self::rebind`].
+    /// Input, error, and panic contracts match [`Self::rebind`].
     pub fn rebind_produced(
         &mut self,
         plan: MsmPlan<C>,
@@ -1203,17 +1211,20 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
     }
 
     /// Reuses a completed partition while preserving stale-key detection.
-    /// Errors match [`Self::rebind`]; invalid or reversed ranges also return
-    /// [`TaskError::InvalidRequest`].
+    ///
+    /// The range must be ordered and contained in the input; violations panic.
+    /// Input and lifecycle contracts follow [`Self::rebind`].
     pub fn rebind_produced_partition(
         &mut self,
         plan: MsmPlan<C>,
         input: ProducedInput<'i, C>,
         range: core::ops::Range<usize>,
     ) -> Result<(), TaskError> {
-        if input.len() != plan.terms || range.start > range.end || range.end > input.len() {
-            return Err(TaskError::InvalidRequest);
-        }
+        assert_eq!(input.len(), plan.terms, "input must match the plan");
+        assert!(
+            range.start <= range.end && range.end <= input.len(),
+            "partition must lie within the input"
+        );
         self.rebind_range(plan, input.metadata(), range)?;
         self.produced = Some(input);
         Ok(())
@@ -1238,9 +1249,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         {
             prepared.cached = None;
         }
-        if !plan.accepts(input) {
-            return Err(TaskError::InvalidRequest);
-        }
+        assert!(plan.accepts(input), "input preparation must match the plan");
         self.frontier
             .restart(range.len().min(plan.cap).div_ceil(recode::CHUNK))?;
         self.input = input;

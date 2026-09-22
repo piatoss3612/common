@@ -104,7 +104,7 @@ fn generate_srs<C: PastaCurve>(name: &str, damage: &str) {
     });
     let mut points = [Point::IDENTITY; record::SRS_SIZE];
     let mut scratch = [PastaField::ZERO; record::SRS_SIZE];
-    batch_normalize(&projective, &mut points, &mut scratch).unwrap();
+    batch_normalize(&projective, &mut points, &mut scratch);
     record.coefficient =
         points.map(|point| PreparedAffinePoint::from_affine(point.as_affine().unwrap()));
     reference::inverse_transform(
@@ -112,7 +112,7 @@ fn generate_srs<C: PastaCurve>(name: &str, damage: &str) {
         &domain.inverse_root(),
         &domain.size_inverse(),
     );
-    batch_normalize(&projective, &mut points, &mut scratch).unwrap();
+    batch_normalize(&projective, &mut points, &mut scratch);
     record.lagrange =
         points.map(|point| PreparedAffinePoint::from_affine(point.as_affine().unwrap()));
     match damage {

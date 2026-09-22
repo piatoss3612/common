@@ -308,12 +308,9 @@ fn inner_products<M: PrimeModulus, const N: usize>(group: &mut BenchmarkGroup<'_
     group.bench_function(BenchmarkId::new("sum_of_products", N), |b| {
         b.iter(|| PastaField::sum_of_products(black_box(&lhs), black_box(&rhs)));
     });
-    group.bench_function(BenchmarkId::new("checked_sum_of_products", N), |b| {
+    group.bench_function(BenchmarkId::new("sum_of_products_slice", N), |b| {
         b.iter(|| {
-            PastaField::checked_sum_of_products(
-                black_box(lhs.as_slice()),
-                black_box(rhs.as_slice()),
-            )
+            PastaField::sum_of_products_slice(black_box(lhs.as_slice()), black_box(rhs.as_slice()))
         });
     });
     group.bench_function(BenchmarkId::new("sum_of_product_pairs", N), |b| {
@@ -444,8 +441,7 @@ fn batch_inversion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
                         zakura_udon::field::batch_invert(
                             black_box(values),
                             black_box(&mut scratch),
-                        )
-                        .unwrap();
+                        );
                         black_box(values);
                     },
                     BatchSize::SmallInput,

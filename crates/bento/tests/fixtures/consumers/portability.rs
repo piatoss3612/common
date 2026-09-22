@@ -10,11 +10,12 @@ use udon::curve::{
     Point, PreparedAffinePoint, ProjectivePoint, Vesta, VestaAffine, batch_normalize,
     glv_decompose, msm,
 };
-use udon::exec::{Executor, SerialExecutor, TaskBudget, for_each_chunk_mut, for_each_mut};
+use udon::exec::{
+    ExecutionOptions, Executor, SerialExecutor, TaskBudget, for_each_chunk_mut, for_each_mut,
+};
 use udon::fft::{
-    Codelet, Direction, Domain, ElementOrder, EvaluationLayout, ExecutionOptions, Expansion,
-    ExpansionOptions, FftError, Plan, ResidueLayout, TableRequirements, TablesMut,
-    TransformRequest,
+    Direction, Domain, ElementOrder, EvaluationLayout, Expansion, ExpansionScales, FftError,
+    ResidueLayout, StorageLayout, TableRequirements, TablesMut, Transform, TransformRequest,
     run::{FftPlan, InterpolationPlan},
 };
 use udon::field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum};
@@ -92,7 +93,7 @@ fn curve_operations<C: PastaCurve>(
     let points = [point, point.neg().add(&point)];
     let mut output = [Point::IDENTITY; 2];
     let mut normalization_scratch = [PastaField::ZERO; 2];
-    batch_normalize(&points, &mut output, &mut normalization_scratch)?;
+    batch_normalize(&points, &mut output, &mut normalization_scratch);
     const DESCRIPTION: FixedBaseDescription = FixedBaseDescription { window_bits: 4 };
     const REQUIREMENTS: CurveTableRequirements = match DESCRIPTION.requirements() {
         Ok(required) => required,
@@ -101,24 +102,17 @@ fn curve_operations<C: PastaCurve>(
     let mut entries = [AffinePoint::GENERATOR; REQUIREMENTS.table_entries];
     let mut projective = [ProjectivePoint::IDENTITY; REQUIREMENTS.projective_scratch];
     let mut field = [PastaField::ZERO; REQUIREMENTS.field_scratch];
-    let table = FixedBaseTable::prepare(
-        DESCRIPTION,
-        &base,
-        &mut entries,
-        &mut projective,
-        &mut field,
-    )?;
-    let bound = FixedBaseTable::bind(DESCRIPTION, &base, table.as_slice())?;
+    let table = FixedBaseTable::prepare(&base, &mut entries, &mut projective, &mut field)?;
+    let bound = FixedBaseTable::bind(table.description(), &base, table.as_slice())?;
     let product = bound.mul(scalar);
     assert_eq!(product, base.to_projective().mul(scalar));
     let mut cached = [PreparedAffinePoint::from_affine(&base); REQUIREMENTS.table_entries];
-    let cached =
-        FixedBaseTable::prepare(DESCRIPTION, &base, &mut cached, &mut projective, &mut field)?;
+    let cached = FixedBaseTable::prepare(&base, &mut cached, &mut projective, &mut field)?;
     assert_eq!(cached.mul(scalar), product);
     let mut compact_entries = [PreparedAffinePoint::from_affine(&base); 8];
     let compact =
         EisensteinTable::prepare(&base, &mut compact_entries, &mut projective, &mut field)?;
-    EisensteinTable::bind(&base, compact.as_slice())?.validate()?;
+    EisensteinTable::bind(&base, compact.as_array())?.validate()?;
     assert_eq!(compact.mul(scalar), product);
     assert_eq!(
         compact.mul_prepared(&EisensteinScalar::new(scalar)),
@@ -190,15 +184,12 @@ fn table_batch_operations<C: PastaCurve>(
         &mut field,
         TaskBudget::SERIAL,
         &SerialExecutor,
-    )?;
+    );
     assert!(output.iter().all(|&p| p == expected));
     Ok(())
 }
 
-const MSM_OPTIONS: msm::BatchOptions = msm::BatchOptions::new(
-    msm::ArithmeticOptions::DEFAULT.with_max_terms_per_pass(core::num::NonZeroUsize::new(17)),
-)
-.with_memory_limit(8192);
+const MSM_OPTIONS: ExecutionOptions = ExecutionOptions::DEFAULT.with_memory_limit(8192);
 const MSM_METADATA: (usize, usize) =
     match msm::run::BatchPlan::<Pallas>::storage_len(1, MSM_OPTIONS) {
         Ok(counts) => counts,
@@ -233,7 +224,7 @@ fn msm_operations<C: PastaCurve>(
     let indices: [u32; 257] = core::array::from_fn(|i| (i % 2) as u32);
     let scalars = [*scalar; 257];
     let selection = msm::Selection::indexed(msm::Bases::Points(&points), &indices)?;
-    let input = selection.with_scalars(&scalars)?;
+    let input = selection.with_scalars(&scalars);
     let inputs = [input];
     let mut jobs = [msm::run::JobStorage::EMPTY; MSM_METADATA.0];
     let mut workers = [msm::run::WorkerStorage::EMPTY; MSM_METADATA.1];
@@ -258,7 +249,7 @@ fn msm_operations<C: PastaCurve>(
             &mut field,
             &mut working_indices,
         ),
-    )?;
+    );
     assert_eq!(
         output[0],
         base.mul_projective(&scalar.mul(&PastaField::from_u64(129)))
@@ -301,36 +292,26 @@ const EXTENDED_FFT_SIZE: usize = 32;
 
 // Sizing is evaluated for the consumer target, including its slice byte limit.
 const _: () = {
-    let options = ExecutionOptions::serial();
-    let expansion = ExpansionOptions::serial();
     if usize::BITS == 32 {
         assert!(TableRequirements::for_size(1 << 25).is_ok());
-        assert!(options.requirements(1 << 25).is_ok());
+        assert!(ExpansionScales::<PallasBase>::requirements(1, 1 << 25).is_ok());
         assert!(matches!(
             TableRequirements::for_size(1 << 26),
             Err(FftError::SizeOverflow)
         ));
         assert!(matches!(
-            options.requirements(1 << 26),
-            Err(FftError::SizeOverflow)
-        ));
-        assert!(matches!(
-            expansion.coefficient_requirements(1, 1 << 26),
-            Err(FftError::SizeOverflow)
-        ));
-        assert!(matches!(
-            expansion.evaluation_requirements(1, 1 << 26),
+            ExpansionScales::<PallasBase>::requirements(1, 1 << 26),
             Err(FftError::SizeOverflow)
         ));
     } else {
         assert!(TableRequirements::for_size((1u64 << 32) as usize).is_ok());
-        assert!(options.requirements((1u64 << 32) as usize).is_ok());
+        assert!(ExpansionScales::<PallasBase>::requirements(1, (1u64 << 32) as usize).is_ok());
         assert!(matches!(
             TableRequirements::for_size((1u64 << 33) as usize),
             Err(FftError::InvalidSize)
         ));
         assert!(matches!(
-            options.requirements((1u64 << 33) as usize),
+            ExpansionScales::<PallasBase>::requirements(1, (1u64 << 33) as usize),
             Err(FftError::InvalidSize)
         ));
     }
@@ -343,40 +324,32 @@ fn fft_operations<M: PrimeModulus>(values: &mut [PastaField<M>; FFT_SIZE]) -> Re
         Err(_) => panic!("unsupported table size"),
     };
     let mut twiddles = [PastaField::ZERO; TABLES.twiddles];
-    let tables = TablesMut {
+    let plan = TablesMut {
         forward: Some(&mut twiddles),
         ..TablesMut::default()
     }
-    .prepare(domain)?;
-    let plan = Plan::new(tables);
-    const OPTIONS: ExecutionOptions = ExecutionOptions {
-        tile_len: 4,
-        columns_per_task: 2,
-        max_tasks: 1,
-    };
-    const SCRATCH: usize = match OPTIONS.requirements(FFT_SIZE) {
-        Ok(required) => required.field_elements,
-        Err(_) => panic!("unsupported transform configuration"),
-    };
-    let mut scratch = [PastaField::ZERO; SCRATCH];
-    plan.forward(values, OPTIONS, &SerialExecutor, &mut scratch)?;
+    .prepare(domain);
+    const OPTIONS: ExecutionOptions = ExecutionOptions::DEFAULT;
+    let mut scratch = [PastaField::ZERO; FFT_SIZE];
+    let forward = FftPlan::new(
+        plan,
+        TransformRequest::new(Direction::Forward),
+        StorageLayout::Fragments {
+            length: NonZeroUsize::new(4).unwrap(),
+            whole_bank: true,
+        },
+        OPTIONS,
+    )?;
+    assert!(forward.retained_fields() <= scratch.len());
+    forward.execute(None, values, None, &mut scratch, &SerialExecutor);
     let extended = Domain::for_size(EXTENDED_FFT_SIZE)?.coset(PastaField::ZETA)?;
     let expansion = Expansion::new(plan, extended, None)?;
     let mut evaluations = [PastaField::ZERO; EXTENDED_FFT_SIZE];
-    const EXPANSION_OPTIONS: ExpansionOptions = ExpansionOptions {
-        max_residue_tasks: 1,
-        transform: OPTIONS,
-    };
-    const EXPANSION_SCRATCH: usize =
-        match EXPANSION_OPTIONS.evaluation_requirements(FFT_SIZE, EXTENDED_FFT_SIZE) {
-            Ok(required) => required.field_elements,
-            Err(_) => panic!("unsupported expansion configuration"),
-        };
-    let mut scratch = [PastaField::ZERO; EXPANSION_SCRATCH];
+    assert!(expansion.evaluation_scratch(OPTIONS)?.field_elements <= scratch.len());
     expansion.evaluations(
         values,
         &mut evaluations,
-        EXPANSION_OPTIONS,
+        OPTIONS,
         &SerialExecutor,
         &mut scratch,
     )?;
@@ -390,30 +363,20 @@ fn fft_operations<M: PrimeModulus>(values: &mut [PastaField<M>; FFT_SIZE]) -> Re
             .unwrap();
         coefficients[destination] = *value;
     }
-    let inverse = |plan, input_order| {
-        FftPlan::new(
-            plan,
-            TransformRequest {
-                input_order,
-                ..TransformRequest::new(Direction::Inverse)
-            },
-            NonZeroUsize::new(EXTENDED_FFT_SIZE).unwrap(),
-            Codelet::Radix2,
-        )
-    };
     InterpolationPlan::new(
         [
-            inverse(Plan::without_tables(extended), ElementOrder::BitReversed)?,
-            inverse(plan, ElementOrder::Natural)?,
+            (Transform::new(extended), ElementOrder::BitReversed),
+            (plan, ElementOrder::Natural),
         ],
         false,
+        StorageLayout::Contiguous,
+        OPTIONS,
     )?
     .execute(
         [&mut coefficients, values],
         [&mut [], &mut []],
-        NonZeroUsize::MIN,
         &SerialExecutor,
-    )?;
+    );
     values.copy_from_slice(&coefficients[..FFT_SIZE]);
     Ok(())
 }

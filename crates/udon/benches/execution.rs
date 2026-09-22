@@ -125,12 +125,11 @@ fn mixed(c: &mut Criterion) {
         .map(|round| {
             let n = TERMS >> round;
             [
-                Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap(),
+                Input::new(Bases::Affine(&bases[..n]), &scalars[..n]),
                 Input::new(
                     Bases::Affine(&bases[..(n / 8).max(1)]),
                     &scalars[..(n / 8).max(1)],
-                )
-                .unwrap(),
+                ),
             ]
         })
         .collect();
@@ -313,13 +312,13 @@ fn isolated(c: &mut Criterion) {
             let scalars: Vec<_> = (0..terms)
                 .map(|i| Fq::from_u64(i as u64 + 2).invert().unwrap())
                 .collect();
-            let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
+            let input = Input::new(Bases::Affine(&bases), &scalars);
             let options =
                 ExecutionOptions::default().with_task_budget(TaskBudget::new(threads).unwrap());
             let plan = msm::run::MsmPlan::new(terms, options).unwrap();
             let mut synchronous =
                 Buffers::new(core::iter::once(input.requirements(options).unwrap()));
-            let mut bounded = Buffers::new(core::iter::once(plan.requirements().unwrap()));
+            let mut bounded = Buffers::new(core::iter::once(plan.requirements()));
             for mode in ["synchronous", "runs"] {
                 group.bench_function(
                     BenchmarkId::new(format!("msm/{terms}/{mode}"), threads),
@@ -332,9 +331,7 @@ fn isolated(c: &mut Criterion) {
                                         "synchronous" => input
                                             .execute(options, &Pool, synchronous.borrow())
                                             .unwrap(),
-                                        "runs" => {
-                                            plan.execute(input, &Pool, bounded.borrow()).unwrap()
-                                        }
+                                        "runs" => plan.execute(input, &Pool, bounded.borrow()),
                                         _ => unreachable!(),
                                     });
                                 }
@@ -400,15 +397,13 @@ fn isolated(c: &mut Criterion) {
                                                         .unwrap();
                                                     }
                                                 }
-                                                _ => planned
-                                                    .execute(
-                                                        None,
-                                                        &mut values,
-                                                        None,
-                                                        &mut bounded_scratch,
-                                                        &Pool,
-                                                    )
-                                                    .unwrap(),
+                                                _ => planned.execute(
+                                                    None,
+                                                    &mut values,
+                                                    None,
+                                                    &mut bounded_scratch,
+                                                    &Pool,
+                                                ),
                                             }
                                             black_box(&values);
                                         }

@@ -106,14 +106,13 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
         Bases::Prepared(&record.cached),
     ] {
         let selection = Selection::indexed(bases, &indices).unwrap();
-        let input = selection.with_scalars(&scalars).unwrap();
+        let input = selection.with_scalars(&scalars);
         let inputs = [input];
         let mut jobs = [JobStorage::EMPTY];
         let mut workers = [WorkerStorage::EMPTY];
         let plan = BatchPlan::new(&inputs, OPTIONS, &mut jobs, &mut workers).unwrap();
         let mut output = [ProjectivePoint::IDENTITY];
-        plan.execute(&mut output, &SerialExecutor, scratch.reborrow())
-            .unwrap();
+        plan.execute(&mut output, &SerialExecutor, scratch.reborrow());
         assert_eq!(output[0], expected);
     }
     // Embedded compact layouts must support retained preparation and selection
@@ -127,16 +126,14 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
         let selection = Selection::indexed(bases, &indices).unwrap();
         for row in [scalars, scalars.map(|s| s.neg())] {
             let prepared =
-                PreparedScalars::prepare(&row, &mut retained, TaskBudget::SERIAL, &SerialExecutor)
-                    .unwrap();
-            let inputs = [selection.with_prepared_scalars(prepared).unwrap()];
+                PreparedScalars::prepare(&row, &mut retained, TaskBudget::SERIAL, &SerialExecutor);
+            let inputs = [selection.with_prepared_scalars(prepared)];
             let expected = row.iter().fold(PastaField::ZERO, |sum, s| sum.add(s));
             let mut jobs = [JobStorage::EMPTY];
             let mut workers = [WorkerStorage::EMPTY];
             let plan = BatchPlan::new(&inputs, OPTIONS, &mut jobs, &mut workers).unwrap();
             let mut output = [ProjectivePoint::IDENTITY];
-            plan.execute(&mut output, &SerialExecutor, scratch.reborrow())
-                .unwrap();
+            plan.execute(&mut output, &SerialExecutor, scratch.reborrow());
             assert_eq!(output[0], record.base.mul_projective(&expected));
         }
     }
@@ -185,8 +182,8 @@ fn exercise_srs<C: PastaCurve>(record: &record::SrsRecord<C>) {
     });
     let mut evaluations = coefficient;
     reference::transform(&mut evaluations, &domain.root());
-    let coefficient_input = Input::new(Bases::Prepared(&record.coefficient), &coefficient).unwrap();
-    let lagrange_input = Input::new(Bases::Prepared(&record.lagrange), &evaluations).unwrap();
+    let coefficient_input = Input::new(Bases::Prepared(&record.coefficient), &coefficient);
+    let lagrange_input = Input::new(Bases::Prepared(&record.lagrange), &evaluations);
     let inputs = [coefficient_input, lagrange_input];
     let mut jobs = [JobStorage::EMPTY; 2];
     let mut workers = [WorkerStorage::EMPTY];
@@ -198,8 +195,7 @@ fn exercise_srs<C: PastaCurve>(record: &record::SrsRecord<C>) {
     )
     .unwrap();
     let mut output = [ProjectivePoint::IDENTITY; 2];
-    plan.execute(&mut output, &SerialExecutor, scratch.reborrow())
-        .unwrap();
+    plan.execute(&mut output, &SerialExecutor, scratch.reborrow());
     let [left, right] = output;
     assert_eq!(
         left, right,

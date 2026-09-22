@@ -23,18 +23,16 @@ fn dispatch<'a, 't, 'b, M: PrimeModulus, E: Executor>(
     requests: &mut [Option<Request<'a>>],
     mut leases: impl Iterator<Item = Lease<'b, M>>,
     executor: &E,
-) -> Result<(), FftError> {
+) {
     if requests.len() == 1 {
         let mut task = run
             .try_claim(requests[0].take().unwrap(), || leases.next())
             .expect("structured claim")
             .expect("complete resource iterator");
         task.execute().expect("fresh task");
-        return run
-            .complete(task.finish())
-            .expect("structured receipt")
-            .error
-            .map_or(Ok(()), Err);
+        let published = run.complete(task.finish()).expect("structured receipt");
+        assert!(published.error.is_none(), "validated transform phases");
+        return;
     }
     let mut tasks: [Option<Task<'a, FftKernel<'t, M>, Lease<'b, M>>>; 32] =
         core::array::from_fn(|_| None);
@@ -57,7 +55,7 @@ fn dispatch<'a, 't, 'b, M: PrimeModulus, E: Executor>(
             .expect("structured receipt");
         error = error.or(published.error);
     }
-    error.map_or(Ok(()), Err)
+    assert!(error.is_none(), "validated transform phases");
 }
 
 impl<M: PrimeModulus> FftPlan<'_, M> {
@@ -74,10 +72,8 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
     /// order and is multiplied pointwise after the transform's scaling.
     /// `scratch` needs at least [`Self::retained_fields`] entries.
     ///
-    /// Returns [`FftError::InvalidExecution`] for an incompatible `input`
-    /// presence, [`FftError::LengthMismatch`] for input, output, or factor
-    /// lengths, or [`FftError::ScratchTooSmall`] for insufficient scratch.
-    /// These checks precede mutation. This driver does not allocate.
+    /// Panics if the buffers do not meet these requirements. These checks precede
+    /// mutation. This driver does not allocate.
     ///
     /// The task limit bounds detached envelopes in each structured join. It
     /// neither changes arithmetic grain nor assigns workers to this operation.
@@ -92,7 +88,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         factor: Option<&[PastaField<M>]>,
         scratch: &mut [PastaField<M>],
         executor: &E,
-    ) -> Result<(), FftError> {
+    ) {
         self.execute_with(
             input,
             values,
@@ -111,26 +107,27 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         scratch: &mut [PastaField<M>],
         max_tasks: NonZeroUsize,
         executor: &E,
-    ) -> Result<(), FftError> {
-        if self.separate() != input.is_some() {
-            return Err(FftError::InvalidExecution);
-        }
-        super::super::check_length("output", self.size(), values.len())?;
+    ) {
+        assert_eq!(
+            self.separate(),
+            input.is_some(),
+            "input storage must match the plan"
+        );
+        super::super::assert_length("output", self.size(), values.len());
         if let Some(input) = input {
-            super::super::check_length("input", self.request.input_len(self.size()), input.len())?;
+            super::super::assert_length("input", self.request.input_len(self.size()), input.len());
         }
         if let Some(factor) = factor {
-            super::super::check_length("factor", self.size(), factor.len())?;
+            super::super::assert_length("factor", self.size(), factor.len());
         }
         super::super::ScratchRequirements {
             field_elements: self.retained_fields(),
         }
-        .check(scratch.len())?;
+        .check(scratch.len());
         if self.fragments() == 1 {
             let mut identity = Identity::new();
             let mut slot = [TaskStorage::EMPTY];
-            let mut run = FftRun::new(self, factor.is_some(), &mut identity, &mut slot)
-                .expect("one local task");
+            let mut run = FftRun::new(self, factor.is_some(), &mut identity, &mut slot);
             let mut request = [None];
             run.ready(&mut request);
             let lease = Lease {
@@ -144,11 +141,9 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                 .expect("local claim")
                 .unwrap();
             task.execute().expect("fresh local task");
-            return run
-                .complete(task.finish())
-                .expect("local receipt")
-                .error
-                .map_or(Ok(()), Err);
+            let published = run.complete(task.finish()).expect("local receipt");
+            assert!(published.error.is_none(), "validated transform phases");
+            return;
         }
         let max_tasks = if self.first() > self.size()
             || self.separate() && self.request.input_len(self.size()) <= 1
@@ -169,11 +164,10 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         scratch: &mut [PastaField<M>],
         max_tasks: NonZeroUsize,
         executor: &E,
-    ) -> Result<(), FftError> {
+    ) {
         let mut identity = Identity::new();
         let mut slots = [const { TaskStorage::EMPTY }; 32];
-        let mut run =
-            FftRun::new(self, factor.is_some(), &mut identity, &mut slots).expect("fixed frontier");
+        let mut run = FftRun::new(self, factor.is_some(), &mut identity, &mut slots);
         let mut requests: [Option<Request<'_>>; 32] = core::array::from_fn(|_| None);
         while !run.is_complete() {
             let count = run.ready(
@@ -208,13 +202,13 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                         factor: &[],
                     }),
                     executor,
-                )?,
+                ),
                 WorkKind::Permute => dispatch(
                     &mut run,
                     &mut requests[..count],
                     core::iter::once(empty(values)),
                     executor,
-                )?,
+                ),
                 WorkKind::Snapshot => {
                     let leases = scratch[..self.size()]
                         .chunks_exact_mut(self.tile)
@@ -227,7 +221,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                             source: &values[i * self.tile..(i + 1) * self.tile],
                             factor: &[],
                         });
-                    dispatch(&mut run, &mut requests[..count], leases, executor)?;
+                    dispatch(&mut run, &mut requests[..count], leases, executor);
                 }
                 WorkKind::Pair => {
                     let leases = values
@@ -245,7 +239,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                             source: &[],
                             factor: &[],
                         });
-                    dispatch(&mut run, &mut requests[..count], leases, executor)?;
+                    dispatch(&mut run, &mut requests[..count], leases, executor);
                 }
                 WorkKind::Column => {
                     let fields = self.columns.unwrap().0 * self.fragments();
@@ -259,7 +253,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                             source: values,
                             factor: &[],
                         });
-                    dispatch(&mut run, &mut requests[..count], leases, executor)?;
+                    dispatch(&mut run, &mut requests[..count], leases, executor);
                 }
                 WorkKind::Scatter => {
                     let column = run.column;
@@ -274,7 +268,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                             source: &scratch[..band * self.fragments()],
                             factor: &[],
                         });
-                    dispatch(&mut run, &mut requests[..count], leases, executor)?;
+                    dispatch(&mut run, &mut requests[..count], leases, executor);
                 }
                 _ => {
                     let source = match run.kind {
@@ -299,11 +293,10 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
                                 &[]
                             },
                         });
-                    dispatch(&mut run, &mut requests[..count], leases, executor)?;
+                    dispatch(&mut run, &mut requests[..count], leases, executor);
                 }
             }
         }
-        Ok(())
     }
 }
 
@@ -379,16 +372,15 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
     /// must meet [`Self::batch_fields`] for this polynomial count. Empty batches
     /// are accepted when the plan supports batching.
     ///
-    /// Returns [`FftError::InvalidLayout`] if `values.len()` is not a multiple
-    /// of [`Self::size`], or [`FftError::ScratchTooSmall`] for insufficient
-    /// scratch. Transform and size errors follow [`Self::batch_fields`]. All
-    /// validation precedes writes; panic behavior follows [`Self::execute`].
+    /// The plan must select full in-place transforms. Panics if the plan or buffers do
+    /// not meet these requirements, before writing any output. Executor panic behavior
+    /// follows [`Self::execute`].
     pub fn execute_batch<E: Executor>(
         self,
         values: &mut [PastaField<M>],
         scratch: &mut [PastaField<M>],
         executor: &E,
-    ) -> Result<(), FftError> {
+    ) {
         self.execute_batch_with(
             values,
             scratch,
@@ -403,17 +395,26 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         scratch: &mut [PastaField<M>],
         max_tasks: NonZeroUsize,
         executor: &E,
-    ) -> Result<(), FftError> {
-        if !values.len().is_multiple_of(self.size()) {
-            return Err(FftError::InvalidLayout);
-        }
+    ) {
+        assert!(
+            values.len().is_multiple_of(self.size()),
+            "batch must contain complete polynomials"
+        );
+        assert!(
+            !self.separate() && self.request.support == InputSupport::Full,
+            "batching requires full in-place transforms"
+        );
         let count = values.len() / self.size();
-        let fields = self.batch_fields_with(count, max_tasks)?;
+        let fields = self
+            .batch_fields_with(count, max_tasks)
+            .expect("scratch bounded by batch storage");
         super::super::ScratchRequirements {
             field_elements: fields,
         }
-        .check(scratch.len())?;
-        let (plan, jobs, inner) = self.batch_geometry(count, max_tasks)?;
+        .check(scratch.len());
+        let (plan, jobs, inner) = self
+            .batch_geometry(count, max_tasks)
+            .expect("batch-compatible plan");
         fn visit<M: PrimeModulus, E: Executor>(
             plan: FftPlan<'_, M>,
             values: &mut [PastaField<M>],
@@ -424,8 +425,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         ) {
             if jobs <= 1 {
                 for values in values.chunks_exact_mut(plan.size()) {
-                    plan.execute_with(None, values, None, scratch, inner, executor)
-                        .expect("validated batch buffers");
+                    plan.execute_with(None, values, None, scratch, inner, executor);
                 }
             } else {
                 let left_jobs = jobs / 2;
@@ -439,6 +439,5 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
             }
         }
         visit(plan, values, &mut scratch[..fields], jobs, inner, executor);
-        Ok(())
     }
 }

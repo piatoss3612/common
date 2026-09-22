@@ -114,11 +114,7 @@ impl<C: PastaCurve> MsmRun<'_, '_, C> {
     }
 
     /// Execution has access only to slices and cannot grow the workspace.
-    pub fn execute<E: Executor>(
-        &mut self,
-        output: &mut [ProjectivePoint<C>],
-        executor: &E,
-    ) -> Result<(), CurveError> {
+    pub fn execute<E: Executor>(&mut self, output: &mut [ProjectivePoint<C>], executor: &E) {
         self.plan.execute(output, executor, self.scratch.reborrow())
     }
 }

@@ -1,17 +1,15 @@
 //! Batch normalization with a shared field inversion.
 
-use super::{CurveError, PastaCurve, Point, ProjectivePoint, check_length};
+use super::{PastaCurve, Point, ProjectivePoint, assert_length};
 use crate::field::{NonzeroInversionLanes, PastaField};
 
 /// Normalizes points in order, preserving identity positions.
 ///
-/// `output` must have exactly `points.len()` elements. Scratch bounds the batch
-/// size: one field per point shares one inversion across the entire input;
-/// smaller buffers process bounded batches and empty scratch normalizes
-/// individually. Initial scratch contents do not matter, and its unused tail
-/// is untouched. Returns [`CurveError::LengthMismatch`] for an
-/// incorrect output length.
-/// Every returned error leaves both buffers unchanged.
+/// `output` must have exactly `points.len()` elements. Scratch bounds the batch size:
+/// one field per point shares one inversion across the entire input; smaller buffers
+/// process bounded batches and empty scratch normalizes individually. Initial scratch
+/// contents do not matter, and its unused tail is untouched. A mismatched output length
+/// panics before either buffer is changed.
 ///
 /// Each batch containing nonidentity points uses one inversion; empty or
 /// all-identity batches use none.
@@ -26,17 +24,16 @@ use crate::field::{NonzeroInversionLanes, PastaField};
 /// let input = [g.double(), PallasProjective::IDENTITY, g];
 /// let mut output = [PallasPoint::IDENTITY; 3];
 /// let mut scratch = [Fp::ZERO; 3];
-/// batch_normalize(&input, &mut output, &mut scratch).unwrap();
+/// batch_normalize(&input, &mut output, &mut scratch);
 /// assert_eq!(output, input.map(|point| point.to_point()));
 /// ```
 pub fn batch_normalize<C: PastaCurve>(
     points: &[ProjectivePoint<C>],
     output: &mut [Point<C>],
     scratch: &mut [PastaField<C::Base>],
-) -> Result<(), CurveError> {
-    check_length("output", points.len(), output.len())?;
+) {
+    assert_length("output", points.len(), output.len());
     normalize(points, scratch, |index, point| output[index] = point);
-    Ok(())
 }
 
 // Callers check lengths before any mutation. A sink lets table preparation

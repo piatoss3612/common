@@ -9,7 +9,7 @@ use zakura_udon::{
         run::{Completion, Identity, Task, TaskStorage},
     },
     fft::{
-        ClassState, Domain, ElementOrder, FftError, StorageLayout, Transform,
+        ClassState, Domain, ElementOrder, StorageLayout, Transform,
         run::{AdditionKernel, Bank, FftKernel, InterpolationPlan, InterpolationRun, Request},
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
@@ -24,11 +24,7 @@ enum Job<'a, M: PrimeModulus> {
     Add(usize, Task<'a, AdditionKernel<M>, Lease<'a, M>>),
 }
 impl<'a, M: PrimeModulus> Work for Job<'a, M> {
-    type Completion = (
-        usize,
-        bool,
-        Completion<'a, Lease<'a, M>, Result<(), FftError>>,
-    );
+    type Completion = (usize, bool, Completion<'a, Lease<'a, M>, ()>);
     fn execute(&mut self) {
         match self {
             Self::Transform(_, task) => task.execute().unwrap(),
@@ -124,13 +120,11 @@ fn check<M: PrimeModulus>() {
                     let mut scratch: [_; CLASSES] = core::array::from_fn(|i| {
                         vec![PastaField::ZERO; contiguous.snapshot_fields(i).unwrap()]
                     });
-                    contiguous
-                        .execute(
-                            values.each_mut().map(Vec::as_mut_slice),
-                            scratch.each_mut().map(Vec::as_mut_slice),
-                            &SerialExecutor,
-                        )
-                        .unwrap();
+                    contiguous.execute(
+                        values.each_mut().map(Vec::as_mut_slice),
+                        scratch.each_mut().map(Vec::as_mut_slice),
+                        &SerialExecutor,
+                    );
                     assert_eq!(values[0], expected);
                     if !consume {
                         assert_eq!(&values[1..], &coefficients[1..]);
@@ -139,7 +133,7 @@ fn check<M: PrimeModulus>() {
                 let mut ids = core::array::from_fn(|_| core::array::from_fn(|_| Identity::new()));
                 let mut slots =
                     [const { [const { [const { TaskStorage::EMPTY }; 3] }; 2] }; CLASSES];
-                let mut run = InterpolationRun::new(plan, &mut ids, &mut slots).unwrap();
+                let mut run = InterpolationRun::new(plan, &mut ids, &mut slots);
                 let mut released = [false; CLASSES];
                 run_pool::scoped(4, 3, |pool| {
                     while !run.is_complete() {

@@ -2,7 +2,7 @@
 
 use super::{
     Accumulation, ArithmeticOptions, Bases, BatchOptions, CurveError, Input, Kernel, PastaCurve,
-    ProjectivePoint, Requirements, ScalarStorage, Scalars, Scratch, check_length, check_scratch,
+    ProjectivePoint, Requirements, ScalarStorage, Scalars, Scratch, assert_length, assert_scratch,
     checked_count, recode::Geometry,
 };
 use crate::exec::{ExecutionOptions, Executor, TaskBudget};
@@ -593,7 +593,6 @@ fn execute_job<C: PastaCurve, X: Executor>(
         options.memory_limit,
     )
     .execute(*input, executor, scratch)
-    .expect("validated synchronous MSM storage")
 }
 
 /// Borrowed reusable plan over immutable inputs and caller-owned metadata.
@@ -645,13 +644,11 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     /// Builds a reusable schedule into initialized metadata.
     ///
     /// Size metadata with [`Self::storage_len`] and initialize it with
-    /// [`JobStorage::EMPTY`] and [`WorkerStorage::EMPTY`]. Returns
-    /// [`CurveError::ScratchTooSmall`] for short buffers,
-    /// [`CurveError::SizeOverflow`] for unrepresentable sizes, or
-    /// [`CurveError::MemoryLimit`] under the
-    /// [workspace ceiling](ExecutionOptions::with_memory_limit).
-    /// All returned errors precede writes; tails beyond the required metadata
-    /// prefixes remain untouched.
+    /// [`JobStorage::EMPTY`] and [`WorkerStorage::EMPTY`]. Short buffers panic before
+    /// writes. Returns [`CurveError::SizeOverflow`] for unrepresentable sizes, or
+    /// [`CurveError::MemoryLimit`] under the [workspace
+    /// ceiling](ExecutionOptions::with_memory_limit). All returned errors precede
+    /// writes; tails beyond the required metadata prefixes remain untouched.
     pub fn new(
         inputs: &'a [Input<'i, C>],
         options: ExecutionOptions,
@@ -667,8 +664,8 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
         workers: &'a mut [WorkerStorage],
     ) -> Result<Self, CurveError> {
         let (j, w) = Self::storage_len_with(inputs.len(), options)?;
-        check_scratch("jobs", j, jobs.len())?;
-        check_scratch("workers", w, workers.len())?;
+        assert_scratch("jobs", j, jobs.len());
+        assert_scratch("workers", w, workers.len());
         let plan = Plan::new(inputs, options)?;
         let temporary_bytes = plan.requirements.bytes::<C>()?;
         let jobs = &mut jobs[..j];
@@ -704,20 +701,18 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     }
     /// Executes the retained plan, writing one result per input in input order.
     ///
-    /// Returns [`CurveError::LengthMismatch`] unless the output length equals the
-    /// input count, or [`CurveError::ScratchTooSmall`] if scratch is shorter than
-    /// [`Self::requirements`]. Unused scratch tails remain untouched. All
-    /// returned errors precede writes. An executor panic may partially write
-    /// output and scratch; reuse after unwinding
-    /// requires all scoped work to finish unwinding before buffers are reused.
+    /// Panics before writes unless the output length equals the input count and scratch
+    /// meets [`Self::requirements`]. Unused scratch tails remain untouched. An executor
+    /// panic may partially write output and scratch; reuse after unwinding requires all
+    /// scoped work to finish unwinding before buffers are reused.
     pub fn execute<X: Executor>(
         &self,
         output: &mut [ProjectivePoint<C>],
         executor: &X,
         scratch: Scratch<'_, C>,
-    ) -> Result<(), CurveError> {
-        check_length("output", self.inputs.len(), output.len())?;
-        let scratch = scratch.checked(self.plan.requirements)?;
+    ) {
+        assert_length("output", self.inputs.len(), output.len());
+        let scratch = scratch.checked(self.plan.requirements);
         execute_workers(
             self.inputs,
             self.jobs,
@@ -728,7 +723,6 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
             executor,
             scratch,
         );
-        Ok(())
     }
 }
 fn fill_metadata<C: PastaCurve>(
@@ -846,7 +840,7 @@ mod tests {
     fn weighted_ranges_preserve_dominant_and_odd_budgets() {
         let bases = vec![AffinePoint::<Pallas>::GENERATOR; 1024];
         let scalars = vec![Fq::ONE; 1024];
-        let input = |n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap();
+        let input = |n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]);
         let inputs = [input(2), input(1024), input(3), input(17)];
         for budget in [2, 3, 5, 17] {
             let options = BatchOptions::default()
@@ -887,7 +881,7 @@ mod tests {
         ] {
             let inputs: Vec<_> = sizes
                 .iter()
-                .map(|&n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap())
+                .map(|&n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]))
                 .collect();
             for tasks in [1, 2, 3, 5, 17, 65] {
                 for pass in [1, 2, 17, 128, 513] {
@@ -932,7 +926,7 @@ mod tests {
                             {
                                 *visited += 1;
                                 let job = plan.jobs[i];
-                                owned.reborrow().checked(job.requirements).unwrap();
+                                owned.reborrow().checked(job.requirements);
                                 assert!(job.workers <= job.budget.get());
                                 if !inputs[i].is_empty() {
                                     assert!(job.pass > 0 && job.pass <= job.cap);
@@ -944,8 +938,7 @@ mod tests {
                         assert!(plan.temporary_bytes() <= limit);
                         // Different output values expose range/order mistakes.
                         let mut output = vec![ProjectivePoint::IDENTITY; inputs.len()];
-                        plan.execute(&mut output, &SerialExecutor, scratch.borrow())
-                            .unwrap();
+                        plan.execute(&mut output, &SerialExecutor, scratch.borrow());
                         for (p, &n) in output.iter().zip(&sizes) {
                             assert_eq!(*p, bases[0].mul_projective(&Fq::from_u64(n as u64)));
                         }

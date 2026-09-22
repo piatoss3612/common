@@ -440,7 +440,7 @@ fn batch_normalization<C: PastaCurve>(
             let expected: Vec<_> = points.iter().map(ProjectivePoint::to_point).collect();
             let mut output = vec![Point::IDENTITY; size];
             let mut scratch = vec![PastaField::ZERO; size];
-            batch_normalize(&points, &mut output, &mut scratch).unwrap();
+            batch_normalize(&points, &mut output, &mut scratch);
             assert_eq!(output, expected);
             // Keep the original dense-batch IDs for existing Criterion baselines.
             let id = if shape == "nonidentity" {
@@ -454,8 +454,7 @@ fn batch_normalization<C: PastaCurve>(
                         black_box(&points),
                         black_box(&mut output),
                         black_box(&mut scratch),
-                    )
-                    .unwrap();
+                    );
                     black_box(&output);
                 })
             });
@@ -786,34 +785,37 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
                 black_box(&mut field),
             )
             .unwrap();
-            black_box(table.as_slice());
+            black_box(table.as_array());
         })
     });
     let table =
         EisensteinTable::prepare(affine, &mut entries, &mut projective, &mut field).unwrap();
     group.bench_function("bind", |b| {
-        b.iter(|| EisensteinTable::bind(black_box(affine), black_box(table.as_slice())).unwrap())
+        b.iter(|| EisensteinTable::bind(black_box(affine), black_box(table.as_array())).unwrap())
     });
     group.bench_function("bind_trusted", |b| {
         b.iter(|| {
-            EisensteinTable::bind_trusted(black_box(affine), black_box(table.as_slice())).unwrap()
+            EisensteinTable::bind_trusted(black_box(affine), black_box(table.as_array())).unwrap()
         })
     });
     bench(&mut group, "validate", &table, |table| {
         table.validate().unwrap()
     });
-    for (case, entries) in invalid_entries::<C, E>(table.as_slice()) {
+    for (case, entries) in invalid_entries::<C, E>(table.as_array()) {
         assert_eq!(
-            EisensteinTable::bind(affine, &entries).unwrap_err(),
+            EisensteinTable::bind(affine, entries.as_slice().try_into().unwrap()).unwrap_err(),
             CurveError::InvalidTable
         );
-        let invalid = EisensteinTable::bind_trusted(affine, &entries).unwrap();
+        let invalid =
+            EisensteinTable::bind_trusted(affine, entries.as_slice().try_into().unwrap()).unwrap();
         assert_eq!(invalid.validate(), Err(CurveError::InvalidTable));
         bench(
             &mut group,
             &format!("bind/{case}"),
             &(*affine, entries.as_slice()),
-            |&(base, entries)| EisensteinTable::bind(&base, entries).unwrap_err(),
+            |&(base, entries)| {
+                EisensteinTable::bind(&base, entries.try_into().unwrap()).unwrap_err()
+            },
         );
         bench(&mut group, &format!("validate/{case}"), &invalid, |table| {
             table.validate().unwrap_err()

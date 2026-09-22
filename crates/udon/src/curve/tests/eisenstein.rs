@@ -20,13 +20,13 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
         assert_eq!(projective[8..], [ProjectivePoint::GENERATOR; 2]);
         assert_eq!(field[8..], [PastaField::ONE; 2]);
         table.validate().unwrap();
-        let bound = EisensteinTable::bind(&base, table.as_slice()).unwrap();
-        let trusted = EisensteinTable::bind_trusted(&base, table.as_slice()).unwrap();
+        let bound = EisensteinTable::bind(&base, table.as_array()).unwrap();
+        let trusted = EisensteinTable::bind_trusted(&base, table.as_array()).unwrap();
         let p = modulus::<C::Base>();
         let reference = Reference::from_point(&base.to_point());
         let phi = Reference::from_point(&base.endomorphism().to_point());
         // Independent affine formulas establish representative ordering.
-        for (&(a, b), entry) in REPRESENTATIVES.iter().zip(table.as_slice()) {
+        for (&(a, b), entry) in REPRESENTATIVES.iter().zip(table.as_array()) {
             let first = reference.mul(&BigUint::from(a as u8), &p);
             let mut second = phi.mul(&BigUint::from(b.unsigned_abs()), &p);
             if b < 0
@@ -61,53 +61,52 @@ fn errors<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
         y: PastaField::ZERO,
         ..base
     };
-    let mut entries = [E::from_affine(&base); 9];
+    let mut entries = [E::from_affine(&base); 8];
     let mut projective = [ProjectivePoint::GENERATOR; 9];
     let mut field = [PastaField::ONE; 9];
-    for (base, len, plen, flen) in [
-        (base, 7, 8, 8),
-        (base, 9, 8, 8),
-        (base, 8, 7, 8),
-        (base, 8, 8, 7),
-        (invalid_base, 8, 8, 8),
-        (off_curve, 8, 8, 8),
-    ] {
+    for (plen, flen) in [(7, 8), (8, 7)] {
         let old = (entries, projective, field);
         assert!(
-            EisensteinTable::prepare(
-                &base,
-                &mut entries[..len],
-                &mut projective[..plen],
-                &mut field[..flen]
-            )
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = EisensteinTable::prepare(
+                    &base,
+                    &mut entries,
+                    &mut projective[..plen],
+                    &mut field[..flen],
+                );
+            }))
             .is_err()
         );
         assert_eq!((entries, projective, field), old);
     }
-    for len in [0, 7, 9] {
-        assert!(EisensteinTable::bind(&base, &entries[..len]).is_err());
-        assert!(EisensteinTable::bind_trusted(&base, &entries[..len]).is_err());
+    for base in [invalid_base, off_curve] {
+        let old = (entries, projective, field);
+        assert_eq!(
+            EisensteinTable::prepare(&base, &mut entries, &mut projective, &mut field).unwrap_err(),
+            CurveError::InvalidBase
+        );
+        assert_eq!((entries, projective, field), old);
     }
     for base in [invalid_base, off_curve] {
         assert_eq!(
-            EisensteinTable::bind(&base, &entries[..8]).unwrap_err(),
+            EisensteinTable::bind(&base, &entries).unwrap_err(),
             CurveError::InvalidBase
         );
         assert_eq!(
-            EisensteinTable::bind_trusted(&base, &entries[..8]).unwrap_err(),
+            EisensteinTable::bind_trusted(&base, &entries).unwrap_err(),
             CurveError::InvalidBase
         );
     }
-    EisensteinTable::prepare(&base, &mut entries[..8], &mut projective, &mut field).unwrap();
+    EisensteinTable::prepare(&base, &mut entries, &mut projective, &mut field).unwrap();
     let valid = entries;
     for index in 0..8 {
         entries[index] = E::from_affine(&base.neg());
         assert_eq!(
-            EisensteinTable::bind(&base, &entries[..8]).unwrap_err(),
+            EisensteinTable::bind(&base, &entries).unwrap_err(),
             CurveError::InvalidTable
         );
         assert_eq!(
-            EisensteinTable::bind_trusted(&base, &entries[..8])
+            EisensteinTable::bind_trusted(&base, &entries)
                 .unwrap()
                 .validate(),
             Err(CurveError::InvalidTable)
@@ -115,8 +114,8 @@ fn errors<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
         entries = valid;
     }
     entries.swap(0, 1);
-    assert!(EisensteinTable::bind(&base, &entries[..8]).is_err());
-    EisensteinTable::prepare(&base, &mut entries[..8], &mut projective, &mut field)
+    assert!(EisensteinTable::bind(&base, &entries).is_err());
+    EisensteinTable::prepare(&base, &mut entries, &mut projective, &mut field)
         .unwrap()
         .validate()
         .unwrap();

@@ -160,15 +160,12 @@ pub struct ScratchRequirements {
 }
 
 impl ScratchRequirements {
-    pub(super) fn check(self, provided: usize) -> Result<(), FftError> {
-        if provided < self.field_elements {
-            Err(FftError::ScratchTooSmall {
-                required: self.field_elements,
-                provided,
-            })
-        } else {
-            Ok(())
-        }
+    pub(super) fn check(self, provided: usize) {
+        assert!(
+            provided >= self.field_elements,
+            "scratch requires {} fields, got {provided}",
+            self.field_elements
+        );
     }
 }
 

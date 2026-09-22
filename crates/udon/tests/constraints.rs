@@ -64,13 +64,12 @@ fn msm<C: PastaCurve>() {
         let expected = AffinePoint::<C>::GENERATOR.mul_projective(&sum);
         let mut records = vec![ScalarStorage::<C>::ZERO; count];
         let prepared =
-            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
-                .unwrap();
+            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
         for tasks in [1, 4] {
             let options =
                 ExecutionOptions::default().with_task_budget(TaskBudget::new(tasks).unwrap());
             let plan = MsmPlan::new(count, options).unwrap();
-            let length = prepared.cache_len(&plan).unwrap();
+            let length = prepared.cache_len(&plan);
             if count == 4096 {
                 assert!(length > 0);
             }
@@ -78,19 +77,17 @@ fn msm<C: PastaCurve>() {
                 assert_eq!(length, 0);
             }
             let mut digits = vec![0xa5; length + 1];
-            let cached = prepared.cache(&plan, &mut digits).unwrap();
-            let input = Input::new_prepared(Bases::Affine(&bases), cached).unwrap();
+            let cached = prepared.cache(&plan, &mut digits);
+            let input = Input::new_prepared(Bases::Affine(&bases), cached);
             let cached_plan = MsmPlan::for_input(&input, options).unwrap();
-            let required = cached_plan.requirements().unwrap();
+            let required = cached_plan.requirements();
             if length != 0 {
                 assert_eq!(required.digits(), 0, "requested cache must be consumed");
             }
             assert_eq!(required.scalars(), 0);
             let mut workspace = Workspace::new(required);
             assert_eq!(
-                cached_plan
-                    .execute(input, &SerialExecutor, workspace.scratch())
-                    .unwrap(),
+                cached_plan.execute(input, &SerialExecutor, workspace.scratch()),
                 expected
             );
             assert_eq!(digits[length], 0xa5);
@@ -98,7 +95,7 @@ fn msm<C: PastaCurve>() {
     }
     let bases = vec![AffinePoint::<C>::GENERATOR; 4096];
     let scalars = vec![PastaField::<C::Scalar>::TWO_INVERSE; bases.len()];
-    let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
+    let input = Input::new(Bases::Affine(&bases), &scalars);
     let options = ExecutionOptions::default().with_task_budget(TaskBudget::new(4).unwrap());
     let bounded = options.with_memory_limit(64 * 1024);
     let required = input.requirements(bounded).unwrap();
@@ -124,8 +121,7 @@ fn msm<C: PastaCurve>() {
 
     let mut records = vec![ScalarStorage::<C>::ZERO; scalars.len()];
     let prepared =
-        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
-            .unwrap();
+        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
     for fragment in [256, 2048] {
         let plan = MsmPlan::for_produced(
             ProducedInput::dense(Bases::Affine(&bases)),
@@ -134,25 +130,26 @@ fn msm<C: PastaCurve>() {
         )
         .unwrap();
         assert!(plan.grain() <= fragment);
-        assert_eq!(prepared.cache_len(&plan).unwrap(), 0);
-        let mut workspace = Workspace::new(plan.requirements().unwrap());
+        assert_eq!(prepared.cache_len(&plan), 0);
+        let mut workspace = Workspace::new(plan.requirements());
         assert_eq!(
-            plan.execute(input, &SerialExecutor, workspace.scratch())
-                .unwrap(),
+            plan.execute(input, &SerialExecutor, workspace.scratch()),
             expected
         );
     }
     let specialized = MsmPlan::for_input(
-        &Input::new_prepared(Bases::Affine(&bases), prepared).unwrap(),
+        &Input::new_prepared(Bases::Affine(&bases), prepared),
         options,
     )
     .unwrap();
     let mut identities = [Identity::new()];
     let mut tasks = [[const { TaskStorage::EMPTY }; 1]];
-    assert!(matches!(
-        ParallelMsmRun::new(specialized, input, &mut identities, &mut tasks),
-        Err(TaskError::InvalidRequest)
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = ParallelMsmRun::new(specialized, input, &mut identities, &mut tasks);
+        }))
+        .is_err()
+    );
 }
 
 #[test]
@@ -166,28 +163,29 @@ fn cached_plan_slots<C: PastaCurve>() {
     let scalars = [PastaField::<C::Scalar>::TWO_INVERSE; 16];
     let mut records = [ScalarStorage::<C>::ZERO; 16];
     let prepared =
-        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
-            .unwrap();
+        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
     let options = ExecutionOptions::default();
     let plan = MsmPlan::<C>::new(scalars.len(), options).unwrap();
-    let mut digits = vec![0; prepared.cache_len(&plan).unwrap()];
+    let mut digits = vec![0; prepared.cache_len(&plan)];
     assert!(!digits.is_empty());
-    let cached = prepared.cache(&plan, &mut digits).unwrap();
-    let input = Input::new_prepared(Bases::Affine(&bases), cached).unwrap();
+    let cached = prepared.cache(&plan, &mut digits);
+    let input = Input::new_prepared(Bases::Affine(&bases), cached);
     let plan = MsmPlan::for_input(&input, options).unwrap();
-    assert_eq!(plan.requirements().unwrap().digits(), 0);
+    assert_eq!(plan.requirements().digits(), 0);
 
     let mut identity = Identity::new();
     let mut storage = [const { TaskStorage::EMPTY }; 1];
-    assert!(matches!(
-        MsmRun::new_partition(plan, input, 0..8, &mut identity, &mut storage),
-        Err(TaskError::InvalidRequest)
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = MsmRun::new_partition(plan, input, 0..8, &mut identity, &mut storage);
+        }))
+        .is_err()
+    );
     for rebind in [false, true] {
         let mut identities = core::array::from_fn(|_| Identity::new());
         let mut storage = [const { [const { TaskStorage::EMPTY }; 1] }; 2];
         let run = if rebind {
-            let empty = Input::new(Bases::Affine(&[]), &[]).unwrap();
+            let empty = Input::new(Bases::Affine(&[]), &[]);
             let empty_plan = MsmPlan::new(0, options).unwrap();
             let mut run =
                 ParallelMsmRun::new(empty_plan, empty, &mut identities, &mut storage).unwrap();
@@ -245,8 +243,7 @@ fn fft<M: PrimeModulus>() {
                             None,
                             &mut scratch,
                             &SerialExecutor,
-                        )
-                        .unwrap();
+                        );
                         assert!(
                             scratch[plan.retained_fields()..]
                                 .iter()

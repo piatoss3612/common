@@ -54,7 +54,7 @@ fn expansions<M: PrimeModulus>() {
                             &mut scale_values,
                         )
                         .unwrap();
-                        expansion.with_scales(scales).unwrap()
+                        expansion.with_scales(scales)
                     } else {
                         expansion
                     };
@@ -73,8 +73,7 @@ fn expansions<M: PrimeModulus>() {
                         &contiguous,
                         domain,
                         EvaluationLayout::Residues(expansion.layout()),
-                    )
-                    .unwrap();
+                    );
                     for (row, value) in expected.iter().enumerate() {
                         assert_eq!(contiguous.get(row), Some(value));
                     }
@@ -111,43 +110,35 @@ fn expansions<M: PrimeModulus>() {
                             };
                             let operation = operation.unwrap();
                             let mut output = vec![PastaField::ONE; domain.size()];
-                            let mut scratch = vec![
-                                PastaField::ONE;
-                                operation.scratch_fields_with(nz(5)).unwrap() + 1
-                            ];
+                            let mut scratch =
+                                vec![PastaField::ONE; operation.scratch_fields_with(nz(5)) + 1];
                             let mut working = vec![PastaField::ONE; operation.coefficient_fields()];
                             let mut disposable = evaluations.clone();
                             let retained =
                                 if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
-                                    Some(
-                                        operation
-                                            .execute_disposable_with(
-                                                &mut disposable,
-                                                &mut output,
-                                                None,
-                                                &mut scratch,
-                                                nz(5),
-                                                &SerialExecutor,
-                                            )
-                                            .unwrap(),
-                                    )
+                                    Some(operation.execute_disposable_with(
+                                        &mut disposable,
+                                        &mut output,
+                                        None,
+                                        &mut scratch,
+                                        nz(5),
+                                        &SerialExecutor,
+                                    ))
                                 } else {
                                     let input = if storage == ExpansionStorage::Coefficients {
                                         &coefficients
                                     } else {
                                         &evaluations
                                     };
-                                    operation
-                                        .execute_with(
-                                            input,
-                                            &mut output,
-                                            &mut working,
-                                            None,
-                                            &mut scratch,
-                                            nz(5),
-                                            &SerialExecutor,
-                                        )
-                                        .unwrap()
+                                    operation.execute_with(
+                                        input,
+                                        &mut output,
+                                        &mut working,
+                                        None,
+                                        &mut scratch,
+                                        nz(5),
+                                        &SerialExecutor,
+                                    )
                                 };
                             if let Some(view) = retained {
                                 check_coefficients(view, &coefficients, scale.unwrap());
@@ -157,7 +148,7 @@ fn expansions<M: PrimeModulus>() {
                             } else {
                                 EvaluationLayout::BitReversed
                             };
-                            let view = EvaluationView::bind(&output, domain, layout).unwrap();
+                            let view = EvaluationView::bind(&output, domain, layout);
                             for (row, value) in expected.iter().enumerate() {
                                 assert_eq!(
                                     view.get(row),
@@ -169,17 +160,15 @@ fn expansions<M: PrimeModulus>() {
                             assert_eq!(scratch.last(), Some(&PastaField::ONE));
                             if storage == ExpansionStorage::Coefficients {
                                 let mut product = output.clone();
-                                operation
-                                    .execute_with(
-                                        &coefficients,
-                                        &mut product,
-                                        &mut [],
-                                        Some(&output),
-                                        &mut scratch,
-                                        nz(5),
-                                        &SerialExecutor,
-                                    )
-                                    .unwrap();
+                                operation.execute_with(
+                                    &coefficients,
+                                    &mut product,
+                                    &mut [],
+                                    Some(&output),
+                                    &mut scratch,
+                                    nz(5),
+                                    &SerialExecutor,
+                                );
                                 for (product, value) in product.iter().zip(&output) {
                                     assert_eq!(*product, value.square());
                                 }
@@ -228,8 +217,7 @@ fn expansions<M: PrimeModulus>() {
                             } else {
                                 EvaluationLayout::BitReversed
                             };
-                            let view =
-                                EvaluationView::bind(&output, residue.domain(), layout).unwrap();
+                            let view = EvaluationView::bind(&output, residue.domain(), layout);
                             for row in 0..base.domain().size() {
                                 assert_eq!(
                                     view.get(row),
@@ -286,17 +274,15 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                     let mut scales = vec![PastaField::ZERO; domain.size()];
                     let expansion = Expansion::new(base, domain, None).unwrap();
                     let expansion = if let Some(normalization) = normalization {
-                        expansion
-                            .with_scales(
-                                ExpansionScales::prepare(
-                                    subgroup.size(),
-                                    domain,
-                                    normalization,
-                                    &mut scales,
-                                )
-                                .unwrap(),
+                        expansion.with_scales(
+                            ExpansionScales::prepare(
+                                subgroup.size(),
+                                domain,
+                                normalization,
+                                &mut scales,
                             )
-                            .unwrap()
+                            .unwrap(),
+                        )
                     } else {
                         expansion
                     };
@@ -318,36 +304,30 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                     }
                     let mut output = vec![PastaField::ONE; domain.size()];
                     let mut scratch =
-                        vec![PastaField::ONE; operation.scratch_fields_with(nz(5)).unwrap() + 1];
-                    operation
-                        .execute_with(
-                            &coefficients[..len],
-                            &mut output,
-                            &mut [],
-                            None,
-                            &mut scratch,
-                            nz(5),
-                            executor,
-                        )
-                        .unwrap();
-                    let view = EvaluationView::bind(&output, domain, EvaluationLayout::BitReversed)
-                        .unwrap();
+                        vec![PastaField::ONE; operation.scratch_fields_with(nz(5)) + 1];
+                    operation.execute_with(
+                        &coefficients[..len],
+                        &mut output,
+                        &mut [],
+                        None,
+                        &mut scratch,
+                        nz(5),
+                        executor,
+                    );
+                    let view = EvaluationView::bind(&output, domain, EvaluationLayout::BitReversed);
                     for (row, expected) in expected.iter().enumerate() {
                         assert_eq!(view.get(row), Some(expected));
                     }
-                    operation
-                        .execute_with(
-                            &coefficients[..len],
-                            &mut output,
-                            &mut [],
-                            Some(&ordered_factors),
-                            &mut scratch,
-                            nz(5),
-                            executor,
-                        )
-                        .unwrap();
-                    let view = EvaluationView::bind(&output, domain, EvaluationLayout::BitReversed)
-                        .unwrap();
+                    operation.execute_with(
+                        &coefficients[..len],
+                        &mut output,
+                        &mut [],
+                        Some(&ordered_factors),
+                        &mut scratch,
+                        nz(5),
+                        executor,
+                    );
+                    let view = EvaluationView::bind(&output, domain, EvaluationLayout::BitReversed);
                     for (row, expected) in expected.iter().enumerate() {
                         assert_eq!(view.get(row), Some(&expected.mul(&factors[row])));
                     }
@@ -361,7 +341,6 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                         let retained = CoefficientView::new(&raw, InverseScale::Unscaled);
                         operation
                             .with_coefficient_scale(retained.normalization_factor())
-                            .unwrap()
                             .execute_with(
                                 retained.as_slice(),
                                 &mut product,
@@ -370,8 +349,7 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                                 &mut scratch,
                                 nz(5),
                                 executor,
-                            )
-                            .unwrap();
+                            );
                         assert_eq!(product, output);
                     }
                     assert_canonical(&scratch);
@@ -410,8 +388,7 @@ fn short_bit_reversed_residues_restore_fields_on_panic() {
     residue
         .coefficients_with(&input, &mut output, options, &joins, &mut scratch)
         .unwrap();
-    let view =
-        EvaluationView::bind(&output, residue.domain(), EvaluationLayout::BitReversed).unwrap();
+    let view = EvaluationView::bind(&output, residue.domain(), EvaluationLayout::BitReversed);
     for (row, expected) in expected.iter().enumerate() {
         assert_eq!(view.get(row), Some(expected));
     }
@@ -469,7 +446,7 @@ fn expansion_metadata_storage_errors_and_panics() {
             )
             .unwrap();
             let mut output = vec![Fp::ONE; domain.size()];
-            let mut scratch = vec![Fp::ONE; operation.scratch_fields_with(nz(5)).unwrap()];
+            let mut scratch = vec![Fp::ONE; operation.scratch_fields_with(nz(5))];
             let mut workspace = vec![Fp::ONE; operation.coefficient_fields()];
             let mut disposable = evaluations.clone();
             let execute = |input: &mut [Fp],
@@ -478,18 +455,29 @@ fn expansion_metadata_storage_errors_and_panics() {
                            scratch: &mut [Fp],
                            executor: &CountJoins| {
                 if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
-                    operation
-                        .execute_disposable_with(input, output, None, scratch, nz(5), executor)
-                        .map(|_| ())
+                    operation.execute_disposable_with(
+                        input,
+                        output,
+                        None,
+                        scratch,
+                        nz(5),
+                        executor,
+                    );
                 } else {
                     let input = if storage == ExpansionStorage::Coefficients {
                         &coefficients
                     } else {
                         &evaluations
                     };
-                    operation
-                        .execute_with(input, output, workspace, None, scratch, nz(5), executor)
-                        .map(|_| ())
+                    operation.execute_with(
+                        input,
+                        output,
+                        workspace,
+                        None,
+                        scratch,
+                        nz(5),
+                        executor,
+                    );
                 }
             };
             let joins = CountJoins::default();
@@ -499,8 +487,7 @@ fn expansion_metadata_storage_errors_and_panics() {
                 &mut workspace,
                 &mut scratch,
                 &joins,
-            )
-            .unwrap();
+            );
             for index in 0..joins.take() {
                 let mut disposable = evaluations.clone();
                 let executor = FailAt {
@@ -510,33 +497,29 @@ fn expansion_metadata_storage_errors_and_panics() {
                 assert!(
                     catch_unwind(AssertUnwindSafe(|| {
                         if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
-                            operation
-                                .execute_disposable_with(
-                                    &mut disposable,
-                                    &mut output,
-                                    None,
-                                    &mut scratch,
-                                    nz(5),
-                                    &executor,
-                                )
-                                .map(|_| ())
+                            operation.execute_disposable_with(
+                                &mut disposable,
+                                &mut output,
+                                None,
+                                &mut scratch,
+                                nz(5),
+                                &executor,
+                            );
                         } else {
                             let input = if storage == ExpansionStorage::Coefficients {
                                 &coefficients
                             } else {
                                 &evaluations
                             };
-                            operation
-                                .execute_with(
-                                    input,
-                                    &mut output,
-                                    &mut workspace,
-                                    None,
-                                    &mut scratch,
-                                    nz(5),
-                                    &executor,
-                                )
-                                .map(|_| ())
+                            operation.execute_with(
+                                input,
+                                &mut output,
+                                &mut workspace,
+                                None,
+                                &mut scratch,
+                                nz(5),
+                                &executor,
+                            );
                         }
                     }))
                     .is_err()
@@ -553,16 +536,18 @@ fn expansion_metadata_storage_errors_and_panics() {
                     workspace.clone(),
                     scratch.clone(),
                 );
-                assert!(matches!(
-                    execute(
-                        &mut disposable,
-                        &mut output,
-                        &mut workspace[..short],
-                        &mut scratch,
-                        &joins
-                    ),
-                    Err(FftError::LengthMismatch { .. })
-                ));
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        execute(
+                            &mut disposable,
+                            &mut output,
+                            &mut workspace[..short],
+                            &mut scratch,
+                            &joins,
+                        );
+                    }))
+                    .is_err()
+                );
                 assert_eq!(
                     (
                         disposable.clone(),
@@ -583,16 +568,18 @@ fn expansion_metadata_storage_errors_and_panics() {
                     workspace.clone(),
                     scratch.clone(),
                 );
-                assert!(matches!(
-                    execute(
-                        &mut disposable,
-                        &mut output,
-                        &mut workspace,
-                        &mut scratch[..short],
-                        &joins
-                    ),
-                    Err(FftError::ScratchTooSmall { .. })
-                ));
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        execute(
+                            &mut disposable,
+                            &mut output,
+                            &mut workspace,
+                            &mut scratch[..short],
+                            &joins,
+                        );
+                    }))
+                    .is_err()
+                );
                 assert_eq!(disposable, before.0);
                 assert_eq!(output, before.1);
                 assert_eq!(workspace, before.2);
@@ -611,17 +598,18 @@ fn expansion_metadata_storage_errors_and_panics() {
     .unwrap();
     let mut other_values = vec![Fp::ZERO; domain.size()];
     assert!(
-        expansion
-            .with_scales(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = expansion.with_scales(
                 ExpansionScales::prepare(
                     base.domain().size(),
                     domain.domain().subgroup(),
                     ExpansionScaleNormalization::UnscaledInverse,
-                    &mut other_values
+                    &mut other_values,
                 )
-                .unwrap()
-            )
-            .is_err()
+                .unwrap(),
+            );
+        }))
+        .is_err()
     );
     scales[1] = Fp::ONE;
     assert!(matches!(
@@ -652,22 +640,24 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
             .with_columns(nz(3), nz(2))
             .unwrap()
         });
-        let plan = InterpolationPlan::with_transforms(transforms, consume).unwrap();
+        let plan = InterpolationPlan::with_transforms(transforms, consume);
         let mut values: [_; 3] = core::array::from_fn(|_| original.clone());
         let mut scratch: [_; 3] =
             core::array::from_fn(|i| vec![Fp::ONE; plan.snapshot_fields(i).unwrap() + 1]);
         let count = CountJoins::default();
         let short = plan.snapshot_fields(2).unwrap() - 1;
         let [a, b, c] = &mut scratch;
-        assert!(matches!(
-            plan.execute_with(
-                values.each_mut().map(Vec::as_mut_slice),
-                [a, b, &mut c[..short]],
-                nz(5),
-                &count
-            ),
-            Err(FftError::ScratchTooSmall { .. })
-        ));
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                plan.execute_with(
+                    values.each_mut().map(Vec::as_mut_slice),
+                    [a, b, &mut c[..short]],
+                    nz(5),
+                    &count,
+                );
+            }))
+            .is_err()
+        );
         assert!(values.iter().all(|v| *v == original));
         assert!(scratch.iter().flatten().all(|v| *v == Fp::ONE));
         assert_eq!(count.take(), 0);
@@ -676,8 +666,7 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
             scratch.each_mut().map(Vec::as_mut_slice),
             nz(5),
             &count,
-        )
-        .unwrap();
+        );
         let joins = count.take();
         assert!(joins > 0);
         for index in 0..joins {
@@ -771,7 +760,7 @@ fn interpolation<M: PrimeModulus>() {
                     )
                     .unwrap()
                 });
-                let plan = InterpolationPlan::<_, 5>::with_transforms(transforms, consume).unwrap();
+                let plan = InterpolationPlan::<_, 5>::with_transforms(transforms, consume);
                 let mut scratch: [_; 5] = core::array::from_fn(|i| {
                     vec![PastaField::ONE; plan.snapshot_fields(i).unwrap() + 1]
                 });
@@ -780,8 +769,7 @@ fn interpolation<M: PrimeModulus>() {
                     scratch.each_mut().map(Vec::as_mut_slice),
                     nz(tasks),
                     &Threads,
-                )
-                .unwrap();
+                );
                 assert_eq!(values[0], expected);
                 if !consume {
                     assert_eq!(values[1..], lift_coefficients);
@@ -816,8 +804,7 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                     .unwrap();
             let expansion = Expansion::new(base, base.domain(), None)
                 .unwrap()
-                .with_scales(scales)
-                .unwrap();
+                .with_scales(scales);
             for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
                 let operation = ExpansionPlan::with_strategy(
                     expansion,
@@ -829,87 +816,84 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                     Codelet::Radix2,
                 )
                 .unwrap();
-                let count = operation.scratch_fields_with(nz(5)).unwrap();
+                let count = operation.scratch_fields_with(nz(5));
                 let mut scratch = vec![PastaField::ONE; count + 1];
                 let mut output = vec![PastaField::ONE; input.len()];
                 let joins = CountJoins::default();
-                assert!(matches!(
-                    operation.execute_with(
-                        &input[..input.len() - 1],
-                        &mut output,
-                        &mut [],
-                        None,
-                        &mut scratch,
-                        nz(5),
-                        &joins
-                    ),
-                    Err(FftError::LengthMismatch {
-                        buffer: "input",
-                        ..
-                    })
-                ));
-                assert!(matches!(
-                    operation.execute_with(
-                        &input,
-                        &mut output[..input.len() - 1],
-                        &mut [],
-                        None,
-                        &mut scratch,
-                        nz(5),
-                        &joins
-                    ),
-                    Err(FftError::LengthMismatch {
-                        buffer: "output",
-                        ..
-                    })
-                ));
-                if count > 0 {
-                    assert!(matches!(
-                        operation.execute_with(
-                            &input,
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = operation.execute_with(
+                            &input[..input.len() - 1],
                             &mut output,
                             &mut [],
                             None,
-                            &mut scratch[..count - 1],
+                            &mut scratch,
                             nz(5),
-                            &joins
-                        ),
-                        Err(FftError::ScratchTooSmall { .. })
-                    ));
+                            &joins,
+                        );
+                    }))
+                    .is_err()
+                );
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = operation.execute_with(
+                            &input,
+                            &mut output[..input.len() - 1],
+                            &mut [],
+                            None,
+                            &mut scratch,
+                            nz(5),
+                            &joins,
+                        );
+                    }))
+                    .is_err()
+                );
+                if count > 0 {
+                    assert!(
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let _ = operation.execute_with(
+                                &input,
+                                &mut output,
+                                &mut [],
+                                None,
+                                &mut scratch[..count - 1],
+                                nz(5),
+                                &joins,
+                            );
+                        }))
+                        .is_err()
+                    );
                 }
-                assert!(matches!(
-                    operation.execute_with(
-                        &input,
-                        &mut output,
-                        &mut [],
-                        Some(&input[..input.len() - 1]),
-                        &mut scratch,
-                        nz(5),
-                        &joins
-                    ),
-                    Err(FftError::LengthMismatch {
-                        buffer: "factor",
-                        ..
-                    })
-                ));
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = operation.execute_with(
+                            &input,
+                            &mut output,
+                            &mut [],
+                            Some(&input[..input.len() - 1]),
+                            &mut scratch,
+                            nz(5),
+                            &joins,
+                        );
+                    }))
+                    .is_err()
+                );
                 assert!(output.iter().all(|v| *v == PastaField::ONE));
-                operation
-                    .execute_with(
-                        &input,
-                        &mut output,
-                        &mut [],
-                        None,
-                        &mut scratch,
-                        nz(5),
-                        &joins,
-                    )
-                    .unwrap();
+                operation.execute_with(
+                    &input,
+                    &mut output,
+                    &mut [],
+                    None,
+                    &mut scratch,
+                    nz(5),
+                    &joins,
+                );
                 let layout = if order == ExpansionOrder::Residues {
                     EvaluationLayout::Residues(expansion.layout())
                 } else {
                     EvaluationLayout::BitReversed
                 };
-                let view = EvaluationView::bind(&output, base.domain(), layout).unwrap();
+                let view = EvaluationView::bind(&output, base.domain(), layout);
                 for (i, value) in input.iter().enumerate() {
                     assert_eq!(view.get(i), Some(value));
                 }

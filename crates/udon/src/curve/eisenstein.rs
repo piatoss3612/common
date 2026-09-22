@@ -7,8 +7,7 @@
 
 use super::{
     AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, PastaCurve,
-    PreparedAffinePoint, ProjectivePoint, batch, check_length, check_scratch,
-    table_entry::check_entry,
+    PreparedAffinePoint, ProjectivePoint, assert_scratch, batch, table_entry::check_entry,
 };
 use crate::field::{CanonicalUint, PastaField};
 use core::marker::PhantomData;
@@ -192,7 +191,7 @@ pub(super) fn representatives<C: PastaCurve>(base: &ProjectivePoint<C>) -> [Proj
 #[derive(Clone, Copy)]
 pub struct EisensteinTable<'a, C: PastaCurve, E: CurveTableEntry<C> = AffinePoint<C>> {
     pub(super) base: AffinePoint<C>,
-    pub(super) entries: &'a [E],
+    pub(super) entries: &'a [E; 8],
 }
 
 impl<C: PastaCurve, E: CurveTableEntry<C>> core::fmt::Debug for EisensteinTable<'_, C, E> {
@@ -214,13 +213,11 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
 
     /// Prepares eight entries in caller-owned storage using one inversion.
     ///
-    /// `entries` must have exactly eight elements and both scratch buffers
-    /// must have at least eight. Initial contents do not matter. Scratch tails
-    /// are untouched and scratch can be reused as soon as this returns.
+    /// Both scratch buffers must have at least eight elements; shorter buffers panic
+    /// before any writes. Initial contents do not matter. Scratch tails are untouched
+    /// and scratch can be reused as soon as this returns.
     ///
-    /// Returns [`CurveError::InvalidBase`] for an unreduced or off-curve base,
-    /// [`CurveError::LengthMismatch`] for the wrong entry count, or
-    /// [`CurveError::ScratchTooSmall`] for short scratch. Every error leaves
+    /// Returns [`CurveError::InvalidBase`] for an unreduced or off-curve base, leaving
     /// all buffers unchanged. The returned view borrows only `entries`.
     ///
     /// ```
@@ -243,13 +240,13 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
     /// ```
     pub fn prepare(
         base: &AffinePoint<C>,
-        entries: &'a mut [E],
+        entries: &'a mut [E; 8],
         projective_scratch: &mut [ProjectivePoint<C>],
         field_scratch: &mut [PastaField<C::Base>],
     ) -> Result<Self, CurveError> {
-        check_inputs(base, entries.len())?;
-        check_scratch("projective", 8, projective_scratch.len())?;
-        check_scratch("field", 8, field_scratch.len())?;
+        check_base(base)?;
+        assert_scratch("projective", 8, projective_scratch.len());
+        assert_scratch("field", 8, field_scratch.len());
         projective_scratch[..8].copy_from_slice(&representatives(&base.to_projective()));
         normalize(&projective_scratch[..8], &mut field_scratch[..8], entries);
         Ok(Self {
@@ -260,10 +257,10 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
 
     /// Binds stored entries after checking the specified multiples and caches.
     ///
-    /// Returns the base and length errors from [`Self::bind_trusted`], or
-    /// [`CurveError::InvalidTable`] for unreduced, incorrect, or inconsistent
-    /// entries. Validation needs no inversion, allocation, or scratch.
-    pub fn bind(base: &AffinePoint<C>, entries: &'a [E]) -> Result<Self, CurveError> {
+    /// Returns the base error from [`Self::bind_trusted`], or
+    /// [`CurveError::InvalidTable`] for unreduced, incorrect, or inconsistent entries.
+    /// Validation needs no inversion, allocation, or scratch.
+    pub fn bind(base: &AffinePoint<C>, entries: &'a [E; 8]) -> Result<Self, CurveError> {
         let table = Self::bind_trusted(base, entries)?;
         table.validate()?;
         Ok(table)
@@ -271,15 +268,13 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
 
     /// Binds entries whose mathematical validity the owner has established.
     ///
-    /// Returns [`CurveError::InvalidBase`] for unreduced or off-curve base
-    /// coordinates, or [`CurveError::LengthMismatch`] unless there are exactly
-    /// eight entries.
-    /// Entries must be the reduced, on-curve multiples in this type's order,
-    /// with consistent cached coordinates. This method does not inspect them;
-    /// invalid entries may panic or give incorrect results during arithmetic,
-    /// while remaining memory-safe. Use [`Self::bind`] to validate stored data.
-    pub fn bind_trusted(base: &AffinePoint<C>, entries: &'a [E]) -> Result<Self, CurveError> {
-        check_inputs(base, entries.len())?;
+    /// Returns [`CurveError::InvalidBase`] for unreduced or off-curve base coordinates.
+    /// Entries must be the reduced, on-curve multiples in this type's order, with
+    /// consistent cached coordinates. This method does not inspect them; invalid
+    /// entries may panic or give incorrect results during arithmetic, while remaining
+    /// memory-safe. Use [`Self::bind`] to validate stored data.
+    pub fn bind_trusted(base: &AffinePoint<C>, entries: &'a [E; 8]) -> Result<Self, CurveError> {
+        check_base(base)?;
         Ok(Self {
             base: *base,
             entries,
@@ -310,6 +305,11 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
         self.entries
     }
 
+    /// Borrows the eight entries in the representative order documented on this type.
+    pub const fn as_array(&self) -> &'a [E; 8] {
+        self.entries
+    }
+
     /// Multiplies by a reduced scalar; zero returns identity.
     ///
     /// The scalar must satisfy [`PastaField`]'s reduced-residue invariant,
@@ -329,8 +329,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
     }
 }
 
-fn check_inputs<C: PastaCurve>(base: &AffinePoint<C>, length: usize) -> Result<(), CurveError> {
-    check_length("entries", 8, length)?;
+fn check_base<C: PastaCurve>(base: &AffinePoint<C>) -> Result<(), CurveError> {
     if AffinePoint::<C>::from_xy(base.x, base.y).is_none() {
         return Err(CurveError::InvalidBase);
     }

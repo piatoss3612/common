@@ -33,18 +33,19 @@ fn dispatch<'a, 'i, 'b, C: PastaCurve, E: Executor>(
     requests: &mut [Option<Request<'a>>],
     mut leases: impl Iterator<Item = Lease<'b, C>>,
     executor: &E,
-) -> Result<(), CurveError> {
+) {
     if requests.len() == 1 {
         let mut task = run
             .try_claim(requests[0].take().unwrap(), || leases.next())
             .expect("structured claim")
             .expect("complete resource iterator");
         task.execute().expect("fresh task");
-        return run
-            .complete(task.finish())
-            .expect("structured receipt")
-            .error
-            .map_or(Ok(()), Err);
+        let published = run.complete(task.finish()).expect("structured receipt");
+        assert!(
+            published.error.is_none(),
+            "validated input and complete resources"
+        );
+        return;
     }
     let mut tasks: [Option<Task<'a, MsmKernel<'i, C>, Lease<'b, C>>>; 32] =
         core::array::from_fn(|_| None);
@@ -67,7 +68,7 @@ fn dispatch<'a, 'i, 'b, C: PastaCurve, E: Executor>(
             .expect("structured receipt");
         error = error.or(published.error);
     }
-    error.map_or(Ok(()), Err)
+    assert!(error.is_none(), "validated input and complete resources");
 }
 
 // A structured join owns every window output and the requested scratch bank
@@ -148,41 +149,41 @@ impl<C: PastaCurve> MsmPlan<C> {
     ///
     /// Includes retained intermediates and simultaneous temporary bundles.
     /// Metadata, buffer tails, alignment, and stack/executor costs are separate.
-    /// Returns [`CurveError::SizeOverflow`] for unrepresentable counts or bytes.
-    pub fn requirements(&self) -> Result<Requirements, CurveError> {
+    pub fn requirements(&self) -> Requirements {
         self.requirements_with(NonZeroUsize::new(self.job.budget.get()).unwrap())
     }
 
-    pub(crate) fn requirements_with(
-        &self,
-        leases: NonZeroUsize,
-    ) -> Result<Requirements, CurveError> {
+    pub(crate) fn requirements_with(&self, leases: NonZeroUsize) -> Requirements {
         let count = self.output_slots().min(leases.get()).min(32);
         let r = self
             .retained
-            .plus(self.temporary().times::<C>(count)?)?
-            .times::<C>(1)?;
-        r.bytes::<C>()?;
-        Ok(r)
+            .plus(
+                self.temporary()
+                    .times::<C>(count)
+                    .expect("bounded task count"),
+            )
+            .expect("bounded plan workspace")
+            .times::<C>(1)
+            .expect("bounded plan workspace");
+        r.bytes::<C>().expect("bounded plan workspace");
+        r
     }
 
     /// Executes bounded tasks with contiguous storage and a scoped executor.
     ///
-    /// Scratch must meet [`Self::requirements`]. Every executing task owns a
-    /// distinct bundle; nested work never obtains storage by worker identity.
-    /// Returns [`CurveError::LengthMismatch`] for the wrong term count,
-    /// [`CurveError::IncompatibleMsmInput`] for missing preparation required by
-    /// [`Self::for_input`], or [`CurveError::ScratchTooSmall`] for short scratch.
-    /// Size errors follow [`Self::requirements`]. All checks precede mutation;
-    /// unused scratch tails are untouched. An empty input returns identity.
-    /// The driver allocates nothing. A panic waits for joined work before
-    /// propagating; scratch can be reused after unwinding.
+    /// Scratch must meet [`Self::requirements`]. Every executing task owns a distinct
+    /// bundle; nested work never obtains storage by worker identity. The input must
+    /// satisfy the plan's requirements (see [`Self::for_input`]). Incompatible
+    /// input or insufficient scratch panics before
+    /// mutation; unused scratch tails are untouched. An empty input returns identity.
+    /// The driver allocates nothing. A panic waits for joined work before propagating;
+    /// scratch can be reused after unwinding.
     pub fn execute<E: Executor>(
         self,
         input: Input<'_, C>,
         executor: &E,
         scratch: Scratch<'_, C>,
-    ) -> Result<ProjectivePoint<C>, CurveError> {
+    ) -> ProjectivePoint<C> {
         self.execute_with(
             input,
             NonZeroUsize::new(self.job.budget.get()).unwrap(),
@@ -197,14 +198,15 @@ impl<C: PastaCurve> MsmPlan<C> {
         leases: NonZeroUsize,
         executor: &E,
         scratch: Scratch<'_, C>,
-    ) -> Result<ProjectivePoint<C>, CurveError> {
-        super::super::check_length("input", self.terms, input.len())?;
-        if !self.accepts(input) {
-            return Err(CurveError::IncompatibleMsmInput);
-        }
-        let scratch = scratch.checked(self.requirements_with(leases)?)?;
+    ) -> ProjectivePoint<C> {
+        super::super::assert_length("input", self.terms, input.len());
+        assert!(
+            self.accepts(input),
+            "input must match the plan's preparation"
+        );
+        let scratch = scratch.checked(self.requirements_with(leases));
         if input.is_empty() {
-            return Ok(ProjectivePoint::IDENTITY);
+            return ProjectivePoint::IDENTITY;
         }
         let (retained, mut temporary) = schedule::split_scratch(scratch, self.retained);
         let Scratch {
@@ -216,11 +218,11 @@ impl<C: PastaCurve> MsmPlan<C> {
         let (partials, buckets) = projective.split_at_mut(self.output_slots());
         let mut identity = Identity::new();
         let mut slots = [const { TaskStorage::EMPTY }; 32];
-        let mut run = MsmRun::new(self, input, &mut identity, &mut slots).expect("fixed frontier");
+        let mut run = MsmRun::new(self, input, &mut identity, &mut slots);
         let mut requests = [None; 32];
         loop {
             if let Some(result) = run.result() {
-                return Ok(result);
+                return result;
             }
             let limit = if run.kind == WorkKind::Window && !self.options.streaming() {
                 self.output_slots().min(32)
@@ -273,7 +275,7 @@ impl<C: PastaCurve> MsmPlan<C> {
                             output: &mut [],
                             partials: &[],
                         });
-                    dispatch(&mut run, &mut requests[..count], leases, executor)?;
+                    dispatch(&mut run, &mut requests[..count], leases, executor);
                 }
                 WorkKind::Window if !self.options.streaming() => {
                     let mut claims = core::array::from_fn::<_, 32, _>(|_| None);
@@ -305,9 +307,7 @@ impl<C: PastaCurve> MsmPlan<C> {
                             .expect("window receipt")
                             .error);
                     }
-                    if let Some(error) = error {
-                        return Err(error);
-                    }
+                    assert!(error.is_none(), "validated input and complete resources");
                 }
                 WorkKind::Window | WorkKind::Collapse => {
                     let leases = partials
@@ -323,7 +323,7 @@ impl<C: PastaCurve> MsmPlan<C> {
                             output: core::slice::from_mut(output),
                             partials: &[],
                         });
-                    dispatch(&mut run, &mut requests[..count], leases, executor)?;
+                    dispatch(&mut run, &mut requests[..count], leases, executor);
                 }
                 WorkKind::Reduce => {
                     let lease = Lease {
@@ -339,7 +339,7 @@ impl<C: PastaCurve> MsmPlan<C> {
                         &mut requests[..count],
                         core::iter::once(lease),
                         executor,
-                    )?;
+                    );
                 }
             }
         }

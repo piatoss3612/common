@@ -326,24 +326,21 @@ impl<M: PrimeModulus> PastaField<M> {
 
     /// Returns the inner product of two arrays, or zero for empty arrays.
     ///
-    /// The lengths agree by type. Products share one Montgomery reduction.
+    /// Products share one Montgomery reduction.
     pub fn sum_of_products<const N: usize>(lhs: &[Self; N], rhs: &[Self; N]) -> Self {
         Self::sum_of_products_slice(lhs, rhs)
     }
 
-    /// Returns the inner product of equal-length slices.
+    /// Returns the inner product of two slices, or zero for empty slices.
     ///
-    /// Returns `None` when the lengths differ and `Some(Self::ZERO)` for two
-    /// empty slices. Products share one Montgomery reduction.
-    pub fn checked_sum_of_products(lhs: &[Self], rhs: &[Self]) -> Option<Self> {
-        if lhs.len() != rhs.len() {
-            return None;
-        }
-        Some(Self::sum_of_products_slice(lhs, rhs))
-    }
-
+    /// Products share one Montgomery reduction.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the slices have different lengths.
     #[inline]
-    fn sum_of_products_slice(lhs: &[Self], rhs: &[Self]) -> Self {
+    pub fn sum_of_products_slice(lhs: &[Self], rhs: &[Self]) -> Self {
+        assert_eq!(lhs.len(), rhs.len(), "inner product lengths must agree");
         const {
             assert!(
                 usize::BITS <= 64,

@@ -175,8 +175,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
             &mut [],
             nz(options.max_tasks),
             executor,
-        )
-        .expect("validated stage storage");
+        );
     }
 
     pub fn run<E: Executor>(

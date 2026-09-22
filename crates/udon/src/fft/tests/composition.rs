@@ -54,8 +54,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                             Codelet::Radix2,
                         )
                         .unwrap()
-                        .with_input_scale(view.normalization_factor())
-                        .unwrap();
+                        .with_input_scale(view.normalization_factor());
                         if columns {
                             operation = operation.with_columns(nz(2), nz(3)).unwrap();
                         }
@@ -68,22 +67,19 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                         } else {
                             EvaluationLayout::BitReversed
                         };
-                        for operation in [operation, operation.with_forward_scales(scales).unwrap()]
-                        {
+                        for operation in [operation, operation.with_forward_scales(scales)] {
                             let mut scratch =
                                 vec![PastaField::ONE; operation.retained_fields() + 1];
                             for factor in [None, Some(factor_values.as_slice())] {
-                                operation
-                                    .execute_with(
-                                        Some(view.as_slice()),
-                                        &mut output,
-                                        factor,
-                                        &mut scratch,
-                                        nz(3),
-                                        &SerialExecutor,
-                                    )
-                                    .unwrap();
-                                let result = EvaluationView::bind(&output, domain, layout).unwrap();
+                                operation.execute_with(
+                                    Some(view.as_slice()),
+                                    &mut output,
+                                    factor,
+                                    &mut scratch,
+                                    nz(3),
+                                    &SerialExecutor,
+                                );
+                                let result = EvaluationView::bind(&output, domain, layout);
                                 for (row, value) in expected.iter().enumerate() {
                                     let expected = if factor.is_some() {
                                         value.mul(&factor_values[0])
@@ -123,7 +119,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                         &mut [],
                     )
                     .unwrap();
-                let result = expansion.view(&output).unwrap();
+                let result = expansion.view(&output);
                 for (row, value) in expected.iter().enumerate() {
                     assert_eq!(result.get(row), Some(value));
                 }
@@ -131,14 +127,14 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                 expansion
                     .short_product_with(
                         view,
-                        expansion.view(&factor_values).unwrap(),
+                        expansion.view(&factor_values),
                         &mut output,
                         ExpansionStrategy::SERIAL,
                         &SerialExecutor,
                         &mut [],
                     )
                     .unwrap();
-                let result = expansion.view(&output).unwrap();
+                let result = expansion.view(&output);
                 for (row, value) in expected.iter().enumerate() {
                     assert_eq!(result.get(row), Some(&value.mul(&factor_values[0])));
                 }
@@ -153,28 +149,25 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                         Codelet::Radix2,
                     )
                     .unwrap()
-                    .with_coefficient_scale(view.normalization_factor())
-                    .unwrap();
+                    .with_coefficient_scale(view.normalization_factor());
                     let layout = if order == ExpansionOrder::Residues {
                         EvaluationLayout::Residues(expansion.layout())
                     } else {
                         EvaluationLayout::BitReversed
                     };
                     let mut scratch =
-                        vec![PastaField::ONE; operation.scratch_fields_with(nz(3)).unwrap() + 1];
+                        vec![PastaField::ONE; operation.scratch_fields_with(nz(3)) + 1];
                     for factor in [None, Some(factor_values.as_slice())] {
-                        operation
-                            .execute_with(
-                                view.as_slice(),
-                                &mut output,
-                                &mut [],
-                                factor,
-                                &mut scratch,
-                                nz(3),
-                                &SerialExecutor,
-                            )
-                            .unwrap();
-                        let result = EvaluationView::bind(&output, extended, layout).unwrap();
+                        operation.execute_with(
+                            view.as_slice(),
+                            &mut output,
+                            &mut [],
+                            factor,
+                            &mut scratch,
+                            nz(3),
+                            &SerialExecutor,
+                        );
+                        let result = EvaluationView::bind(&output, extended, layout);
                         for (row, value) in expected.iter().enumerate() {
                             let expected = if factor.is_some() {
                                 value.mul(&factor_values[0])
@@ -247,8 +240,7 @@ fn coefficient_composition<M: PrimeModulus>() {
                 &mut [],
                 nz(1),
                 &SerialExecutor,
-            )
-            .unwrap();
+            );
             let before = view.as_slice().to_vec();
             consume_coefficients(view, &ordinary);
             assert_eq!(view.as_slice(), before);
@@ -271,29 +263,49 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
     let joins = CountJoins::default();
     let mut output = vec![PastaField::ONE; domain.size()];
     let mut scratch = vec![PastaField::ONE; 128];
-    assert!(matches!(
-        plan.forward_into_with(
-            CoefficientView::normalized(&coefficients[..1]),
-            &mut output,
-            Strategy::SERIAL,
-            &joins,
-            &mut scratch,
-        ),
-        Err(FftError::LengthMismatch { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = plan.forward_into_with(
+                CoefficientView::normalized(&coefficients[..1]),
+                &mut output,
+                Strategy::SERIAL,
+                &joins,
+                &mut scratch,
+            );
+        }))
+        .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = plan.execute(
+                TransformRequest {
+                    input_storage: InputStorage::Preserve,
+                    ..TransformRequest::new(Direction::Inverse)
+                },
+                Some(CoefficientView::new(&coefficients, InverseScale::Unscaled)),
+                &mut output,
+                Default::default(),
+                &joins,
+                &mut scratch,
+            );
+        }))
+        .is_err()
+    );
     let other = domain.domain().coset(PastaField::from_u64(7)).unwrap();
-    let factor = EvaluationView::bind(&coefficients, other, EvaluationLayout::Natural).unwrap();
+    let factor = EvaluationView::bind(&coefficients, other, EvaluationLayout::Natural);
     let expansion = Expansion::new(plan, domain, None).unwrap();
-    assert_eq!(
-        expansion.short_product_with(
-            view,
-            factor,
-            &mut output,
-            ExpansionStrategy::SERIAL,
-            &joins,
-            &mut scratch
-        ),
-        Err(FftError::InvalidLayout)
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = expansion.short_product_with(
+                view,
+                factor,
+                &mut output,
+                ExpansionStrategy::SERIAL,
+                &joins,
+                &mut scratch,
+            );
+        }))
+        .is_err()
     );
     let small = Transform::new(Domain::new(2).unwrap().subgroup());
     assert!(matches!(

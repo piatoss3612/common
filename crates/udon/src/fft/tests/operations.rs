@@ -84,17 +84,15 @@ fn operations<M: PrimeModulus>() {
                                         let mut output = original.clone();
                                         let mut scratch =
                                             vec![PastaField::ONE; operation.retained_fields() + 1];
-                                        operation
-                                            .execute_with(
-                                                (input_storage == InputStorage::Preserve)
-                                                    .then_some(original.as_slice()),
-                                                &mut output,
-                                                None,
-                                                &mut scratch,
-                                                nz(3),
-                                                &SerialExecutor,
-                                            )
-                                            .unwrap();
+                                        operation.execute_with(
+                                            (input_storage == InputStorage::Preserve)
+                                                .then_some(original.as_slice()),
+                                            &mut output,
+                                            None,
+                                            &mut scratch,
+                                            nz(3),
+                                            &SerialExecutor,
+                                        );
                                         assert_eq!(
                                             output,
                                             ordered(expected, output_order),
@@ -223,16 +221,14 @@ fn prefixes_and_products<M: PrimeModulus>() {
                             let mut scratch =
                                 vec![PastaField::ONE; operation.retained_fields() + 1];
                             let mut output = values.clone();
-                            operation
-                                .execute_with(
-                                    input,
-                                    &mut output,
-                                    None,
-                                    &mut scratch,
-                                    nz(3),
-                                    &SerialExecutor,
-                                )
-                                .unwrap();
+                            operation.execute_with(
+                                input,
+                                &mut output,
+                                None,
+                                &mut scratch,
+                                nz(3),
+                                &SerialExecutor,
+                            );
                             assert_eq!(
                                 output,
                                 ordered(&expected, output_order),
@@ -240,16 +236,14 @@ fn prefixes_and_products<M: PrimeModulus>() {
                             );
                             let factor = ordered(&factors, output_order);
                             output.copy_from_slice(&values);
-                            operation
-                                .execute_with(
-                                    input,
-                                    &mut output,
-                                    Some(&factor),
-                                    &mut scratch,
-                                    nz(3),
-                                    &SerialExecutor,
-                                )
-                                .unwrap();
+                            operation.execute_with(
+                                input,
+                                &mut output,
+                                Some(&factor),
+                                &mut scratch,
+                                nz(3),
+                                &SerialExecutor,
+                            );
                             let product: Vec<_> = expected
                                 .iter()
                                 .zip(&factors)
@@ -300,9 +294,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
                     .with_twiddles(table);
                     let mut output = input.clone();
                     let mut scratch = vec![PastaField::ZERO; operation.retained_fields()];
-                    operation
-                        .execute_with(None, &mut output, None, &mut scratch, nz(3), executor)
-                        .unwrap();
+                    operation.execute_with(None, &mut output, None, &mut scratch, nz(3), executor);
                     let expected = if direction == Direction::Forward {
                         direct(&input, domain)
                     } else {
@@ -333,12 +325,9 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
     )
     .unwrap()
     .with_forward_scales(scales)
-    .unwrap()
     .with_contiguous_permutation();
     let mut output = input.clone();
-    operation
-        .execute_with(None, &mut output, None, &mut [], nz(3), &Threads)
-        .unwrap();
+    operation.execute_with(None, &mut output, None, &mut [], nz(3), &Threads);
     assert_eq!(output, direct(&input, domain));
 }
 
@@ -395,16 +384,14 @@ fn bound_plan_tables<M: PrimeModulus>() {
                                     let mut output = ordered(&input, input_order);
                                     // Serial joins still exercise every task region, including
                                     // the paired terminal split at size 256.
-                                    operation
-                                        .execute_with(
-                                            None,
-                                            &mut output,
-                                            None,
-                                            &mut [],
-                                            nz(tasks),
-                                            &SerialExecutor,
-                                        )
-                                        .unwrap();
+                                    operation.execute_with(
+                                        None,
+                                        &mut output,
+                                        None,
+                                        &mut [],
+                                        nz(tasks),
+                                        &SerialExecutor,
+                                    );
                                     assert_eq!(
                                         output,
                                         ordered(expected, output_order),
@@ -459,10 +446,12 @@ fn transform_configuration_and_scratch_are_checked_before_mutation() {
     let original = values.clone();
     let mut scratch = vec![Fp::ONE; operation.retained_fields() - 1];
     let joins = CountJoins::default();
-    assert!(matches!(
-        operation.execute_with(None, &mut values, None, &mut scratch, nz(3), &joins),
-        Err(FftError::ScratchTooSmall { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation.execute_with(None, &mut values, None, &mut scratch, nz(3), &joins);
+        }))
+        .is_err()
+    );
     assert_eq!(values, original);
     assert!(scratch.iter().all(|v| *v == Fp::ONE));
     assert_eq!(joins.take(), 0);
@@ -497,9 +486,14 @@ fn parallel_panics_restore_all_field_buffers() {
                         let mut values = inputs(domain.size());
                         let mut scratch = vec![PastaField::ONE; operation.retained_fields()];
                         let joins = CountJoins::default();
-                        operation
-                            .execute_with(None, &mut values, None, &mut scratch, nz(3), &joins)
-                            .unwrap();
+                        operation.execute_with(
+                            None,
+                            &mut values,
+                            None,
+                            &mut scratch,
+                            nz(3),
+                            &joins,
+                        );
                         for index in 0..joins.take() {
                             let mut values = inputs(domain.size());
                             let failed = catch_unwind(AssertUnwindSafe(|| {
@@ -561,17 +555,15 @@ fn finish_tables_preserve_prefix_and_codelet_results() {
                             let mut scratch = vec![Fp::ONE; operation.retained_fields() + 1];
                             let mut output = input.clone();
                             output.resize(domain.size(), Fp::ONE);
-                            operation
-                                .execute_with(
-                                    (input_storage == InputStorage::Preserve)
-                                        .then_some(input.as_slice()),
-                                    &mut output,
-                                    None,
-                                    &mut scratch,
-                                    nz(3),
-                                    &SerialExecutor,
-                                )
-                                .unwrap();
+                            operation.execute_with(
+                                (input_storage == InputStorage::Preserve)
+                                    .then_some(input.as_slice()),
+                                &mut output,
+                                None,
+                                &mut scratch,
+                                nz(3),
+                                &SerialExecutor,
+                            );
                             assert_eq!(output, expected);
                             assert_eq!(scratch.last(), Some(&Fp::ONE));
                         }

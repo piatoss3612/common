@@ -55,8 +55,9 @@ The coordinator performs this sequence:
 The application must treat resource acquisition and admission accounting as one
 coordinator transaction. Counting compatible blocks cannot create references or
 establish that a particular block contains a particular result.
-Arithmetic resource traits validate lengths before writing. Matching logical
-slots to the requested data is the provider's arithmetic-correctness contract.
+Resource providers must supply the data and storage described by each request.
+Kernels assert buffer requirements before writing. Matching logical slots to the
+requested data is the provider's arithmetic-correctness contract.
 Incorrect data does not permit a Rust memory-safety violation.
 
 A task owns safe mutable slices or application lease guards. Its kernel may
@@ -89,9 +90,10 @@ execution cancels that task. Executing twice is rejected.
 
 `Outcome::Success` means the kernel returned normally; its output can still be
 an arithmetic `Err`. Publication inspects both the outcome and the output.
-Setup validation precedes driver writes; each incremental task validates its
-own resource lengths before writing. A later task error leaves earlier writes
-in place. These are different scopes of validation, not whole-run rollback.
+FFT kernels return unit; MSM kernels can reject invalid indices in produced
+sources. Setup validation precedes driver writes; each incremental task asserts
+its resource requirements before writing. A later task failure leaves earlier
+writes in place.
 An arithmetic error, failed execution, or cancellation poisons the run and
 stops new claims. Other outstanding receipts remain drainable. The application
 must join workers and drop actual guards before releasing their accounting or
@@ -106,12 +108,11 @@ but memory safety does not depend on a destructor running. Abandon the run only
 after all accessible detached tasks have been drained or ended. Fresh identity
 storage cannot be rebound while accessible tickets still borrow it.
 
-[`TaskError`](../crates/udon/src/exec/run/task.rs) distinguishes invalid input
-shape, range, or configuration (`InvalidRequest`) from missing run metadata
-capacity or a retained provision exceeding the plan's workspace ceiling
-(`Storage`). Unrepresentable storage sizes or exhausted epoch identity
-arithmetic return `Overflow`. Transition errors describe the current run or
-task state; they do not report arithmetic kernel results.
+[`TaskError`](../crates/udon/src/exec/run/task.rs) reports a retained provision
+exceeding the plan's workspace ceiling (`Storage`), unrepresentable storage sizes
+or exhausted epoch identity arithmetic (`Overflow`), and invalid task or run
+transitions. Plan compatibility and metadata capacity are caller contracts.
+Transition errors do not report arithmetic kernel results.
 
 ## Bounded readiness and retained results
 
@@ -174,11 +175,12 @@ while other field kernels still own disjoint writable fragments.
 Source views use request-local indices: element zero corresponds to
 `Request::offset`, and preparation requires `Request::terms` raw field scalars.
 Indexed preparation and windows also require that many base indices. Kernels
-validate lengths and indices before writing; matching each fragment to its
-logical range remains the provider's responsibility. Keep published values
-unchanged through their last consumer. A source may cross several fragments;
-`ReadView::contiguous_prefix` exposes the first contiguous part of a range so
-the kernel can recode each part directly into retained scalar and digit banks.
+assert resource requirements and validate indices before writing; matching each
+fragment to its logical range remains the provider's responsibility. Keep
+published values unchanged through their last consumer. A source may cross
+several fragments; `ReadView::contiguous_prefix` exposes the first contiguous
+part of a range so the kernel can recode each part directly into retained scalar
+and digit banks.
 Preparation writes those retained banks in place. Publication only transfers
 their ownership; it need not copy the prepared data under a scheduler lock.
 

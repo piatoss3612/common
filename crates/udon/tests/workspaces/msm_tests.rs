@@ -22,7 +22,7 @@ fn bases<C: PastaCurve>(n: usize) -> Vec<AffinePoint<C>> {
         })
         .collect();
     let mut points = vec![Point::IDENTITY; n];
-    batch_normalize(&projective, &mut points, &mut vec![PastaField::ZERO; n]).unwrap();
+    batch_normalize(&projective, &mut points, &mut vec![PastaField::ZERO; n]);
     points.iter().map(|p| *p.as_affine().unwrap()).collect()
 }
 
@@ -73,7 +73,7 @@ fn representations<C: PastaCurve>() {
                             .unwrap()
                     })
                     .collect();
-                let inputs = [selection.with_scalars(&scalars).unwrap()];
+                let inputs = [selection.with_scalars(&scalars)];
                 let sum = scalars
                     .iter()
                     .enumerate()
@@ -94,11 +94,11 @@ fn representations<C: PastaCurve>() {
                     .unwrap();
                 assert!(run.temporary_bytes() <= 32768);
                 assert!(run.requirements().bytes::<C>().unwrap() <= run.temporary_bytes());
-                run.execute(&mut result, &SerialExecutor).unwrap();
+                run.execute(&mut result, &SerialExecutor);
                 let expected = expected(sum);
                 assert_eq!(result[0], expected);
                 // The same borrowed plan can execute again using dirty scratch.
-                run.execute(&mut result, &SerialExecutor).unwrap();
+                run.execute(&mut result, &SerialExecutor);
                 assert_eq!(result[0], expected);
             }
         }
@@ -159,8 +159,8 @@ fn shrinking_batches<C: PastaCurve>() {
                         .collect()
                 });
                 let inputs = [
-                    selections[0].with_scalars(&rows[0]).unwrap(),
-                    selections[1].with_scalars(&rows[1]).unwrap(),
+                    selections[0].with_scalars(&rows[0]),
+                    selections[1].with_scalars(&rows[1]),
                 ];
                 let side_scalars: [_; 4] =
                     core::array::from_fn(|i| PastaField::from_u64((i + round + 2) as u64));
@@ -174,7 +174,7 @@ fn shrinking_batches<C: PastaCurve>() {
                             .with_memory_limit(2 * 1024 * 1024);
                         let mut run = workspace.prepare(&inputs, options).unwrap();
                         peak_required = peak_required.max(run.temporary_bytes());
-                        run.execute(&mut result, &executor).unwrap();
+                        run.execute(&mut result, &executor);
                         result
                     },
                     |side| {
@@ -190,7 +190,7 @@ fn shrinking_batches<C: PastaCurve>() {
                     result[i] = result[i].add(&side[i]);
                 }
                 let mut points = [Point::IDENTITY; 2];
-                batch_normalize(&result, &mut points, &mut [PastaField::ZERO; 2]).unwrap();
+                batch_normalize(&result, &mut points, &mut [PastaField::ZERO; 2]);
                 for i in 0..2 {
                     let sum = rows[i]
                         .iter()

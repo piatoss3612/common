@@ -1,4 +1,4 @@
-//! Public arithmetic boundaries keep implementation choices private.
+//! Public arithmetic boundaries enforce type contracts and hide implementation choices.
 
 #[path = "support/consumer.rs"]
 mod consumer;
@@ -41,6 +41,9 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
             "fft-codelet",
             "fft-strategy",
             "cache-options",
+            "eisenstein-length",
+            "empty-msm-slots",
+            "empty-interpolation",
         ])
         .collect();
     let consumer = Consumer::new(
@@ -93,6 +96,7 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
                 "cache-options",
                 "expected `&MsmPlan<C>`, found `ExecutionOptions`",
             ),
+            ("eisenstein-length", "expected an array with a size of 8"),
         ] {
             consumer.check(
                 "build",
@@ -100,6 +104,27 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
                 &[],
                 Some(diagnostic),
                 &["src/main.rs"],
+            );
+        }
+        // Monomorphization reports inline-const contracts at their definitions.
+        for (feature, diagnostic, source) in [
+            (
+                "empty-msm-slots",
+                "parallel slots must be nonzero",
+                "src/curve/msm/run/chunks.rs",
+            ),
+            (
+                "empty-interpolation",
+                "interpolation needs an output class",
+                "src/fft/run/interpolation.rs",
+            ),
+        ] {
+            consumer.check(
+                "build",
+                &format!("{configuration},{feature}"),
+                &[],
+                Some(diagnostic),
+                &[source],
             );
         }
     }

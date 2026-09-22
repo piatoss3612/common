@@ -42,6 +42,7 @@ pub fn execute_batch<C: PastaCurve, E: Executor>(
     scratch: Scratch<'_, C>,
 ) -> Result<(), CurveError> {
     planned(inputs, options, |plan| {
-        plan.execute(output, executor, scratch)
+        plan.execute(output, executor, scratch);
+        Ok(())
     })
 }

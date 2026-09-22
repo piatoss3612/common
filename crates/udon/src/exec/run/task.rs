@@ -24,12 +24,10 @@ pub enum Outcome {
     Cancelled,
 }
 
-/// Invalid run request, storage capacity, or task/frontier transition.
+/// A workspace limit, exhausted run identity, or invalid task/frontier transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TaskError {
-    /// The input shape, range, or configuration is unsupported by the run.
-    InvalidRequest,
-    /// No retained slot or frontier storage was supplied.
+    /// The retained slots exceed the plan's workspace ceiling.
     Storage,
     /// The key or completion does not belong to the current frontier epoch.
     Stale,
@@ -48,8 +46,7 @@ pub enum TaskError {
 impl core::fmt::Display for TaskError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str(match self {
-            Self::InvalidRequest => "invalid run input, range, or configuration",
-            Self::Storage => "insufficient run metadata storage",
+            Self::Storage => "retained storage exceeds the workspace ceiling",
             Self::Stale => "task does not belong to the current frontier epoch",
             Self::Claimed => "task has already been claimed or completed",
             Self::Executed => "task execution has already started",

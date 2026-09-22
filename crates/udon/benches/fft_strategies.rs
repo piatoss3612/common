@@ -115,15 +115,13 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                 group.bench_function(id, |b| {
                     runner.install(|| {
                         b.iter(|| {
-                            operation
-                                .execute(
-                                    Some(black_box(&input)),
-                                    black_box(&mut output),
-                                    None,
-                                    black_box(&mut scratch),
-                                    runner,
-                                )
-                                .unwrap();
+                            operation.execute(
+                                Some(black_box(&input)),
+                                black_box(&mut output),
+                                None,
+                                black_box(&mut scratch),
+                                runner,
+                            );
                             black_box(&output);
                         })
                     })
@@ -191,8 +189,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                         ..TablesMut::default()
                     }
                 }
-                .prepare(domain)
-                .unwrap();
+                .prepare(domain);
                 for direction in [Direction::Forward, Direction::Inverse] {
                     bench(
                         &format!("plan_twiddles/inverse_{inverse}/{direction:?}"),
@@ -206,8 +203,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                 "coefficient_scales",
                 runner
                     .transform(plan, TransformRequest::new(Direction::Forward), true, None)
-                    .with_forward_scales(scales)
-                    .unwrap(),
+                    .with_forward_scales(scales),
             );
             group.finish();
         }
@@ -234,17 +230,15 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
         let mut scales = vec![PastaField::ZERO; extended.size()];
         let expansion = Expansion::new(base, extended, None).unwrap();
         let expansion = if let Some(normalization) = normalization {
-            expansion
-                .with_scales(
-                    ExpansionScales::prepare(
-                        base.domain().size(),
-                        extended,
-                        normalization,
-                        &mut scales,
-                    )
-                    .unwrap(),
+            expansion.with_scales(
+                ExpansionScales::prepare(
+                    base.domain().size(),
+                    extended,
+                    normalization,
+                    &mut scales,
                 )
-                .unwrap()
+                .unwrap(),
+            )
         } else {
             expansion
         };
@@ -277,7 +271,7 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                 .unwrap();
                 let mut output = vec![PastaField::ZERO; extended.size()];
                 let mut workspace = vec![PastaField::ZERO; operation.coefficient_fields()];
-                let mut scratch = vec![PastaField::ZERO; operation.scratch_fields().unwrap()];
+                let mut scratch = vec![PastaField::ZERO; operation.scratch_fields()];
                 let id = format!(
                     "{normalization:?}/{order:?}/{storage_name}/scratch_{}_coefficients_{}",
                     scratch.len() * 32,
@@ -289,30 +283,22 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                             || input.clone(),
                             |working| {
                                 if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
-                                    black_box(
-                                        operation
-                                            .execute_disposable(
-                                                black_box(working),
-                                                &mut output,
-                                                None,
-                                                &mut scratch,
-                                                runner,
-                                            )
-                                            .unwrap(),
-                                    );
+                                    black_box(operation.execute_disposable(
+                                        black_box(working),
+                                        &mut output,
+                                        None,
+                                        &mut scratch,
+                                        runner,
+                                    ));
                                 } else {
-                                    black_box(
-                                        operation
-                                            .execute(
-                                                black_box(&input),
-                                                &mut output,
-                                                &mut workspace,
-                                                None,
-                                                &mut scratch,
-                                                runner,
-                                            )
-                                            .unwrap(),
-                                    );
+                                    black_box(operation.execute(
+                                        black_box(&input),
+                                        &mut output,
+                                        &mut workspace,
+                                        None,
+                                        &mut scratch,
+                                        runner,
+                                    ));
                                 }
                                 black_box(&output);
                             },
@@ -345,9 +331,7 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                         b.iter_batched_ref(
                             || values.clone(),
                             |output| {
-                                operation
-                                    .execute_batch(black_box(output), &mut scratch, runner)
-                                    .unwrap();
+                                operation.execute_batch(black_box(output), &mut scratch, runner);
                                 black_box(output);
                             },
                             criterion::BatchSize::SmallInput,
@@ -377,13 +361,11 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                 b.iter_batched_ref(
                     || [input.clone(), input.clone(), input.clone(), input.clone()],
                     |values| {
-                        operation
-                            .execute(
-                                values.each_mut().map(Vec::as_mut_slice),
-                                scratch.each_mut().map(Vec::as_mut_slice),
-                                runner,
-                            )
-                            .unwrap();
+                        operation.execute(
+                            values.each_mut().map(Vec::as_mut_slice),
+                            scratch.each_mut().map(Vec::as_mut_slice),
+                            runner,
+                        );
                         black_box(values);
                     },
                     criterion::BatchSize::SmallInput,
@@ -402,8 +384,7 @@ fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, r
         forward: Some(&mut twiddles),
         ..TablesMut::default()
     }
-    .prepare(domain)
-    .unwrap();
+    .prepare(domain);
     let input = inputs(domain.size());
     let factor = inputs(extended.size());
     let mut group =
@@ -433,7 +414,7 @@ fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, r
                     runner.options(),
                 )
                 .unwrap();
-                let mut scratch = vec![PastaField::ZERO; operation.scratch_fields().unwrap()];
+                let mut scratch = vec![PastaField::ZERO; operation.scratch_fields()];
                 for product in [false, true] {
                     group.bench_function(
                         format!("{name}/{order:?}/prefix_{prefix}/product_{product}"),
@@ -441,16 +422,14 @@ fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, r
                             runner.install(|| {
                                 b.iter(|| {
                                     let input = black_box(&input[..prefix]);
-                                    operation
-                                        .execute(
-                                            input,
-                                            &mut output,
-                                            &mut [],
-                                            product.then_some(ordered_factor.as_slice()),
-                                            &mut scratch,
-                                            runner,
-                                        )
-                                        .unwrap();
+                                    operation.execute(
+                                        input,
+                                        &mut output,
+                                        &mut [],
+                                        product.then_some(ordered_factor.as_slice()),
+                                        &mut scratch,
+                                        runner,
+                                    );
                                     black_box(&output);
                                 })
                             })
@@ -553,19 +532,17 @@ fn subgroup_expansion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
             )
             .unwrap();
             let mut output = vec![PastaField::ZERO; extended.size()];
-            let mut scratch = vec![PastaField::ZERO; operation.scratch_fields().unwrap()];
+            let mut scratch = vec![PastaField::ZERO; operation.scratch_fields()];
             group.bench_function(BenchmarkId::new(format!("{order:?}"), residues), |b| {
                 b.iter(|| {
-                    operation
-                        .execute(
-                            black_box(&input),
-                            &mut output,
-                            &mut [],
-                            None,
-                            &mut scratch,
-                            &SerialExecutor,
-                        )
-                        .unwrap();
+                    operation.execute(
+                        black_box(&input),
+                        &mut output,
+                        &mut [],
+                        None,
+                        &mut scratch,
+                        &SerialExecutor,
+                    );
                     black_box(&output);
                 })
             });

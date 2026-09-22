@@ -164,8 +164,7 @@ fn differentials<C: PastaCurve>() {
                 &mut storage,
                 TaskBudget::new(3).unwrap(),
                 &Pool,
-            )
-            .unwrap();
+            );
             assert_eq!(retained.len(), n);
             assert_eq!(retained.is_empty(), n == 0);
             for bases in [
@@ -173,13 +172,13 @@ fn differentials<C: PastaCurve>() {
                 Bases::Prepared(&prepared[..n]),
                 Bases::Points(&points[..n]),
             ] {
-                let dense = Input::new(bases, scalars).unwrap();
+                let dense = Input::new(bases, scalars);
                 let ix: Vec<_> = indices[..n].iter().map(|i| i % n.max(1) as u32).collect();
                 let indexed = Input::indexed(bases, &ix, scalars).unwrap();
                 for input in [dense, indexed] {
                     let reused = match input.indices {
                         Some(indices) => Input::indexed_prepared(bases, indices, retained),
-                        None => Input::new_prepared(bases, retained),
+                        None => Ok(Input::new_prepared(bases, retained)),
                     }
                     .unwrap();
                     let expected = reference(&input);
@@ -237,36 +236,41 @@ fn prepared_scalars_validate_before_writes_and_release_originals() {
         .collect();
     let g = AffinePoint::<C>::GENERATOR;
     let bases = vec![g; scalars.len()];
-    let raw = Input::new(Bases::Affine(&bases), &scalars).unwrap();
+    let raw = Input::new(Bases::Affine(&bases), &scalars);
     let expected = reference(&raw);
     let bytes = PreparedScalars::<C>::storage_len(scalars.len()).unwrap();
     let mut storage = vec![ScalarStorage::ZERO; bytes + 1];
-    assert!(matches!(
-        PreparedScalars::<C>::prepare(
-            &scalars,
-            &mut storage[..bytes - 1],
-            TaskBudget::SERIAL,
-            &SerialExecutor
-        ),
-        Err(CurveError::ScratchTooSmall { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = PreparedScalars::<C>::prepare(
+                &scalars,
+                &mut storage[..bytes - 1],
+                TaskBudget::SERIAL,
+                &SerialExecutor,
+            );
+        }))
+        .is_err()
+    );
     assert!(storage.iter().all(|b| *b == ScalarStorage::ZERO));
     assert_eq!(
         PreparedScalars::<C>::storage_len(usize::MAX),
         Err(CurveError::SizeOverflow)
     );
     let retained =
-        PreparedScalars::<C>::prepare(&scalars, &mut storage, TaskBudget::SERIAL, &SerialExecutor)
-            .unwrap();
+        PreparedScalars::<C>::prepare(&scalars, &mut storage, TaskBudget::SERIAL, &SerialExecutor);
     scalars.fill(PastaField::ZERO);
-    assert!(matches!(
-        Input::new_prepared(Bases::Affine(&bases[..1]), retained),
-        Err(CurveError::LengthMismatch { .. })
-    ));
-    assert!(matches!(
-        Input::indexed_prepared(Bases::Affine(&bases), &[], retained),
-        Err(CurveError::LengthMismatch { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = Input::new_prepared(Bases::Affine(&bases[..1]), retained);
+        }))
+        .is_err()
+    );
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = Input::indexed_prepared(Bases::Affine(&bases), &[], retained);
+        }))
+        .is_err()
+    );
     let mut indices = vec![0; bases.len()];
     indices[13] = bases.len() as u32;
     assert!(matches!(
@@ -278,8 +282,8 @@ fn prepared_scalars_validate_before_writes_and_release_originals() {
     // bases and indices. The source scalar vector has already been overwritten.
     indices.fill(0);
     let inputs = [
-        Input::new(Bases::Affine(&bases), &scalars).unwrap(),
-        Input::new_prepared(Bases::Affine(&bases), retained).unwrap(),
+        Input::new(Bases::Affine(&bases), &scalars),
+        Input::new_prepared(Bases::Affine(&bases), retained),
         Input::indexed_prepared(Bases::Affine(&negative[..1]), &indices, retained).unwrap(),
     ];
     let options = BatchOptions::new(
@@ -335,8 +339,7 @@ fn scalar_boundaries<C: PastaCurve>() {
                 &mut storage,
                 TaskBudget::SERIAL,
                 &SerialExecutor,
-            )
-            .unwrap();
+            );
             let reused =
                 Input::indexed_prepared(Bases::Points(&bases), &indices, retained).unwrap();
             for tasks in [1, 4] {
@@ -411,12 +414,11 @@ fn dense_and_sparse_bounded_rows_cross_chunk_policies() {
                         &mut records,
                         TaskBudget::SERIAL,
                         &SerialExecutor,
-                    )
-                    .unwrap();
+                    );
                     let cache_options = ArithmeticOptions::DEFAULT;
                     let mut digits = vec![73; prepared.cache_len_with(cache_options).unwrap()];
                     let cached = prepared.cache_with(cache_options, &mut digits).unwrap();
-                    let reused = raw.selection().with_prepared_scalars(cached).unwrap();
+                    let reused = raw.selection().with_prepared_scalars(cached);
                     for chunk in [n, 257] {
                         let options = BatchOptions::new(
                             ArithmeticOptions::DEFAULT
@@ -474,7 +476,7 @@ fn scratch_can_be_reused_after_executor_unwind() {
     }
     let bases = [AffinePoint::<Pallas>::GENERATOR; 700];
     let scalars: Vec<_> = field_samples().take(bases.len()).collect();
-    let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
+    let input = Input::new(Bases::Affine(&bases), &scalars);
     let expected = reference(&input);
     let options = BatchOptions::new(
         ArithmeticOptions::DEFAULT.with_max_terms_per_pass(NonZeroUsize::new(37)),
@@ -520,13 +522,11 @@ fn scratch_can_be_reused_after_executor_unwind() {
         };
         assert!(
             catch_unwind(AssertUnwindSafe(|| {
-                plan.execute(&mut output, &executor, planned_buffers.borrow())
-                    .unwrap();
+                plan.execute(&mut output, &executor, planned_buffers.borrow());
             }))
             .is_err()
         );
-        plan.execute(&mut output, &Pool, planned_buffers.borrow())
-            .unwrap();
+        plan.execute(&mut output, &Pool, planned_buffers.borrow());
         assert_eq!(output, [expected; 2]);
         planned_buffers.tails(plan.requirements());
     }
@@ -543,16 +543,14 @@ fn scratch_can_be_reused_after_executor_unwind() {
                 &mut storage,
                 options.task_budget,
                 &executor,
-            )
-            .unwrap();
+            );
         }))
         .is_err()
     );
     assert!(*storage.last().unwrap() == ScalarStorage::ZERO);
     let retained =
-        PreparedScalars::<Pallas>::prepare(&scalars, &mut storage, options.task_budget, &Pool)
-            .unwrap();
-    let reused = Input::new_prepared(Bases::Affine(&bases), retained).unwrap();
+        PreparedScalars::<Pallas>::prepare(&scalars, &mut storage, options.task_budget, &Pool);
+    let reused = Input::new_prepared(Bases::Affine(&bases), retained);
     assert_eq!(
         reused
             .execute_with(options, &Pool, buffers.borrow())
@@ -580,7 +578,7 @@ fn collisions<C: PastaCurve>() {
             PastaField::ONE.neg(),
         ] {
             let scalars = vec![value; n];
-            let input = Input::new(Bases::Points(&bases), &scalars).unwrap();
+            let input = Input::new(Bases::Points(&bases), &scalars);
             let expected = reference(&input);
             for cap in [1, 2, 3, 37, n] {
                 let options = BatchOptions::new(
@@ -612,22 +610,21 @@ fn grouped_jobs_share_workers_with_side_work_and_reuse_dirty_scratch() {
     let scalars: Vec<_> = field_samples().take(700).collect();
     let indices: Vec<_> = (0..700).map(|i| i as u32 % 13).collect();
     let mut jobs = [
-        Input::new(Bases::Affine(&[]), &[]).unwrap(),
+        Input::new(Bases::Affine(&[]), &[]),
         Input::indexed(Bases::Prepared(&cached), &indices[..700], &scalars).unwrap(),
-        Input::new(Bases::Affine(&bases[..17]), &scalars[..17]).unwrap(),
+        Input::new(Bases::Affine(&bases[..17]), &scalars[..17]),
         Input::indexed(Bases::Points(&points), &indices[..99], &scalars[..99]).unwrap(),
-        Input::new(Bases::Affine(&bases[..257]), &scalars[..257]).unwrap(),
+        Input::new(Bases::Affine(&bases[..257]), &scalars[..257]),
     ];
     let expected = jobs.map(|input| reference(&input));
     let mut records = vec![ScalarStorage::ZERO; scalars.len()];
     let prepared =
-        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
-            .unwrap();
+        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
     let mut digits = vec![0; prepared.cache_len_with(ArithmeticOptions::DEFAULT).unwrap()];
     let retained = prepared
         .cache_with(ArithmeticOptions::DEFAULT, &mut digits)
         .unwrap();
-    jobs[1] = jobs[1].selection().with_prepared_scalars(retained).unwrap();
+    jobs[1] = jobs[1].selection().with_prepared_scalars(retained);
     for workers in [1, 2, 4] {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -657,14 +654,12 @@ fn grouped_jobs_share_workers_with_side_work_and_reuse_dirty_scratch() {
             // Dirty scratch checks that workers clear unclaimed result slots.
             for _ in 0..2 {
                 output.fill(ProjectivePoint::GENERATOR);
-                pool.install(|| plan.execute(&mut output, &Pool, buffers.borrow()).unwrap());
+                pool.install(|| plan.execute(&mut output, &Pool, buffers.borrow()));
                 assert_eq!(output, expected);
                 buffers.tails(r);
             }
             let width = JoinWidth(core::sync::atomic::AtomicUsize::new(1));
-            let (result, peak) =
-                width.measure(|| plan.execute(&mut output, &width, buffers.borrow()));
-            result.unwrap();
+            let ((), peak) = width.measure(|| plan.execute(&mut output, &width, buffers.borrow()));
             assert_eq!(output, expected);
             assert!(
                 peak <= tasks,
@@ -681,10 +676,12 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
     type C = Pallas;
     let bases = [AffinePoint::<C>::GENERATOR; 256];
     let scalars = [PastaField::ONE; 256];
-    assert!(matches!(
-        Input::new(Bases::Affine(&bases), &scalars[..255]),
-        Err(CurveError::LengthMismatch { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = Input::new(Bases::Affine(&bases), &scalars[..255]);
+        }))
+        .is_err()
+    );
     assert!(matches!(
         Input::indexed(Bases::Affine(&bases), &[256], &scalars[..1]),
         Err(CurveError::BaseIndexOutOfBounds {
@@ -693,10 +690,12 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
             bases: 256
         })
     ));
-    assert!(matches!(
-        Input::indexed(Bases::Affine(&bases), &[], &scalars[..1]),
-        Err(CurveError::LengthMismatch { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = Input::indexed(Bases::Affine(&bases), &[], &scalars[..1]);
+        }))
+        .is_err()
+    );
     for n in [usize::MAX, isize::MAX as usize, usize::MAX / 64] {
         assert_eq!(
             Input::<C>::requirements_for_len(n, BatchOptions::default()),
@@ -710,7 +709,7 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
         Ok(r) => r,
         Err(_) => panic!("valid length"),
     };
-    let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
+    let input = Input::new(Bases::Affine(&bases), &scalars);
     assert_eq!(input.requirements_with(BatchOptions::default()).unwrap(), R);
     for short in 0..7 {
         let mut b = Buffers::<C>::new(R);
@@ -727,13 +726,15 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
         let mut output = [ProjectivePoint::GENERATOR; 2];
         let len = if short == 6 { 2 } else { 1 };
         assert!(
-            execute_batch(
-                &[input],
-                &mut output[..len],
-                BatchOptions::default(),
-                &SerialExecutor,
-                scratch
-            )
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = execute_batch(
+                    &[input],
+                    &mut output[..len],
+                    BatchOptions::default(),
+                    &SerialExecutor,
+                    scratch,
+                );
+            }))
             .is_err()
         );
         assert_eq!(output, [ProjectivePoint::GENERATOR; 2]);
@@ -888,8 +889,7 @@ fn production_booth_rows_reconstruct_both_glv_halves() {
                 &mut storage,
                 TaskBudget::SERIAL,
                 &SerialExecutor,
-            )
-            .unwrap();
+            );
             for width in 4..=12 {
                 let geometry = recode::Geometry::Booth(width);
                 let mut digits = vec![73; geometry.storage_len(n).unwrap()];
@@ -927,12 +927,11 @@ fn forced_kernels_chunks_and_incompatible_caches() {
                 }
             })
             .collect();
-        let raw = Input::new(Bases::Points(&bases), &scalars).unwrap();
+        let raw = Input::new(Bases::Points(&bases), &scalars);
         let expected = reference(&raw);
         let mut records = vec![ScalarStorage::ZERO; n];
         let prepared =
-            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
-                .unwrap();
+            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
         let cached_options = ArithmeticOptions::DEFAULT
             .with_kernel(Kernel::Booth {
                 width: Some(8),
@@ -941,7 +940,7 @@ fn forced_kernels_chunks_and_incompatible_caches() {
             .unwrap();
         let mut bytes = vec![73; prepared.cache_len_with(cached_options).unwrap() + 1];
         let cached = prepared.cache_with(cached_options, &mut bytes).unwrap();
-        let reused = raw.selection().with_prepared_scalars(cached).unwrap();
+        let reused = raw.selection().with_prepared_scalars(cached);
         assert_eq!(
             reused
                 .requirements_with(BatchOptions::new(cached_options))
@@ -1039,10 +1038,10 @@ fn typed_sources_validate_bounds_and_signed_extremes() {
             })
             .collect();
         for (typed, raw) in [
-            (selection.with_signed(&signed).unwrap(), &raw_signed),
-            (selection.with_unsigned(&unsigned).unwrap(), &raw_unsigned),
+            (selection.with_signed(&signed), &raw_signed),
+            (selection.with_unsigned(&unsigned), &raw_unsigned),
         ] {
-            let expected = reference(&selection.with_scalars(raw).unwrap());
+            let expected = reference(&selection.with_scalars(raw));
             for width in [None, Some(5), Some(12)] {
                 let options = width.map_or(BatchOptions::default(), |w| {
                     BatchOptions::new(
@@ -1090,7 +1089,12 @@ fn typed_sources_validate_bounds_and_signed_extremes() {
             .is_err()
         );
         assert!(records.iter().all(|r| *r == ScalarStorage::ZERO));
-        assert!(selection.with_unsigned(&unsigned[..5]).is_err());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = selection.with_unsigned(&unsigned[..5]);
+            }))
+            .is_err()
+        );
     }
     check::<Pallas>();
     check::<Vesta>();
@@ -1106,7 +1110,7 @@ fn memory_ceiling_and_reusable_weighted_plans() {
     let sizes = [3, 1025, 0, 17, 65, 2];
     let inputs: Vec<_> = sizes
         .iter()
-        .map(|&n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap())
+        .map(|&n| Input::new(Bases::Affine(&bases[..n]), &scalars[..n]))
         .collect();
     let expected: Vec<_> = inputs.iter().map(reference).collect();
     let serial = batch_requirements(&inputs, BatchOptions::default()).unwrap();
@@ -1136,7 +1140,7 @@ fn memory_ceiling_and_reusable_weighted_plans() {
             let mut buffers = Buffers::new(r);
             let mut output = vec![ProjectivePoint::GENERATOR; inputs.len()];
             for _ in 0..2 {
-                plan.execute(&mut output, &Pool, buffers.borrow()).unwrap();
+                plan.execute(&mut output, &Pool, buffers.borrow());
                 assert_eq!(output, expected);
                 buffers.tails(r);
             }
@@ -1203,7 +1207,7 @@ fn compact_tables_and_selection_rebind_across_scalar_rows() {
                     .skip(row * indices.len())
                     .take(indices.len())
                     .collect();
-                let input = selection.with_scalars(&scalars).unwrap();
+                let input = selection.with_scalars(&scalars);
                 let expected = reference(&input);
                 for options in [
                     BatchOptions::default(),
@@ -1352,24 +1356,20 @@ fn optional_compact_batch_certificate_preserves_fallbacks() {
             assert_eq!(prepared.batch_safe(), certified.batch_safe());
             let mut plain = [ProjectivePoint::IDENTITY; 32];
             let mut cached = plain;
-            tables
-                .mul_prepared(
-                    &prepared,
-                    &mut plain,
-                    &mut fields,
-                    TaskBudget::SERIAL,
-                    &SerialExecutor,
-                )
-                .unwrap();
-            tables
-                .mul_prepared(
-                    &certified,
-                    &mut cached,
-                    &mut fields,
-                    TaskBudget::new(3).unwrap(),
-                    &Pool,
-                )
-                .unwrap();
+            tables.mul_prepared(
+                &prepared,
+                &mut plain,
+                &mut fields,
+                TaskBudget::SERIAL,
+                &SerialExecutor,
+            );
+            tables.mul_prepared(
+                &certified,
+                &mut cached,
+                &mut fields,
+                TaskBudget::new(3).unwrap(),
+                &Pool,
+            );
             assert_eq!(plain, cached);
             assert!(
                 cached
@@ -1400,8 +1400,7 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
         let expected = reference(&raw);
         let mut records = vec![ScalarStorage::ZERO; scalars.len()];
         let prepared =
-            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
-                .unwrap();
+            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
         for width in 4..=12 {
             for chunk in [1, 2, 17, 256, 513] {
                 let options = BatchOptions::new(
@@ -1410,10 +1409,7 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
                         .unwrap()
                         .with_chunk_size(NonZeroUsize::new(chunk).unwrap()),
                 );
-                for input in [
-                    raw,
-                    raw.selection().with_prepared_scalars(prepared).unwrap(),
-                ] {
+                for input in [raw, raw.selection().with_prepared_scalars(prepared)] {
                     let r = input.requirements_with(options).unwrap();
                     let mut buffers = Buffers::new(r);
                     for _ in 0..2 {

@@ -2,7 +2,7 @@
 
 use core::marker::PhantomData;
 
-use super::{CurveError, PastaCurve, Scalars, check_scratch, checked_count};
+use super::{CurveError, PastaCurve, Scalars, assert_scratch, checked_count};
 use crate::{
     curve::{glv::decompose_canonical, parameters::GlvParameters},
     exec::{Executor, TaskBudget, for_each_chunk_mut},
@@ -110,13 +110,13 @@ impl<C: PastaCurve> ScalarStorage<C> {
 /// let mut records = [ScalarStorage::<Pallas>::ZERO; 2];
 /// let prepared = PreparedScalars::prepare(
 ///     &scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor,
-/// )?;
+/// );
 /// scalars.fill(Fq::ZERO);
 /// let bases = [AffinePoint::<Pallas>::GENERATOR; 2];
 /// let opposite = bases.map(|p| p.neg());
 /// let inputs = [
-///     Input::new_prepared(Bases::Affine(&bases), prepared)?,
-///     Input::new_prepared(Bases::Affine(&opposite), prepared)?,
+///     Input::new_prepared(Bases::Affine(&bases), prepared),
+///     Input::new_prepared(Bases::Affine(&opposite), prepared),
 /// ];
 /// let options = ExecutionOptions::default();
 /// let mut jobs = [run::JobStorage::EMPTY; 2];
@@ -133,7 +133,7 @@ impl<C: PastaCurve> ScalarStorage<C> {
 /// #     &mut projective, &mut field, &mut indices);
 /// // Allocate and initialize scratch from `r`, as in the `msm` module example.
 /// let mut output = [ProjectivePoint::IDENTITY; 2];
-/// plan.execute(&mut output, &SerialExecutor, scratch)?;
+/// plan.execute(&mut output, &SerialExecutor, scratch);
 /// let expected = bases[0].mul_projective(&Fq::from_u64(3));
 /// assert_eq!(output, [expected, expected.neg()]);
 /// # Ok::<(), zakura_udon::curve::CurveError>(())
@@ -160,50 +160,49 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// storage with at least [`Self::storage_len`] entries for `scalars.len()`;
     /// entries beyond that prefix are untouched.
     ///
-    /// Returns [`CurveError::SizeOverflow`] or [`CurveError::ScratchTooSmall`]
-    /// before any writes. An executor panic may partially write storage, which
-    /// can be reused without clearing after all scoped jobs finish unwinding,
-    /// as required by [`Executor`].
+    /// Insufficient storage panics before any writes. An executor panic may partially
+    /// write storage, which can be reused without clearing after all scoped jobs finish
+    /// unwinding, as required by [`Executor`].
     pub fn prepare<X: Executor>(
         scalars: &[PastaField<C::Scalar>],
         storage: &'a mut [ScalarStorage<C>],
         budget: TaskBudget,
         executor: &X,
-    ) -> Result<Self, CurveError> {
+    ) -> Self {
         Self::from_source(Scalars::Raw(scalars), storage, budget, executor)
     }
 
     /// Prepares unsigned 128-bit coefficients without Montgomery conversion.
     ///
-    /// The type guarantees the bound; errors and scratch contracts match
+    /// The type guarantees the bound; storage and panic contracts match
     /// [`Self::prepare`].
     pub fn unsigned<X: Executor>(
         scalars: &[u128],
         storage: &'a mut [ScalarStorage<C>],
         budget: TaskBudget,
         executor: &X,
-    ) -> Result<Self, CurveError> {
+    ) -> Self {
         Self::from_source(Scalars::Unsigned(scalars), storage, budget, executor)
     }
 
     /// Prepares signed 128-bit coefficients, including `i128::MIN`.
     ///
-    /// Negative coefficients subtract their magnitude's base multiple. Errors,
-    /// scratch requirements, and executor panic behavior match [`Self::prepare`].
+    /// Negative coefficients subtract their magnitude's base multiple. Storage and
+    /// panic contracts match [`Self::prepare`].
     pub fn signed<X: Executor>(
         scalars: &[i128],
         storage: &'a mut [ScalarStorage<C>],
         budget: TaskBudget,
         executor: &X,
-    ) -> Result<Self, CurveError> {
+    ) -> Self {
         Self::from_source(Scalars::Signed(scalars), storage, budget, executor)
     }
 
     /// Prepares canonical integers after checking the modulus and `bits` bound.
     ///
     /// Accepted bounds and scalar errors match [`super::Selection::with_canonical`].
-    /// Storage requirements, sizing errors, and executor panic behavior match
-    /// [`Self::prepare`]. All returned errors precede storage writes.
+    /// Storage and panic contracts match [`Self::prepare`]. All returned errors precede
+    /// storage writes.
     pub fn canonical<X: Executor>(
         scalars: &[CanonicalUint],
         bits: usize,
@@ -212,7 +211,12 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
         executor: &X,
     ) -> Result<Self, CurveError> {
         validate_canonical::<C>(scalars, bits)?;
-        Self::from_source(Scalars::Canonical(scalars), storage, budget, executor)
+        Ok(Self::from_source(
+            Scalars::Canonical(scalars),
+            storage,
+            budget,
+            executor,
+        ))
     }
 
     fn from_source<X: Executor>(
@@ -220,28 +224,30 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
         storage: &'a mut [ScalarStorage<C>],
         budget: TaskBudget,
         executor: &X,
-    ) -> Result<Self, CurveError> {
-        let n = Self::storage_len(source.len())?;
-        check_scratch("scalars", n, storage.len())?;
+    ) -> Self {
+        let n = source.len();
+        assert_scratch("scalars", n, storage.len());
         let records = &mut storage[..n];
         prepare(source, records, budget, executor);
-        Ok(Self {
+        Self {
             shape: super::recode::Shape::of(records),
             records,
             cached: None,
-        })
+        }
     }
 
     /// Additional bytes for this resolved plan's reusable recoding cache.
     ///
-    /// Returns zero when the plan has a different term count, splits the input
-    /// into chunks, or cannot reuse retained digits. Scalar records remain
-    /// independently reusable. Returns [`CurveError::SizeOverflow`] if the
-    /// required byte slice is unrepresentable. The cache is persistent
-    /// preparation, separate from the plan's workspace ceiling.
-    pub fn cache_len(&self, plan: &super::run::MsmPlan<C>) -> Result<usize, CurveError> {
-        plan.cache_geometry(self.len())
-            .map_or(Ok(0), |geometry| geometry.storage_len(self.len()))
+    /// Returns zero when the plan has a different term count, splits the input into
+    /// chunks, or cannot reuse retained digits. Scalar records remain independently
+    /// reusable. The cache is persistent preparation, separate from the plan's
+    /// workspace ceiling.
+    pub fn cache_len(&self, plan: &super::run::MsmPlan<C>) -> usize {
+        plan.cache_geometry(self.len()).map_or(0, |geometry| {
+            geometry
+                .storage_len(self.len())
+                .expect("bounded plan geometry")
+        })
     }
 
     /// Retains exactly the resolved plan's recoding in caller-owned bytes.
@@ -252,26 +258,22 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// fixed; use [`super::run::MsmPlan::for_input`] with the returned handle to
     /// resolve requirements that account for the retained cache.
     ///
-    /// Returns [`CurveError::ScratchTooSmall`] for short storage or
-    /// [`CurveError::SizeOverflow`] for an unrepresentable byte slice, before
-    /// writing anything. Unused storage tails are untouched.
-    pub fn cache(
-        &self,
-        plan: &super::run::MsmPlan<C>,
-        storage: &'a mut [u8],
-    ) -> Result<Self, CurveError> {
+    /// Insufficient storage panics before writes. Unused storage tails are untouched.
+    pub fn cache(&self, plan: &super::run::MsmPlan<C>, storage: &'a mut [u8]) -> Self {
         let Some(geometry) = plan.cache_geometry(self.len()) else {
-            return Ok(*self);
+            return *self;
         };
-        let len = geometry.storage_len(self.len())?;
-        check_scratch("digits", len, storage.len())?;
+        let len = geometry
+            .storage_len(self.len())
+            .expect("bounded plan geometry");
+        assert_scratch("digits", len, storage.len());
         let digits = &mut storage[..len];
         super::recode::write(self.records, geometry, digits);
-        Ok(Self {
+        Self {
             records: self.records,
             shape: self.shape,
             cached: Some(super::recode::Cache { geometry, digits }),
-        })
+        }
     }
 
     /// Returns additional bytes needed to cache recoding for `options`.
@@ -296,8 +298,8 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// streaming is disabled. Otherwise it recodes retained GLV data into scratch;
     /// it never interprets a cache using another geometry.
     ///
-    /// Returns [`CurveError::SizeOverflow`] or [`CurveError::ScratchTooSmall`]
-    /// before writes. Bytes beyond the required prefix remain untouched.
+    /// Returns [`CurveError::SizeOverflow`] if sizing fails. Insufficient storage
+    /// panics before writes. Bytes beyond the required prefix remain untouched.
     #[cfg(test)]
     pub(crate) fn cache_with(
         &self,
@@ -306,7 +308,7 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     ) -> Result<Self, CurveError> {
         let geometry = super::recode::Geometry::for_shape(self.len(), self.shape, options);
         let len = geometry.storage_len(self.len())?;
-        check_scratch("digits", len, storage.len())?;
+        assert_scratch("digits", len, storage.len());
         let digits = &mut storage[..len];
         super::recode::write(self.records, geometry, digits);
         Ok(Self {

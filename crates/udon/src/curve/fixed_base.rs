@@ -2,7 +2,7 @@
 
 use super::{
     AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, PastaCurve, ProjectivePoint,
-    batch, check_length, check_scratch, glv_decompose, table_entry::check_entry,
+    assert_length, assert_scratch, batch, glv_decompose, table_entry::check_entry, validate_length,
 };
 use crate::field::PastaField;
 
@@ -96,10 +96,9 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
     /// their format through [`Self::description`]. Scratch can be reused
     /// immediately.
     ///
-    /// Returns [`CurveError::InvalidBase`] for an invalid base,
-    /// [`CurveError::LengthMismatch`] for too few entries, or
-    /// [`CurveError::ScratchTooSmall`] for insufficient scratch. All checks
-    /// precede writes. Preparation is variable-time and performs no allocation.
+    /// Returns [`CurveError::InvalidBase`] for an invalid base. Insufficient capacity
+    /// panics. These checks precede writes. Preparation is variable-time and performs
+    /// no allocation.
     ///
     /// ```
     /// use zakura_udon::{
@@ -141,13 +140,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
             description = candidate;
         }
         let required = description.requirements()?;
-        if entries.len() < required.table_entries {
-            return Err(CurveError::LengthMismatch {
-                buffer: "table",
-                expected: required.table_entries,
-                actual: entries.len(),
-            });
-        }
+        assert_scratch("entries", required.table_entries, entries.len());
         Self::prepare_with(
             description,
             base,
@@ -165,12 +158,12 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
         field_scratch: &mut [PastaField<C::Base>],
     ) -> Result<Self, CurveError> {
         let requirements = check_inputs(description, base, entries.len())?;
-        check_scratch(
+        assert_scratch(
             "projective",
             requirements.projective_scratch,
             projective_scratch.len(),
-        )?;
-        check_scratch("field", requirements.field_scratch, field_scratch.len())?;
+        );
+        assert_scratch("field", requirements.field_scratch, field_scratch.len());
         let h = requirements.projective_scratch;
         let projective_scratch = &mut projective_scratch[..h];
         let field_scratch = &mut field_scratch[..h];
@@ -211,16 +204,21 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
 
     /// Binds stored entries after checking every specified multiple of `base`.
     ///
-    /// Uses [`FixedBaseDescription`]'s layout. Returns the description, base,
-    /// and length errors from [`Self::bind_trusted`], or
-    /// [`CurveError::InvalidTable`] if an entry has unreduced coordinates,
-    /// differs from its specified multiple, or has an inconsistent cache.
+    /// Uses [`FixedBaseDescription`]'s layout. Returns the description and base errors
+    /// from [`Self::bind_trusted`], [`CurveError::LengthMismatch`] for an incorrect
+    /// stored length, or [`CurveError::InvalidTable`] if an entry has unreduced
+    /// coordinates, differs from its specified multiple, or has an inconsistent cache.
     /// Validation uses no scratch, allocation, or inversion.
     pub fn bind(
         description: FixedBaseDescription,
         base: &AffinePoint<C>,
         entries: &'a [E],
     ) -> Result<Self, CurveError> {
+        validate_length(
+            "entries",
+            description.requirements()?.table_entries,
+            entries.len(),
+        )?;
         let table = Self::bind_trusted(description, base, entries)?;
         table.validate()?;
         Ok(table)
@@ -237,10 +235,10 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
     /// but remain memory-safe. Use [`Self::bind`] for unvalidated data, or call
     /// [`Self::validate`] before multiplication.
     ///
-    /// Returns [`CurveError::InvalidWindowBits`] for an unsupported width,
-    /// [`CurveError::InvalidBase`] for unreduced or off-curve base coordinates,
-    /// or [`CurveError::LengthMismatch`] unless `entries` has exactly the length
-    /// reported by [`FixedBaseDescription::requirements`].
+    /// Returns [`CurveError::InvalidWindowBits`] for an unsupported width, or
+    /// [`CurveError::InvalidBase`] for unreduced or off-curve base coordinates. Panics
+    /// unless `entries` has exactly the length reported by
+    /// [`FixedBaseDescription::requirements`].
     pub fn bind_trusted(
         description: FixedBaseDescription,
         base: &AffinePoint<C>,
@@ -329,7 +327,7 @@ fn check_inputs<C: PastaCurve>(
     length: usize,
 ) -> Result<CurveTableRequirements, CurveError> {
     let requirements = description.requirements()?;
-    check_length("entries", requirements.table_entries, length)?;
+    assert_length("entries", requirements.table_entries, length);
     if AffinePoint::<C>::from_xy(base.x, base.y).is_none() {
         return Err(CurveError::InvalidBase);
     }

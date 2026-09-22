@@ -47,7 +47,7 @@ fn fft_task_owns_nonstatic_slices_on_a_scoped_worker() {
     .unwrap();
     let mut identity = Identity::new();
     let mut slots = [TaskStorage::EMPTY];
-    let mut run = fft_run::FftRun::new(plan, false, &mut identity, &mut slots).unwrap();
+    let mut run = fft_run::FftRun::new(plan, false, &mut identity, &mut slots);
     let mut ready = [None];
     assert_eq!(run.ready(&mut ready), 1);
     let mut task = run
@@ -102,9 +102,8 @@ fn msm_tasks_own_nonstatic_slices_on_scoped_workers() {
     let scalars = [Fq::from_u64(2), Fq::from_u64(3)];
     let mut records = [msm::ScalarStorage::ZERO; 2];
     let prepared =
-        msm::PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
-            .unwrap();
-    let input = msm::Input::new_prepared(msm::Bases::Affine(&bases), prepared).unwrap();
+        msm::PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
+    let input = msm::Input::new_prepared(msm::Bases::Affine(&bases), prepared);
     let plan = msm_run::MsmPlan::new(2, ExecutionOptions::default()).unwrap();
     let required = plan.temporary();
     let mut affine = vec![AffinePoint::GENERATOR; required.affine()];
@@ -114,7 +113,7 @@ fn msm_tasks_own_nonstatic_slices_on_scoped_workers() {
     let mut partial = [ProjectivePoint::IDENTITY];
     let mut identity = Identity::new();
     let mut slots = [TaskStorage::EMPTY];
-    let mut run = msm_run::MsmRun::new(plan, input, &mut identity, &mut slots).unwrap();
+    let mut run = msm_run::MsmRun::new(plan, input, &mut identity, &mut slots);
     while run.result().is_none() {
         let mut ready = [None];
         assert_eq!(run.ready(&mut ready), 1);

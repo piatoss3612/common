@@ -24,7 +24,7 @@ fn detached_scoped_claims_complete_independently_and_drain_panics() {
     let mut data = [1, 2, 3, 4];
     let mut identity = Identity::new();
     let mut slots = [const { TaskStorage::EMPTY }; 2];
-    let mut frontier = Frontier::new(&mut identity, &mut slots, 3).unwrap();
+    let mut frontier = Frontier::new(&mut identity, &mut slots, 3);
     let mut ready = [ReadyRange::EMPTY];
     assert_eq!(frontier.ready(&mut ready), 1);
     let keys: Vec<_> = ready[0].tasks().collect();
@@ -117,10 +117,10 @@ fn detached_scoped_claims_complete_independently_and_drain_panics() {
 fn frontier_is_bounded_rejects_foreign_receipts_and_reuses_epochs() {
     let mut identity = Identity::new();
     let mut slots = [const { TaskStorage::EMPTY }; 3];
-    let mut frontier = Frontier::new(&mut identity, &mut slots, 100).unwrap();
+    let mut frontier = Frontier::new(&mut identity, &mut slots, 100);
     let mut foreign_identity = Identity::new();
     let mut foreign_slots = [TaskStorage::EMPTY];
-    let mut foreign = Frontier::new(&mut foreign_identity, &mut foreign_slots, 100).unwrap();
+    let mut foreign = Frontier::new(&mut foreign_identity, &mut foreign_slots, 100);
     let mut output = [0];
     let mut ready = [ReadyRange::EMPTY];
     let mut old_key = None;
@@ -290,7 +290,7 @@ fn shared_read_leases_move_between_workers_then_release_for_writing() {
         let block = RwLock::new([1, 2, 3, 4]);
         let mut identity = Identity::new();
         let mut slots = [const { TaskStorage::EMPTY }; 2];
-        let mut run = Frontier::new(&mut identity, &mut slots, 2).unwrap();
+        let mut run = Frontier::new(&mut identity, &mut slots, 2);
         let mut ready = [ReadyRange::EMPTY];
         run_pool::scoped(workers, 2, |pool| {
             assert!(pool.queue_bytes() > 0);

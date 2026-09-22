@@ -143,8 +143,6 @@ pub enum CurveError {
         /// The supplied width.
         bits: u32,
     },
-    /// The input does not meet the scalar or preparation facts of its resolved plan.
-    IncompatibleMsmInput,
     /// An MSM Booth width is outside `4..=12`.
     #[cfg(test)]
     InvalidMsmWindow {
@@ -185,7 +183,7 @@ pub enum CurveError {
         /// Number of available bases.
         bases: usize,
     },
-    /// An input or output buffer does not have the required exact length.
+    /// An imported multiplication table has the wrong number of entries.
     LengthMismatch {
         /// The buffer's role.
         buffer: &'static str,
@@ -194,7 +192,7 @@ pub enum CurveError {
         /// Supplied length in elements.
         actual: usize,
     },
-    /// A scratch buffer is too short.
+    /// No MSM implementation fits the supplied scratch capacities.
     ScratchTooSmall {
         /// The buffer's role.
         buffer: &'static str,
@@ -209,9 +207,6 @@ impl fmt::Display for CurveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidWindowBits { bits } => write!(f, "window width {bits} is outside 2..=8"),
-            Self::IncompatibleMsmInput => {
-                f.write_str("input is incompatible with resolved MSM plan")
-            }
             #[cfg(test)]
             Self::InvalidMsmWindow { bits } => write!(f, "MSM width {bits} is outside 4..=12"),
             Self::InvalidScalar { position } => {
@@ -259,7 +254,11 @@ impl fmt::Display for CurveError {
 
 impl core::error::Error for CurveError {}
 
-fn check_length(buffer: &'static str, expected: usize, actual: usize) -> Result<(), CurveError> {
+fn assert_length(buffer: &str, expected: usize, actual: usize) {
+    assert_eq!(actual, expected, "{buffer} length");
+}
+
+fn validate_length(buffer: &'static str, expected: usize, actual: usize) -> Result<(), CurveError> {
     if actual != expected {
         return Err(CurveError::LengthMismatch {
             buffer,
@@ -270,15 +269,11 @@ fn check_length(buffer: &'static str, expected: usize, actual: usize) -> Result<
     Ok(())
 }
 
-fn check_scratch(buffer: &'static str, required: usize, provided: usize) -> Result<(), CurveError> {
-    if provided < required {
-        return Err(CurveError::ScratchTooSmall {
-            buffer,
-            required,
-            provided,
-        });
-    }
-    Ok(())
+fn assert_scratch(buffer: &str, required: usize, provided: usize) {
+    assert!(
+        provided >= required,
+        "{buffer} scratch requires {required} elements, got {provided}"
+    );
 }
 
 const fn checked_count<T>(count: usize, per_item: usize) -> Result<usize, CurveError> {

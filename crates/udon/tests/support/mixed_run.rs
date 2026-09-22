@@ -140,7 +140,7 @@ impl Fixture {
     fn input(&self, round: usize, op: usize) -> Input<'_, Pallas> {
         let n = self.terms >> round;
         let n = if op == 0 { n } else { (n / 8).max(1) };
-        Input::new(Bases::Affine(&self.bases[..n]), &self.scalars[..n]).unwrap()
+        Input::new(Bases::Affine(&self.bases[..n]), &self.scalars[..n])
     }
 }
 
@@ -210,11 +210,7 @@ enum Receipt<'a, 'i> {
     ),
     Fft(
         usize,
-        Completion<
-            'a,
-            Bundle<'a, fft_run::Lease<'i, PallasBase>>,
-            Result<(), zakura_udon::fft::FftError>,
-        >,
+        Completion<'a, Bundle<'a, fft_run::Lease<'i, PallasBase>>, ()>,
     ),
     App(
         usize,
@@ -287,21 +283,21 @@ fn scoped_impl<const CHECK: bool, O>(
     let [mi0, mi1] = &mut msm_identity;
     let [ms0, ms1] = &mut msm_slots;
     let mut msm = [
-        MsmRun::new(fixture.rounds[0][0], fixture.input(0, 0), mi0, ms0).unwrap(),
-        MsmRun::new(fixture.rounds[0][1], fixture.input(0, 1), mi1, ms1).unwrap(),
+        MsmRun::new(fixture.rounds[0][0], fixture.input(0, 0), mi0, ms0),
+        MsmRun::new(fixture.rounds[0][1], fixture.input(0, 1), mi1, ms1),
     ];
     let [fi0, fi1] = &mut fft_identity;
     let [fs0, fs1] = &mut fft_slots;
     let mut fft = [
-        FftRun::new(fixture.fft_plans[0][0], false, fi0, fs0).unwrap(),
-        FftRun::new(fixture.fft_plans[0][1], false, fi1, fs1).unwrap(),
+        FftRun::new(fixture.fft_plans[0][0], false, fi0, fs0),
+        FftRun::new(fixture.fft_plans[0][1], false, fi1, fs1),
     ];
     let [ai0, ai1, ai2] = &mut app_identity;
     let [as0, as1, as2] = &mut app_slots;
     let mut app = [
-        Frontier::new(ai0, as0, APP_CHUNKS).unwrap(),
-        Frontier::new(ai1, as1, 2).unwrap(),
-        Frontier::new(ai2, as2, 1).unwrap(),
+        Frontier::new(ai0, as0, APP_CHUNKS),
+        Frontier::new(ai1, as1, 2),
+        Frontier::new(ai2, as2, 1),
     ];
     let mut admission_identity = Identity::new();
     let mut segments = [SegmentStorage::EMPTY];

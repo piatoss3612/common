@@ -25,14 +25,12 @@
 //! # Validation and working storage
 //!
 //! Transform construction validates configuration without binding working buffers.
-//! Synchronous drivers validate their complete buffer and scratch bindings before
-//! mutation. Incremental tasks validate their own resource lengths before they
-//! write; a later task error does not undo writes from earlier tasks. Publication
-//! inspects arithmetic errors even when a task returned normally, poisons the
-//! run, and permits outstanding receipts to drain.
-//! Length mismatches identify the buffer parameter or table field, along with
-//! its expected and actual lengths. Invalid input prefixes report the
-//! supported length range separately from unsupported domain sizes.
+//! Callers must supply working storage matching the resolved operation or task request.
+//! Synchronous drivers assert buffer and scratch requirements before mutation.
+//! Incremental tasks assert their own resource requirements before writing; a later
+//! task's panic does not undo earlier writes. Publishing a failed or cancelled task
+//! poisons the run and permits outstanding receipts to drain. Invalid input prefixes
+//! report the supported length range separately from unsupported domain sizes.
 //!
 //! Checked table binding, such as [`Tables::bind`], validates dimensions and
 //! mathematical contents before returning a reusable handle. Native
@@ -92,7 +90,7 @@
 //!     forward: Some(&mut forward),
 //!     inverse: Some(&mut inverse),
 //!     ..TablesMut::default()
-//! }.prepare(domain)?;
+//! }.prepare(domain);
 //! let coefficients = [Fq::ONE; SIZE];
 //! let mut values = coefficients;
 //! transform.forward(&mut values, ExecutionOptions::default(), &SerialExecutor, &mut [])?;
@@ -126,17 +124,17 @@
 //! let coefficients = [Fp::ONE, Fp::from_u64(2)];
 //! let mut factor = [Fp::ZERO; 8];
 //! expansion.execute(&coefficients, &mut factor, &mut [], None,
-//!     &mut [], &SerialExecutor)?;
+//!     &mut [], &SerialExecutor);
 //! let mut product = [Fp::ZERO; 8];
 //! expansion.execute(&coefficients, &mut product, &mut [], Some(&factor),
-//!     &mut [], &SerialExecutor)?;
+//!     &mut [], &SerialExecutor);
 //! let inverse = FftPlan::new(Transform::new(extended),
 //!     TransformRequest {
 //!         input_order: ElementOrder::BitReversed,
 //!         ..TransformRequest::new(Direction::Inverse)
 //!     }, StorageLayout::Contiguous, options,
 //! )?;
-//! inverse.execute(None, &mut product, None, &mut [], &SerialExecutor)?;
+//! inverse.execute(None, &mut product, None, &mut [], &SerialExecutor);
 //! assert_eq!(&product[..3], &[Fp::ONE, Fp::from_u64(4), Fp::from_u64(4)]);
 //! assert!(product[3..].iter().all(|value| *value == Fp::ZERO));
 //! # Ok::<(), zakura_udon::fft::FftError>(())
@@ -184,7 +182,7 @@ pub use powers::{PowerTable, TwiddleDescription, TwiddleStorage, TwiddleTable};
 pub use tables::{TableRequirements, Tables, TablesMut};
 pub use transform::Transform;
 
-/// An invalid FFT description or insufficient caller storage.
+/// An invalid FFT description, stored table, or workspace limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FftError {
     /// A domain size is unsupported.
@@ -213,21 +211,14 @@ pub enum FftError {
         /// Caller-provided byte ceiling.
         limit: usize,
     },
-    /// A buffer has the wrong length.
+    /// An imported table has the wrong number of entries.
     LengthMismatch {
-        /// Name of the buffer parameter or table field with the wrong length.
+        /// Name of the table field with the wrong length.
         buffer: &'static str,
         /// Required length, in elements.
         expected: usize,
         /// Supplied length, in elements.
         actual: usize,
-    },
-    /// The scratch buffer is too short.
-    ScratchTooSmall {
-        /// Required length, in field elements.
-        required: usize,
-        /// Supplied length, in field elements.
-        provided: usize,
     },
     /// A prepared table does not match its domain.
     InvalidTables,
@@ -265,12 +256,6 @@ impl core::fmt::Display for FftError {
                     "{buffer}: expected {expected} elements, received {actual}"
                 )
             }
-            Self::ScratchTooSmall { required, provided } => {
-                write!(
-                    f,
-                    "FFT needs {required} scratch elements, received {provided}"
-                )
-            }
             Self::InvalidTables => f.write_str("FFT table contents do not match the domain"),
             Self::InvalidLayout => f.write_str("invalid FFT layout or range"),
             Self::InvalidClass => f.write_str("interpolation class exceeds the output domain"),
@@ -281,7 +266,11 @@ impl core::fmt::Display for FftError {
 
 impl core::error::Error for FftError {}
 
-fn check_length(buffer: &'static str, expected: usize, actual: usize) -> Result<(), FftError> {
+fn assert_length(buffer: &str, expected: usize, actual: usize) {
+    assert_eq!(actual, expected, "{buffer} length");
+}
+
+fn validate_length(buffer: &'static str, expected: usize, actual: usize) -> Result<(), FftError> {
     if actual == expected {
         Ok(())
     } else {

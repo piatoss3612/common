@@ -163,42 +163,6 @@ fn rejections<C: PastaCurve>() {
         ),
         (description, invalid, 257, 8, 8, CurveError::InvalidBase),
         (description, off_curve, 257, 8, 8, CurveError::InvalidBase),
-        (
-            description,
-            base,
-            256,
-            8,
-            8,
-            CurveError::LengthMismatch {
-                buffer: "entries",
-                expected: 257,
-                actual: 256,
-            },
-        ),
-        (
-            description,
-            base,
-            257,
-            7,
-            8,
-            CurveError::ScratchTooSmall {
-                buffer: "projective",
-                required: 8,
-                provided: 7,
-            },
-        ),
-        (
-            description,
-            base,
-            257,
-            8,
-            7,
-            CurveError::ScratchTooSmall {
-                buffer: "field",
-                required: 8,
-                provided: 7,
-            },
-        ),
     ] {
         let old = (entries.clone(), projective.clone(), field.clone());
         assert_eq!(
@@ -211,6 +175,22 @@ fn rejections<C: PastaCurve>() {
             )
             .unwrap_err(),
             expected
+        );
+        assert_eq!((&entries, &projective, &field), (&old.0, &old.1, &old.2));
+    }
+    for (entry_len, projective_len, field_len) in [(256, 8, 8), (257, 7, 8), (257, 8, 7)] {
+        let old = (entries.clone(), projective.clone(), field.clone());
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = FixedBaseTable::prepare_with(
+                    description,
+                    &base,
+                    &mut entries[..entry_len],
+                    &mut projective[..projective_len],
+                    &mut field[..field_len],
+                );
+            }))
+            .is_err()
         );
         assert_eq!((&entries, &projective, &field), (&old.0, &old.1, &old.2));
     }
@@ -269,19 +249,20 @@ fn rejections<C: PastaCurve>() {
     for len in [0, 256, 258] {
         let mut wrong = valid.clone();
         wrong.resize(len, base);
-        for error in [
+        assert_eq!(
             FixedBaseTable::bind(description, &base, &wrong).unwrap_err(),
-            FixedBaseTable::bind_trusted(description, &base, &wrong).unwrap_err(),
-        ] {
-            assert_eq!(
-                error,
-                CurveError::LengthMismatch {
-                    buffer: "entries",
-                    expected: 257,
-                    actual: len
-                }
-            );
-        }
+            CurveError::LengthMismatch {
+                buffer: "entries",
+                expected: required.table_entries,
+                actual: len
+            }
+        );
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = FixedBaseTable::bind_trusted(description, &base, &wrong);
+            }))
+            .is_err()
+        );
     }
     // Reusing all buffers starts from their prior, arbitrary scratch contents.
     FixedBaseTable::prepare_with(

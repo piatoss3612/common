@@ -49,7 +49,7 @@ fn check_products<M: PrimeModulus>() {
             }
         }
         assert_value(
-            PastaField::<M>::checked_sum_of_products(&lhs, &rhs).unwrap(),
+            PastaField::<M>::sum_of_products_slice(&lhs, &rhs),
             &expected,
         );
         assert_value(
@@ -61,17 +61,21 @@ fn check_products<M: PrimeModulus>() {
         let maximal_integer = BigUint::from_bytes_le(&maximal.to_bytes());
         let repeated = vec![maximal; length];
         assert_value(
-            PastaField::<M>::checked_sum_of_products(&repeated, &repeated).unwrap(),
+            PastaField::<M>::sum_of_products_slice(&repeated, &repeated),
             &(&maximal_integer * &maximal_integer * length),
         );
     }
-    assert_eq!(
-        PastaField::<M>::checked_sum_of_products(&[PastaField::ONE], &[]),
-        None
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = PastaField::<M>::sum_of_products_slice(&[PastaField::ONE], &[]);
+        }))
+        .is_err()
     );
-    assert_eq!(
-        PastaField::<M>::checked_sum_of_products(&[], &[PastaField::ONE]),
-        None
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = PastaField::<M>::sum_of_products_slice(&[], &[PastaField::ONE]);
+        }))
+        .is_err()
     );
 
     // Literal lengths instantiate each array API specialization.

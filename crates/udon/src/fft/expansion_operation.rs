@@ -1,6 +1,6 @@
 use super::{
     CoefficientView, CosetDomain, ElementOrder, Executor, Expansion, FftError, InverseScale,
-    PastaField, PrimeModulus, ScratchRequirements, check_length,
+    PastaField, PrimeModulus, ScratchRequirements, assert_length,
 };
 #[cfg(test)]
 use super::{Strategy, check_prefix, expansion::ResidueJobs};
@@ -124,10 +124,9 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
     /// Execution adapts to scratch capacity, including empty scratch; unused
     /// scratch tails remain untouched.
     ///
-    /// Returns [`FftError::InvalidPrefix`] for oversized input or
-    /// [`FftError::LengthMismatch`] for an incorrect output length. Planning
-    /// errors follow [`Self::scratch_requirements`]. All returned errors
-    /// precede writes; panic behavior follows the module's
+    /// Returns [`FftError::InvalidPrefix`] for oversized input. Planning errors follow
+    /// [`Self::scratch_requirements`]. An incorrect output length panics before writes.
+    /// Returned errors also precede writes; executor panics follow the module's
     /// [working-storage rules](super).
     pub fn coefficients<'input, E: Executor>(
         self,
@@ -138,13 +137,14 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         let input = input.into();
-        check_length("output", self.expansion.base.domain().size(), output.len())?;
+        assert_length("output", self.expansion.base.domain().size(), output.len());
         self.plan(
             super::InputSupport::Prefix(input.as_slice().len()),
             options.for_scratch::<PastaField<M>>(scratch.len()),
         )?
-        .with_residue_scales(self.expansion, self.residue, input.normalization_factor())?
-        .execute(Some(input.as_slice()), output, None, scratch, executor)
+        .with_residue_scales(self.expansion, self.residue, input.normalization_factor())
+        .execute(Some(input.as_slice()), output, None, scratch, executor);
+        Ok(())
     }
 
     /// Base-sized coset containing the selected residue's extended rows.
@@ -198,11 +198,9 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
     /// fields and uses the order selected by [`Expansion::residue`].
     /// Scratch must meet [`Self::scratch_requirements`], including for empty input.
     ///
-    /// Returns [`FftError::InvalidPrefix`] for an oversized input,
-    /// [`FftError::LengthMismatch`] for an incorrect output length, or
-    /// [`FftError::ScratchTooSmall`] for insufficient scratch. Option errors follow
-    /// [`Self::scratch_requirements`]. The module's [validation and working-storage
-    /// rules](super) apply.
+    /// Returns [`FftError::InvalidPrefix`] for an oversized input. Option errors follow
+    /// [`Self::scratch_requirements`]. Incorrect output or scratch lengths panic before
+    /// writes. The module's [working-storage rules](super) apply.
     #[cfg(test)]
     pub(crate) fn coefficients_with<'input, E: Executor>(
         self,
@@ -216,9 +214,9 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
         let (normalized_coefficients, extra) = self.expansion.coefficient_input(input);
         let input = input.as_slice();
         check_prefix(input.len(), 0, self.expansion.base.domain().size())?;
-        check_length("output", self.expansion.base.domain().size(), output.len())?;
+        assert_length("output", self.expansion.base.domain().size(), output.len());
         let required = self.scratch_requirements_with(options)?;
-        required.check(scratch.len())?;
+        required.check(scratch.len());
         ResidueJobs {
             expansion: self.expansion,
             coefficients: input,

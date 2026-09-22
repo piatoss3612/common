@@ -152,15 +152,12 @@ pub enum BatchInversionError {
         /// Position of the zero denominator in the record slice.
         index: usize,
     },
-    /// The combined input length cannot be represented by `usize`.
-    SizeOverflow,
 }
 
 impl fmt::Display for BatchInversionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ZeroDenominator { index } => write!(f, "zero denominator at record {index}"),
-            Self::SizeOverflow => f.write_str("batch inversion input length overflow"),
         }
     }
 }
@@ -178,14 +175,11 @@ impl core::error::Error for BatchInversionError {}
 /// ```
 /// use zakura_udon::field::{Fp, batch_invert};
 /// let mut values = [Fp::from_u64(7), Fp::ZERO, Fp::from_u64(3)];
-/// batch_invert(&mut values, &mut [Fp::ZERO; 3]).unwrap();
+/// batch_invert(&mut values, &mut [Fp::ZERO; 3]);
 /// assert_eq!(values[0].mul(&Fp::from_u64(7)), Fp::ONE);
 /// assert_eq!(values[1], Fp::ZERO);
 /// ```
-pub fn batch_invert<M: PrimeModulus>(
-    values: &mut [PastaField<M>],
-    scratch: &mut [PastaField<M>],
-) -> Result<(), BatchInversionError> {
+pub fn batch_invert<M: PrimeModulus>(values: &mut [PastaField<M>], scratch: &mut [PastaField<M>]) {
     batch_invert_groups(&mut [values], scratch)
 }
 
@@ -202,17 +196,12 @@ pub fn batch_invert<M: PrimeModulus>(
 /// Each group's [`AsMut::as_mut`] must expose the same slice throughout the
 /// call. Arrays, mutable slices, and vectors satisfy this requirement. A custom
 /// implementation that changes its view can produce incorrect results or panic.
-///
-/// # Errors
-///
-/// Returns [`BatchInversionError::SizeOverflow`] if the combined length
-/// overflows. All lengths are checked before changing inputs or scratch.
 pub fn batch_invert_groups<M: PrimeModulus>(
     groups: &mut [impl AsMut<[PastaField<M>]>],
     scratch: &mut [PastaField<M>],
-) -> Result<(), BatchInversionError> {
-    let required = combined_len(groups.iter_mut().map(|group| group.as_mut().len()))?;
-    if scratch.len() < required {
+) {
+    let required = combined_len(groups.iter_mut().map(|group| group.as_mut().len()));
+    let Some(required) = required.filter(|&required| required <= scratch.len()) else {
         for group in groups {
             if scratch.is_empty() {
                 for value in group.as_mut() {
@@ -220,12 +209,12 @@ pub fn batch_invert_groups<M: PrimeModulus>(
                 }
             } else {
                 for chunk in group.as_mut().chunks_mut(scratch.len()) {
-                    batch_invert(chunk, scratch)?;
+                    batch_invert(chunk, scratch);
                 }
             }
         }
-        return Ok(());
-    }
+        return;
+    };
     let scratch = &mut scratch[..required];
     // Parity follows the concatenated input, including zeros and empty groups.
     let mut products = NonzeroInversionLanes::new();
@@ -242,7 +231,7 @@ pub fn batch_invert_groups<M: PrimeModulus>(
         }
     }
     let Some(mut inverses) = products.invert() else {
-        return Ok(());
+        return;
     };
     for (value, (index, prefix)) in groups
         .iter_mut()
@@ -254,7 +243,6 @@ pub fn batch_invert_groups<M: PrimeModulus>(
             *value = inverses.pop(index, value, prefix);
         }
     }
-    Ok(())
 }
 
 /// Inverts denominators read from immutable records and visits their inverses.
@@ -328,12 +316,8 @@ pub fn try_batch_invert_by<R, M: PrimeModulus, E: From<BatchInversionError>>(
     Ok(())
 }
 
-fn combined_len(lengths: impl IntoIterator<Item = usize>) -> Result<usize, BatchInversionError> {
-    lengths.into_iter().try_fold(0usize, |total, len| {
-        total
-            .checked_add(len)
-            .ok_or(BatchInversionError::SizeOverflow)
-    })
+fn combined_len(lengths: impl IntoIterator<Item = usize>) -> Option<usize> {
+    lengths.into_iter().try_fold(0usize, usize::checked_add)
 }
 
 #[cfg(test)]
@@ -342,10 +326,7 @@ mod tests {
 
     #[test]
     fn combined_length_overflow() {
-        assert_eq!(
-            combined_len([usize::MAX, 1]),
-            Err(BatchInversionError::SizeOverflow)
-        );
-        assert_eq!(combined_len([0, usize::MAX, 0]), Ok(usize::MAX));
+        assert_eq!(combined_len([usize::MAX, 1]), None);
+        assert_eq!(combined_len([0, usize::MAX, 0]), Some(usize::MAX));
     }
 }

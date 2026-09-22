@@ -37,8 +37,7 @@ impl<M: PrimeModulus> Prepared<M> {
             inverse_finish: Some(&mut result.finish),
             inverse_scales: Some(&mut result.scales),
         }
-        .prepare(domain)
-        .unwrap();
+        .prepare(domain);
         result
     }
 
@@ -434,7 +433,7 @@ fn expansions<M: PrimeModulus>() {
                 let domain = Domain::new(log + extra).unwrap().coset(shift).unwrap();
                 let expansion = Expansion::new(base, domain, None).unwrap();
                 let mut scales = vec![PastaField::ZERO; expansion.scale_count()];
-                let scales = expansion.prepare_scales(&mut scales).unwrap();
+                let scales = expansion.prepare_scales(&mut scales);
                 for scales in [None, Some(scales)] {
                     let expansion = Expansion::new(base, domain, scales).unwrap();
                     expansion.validate_scales().unwrap();
@@ -478,7 +477,7 @@ fn expansions<M: PrimeModulus>() {
                             )
                             .unwrap();
                         assert_eq!(scratch[count], PastaField::ONE);
-                        let view = expansion.view(&output).unwrap();
+                        let view = expansion.view(&output);
                         for (row, expected) in expected.iter().enumerate() {
                             assert_eq!(view.get(row), Some(expected));
                         }
@@ -501,7 +500,7 @@ fn expansions<M: PrimeModulus>() {
                                 .iter()
                                 .all(|value| *value == PastaField::ONE)
                         );
-                        let view = expansion.view(&output).unwrap();
+                        let view = expansion.view(&output);
                         for (row, expected) in expected.iter().enumerate() {
                             assert_eq!(view.get(row), Some(expected));
                         }
@@ -519,7 +518,7 @@ fn expansions<M: PrimeModulus>() {
                                 )
                                 .unwrap();
                             let short_values = direct(short, domain);
-                            let product = expansion.view(&product).unwrap();
+                            let product = expansion.view(&product);
                             for row in 0..domain.size() {
                                 assert_eq!(
                                     product.get(row),
@@ -582,21 +581,15 @@ fn large_expansion<M: PrimeModulus>() {
             .coefficients_with(&coefficients, &mut output, options, &Threads, &mut scratch)
             .unwrap();
         let mut natural = vec![PastaField::ZERO; domain.size()];
-        expansion
-            .layout()
-            .copy_to_natural(&output, &mut natural)
-            .unwrap();
+        expansion.layout().copy_to_natural(&output, &mut natural);
         assert_eq!(natural, expected);
         let evaluations = reference_coset(&coefficients, base_domain.subgroup());
         expansion
             .evaluations_with(&evaluations, &mut output, options, &Threads, &mut scratch)
             .unwrap();
-        expansion
-            .layout()
-            .copy_to_natural(&output, &mut natural)
-            .unwrap();
+        expansion.layout().copy_to_natural(&output, &mut natural);
         assert_eq!(natural, expected);
-        let factor = expansion.view(&output).unwrap();
+        let factor = expansion.view(&output);
         let mut product = vec![PastaField::ZERO; domain.size()];
         expansion
             .short_product_with(
@@ -609,7 +602,7 @@ fn large_expansion<M: PrimeModulus>() {
             )
             .unwrap();
         let short_values = direct(&coefficients[..5], domain);
-        let product = expansion.view(&product).unwrap();
+        let product = expansion.view(&product);
         for row in 0..domain.size() {
             assert_eq!(
                 product.get(row),
@@ -718,7 +711,7 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
         assert!(executor.take() > residues);
         assert_eq!(output, expected);
         let ones = vec![Fp::ONE; domain.size()];
-        let factor = expansion.view(&ones).unwrap();
+        let factor = expansion.view(&ones);
         expansion
             .short_product_with(
                 &coefficients[..5],
@@ -732,7 +725,7 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
         let pruned_joins = executor.take();
         assert!(pruned_joins > 0);
         let expected_short = direct(&coefficients[..5], domain);
-        let view = expansion.view(&output).unwrap();
+        let view = expansion.view(&output);
         for (row, expected) in expected_short.iter().enumerate() {
             assert_eq!(view.get(row), Some(expected));
         }
@@ -771,8 +764,7 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
             let mut scales = vec![PastaField::ZERO; extended.size()];
             let scales = Expansion::new(Transform::new(subgroup), extended, None)
                 .unwrap()
-                .prepare_scales(&mut scales)
-                .unwrap();
+                .prepare_scales(&mut scales);
             for mask in 0..16 {
                 let tables = Tables {
                     forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
@@ -809,7 +801,7 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
                             &mut scratch,
                         )
                         .unwrap();
-                    let view = expansion.view(&output).unwrap();
+                    let view = expansion.view(&output);
                     for (row, expected) in expected.iter().enumerate() {
                         assert_eq!(view.get(row), Some(expected));
                     }
@@ -890,7 +882,7 @@ fn constant_prefixes<M: PrimeModulus>() {
             expansion
                 .short_product_with(
                     &constant,
-                    expansion.view(&factor).unwrap(),
+                    expansion.view(&factor),
                     &mut output,
                     options,
                     &executor,
@@ -942,7 +934,7 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
             Expansion::new(base, Domain::new(6 + extra).unwrap().subgroup(), None).unwrap();
         let mut output = vec![Fp::ONE; expansion.layout().size()];
         let factors = output.clone();
-        let factor = expansion.view(&factors).unwrap();
+        let factor = expansion.view(&factors);
         for tasks in [1, 2, 3, usize::MAX] {
             let options = ExpansionStrategy {
                 max_residue_tasks: tasks,
@@ -965,53 +957,54 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
                 per_transform * tasks.min(expansion.layout().residues() - 1).max(1)
             );
             let mut scratch = vec![Fp::ONE; count - 1];
-            let error = Err(FftError::ScratchTooSmall {
-                required: count,
-                provided: count - 1,
-            });
-            assert_eq!(
-                expansion.coefficients_with(
-                    &input,
-                    &mut output,
-                    options,
-                    &SerialExecutor,
-                    &mut scratch
-                ),
-                error
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = expansion.coefficients_with(
+                        &input,
+                        &mut output,
+                        options,
+                        &SerialExecutor,
+                        &mut scratch,
+                    );
+                }))
+                .is_err()
             );
-            assert_eq!(
-                expansion.coefficients_with(
-                    &[],
-                    &mut output,
-                    options,
-                    &SerialExecutor,
-                    &mut scratch
-                ),
-                error
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = expansion.coefficients_with(
+                        &[],
+                        &mut output,
+                        options,
+                        &SerialExecutor,
+                        &mut scratch,
+                    );
+                }))
+                .is_err()
             );
-            assert_eq!(
-                expansion.short_product_with(
-                    &input[..5],
-                    factor,
-                    &mut output,
-                    options,
-                    &SerialExecutor,
-                    &mut scratch
-                ),
-                error
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = expansion.short_product_with(
+                        &input[..5],
+                        factor,
+                        &mut output,
+                        options,
+                        &SerialExecutor,
+                        &mut scratch,
+                    );
+                }))
+                .is_err()
             );
-            assert_eq!(
-                expansion.evaluations_with(
-                    &input,
-                    &mut output,
-                    options,
-                    &SerialExecutor,
-                    &mut scratch[..eval_count - 1]
-                ),
-                Err(FftError::ScratchTooSmall {
-                    required: eval_count,
-                    provided: eval_count - 1
-                })
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = expansion.evaluations_with(
+                        &input,
+                        &mut output,
+                        options,
+                        &SerialExecutor,
+                        &mut scratch[..eval_count - 1],
+                    );
+                }))
+                .is_err()
             );
             assert_eq!(output, factors);
             assert!(scratch.iter().all(|value| *value == Fp::ONE));
@@ -1164,7 +1157,7 @@ fn classed<M: PrimeModulus>(log: u32) {
                 )
                 .unwrap()
             });
-            let plan = run::InterpolationPlan::with_transforms(transforms, false).unwrap();
+            let plan = run::InterpolationPlan::with_transforms(transforms, false);
             let mut scratch: [_; 3] = core::array::from_fn(|i| {
                 vec![PastaField::ONE; plan.snapshot_fields(i).unwrap() + 2]
             });
@@ -1173,8 +1166,7 @@ fn classed<M: PrimeModulus>(log: u32) {
                 scratch.each_mut().map(Vec::as_mut_slice),
                 core::num::NonZeroUsize::new(tasks).unwrap(),
                 &Threads,
-            )
-            .unwrap();
+            );
             assert_eq!(values[0], expected);
             assert_eq!(values[1], small_coefficients);
             assert_eq!(values[2], smallest_coefficients);
@@ -1207,15 +1199,14 @@ fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
         let input = inputs::<PallasBase>(32);
         let mut stored = [Fp::ZERO; 32];
         let mut natural = [Fp::ZERO; 32];
-        layout.copy_from_natural(&input, &mut stored).unwrap();
-        layout.copy_to_natural(&stored, &mut natural).unwrap();
+        layout.copy_from_natural(&input, &mut stored);
+        layout.copy_to_natural(&stored, &mut natural);
         assert_eq!(input, natural);
         let view = EvaluationView::bind(
             &stored,
             Domain::for_size(32).unwrap().subgroup(),
             EvaluationLayout::Residues(layout),
-        )
-        .unwrap();
+        );
         for (row, expected) in input.iter().enumerate() {
             assert_eq!(view.get(row), Some(expected));
             assert_eq!(layout.natural_row(layout.index(row).unwrap()), Some(row));
@@ -1236,21 +1227,19 @@ fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
         for (input_len, output_len) in [(31, 32), (33, 32), (32, 31), (32, 33)] {
             let source = vec![Fp::ONE; input_len];
             let mut destination = vec![Fp::ZERO; output_len];
-            let expected = Err(FftError::LengthMismatch {
-                buffer: if input_len != 32 { "input" } else { "output" },
-                expected: 32,
-                actual: if input_len != 32 {
-                    input_len
-                } else {
-                    output_len
-                },
-            });
-            assert_eq!(
-                layout.copy_from_natural(&source, &mut destination),
-                expected
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    layout.copy_from_natural(&source, &mut destination);
+                }))
+                .is_err()
             );
             assert_eq!(destination, vec![Fp::ZERO; output_len]);
-            assert_eq!(layout.copy_to_natural(&source, &mut destination), expected);
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    layout.copy_to_natural(&source, &mut destination);
+                }))
+                .is_err()
+            );
             assert_eq!(destination, vec![Fp::ZERO; output_len]);
         }
     }
@@ -1435,95 +1424,91 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     let original = inputs::<PallasBase>(64);
     let mut output = original.clone();
     let mut scratch = vec![Fp::ONE; required - 1];
-    assert!(matches!(
-        plan.forward_with(&mut output, options, &SerialExecutor, &mut scratch),
-        Err(FftError::ScratchTooSmall { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = plan.forward_with(&mut output, options, &SerialExecutor, &mut scratch);
+        }))
+        .is_err()
+    );
     assert_eq!(output, original);
     assert_eq!(scratch, vec![Fp::ONE; required - 1]);
-    assert!(matches!(
-        plan.inverse_bit_reversed_with(&mut output, options, &SerialExecutor, &mut scratch),
-        Err(FftError::ScratchTooSmall { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ =
+                plan.inverse_bit_reversed_with(&mut output, options, &SerialExecutor, &mut scratch);
+        }))
+        .is_err()
+    );
     assert_eq!(output, original);
-    assert!(matches!(
-        plan.forward_into_with(
-            &original,
-            &mut output,
-            options,
-            &SerialExecutor,
-            &mut scratch
-        ),
-        Err(FftError::ScratchTooSmall { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = plan.forward_into_with(
+                &original,
+                &mut output,
+                options,
+                &SerialExecutor,
+                &mut scratch,
+            );
+        }))
+        .is_err()
+    );
     assert_eq!(output, original);
     assert_eq!(scratch, vec![Fp::ONE; required - 1]);
-    assert!(matches!(
-        plan.inverse_into_with(
-            &original,
-            &mut output,
-            options,
-            &SerialExecutor,
-            &mut scratch
-        ),
-        Err(FftError::ScratchTooSmall { .. })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = plan.inverse_into_with(
+                &original,
+                &mut output,
+                options,
+                &SerialExecutor,
+                &mut scratch,
+            );
+        }))
+        .is_err()
+    );
     assert_eq!(output, original);
     assert_eq!(scratch, vec![Fp::ONE; required - 1]);
     for (input_len, output_len) in [(63, 64), (65, 64), (64, 63), (64, 65)] {
         let input = vec![Fp::ONE; input_len];
         let mut output = vec![Fp::ZERO; output_len];
-        let forward_error = plan
-            .forward_into_with(
-                &input,
-                &mut output,
-                Strategy::SERIAL,
-                &SerialExecutor,
-                &mut [],
-            )
-            .unwrap_err();
-        assert_eq!(output, vec![Fp::ZERO; output_len]);
-        let error = plan
-            .inverse_into_with(
-                &input,
-                &mut output,
-                Strategy::SERIAL,
-                &SerialExecutor,
-                &mut [],
-            )
-            .unwrap_err();
-        assert_eq!(forward_error, error);
-        let (buffer, actual) = if input_len != 64 {
-            ("input", input_len)
-        } else {
-            ("output", output_len)
-        };
-        assert_eq!(
-            error,
-            FftError::LengthMismatch {
-                buffer,
-                expected: 64,
-                actual
-            }
-        );
-        assert_eq!(
-            std::format!("{error}"),
-            std::format!("{buffer}: expected 64 elements, received {actual}")
-        );
-        assert_eq!(output, vec![Fp::ZERO; output_len]);
-        if output_len != 64 {
-            assert!(matches!(
-                plan.inverse_bit_reversed_with(
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = plan.forward_into_with(
+                    &input,
                     &mut output,
                     Strategy::SERIAL,
                     &SerialExecutor,
-                    &mut []
-                ),
-                Err(FftError::LengthMismatch {
-                    buffer: "values",
-                    ..
-                })
-            ));
+                    &mut [],
+                );
+            }))
+            .is_err()
+        );
+        assert_eq!(output, vec![Fp::ZERO; output_len]);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = plan.inverse_into_with(
+                    &input,
+                    &mut output,
+                    Strategy::SERIAL,
+                    &SerialExecutor,
+                    &mut [],
+                );
+            }))
+            .is_err()
+        );
+        assert_eq!(output, vec![Fp::ZERO; output_len]);
+        if output_len != 64 {
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _ = plan.inverse_bit_reversed_with(
+                        &mut output,
+                        Strategy::SERIAL,
+                        &SerialExecutor,
+                        &mut [],
+                    );
+                }))
+                .is_err()
+            );
             assert_eq!(output, vec![Fp::ZERO; output_len]);
         }
     }
@@ -1547,19 +1532,18 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         );
         assert_eq!(output, original);
     }
-    let inverse = |domain| {
-        run::FftPlan::with_strategy(
-            Transform::new(domain),
-            TransformRequest::new(Direction::Inverse),
-            core::num::NonZeroUsize::new(8).unwrap(),
-            Codelet::Radix2,
-        )
-        .unwrap()
-    };
     assert!(matches!(
-        run::InterpolationPlan::with_transforms(
-            [inverse(domain), inverse(Domain::new(7).unwrap().subgroup()),],
-            false
+        run::InterpolationPlan::new(
+            [
+                (Transform::new(domain), ElementOrder::Natural),
+                (
+                    Transform::new(Domain::new(7).unwrap().subgroup()),
+                    ElementOrder::Natural,
+                ),
+            ],
+            false,
+            StorageLayout::Contiguous,
+            crate::exec::ExecutionOptions::default(),
         ),
         Err(FftError::InvalidLayout)
     ));
@@ -1571,9 +1555,16 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     };
     let mut expanded = [Fp::ONE; 128];
     assert!(
-        expansion
-            .evaluations_with(&original, &mut expanded, options, &SerialExecutor, &mut [])
-            .is_err()
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = expansion.evaluations_with(
+                &original,
+                &mut expanded,
+                options,
+                &SerialExecutor,
+                &mut [],
+            );
+        }))
+        .is_err()
     );
     assert_eq!(expanded, [Fp::ONE; 128]);
     let too_long = FftError::InvalidPrefix {
@@ -1608,7 +1599,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         "input prefix must contain 0..=64 elements, received 65"
     );
     let factor_values = [Fp::ONE; 128];
-    let factor = expansion.view(&factor_values).unwrap();
+    let factor = expansion.view(&factor_values);
     for len in [0, 65] {
         let error = expansion
             .short_product_with(
@@ -1641,29 +1632,29 @@ fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() 
     let mut valid = [Fp::from_u64(17); 4];
     let mut wrong = [Fp::ONE; 3];
     assert!(
-        TablesMut {
-            inverse: Some(&mut valid),
-            forward: Some(&mut wrong),
-            ..TablesMut::default()
-        }
-        .prepare(domain)
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = TablesMut {
+                inverse: Some(&mut valid),
+                forward: Some(&mut wrong),
+                ..TablesMut::default()
+            }
+            .prepare(domain);
+        }))
         .is_err()
     );
     assert_eq!(valid, [Fp::from_u64(17); 4]);
     assert_eq!(wrong, [Fp::ONE; 3]);
-    assert!(matches!(
-        TablesMut {
-            forward: Some(&mut valid),
-            inverse_scales: Some(&mut wrong),
-            ..TablesMut::default()
-        }
-        .prepare(domain),
-        Err(FftError::LengthMismatch {
-            buffer: "inverse_scales",
-            expected: 4,
-            actual: 3
-        })
-    ));
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = TablesMut {
+                forward: Some(&mut valid),
+                inverse_scales: Some(&mut wrong),
+                ..TablesMut::default()
+            }
+            .prepare(domain);
+        }))
+        .is_err()
+    );
     assert_eq!(valid, [Fp::from_u64(17); 4]);
     assert_eq!(wrong, [Fp::ONE; 3]);
     let mut prepared = Prepared::new(domain);
@@ -1691,7 +1682,7 @@ fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() 
     let expansion =
         Expansion::new(Transform::new(domain.domain().subgroup()), domain, None).unwrap();
     let mut scales = [Fp::ZERO; 8];
-    expansion.prepare_scales(&mut scales).unwrap();
+    expansion.prepare_scales(&mut scales);
     scales[2] = Fp::ZERO;
     assert!(matches!(
         ExpansionScales::bind(
@@ -1774,7 +1765,7 @@ fn executor_panics_leave_public_buffers_canonical() {
     assert_canonical(&values);
     assert_canonical(&scratch);
     // The private fused path also rejects a class interrupted by an executor.
-    let mut class = Class::new(plan, &mut values, ElementOrder::Natural).unwrap();
+    let mut class = Class::new(plan, &mut values, ElementOrder::Natural);
     assert!(
         catch_unwind(AssertUnwindSafe(|| interpolate_classes(
             &mut class,
@@ -1880,7 +1871,7 @@ fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
         .unwrap();
     let inverse_joins = count.take();
     let factors = vec![Fp::ONE; expansion.layout().size()];
-    let factor = expansion.view(&factors).unwrap();
+    let factor = expansion.view(&factors);
     for operation in 0..3 {
         let mut output = factors.clone();
         let executor = FailAt {
@@ -1895,14 +1886,14 @@ fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
                     &mut output,
                     options,
                     &executor,
-                    &mut scratch
+                    &mut scratch,
                 ),
                 1 => expansion.evaluations_with(
                     &input,
                     &mut output,
                     options,
                     &executor,
-                    &mut scratch
+                    &mut scratch,
                 ),
                 _ => expansion.short_product_with(
                     &input[..5],
@@ -1910,7 +1901,7 @@ fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
                     &mut output,
                     options,
                     &executor,
-                    &mut scratch
+                    &mut scratch,
                 ),
             }))
             .is_err()

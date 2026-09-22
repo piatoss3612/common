@@ -110,10 +110,19 @@ fn curve<C: PastaCurve>() {
         &mut records,
         TaskBudget::SERIAL,
         &SerialExecutor,
-    )
-    .unwrap();
-    let mut digits = vec![0; prepared.cache_len(&plan).unwrap()];
-    assert_eq!(prepared.cache(&plan, &mut digits).unwrap().len(), 1);
+    );
+    let mut digits = vec![0; prepared.cache_len(&plan)];
+    assert_eq!(prepared.cache(&plan, &mut digits).len(), 1);
+
+    #[cfg(feature = "eisenstein-length")]
+    let _ = arithmetic::curve::EisensteinTable::<C>::bind(&generator, &[generator; 7]);
+    #[cfg(feature = "empty-msm-slots")]
+    let _ = arithmetic::curve::msm::run::ParallelMsmRun::new(
+        plan,
+        arithmetic::curve::msm::Input::new(arithmetic::curve::msm::Bases::Affine(&[]), &[]),
+        &mut [],
+        &mut [[const { arithmetic::exec::run::TaskStorage::EMPTY }; 1]; 0],
+    );
 
     #[cfg(feature = "msm-arithmetic")]
     let _ = arithmetic::curve::msm::ArithmeticOptions::default();
@@ -145,6 +154,13 @@ impl PastaCurve for Foreign {
 }
 
 fn main() {
+    #[cfg(feature = "empty-interpolation")]
+    let _ = arithmetic::fft::run::InterpolationPlan::<PallasBase, 0>::new(
+        [],
+        false,
+        arithmetic::fft::StorageLayout::Contiguous,
+        arithmetic::exec::ExecutionOptions::default(),
+    );
     field::<PallasBase>(FP_PARAMETERS);
     field::<PallasScalar>(FQ_PARAMETERS);
     curve::<Pallas>();

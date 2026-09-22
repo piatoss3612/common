@@ -1,14 +1,14 @@
-//! Opt-in FFT strategies under explicit memory, order, and concurrency choices.
+//! FFT execution under caller-owned memory, order, and concurrency constraints.
 //!
 //! Reused-output cases include initialization, scaling, and required ordering.
 //! Setup, allocation, and disposable-input restoration are measured separately
-//! or excluded explicitly. No results from this suite tune the runtime defaults.
+//! or excluded explicitly. Udon selects the arithmetic for each case.
 
-use std::{hint::black_box, num::NonZeroUsize, time::Duration};
+use std::{hint::black_box, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use zakura_udon::{
-    exec::{Executor, SerialExecutor},
+    exec::{ExecutionOptions, Executor, SerialExecutor, TaskBudget},
     fft::{
         run::{ExpansionPlan, FftPlan, InterpolationPlan},
         *,
@@ -46,37 +46,35 @@ impl Runner {
         }
     }
 
+    fn options(&self) -> ExecutionOptions {
+        ExecutionOptions::default().with_task_budget(TaskBudget::new(self.tasks).unwrap())
+    }
+
     fn transform<'t, M: PrimeModulus>(
         &self,
-        plan: Plan<'t, M>,
+        plan: Transform<'t, M>,
         request: TransformRequest,
         separate: bool,
-        columns: bool,
-        codelet: Codelet,
+        memory_limit: Option<usize>,
     ) -> FftPlan<'t, M> {
-        let mut operation = FftPlan::new(
+        let options = memory_limit.map_or(self.options(), |limit| {
+            self.options().with_memory_limit(limit)
+        });
+        FftPlan::new(
             plan,
-            zakura_udon::fft::TransformRequest {
+            TransformRequest {
                 input_storage: if separate {
-                    zakura_udon::fft::InputStorage::Preserve
+                    InputStorage::Preserve
                 } else {
-                    zakura_udon::fft::InputStorage::InPlace
+                    InputStorage::InPlace
                 },
                 ..request
             },
-            nz(1024.min(plan.domain().size() / 2).max(1)),
-            codelet,
+            StorageLayout::Contiguous,
+            options,
         )
         .unwrap()
-        .with_contiguous_permutation();
-        if columns {
-            operation = operation.with_columns(nz(32), nz(self.tasks)).unwrap();
-        }
-        operation
     }
-}
-fn nz(n: usize) -> NonZeroUsize {
-    NonZeroUsize::new(n).unwrap()
 }
 
 fn inputs<M: PrimeModulus>(size: usize) -> Vec<PastaField<M>> {
@@ -103,7 +101,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
             ("generic_7", PastaField::from_u64(7)),
         ] {
             let domain = Domain::<M>::for_size(size).unwrap().coset(shift).unwrap();
-            let plan = Plan::without_tables(domain);
+            let plan = Transform::new(domain);
             let input = inputs(size);
             let mut group = criterion.benchmark_group(format!(
                 "{field}/strategies/{size}/{shift_name}/tasks_{}",
@@ -123,7 +121,6 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                                     black_box(&mut output),
                                     None,
                                     black_box(&mut scratch),
-                                    nz(runner.tasks),
                                     runner,
                                 )
                                 .unwrap();
@@ -132,45 +129,30 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                     })
                 });
             };
-            for columns in [false, true] {
+            for memory_limit in [Some(0), None] {
                 for direction in [Direction::Forward, Direction::Inverse] {
                     bench(
-                        &format!("columns_{columns}/{direction:?}"),
+                        &format!("memory_{memory_limit:?}/{direction:?}"),
                         runner.transform(
                             plan,
                             TransformRequest::new(direction),
                             true,
-                            columns,
-                            Codelet::Radix2,
+                            memory_limit,
                         ),
                     );
                 }
             }
-            for scatter in [false, true] {
-                let mut operation = runner.transform(
-                    plan,
-                    TransformRequest::new(Direction::Forward),
-                    true,
-                    true,
-                    Codelet::Radix2,
-                );
-                if scatter {
-                    operation = operation.with_scatter_initialization();
-                }
-                bench(&format!("initialization/scatter_{scatter}"), operation);
-            }
-            for codelet in [Codelet::Radix2, Codelet::Radix4, Codelet::Radix8] {
+            for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
                 bench(
-                    &format!("DIF/{codelet:?}"),
+                    &format!("order/{output_order:?}"),
                     runner.transform(
                         plan,
                         TransformRequest {
-                            output_order: ElementOrder::BitReversed,
+                            output_order,
                             ..TransformRequest::new(Direction::Forward)
                         },
                         true,
-                        true,
-                        codelet,
+                        None,
                     ),
                 );
             }
@@ -191,13 +173,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                     bench(
                         &format!("twiddles/{name}/{direction:?}"),
                         runner
-                            .transform(
-                                plan,
-                                TransformRequest::new(direction),
-                                true,
-                                true,
-                                Codelet::Radix2,
-                            )
+                            .transform(plan, TransformRequest::new(direction), true, None)
                             .with_twiddles(table),
                     );
                 }
@@ -220,13 +196,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                 for direction in [Direction::Forward, Direction::Inverse] {
                     bench(
                         &format!("plan_twiddles/inverse_{inverse}/{direction:?}"),
-                        runner.transform(
-                            Plan::new(tables),
-                            TransformRequest::new(direction),
-                            true,
-                            true,
-                            Codelet::Radix2,
-                        ),
+                        runner.transform(tables, TransformRequest::new(direction), true, None),
                     );
                 }
             }
@@ -235,13 +205,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
             bench(
                 "coefficient_scales",
                 runner
-                    .transform(
-                        plan,
-                        TransformRequest::new(Direction::Forward),
-                        true,
-                        true,
-                        Codelet::Radix2,
-                    )
+                    .transform(plan, TransformRequest::new(Direction::Forward), true, None)
                     .with_forward_scales(scales)
                     .unwrap(),
             );
@@ -251,7 +215,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
 }
 
 fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &Runner) {
-    let base = Plan::without_tables(Domain::<M>::new(11).unwrap().subgroup());
+    let base = Transform::new(Domain::<M>::new(11).unwrap().subgroup());
     let extended = Domain::new(14)
         .unwrap()
         .coset(PastaField::from_u64(7))
@@ -307,14 +271,13 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                     order,
                     InputSupport::Full,
                     ElementOrder::Natural,
-                    nz(1024),
-                    Codelet::Radix2,
+                    StorageLayout::Contiguous,
+                    runner.options(),
                 )
                 .unwrap();
                 let mut output = vec![PastaField::ZERO; extended.size()];
                 let mut workspace = vec![PastaField::ZERO; operation.coefficient_fields()];
-                let mut scratch =
-                    vec![PastaField::ZERO; operation.scratch_fields(nz(runner.tasks)).unwrap()];
+                let mut scratch = vec![PastaField::ZERO; operation.scratch_fields().unwrap()];
                 let id = format!(
                     "{normalization:?}/{order:?}/{storage_name}/scratch_{}_coefficients_{}",
                     scratch.len() * 32,
@@ -333,7 +296,6 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                                                 &mut output,
                                                 None,
                                                 &mut scratch,
-                                                nz(runner.tasks),
                                                 runner,
                                             )
                                             .unwrap(),
@@ -347,7 +309,6 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                                                 &mut workspace,
                                                 None,
                                                 &mut scratch,
-                                                nz(runner.tasks),
                                                 runner,
                                             )
                                             .unwrap(),
@@ -366,32 +327,26 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
 
     let mut group =
         criterion.benchmark_group(format!("{field}/batch_strategies/tasks_{}", runner.tasks));
-    for columns in [false, true] {
+    for memory_limit in [Some(0), None] {
         let operation = runner.transform(
             base,
             TransformRequest::new(Direction::Forward),
             false,
-            columns,
-            Codelet::Radix2,
+            memory_limit,
         );
         for count in [1, 4, 8] {
             let values = inputs::<M>(base.domain().size() * count);
-            let fields = operation.batch_fields(count, nz(runner.tasks)).unwrap();
+            let fields = operation.batch_fields(count).unwrap();
             let mut scratch = vec![PastaField::ZERO; fields];
             group.bench_function(
-                format!("columns_{columns}/{count}/scratch_{}", fields * 32),
+                format!("memory_{memory_limit:?}/{count}/scratch_{}", fields * 32),
                 |b| {
                     runner.install(|| {
                         b.iter_batched_ref(
                             || values.clone(),
                             |output| {
                                 operation
-                                    .execute_batch(
-                                        black_box(output),
-                                        &mut scratch,
-                                        nz(runner.tasks),
-                                        runner,
-                                    )
+                                    .execute_batch(black_box(output), &mut scratch, runner)
                                     .unwrap();
                                 black_box(output);
                             },
@@ -408,14 +363,15 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
         criterion.benchmark_group(format!("{field}/class_strategies/tasks_{}", runner.tasks));
     for mode in ["fused", "parallel", "sum"] {
         let tasks = if mode == "fused" { 1 } else { runner.tasks };
-        let transform = runner.transform(
-            base,
-            TransformRequest::new(Direction::Inverse),
-            false,
-            false,
-            Codelet::Radix2,
-        );
-        let operation = InterpolationPlan::new([transform; 4], mode == "sum").unwrap();
+        let operation = InterpolationPlan::new(
+            [(base, ElementOrder::Natural); 4],
+            mode == "sum",
+            StorageLayout::Contiguous,
+            ExecutionOptions::default().with_task_budget(TaskBudget::new(tasks).unwrap()),
+        )
+        .unwrap();
+        let mut scratch: [_; 4] =
+            core::array::from_fn(|i| vec![PastaField::ZERO; operation.snapshot_fields(i).unwrap()]);
         group.bench_function(mode, |b| {
             runner.install(|| {
                 b.iter_batched_ref(
@@ -424,8 +380,7 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
                         operation
                             .execute(
                                 values.each_mut().map(Vec::as_mut_slice),
-                                [&mut [], &mut [], &mut [], &mut []],
-                                nz(tasks),
+                                scratch.each_mut().map(Vec::as_mut_slice),
                                 runner,
                             )
                             .unwrap();
@@ -454,10 +409,7 @@ fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, r
     let mut group =
         criterion.benchmark_group(format!("{field}/expansion_prefixes/tasks_{}", runner.tasks));
     group.throughput(Throughput::Elements(extended.size() as u64));
-    for (name, base) in [
-        ("computed", Plan::without_tables(domain)),
-        ("table", Plan::new(tables)),
-    ] {
+    for (name, base) in [("computed", Transform::new(domain)), ("table", tables)] {
         let expansion = Expansion::new(base, extended, None).unwrap();
         for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
             let mut output = vec![PastaField::ZERO; extended.size()];
@@ -477,12 +429,11 @@ fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, r
                     order,
                     InputSupport::Prefix(prefix),
                     ElementOrder::Natural,
-                    nz(1024),
-                    Codelet::Radix2,
+                    StorageLayout::Contiguous,
+                    runner.options(),
                 )
                 .unwrap();
-                let mut scratch =
-                    vec![PastaField::ZERO; operation.scratch_fields(nz(runner.tasks)).unwrap()];
+                let mut scratch = vec![PastaField::ZERO; operation.scratch_fields().unwrap()];
                 for product in [false, true] {
                     group.bench_function(
                         format!("{name}/{order:?}/prefix_{prefix}/product_{product}"),
@@ -497,7 +448,6 @@ fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, r
                                             &mut [],
                                             product.then_some(ordered_factor.as_slice()),
                                             &mut scratch,
-                                            nz(runner.tasks),
                                             runner,
                                         )
                                         .unwrap();
@@ -585,7 +535,7 @@ fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
 }
 
 fn subgroup_expansion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
-    let base = Plan::without_tables(Domain::<M>::for_size(2048).unwrap().subgroup());
+    let base = Transform::new(Domain::<M>::for_size(2048).unwrap().subgroup());
     let input = inputs(base.domain().size());
     let mut group = criterion.benchmark_group(format!("{field}/subgroup_expansion"));
     for residues in [1, 8] {
@@ -598,12 +548,12 @@ fn subgroup_expansion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
                 order,
                 InputSupport::Full,
                 ElementOrder::Natural,
-                nz(base.domain().size()),
-                Codelet::Radix2,
+                StorageLayout::Contiguous,
+                ExecutionOptions::default(),
             )
             .unwrap();
             let mut output = vec![PastaField::ZERO; extended.size()];
-            let mut scratch = vec![PastaField::ZERO; operation.scratch_fields(nz(1)).unwrap()];
+            let mut scratch = vec![PastaField::ZERO; operation.scratch_fields().unwrap()];
             group.bench_function(BenchmarkId::new(format!("{order:?}"), residues), |b| {
                 b.iter(|| {
                     operation
@@ -613,7 +563,6 @@ fn subgroup_expansion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
                             &mut [],
                             None,
                             &mut scratch,
-                            nz(1),
                             &SerialExecutor,
                         )
                         .unwrap();

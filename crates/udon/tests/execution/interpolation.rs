@@ -5,15 +5,12 @@ use super::{
 use std::num::NonZeroUsize;
 use zakura_udon::{
     exec::{
-        SerialExecutor,
+        ExecutionOptions, SerialExecutor, TaskBudget,
         run::{Completion, Identity, Task, TaskStorage},
     },
     fft::{
-        ClassState, Codelet, Direction, Domain, ElementOrder, FftError, Plan, TransformRequest,
-        run::{
-            AdditionKernel, Bank, FftKernel, FftPlan, InterpolationPlan, InterpolationRun, Request,
-            WorkKind,
-        },
+        ClassState, Domain, ElementOrder, FftError, StorageLayout, Transform,
+        run::{AdditionKernel, Bank, FftKernel, InterpolationPlan, InterpolationRun, Request},
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -54,7 +51,7 @@ fn check<M: PrimeModulus>() {
         for tile in [8, 64] {
             for flip in [false, true] {
                 let plans = core::array::from_fn::<_, CLASSES, _>(|i| {
-                    Plan::without_tables(
+                    Transform::new(
                         Domain::<M>::for_size(sizes[i])
                             .unwrap()
                             .coset(PastaField::from_u64(shifts[i]))
@@ -83,20 +80,18 @@ fn check<M: PrimeModulus>() {
                         *out = out.add(value);
                     }
                 }
-                let transforms = core::array::from_fn(|i| {
-                    FftPlan::new(
-                        plans[i],
-                        TransformRequest {
-                            input_order: orders[i],
-                            ..TransformRequest::new(Direction::Inverse)
-                        },
-                        NonZeroUsize::new(tile).unwrap(),
-                        Codelet::Radix4,
-                    )
-                    .unwrap()
-                });
-                let plan = InterpolationPlan::new(transforms, consume).unwrap();
-                let banks = Banks::new(&[64; CLASSES * 2], tile);
+                let classes = core::array::from_fn(|i| (plans[i], orders[i]));
+                let plan = InterpolationPlan::new(
+                    classes,
+                    consume,
+                    StorageLayout::Fragments {
+                        length: NonZeroUsize::new(tile).unwrap(),
+                        whole_bank: false,
+                    },
+                    ExecutionOptions::default().with_task_budget(TaskBudget::new(3).unwrap()),
+                )
+                .unwrap();
+                let banks = Banks::new(&[64; CLASSES * 2], tile, CLASSES..CLASSES * 2);
                 for i in 0..CLASSES {
                     let mut evaluations = coefficients[i].clone();
                     plans[i]
@@ -115,38 +110,30 @@ fn check<M: PrimeModulus>() {
                     }
                     banks.write(i, &evaluations);
                 }
-                for codelet in [Codelet::Radix2, Codelet::Radix4] {
-                    for tasks in [1, 3] {
-                        let transforms = core::array::from_fn(|i| {
-                            FftPlan::new(
-                                plans[i],
-                                TransformRequest {
-                                    input_order: orders[i],
-                                    ..TransformRequest::new(Direction::Inverse)
-                                },
-                                NonZeroUsize::new(tile).unwrap(),
-                                codelet,
-                            )
-                            .unwrap()
-                        });
-                        let contiguous = InterpolationPlan::new(transforms, consume).unwrap();
-                        let mut values: [_; CLASSES] =
-                            core::array::from_fn(|i| banks.read(i)[..sizes[i]].to_vec());
-                        let mut scratch: [_; CLASSES] = core::array::from_fn(|i| {
-                            vec![PastaField::ZERO; contiguous.snapshot_fields(i).unwrap()]
-                        });
-                        contiguous
-                            .execute(
-                                values.each_mut().map(Vec::as_mut_slice),
-                                scratch.each_mut().map(Vec::as_mut_slice),
-                                NonZeroUsize::new(tasks).unwrap(),
-                                &SerialExecutor,
-                            )
-                            .unwrap();
-                        assert_eq!(values[0], expected);
-                        if !consume {
-                            assert_eq!(&values[1..], &coefficients[1..]);
-                        }
+                for tasks in [1, 3] {
+                    let contiguous = InterpolationPlan::new(
+                        classes,
+                        consume,
+                        StorageLayout::Contiguous,
+                        ExecutionOptions::default()
+                            .with_task_budget(TaskBudget::new(tasks).unwrap()),
+                    )
+                    .unwrap();
+                    let mut values: [_; CLASSES] =
+                        core::array::from_fn(|i| banks.read(i)[..sizes[i]].to_vec());
+                    let mut scratch: [_; CLASSES] = core::array::from_fn(|i| {
+                        vec![PastaField::ZERO; contiguous.snapshot_fields(i).unwrap()]
+                    });
+                    contiguous
+                        .execute(
+                            values.each_mut().map(Vec::as_mut_slice),
+                            scratch.each_mut().map(Vec::as_mut_slice),
+                            &SerialExecutor,
+                        )
+                        .unwrap();
+                    assert_eq!(values[0], expected);
+                    if !consume {
+                        assert_eq!(&values[1..], &coefficients[1..]);
                     }
                 }
                 let mut ids = core::array::from_fn(|_| core::array::from_fn(|_| Identity::new()));
@@ -188,7 +175,6 @@ fn check<M: PrimeModulus>() {
                                 cursor = add.key.index() + 1;
                                 let request = Request {
                                     key: add.key,
-                                    kind: WorkKind::Initialize,
                                     write: (Bank::Values, add.write.clone()),
                                     pair: None,
                                     read: Some((Bank::Input, add.read.clone())),

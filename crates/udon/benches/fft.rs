@@ -7,11 +7,11 @@ use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use zakura_udon::{
-    exec::{Executor, SerialExecutor},
+    exec::{ExecutionOptions, Executor, SerialExecutor, TaskBudget},
     fft::{
-        Codelet, CosetDomain, Direction, Domain, ExecutionOptions, Expansion, ExpansionOptions,
-        Plan, TableRequirements, Tables, TablesMut, TransformRequest, reference,
-        run::{FftPlan, InterpolationPlan},
+        CoefficientView, CosetDomain, Direction, Domain, ElementOrder, Expansion, InputStorage,
+        InputSupport, StorageLayout, TableRequirements, Tables, TablesMut, TransformRequest,
+        reference, run::InterpolationPlan,
     },
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -124,19 +124,8 @@ fn inputs<M: PrimeModulus>(size: usize) -> Vec<PastaField<M>> {
         .collect()
 }
 
-const TILED: ExecutionOptions = ExecutionOptions {
-    tile_len: 2048,
-    columns_per_task: 128,
-    max_tasks: 4,
-};
-
-// Keep at least two tiles even in the smallest benchmark domain.
-fn tiled(size: usize) -> ExecutionOptions {
-    ExecutionOptions {
-        tile_len: TILED.tile_len.min(size / 2),
-        ..TILED
-    }
-}
+const PARALLEL: ExecutionOptions =
+    ExecutionOptions::DEFAULT.with_task_budget(TaskBudget::new(4).unwrap());
 
 fn reference_coset<M: PrimeModulus>(
     values: &mut [PastaField<M>],
@@ -204,20 +193,14 @@ fn transforms<M: PrimeModulus>(
                     });
                     setup.finish();
                 }
-                let plan = Plan::new(tables.tables().bind(domain).unwrap());
+                let plan = tables.tables().bind(domain).unwrap();
                 let mut group = criterion.benchmark_group(format!(
                     "{field}/fft/{}/{shift_name}/{direction}/{profile}",
                     domain.size()
                 ));
                 for runner in runners {
-                    let options = if runner.name == "serial" {
-                        ExecutionOptions::serial()
-                    } else {
-                        ExecutionOptions {
-                            max_tasks: runner.tasks,
-                            ..tiled(domain.size())
-                        }
-                    };
+                    let options = ExecutionOptions::default()
+                        .with_task_budget(TaskBudget::new(runner.tasks).unwrap());
                     let mut scratch =
                         vec![
                             PastaField::ZERO;
@@ -273,8 +256,14 @@ fn transforms<M: PrimeModulus>(
                                     b.iter(|| {
                                         if into {
                                             if inverse {
-                                                plan.inverse_into(
-                                                    black_box(&input),
+                                                plan.execute(
+                                                    TransformRequest {
+                                                        input_storage: InputStorage::Preserve,
+                                                        ..TransformRequest::new(Direction::Inverse)
+                                                    },
+                                                    Some(CoefficientView::normalized(black_box(
+                                                        &input,
+                                                    ))),
                                                     &mut output,
                                                     options,
                                                     runner,
@@ -282,8 +271,14 @@ fn transforms<M: PrimeModulus>(
                                                 )
                                                 .unwrap();
                                             } else {
-                                                plan.forward_into(
-                                                    black_box(&input),
+                                                plan.execute(
+                                                    TransformRequest {
+                                                        input_storage: InputStorage::Preserve,
+                                                        ..TransformRequest::new(Direction::Forward)
+                                                    },
+                                                    Some(CoefficientView::normalized(black_box(
+                                                        &input,
+                                                    ))),
                                                     &mut output,
                                                     options,
                                                     runner,
@@ -322,8 +317,15 @@ fn transforms<M: PrimeModulus>(
                                     format!("{}/prefix_{prefix_len}", runner.name),
                                     |b| {
                                         b.iter(|| {
-                                            plan.forward_prefix(
-                                                black_box(&input[..prefix_len]),
+                                            plan.execute(
+                                                TransformRequest {
+                                                    input_storage: InputStorage::Preserve,
+                                                    support: InputSupport::Prefix(prefix_len),
+                                                    ..TransformRequest::new(Direction::Forward)
+                                                },
+                                                Some(CoefficientView::normalized(black_box(
+                                                    &input[..prefix_len],
+                                                ))),
                                                 &mut output,
                                                 options,
                                                 runner,
@@ -353,20 +355,18 @@ fn expansions<M: PrimeModulus>(
 ) {
     let base = Domain::new(11).unwrap().subgroup();
     let tables = Prepared::selected(base, 15);
-    let plan = Plan::new(tables.tables().bind(base).unwrap());
-    let coefficient_plan = Plan::new(
-        (Tables {
-            forward: Some(&tables.forward),
-            ..Tables::default()
-        })
-        .bind(base)
-        .unwrap(),
-    );
+    let plan = tables.tables().bind(base).unwrap();
+    let coefficient_plan = (Tables {
+        forward: Some(&tables.forward),
+        ..Tables::default()
+    })
+    .bind(base)
+    .unwrap();
     let coefficients = inputs::<M>(base.size());
     let mut evaluations = coefficients.clone();
     plan.forward(
         &mut evaluations,
-        ExecutionOptions::serial(),
+        ExecutionOptions::default(),
         &SerialExecutor,
         &mut [],
     )
@@ -384,7 +384,7 @@ fn expansions<M: PrimeModulus>(
         setup.finish();
         let scales = expansion.prepare_scales(&mut scales).unwrap();
         let dense_tables = Prepared::selected(extended, 1);
-        let dense_plan = Plan::new(dense_tables.tables().bind(extended).unwrap());
+        let dense_plan = dense_tables.tables().bind(extended).unwrap();
         let factor_values = inputs::<M>(extended.size());
         let factor = expansion.view(&factor_values).unwrap();
         let mut natural_factor = vec![PastaField::ZERO; extended.size()];
@@ -428,17 +428,22 @@ fn expansions<M: PrimeModulus>(
                                         dense_plan
                                             .forward(
                                                 &mut output,
-                                                ExecutionOptions::serial(),
+                                                ExecutionOptions::default(),
                                                 &SerialExecutor,
                                                 &mut [],
                                             )
                                             .unwrap();
                                     }
                                     "prefix" => dense_plan
-                                        .forward_prefix(
-                                            input,
+                                        .execute(
+                                            TransformRequest {
+                                                input_storage: InputStorage::Preserve,
+                                                support: InputSupport::Prefix(input.len()),
+                                                ..TransformRequest::new(Direction::Forward)
+                                            },
+                                            Some(CoefficientView::normalized(input)),
                                             &mut output,
-                                            ExecutionOptions::serial(),
+                                            ExecutionOptions::default(),
                                             &SerialExecutor,
                                             &mut [],
                                         )
@@ -448,7 +453,7 @@ fn expansions<M: PrimeModulus>(
                                             input,
                                             factor,
                                             &mut output,
-                                            ExpansionOptions::serial(),
+                                            ExecutionOptions::default(),
                                             &SerialExecutor,
                                             &mut [],
                                         )
@@ -457,7 +462,7 @@ fn expansions<M: PrimeModulus>(
                                         .coefficients(
                                             input,
                                             &mut output,
-                                            ExpansionOptions::serial(),
+                                            ExecutionOptions::default(),
                                             &SerialExecutor,
                                             &mut [],
                                         )
@@ -486,108 +491,83 @@ fn expansions<M: PrimeModulus>(
         for prepared in [false, true] {
             let scales = prepared.then_some(scales);
             for runner in runners {
-                for scheduling in ["across", "within", "mixed"] {
-                    // Across * within never exceeds the common task budget.
-                    let across = match scheduling {
-                        "across" => runner.tasks,
-                        "mixed" => {
-                            if runner.tasks >= 4 {
-                                2
-                            } else {
-                                1
-                            }
-                        }
-                        _ => 1,
-                    };
-                    let within = runner.tasks / across;
-                    let options = ExpansionOptions {
-                        max_residue_tasks: across,
-                        transform: if scheduling == "across" || runner.name == "serial" {
-                            ExecutionOptions::serial()
+                let options = ExecutionOptions::default()
+                    .with_task_budget(TaskBudget::new(runner.tasks).unwrap());
+                let profile = if prepared { "scales" } else { "no_scales" };
+                for from_evaluations in [false, true] {
+                    let expansion = Expansion::new(
+                        if from_evaluations {
+                            plan
                         } else {
-                            ExecutionOptions {
-                                max_tasks: within,
-                                ..tiled(base.size())
-                            }
+                            coefficient_plan
                         },
-                    };
-                    let profile = if prepared { "scales" } else { "no_scales" };
-                    for from_evaluations in [false, true] {
-                        let expansion = Expansion::new(
-                            if from_evaluations {
-                                plan
-                            } else {
-                                coefficient_plan
-                            },
-                            extended,
-                            scales,
-                        )
-                        .unwrap();
-                        let required = if from_evaluations {
-                            expansion.evaluation_scratch(options)
+                        extended,
+                        scales,
+                    )
+                    .unwrap();
+                    let required = if from_evaluations {
+                        expansion.evaluation_scratch(options)
+                    } else {
+                        expansion.coefficient_scratch(options)
+                    }
+                    .unwrap();
+                    let mut scratch = vec![PastaField::ZERO; required.field_elements];
+                    let table_bytes = if from_evaluations {
+                        tables.bytes()
+                    } else {
+                        tables.forward.len() * 32
+                    } + scales.map_or(0, |scales| scales.as_slice().len() * 32);
+                    eprintln!(
+                        "{field}/expansion/{}/{shift_name}/{profile}/{}/automatic/{}: tables {table_bytes} bytes; scratch {} bytes; dense tables {} bytes",
+                        extended.size(),
+                        runner.name,
+                        if from_evaluations {
+                            "evaluations"
                         } else {
-                            expansion.coefficient_scratch(options)
-                        }
-                        .unwrap();
-                        let mut scratch = vec![PastaField::ZERO; required.field_elements];
-                        let table_bytes = if from_evaluations {
-                            tables.bytes()
-                        } else {
-                            tables.forward.len() * 32
-                        } + scales
-                            .map_or(0, |scales| scales.as_slice().len() * 32);
-                        eprintln!(
-                            "{field}/expansion/{}/{shift_name}/{profile}/{}/{scheduling}/{}: tables {table_bytes} bytes; scratch {} bytes; dense tables {} bytes",
-                            extended.size(),
+                            "coefficients"
+                        },
+                        scratch.len() * 32,
+                        dense_tables.bytes()
+                    );
+                    group.bench_function(
+                        format!(
+                            "{profile}/{}/automatic/{}",
                             runner.name,
                             if from_evaluations {
                                 "evaluations"
                             } else {
                                 "coefficients"
-                            },
-                            scratch.len() * 32,
-                            dense_tables.bytes()
-                        );
-                        group.bench_function(
-                            format!(
-                                "{profile}/{}/{scheduling}/{}",
-                                runner.name,
-                                if from_evaluations {
-                                    "evaluations"
-                                } else {
-                                    "coefficients"
-                                }
-                            ),
-                            |b| {
-                                runner.install(|| {
-                                    b.iter(|| {
-                                        if from_evaluations {
-                                            expansion
-                                                .evaluations(
-                                                    black_box(&evaluations),
-                                                    &mut output,
-                                                    options,
-                                                    runner,
-                                                    &mut scratch,
-                                                )
-                                                .unwrap();
-                                        } else {
-                                            expansion
-                                                .coefficients(
-                                                    black_box(&coefficients),
-                                                    &mut output,
-                                                    options,
-                                                    runner,
-                                                    &mut scratch,
-                                                )
-                                                .unwrap();
-                                        }
-                                        black_box(&output);
-                                    })
+                            }
+                        ),
+                        |b| {
+                            runner.install(|| {
+                                b.iter(|| {
+                                    if from_evaluations {
+                                        expansion
+                                            .evaluations(
+                                                black_box(&evaluations),
+                                                &mut output,
+                                                options,
+                                                runner,
+                                                &mut scratch,
+                                            )
+                                            .unwrap();
+                                    } else {
+                                        expansion
+                                            .coefficients(
+                                                black_box(&coefficients),
+                                                &mut output,
+                                                options,
+                                                runner,
+                                                &mut scratch,
+                                            )
+                                            .unwrap();
+                                    }
+                                    black_box(&output);
                                 })
-                            },
-                        );
-                    }
+                            })
+                        },
+                    );
                 }
             }
         }
@@ -603,38 +583,34 @@ fn interpolation<M: PrimeModulus>(
 ) {
     let domains = [14, 13, 12].map(|log| Domain::new(log).unwrap().coset(shift).unwrap());
     let tables = domains.map(Prepared::new);
-    let plans = core::array::from_fn::<_, 3, _>(|i| {
-        Plan::new(tables[i].tables().bind(domains[i]).unwrap())
-    });
+    let plans = core::array::from_fn::<_, 3, _>(|i| tables[i].tables().bind(domains[i]).unwrap());
     let input = domains.map(|domain| inputs::<M>(domain.size()));
-    let mut scratch =
-        vec![PastaField::ZERO; plans[0].scratch_requirements(TILED).unwrap().field_elements];
+    let mut scratch = vec![
+        PastaField::ZERO;
+        plans[0]
+            .scratch_requirements(PARALLEL)
+            .unwrap()
+            .field_elements
+    ];
     let mut group = criterion.benchmark_group(format!("{field}/class_interpolation/{shift_name}"));
     group.throughput(Throughput::Elements(domains[0].size() as u64));
     group.bench_function("fused", |b| {
         b.iter_batched_ref(
             || input.clone(),
             |[output, a, b]| {
-                let nz = |n| std::num::NonZeroUsize::new(n).unwrap();
-                let transforms = plans.map(|plan| {
-                    FftPlan::new(
-                        plan,
-                        TransformRequest::new(Direction::Inverse),
-                        nz(TILED.tile_len),
-                        Codelet::Radix2,
-                    )
-                    .unwrap()
-                    .with_contiguous_permutation()
-                });
-                InterpolationPlan::new(transforms, false)
-                    .unwrap()
-                    .execute(
-                        [black_box(output), black_box(a), black_box(b)],
-                        [&mut [], &mut [], &mut []],
-                        nz(1),
-                        &SerialExecutor,
-                    )
-                    .unwrap();
+                InterpolationPlan::new(
+                    plans.map(|plan| (plan, ElementOrder::Natural)),
+                    false,
+                    StorageLayout::Contiguous,
+                    ExecutionOptions::default(),
+                )
+                .unwrap()
+                .execute(
+                    [black_box(output), black_box(a), black_box(b)],
+                    [&mut [], &mut [], &mut []],
+                    &SerialExecutor,
+                )
+                .unwrap();
                 black_box(output);
             },
             BatchSize::PerIteration,
@@ -645,7 +621,7 @@ fn interpolation<M: PrimeModulus>(
             || input.clone(),
             |values| {
                 for (plan, values) in plans.iter().zip(values.iter_mut()) {
-                    plan.inverse(black_box(values), TILED, &SerialExecutor, &mut scratch)
+                    plan.inverse(black_box(values), PARALLEL, &SerialExecutor, &mut scratch)
                         .unwrap();
                 }
                 let [output, a, b] = values;

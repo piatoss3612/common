@@ -6,9 +6,9 @@ use zakura_udon::{
     curve::{
         AffinePoint, EisensteinTable, EisensteinTableBatch, Pallas, PastaCurve, Point,
         PreparedAffinePoint, ProjectivePoint, Vesta, batch_normalize,
-        msm::{Bases, BatchOptions, Selection},
+        msm::{Bases, Selection},
     },
-    exec::{SerialExecutor, TaskBudget},
+    exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     field::PastaField,
 };
 
@@ -87,7 +87,10 @@ fn representations<C: PastaCurve>() {
                     });
                 let mut result = [ProjectivePoint::IDENTITY];
                 let mut run = workspace
-                    .prepare(&inputs, BatchOptions::default().with_memory_limit(32768))
+                    .prepare(
+                        &inputs,
+                        ExecutionOptions::default().with_memory_limit(32768),
+                    )
                     .unwrap();
                 assert!(run.temporary_bytes() <= 32768);
                 assert!(run.requirements().bytes::<C>().unwrap() <= run.temporary_bytes());
@@ -166,7 +169,7 @@ fn shrinking_batches<C: PastaCurve>() {
                     budget,
                     |main| {
                         let mut result = [ProjectivePoint::IDENTITY; 2];
-                        let options = BatchOptions::default()
+                        let options = ExecutionOptions::default()
                             .with_task_budget(main)
                             .with_memory_limit(2 * 1024 * 1024);
                         let mut run = workspace.prepare(&inputs, options).unwrap();

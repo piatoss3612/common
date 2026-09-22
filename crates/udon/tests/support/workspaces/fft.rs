@@ -1,5 +1,5 @@
 use zakura_udon::{
-    fft::{CosetDomain, Plan, TableRequirements, Tables, TablesMut},
+    fft::{CosetDomain, TableRequirements, Tables, TablesMut, Transform},
     field::{PastaField, PrimeModulus},
 };
 
@@ -36,18 +36,16 @@ impl<M: PrimeModulus> OwnedTables<M> {
         result
     }
 
-    pub fn plan(&self) -> Plan<'_, M> {
-        Plan::new(
-            Tables {
-                forward: Some(&self.forward),
-                inverse: Some(&self.inverse),
-                inverse_finish: Some(&self.finish),
-                inverse_scales: Some(&self.scales),
-            }
-            // The owner prepared these entries and exposes no mutation.
-            .bind_trusted(self.domain)
-            .unwrap(),
-        )
+    pub fn plan(&self) -> Transform<'_, M> {
+        Tables {
+            forward: Some(&self.forward),
+            inverse: Some(&self.inverse),
+            inverse_finish: Some(&self.finish),
+            inverse_scales: Some(&self.scales),
+        }
+        // The owner prepared these entries and exposes no mutation.
+        .bind_trusted(self.domain)
+        .unwrap()
     }
 
     pub fn capacity_bytes(&self) -> usize {
@@ -105,7 +103,7 @@ pub struct ClassBuilder<'a, M: PrimeModulus> {
 }
 
 impl<'a, M: PrimeModulus> ClassBuilder<'a, M> {
-    pub fn new(plan: Plan<'a, M>, buffer: &'a mut [PastaField<M>], residues: usize) -> Self {
+    pub fn new(plan: Transform<'a, M>, buffer: &'a mut [PastaField<M>], residues: usize) -> Self {
         assert!(residues.is_power_of_two() && residues <= 64 && residues <= buffer.len());
         assert_eq!(plan.domain().size(), buffer.len());
         Self {

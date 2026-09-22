@@ -5,7 +5,7 @@ use super::{
     ProjectivePoint, Requirements, ScalarStorage, Scalars, Scratch, check_length, check_scratch,
     checked_count, recode::Geometry,
 };
-use crate::exec::{Executor, TaskBudget};
+use crate::exec::{ExecutionOptions, Executor, TaskBudget};
 use core::num::NonZeroUsize;
 
 macro_rules! size {
@@ -37,7 +37,7 @@ const ZERO: Requirements = Requirements {
     indices: 0,
 };
 impl Requirements {
-    const fn include(self, b: Self) -> Self {
+    pub(super) const fn include(self, b: Self) -> Self {
         Self {
             scalars: max(self.scalars, b.scalars),
             digits: max(self.digits, b.digits),
@@ -81,7 +81,7 @@ pub struct JobStorage {
     pub(super) cap: usize,
     pub(super) pass: usize,
     pub(super) workers: usize,
-    budget: TaskBudget,
+    pub(super) budget: TaskBudget,
     streaming: bool,
     pub(super) accumulation: Accumulation,
     pub(super) work: Requirements,
@@ -121,7 +121,7 @@ impl WorkerStorage {
 // turn the requested kernel into an explicit selection.
 #[derive(Clone, Copy)]
 pub(super) struct Options {
-    arithmetic: ArithmeticOptions,
+    pub(super) arithmetic: ArithmeticOptions,
     task_budget: TaskBudget,
     memory_limit: Option<usize>,
     width: Option<u8>,
@@ -144,7 +144,15 @@ impl Options {
     const fn geometry(self, n: usize) -> Geometry {
         match self.width {
             Some(width) => Geometry::Booth(width),
-            None => Geometry::for_plan(n, self.arithmetic),
+            None => Geometry::select(
+                n,
+                super::recode::Shape {
+                    bits: 255,
+                    weight: 0,
+                },
+                self.arithmetic,
+                self.task_budget,
+            ),
         }
     }
 }
@@ -260,8 +268,7 @@ pub(super) const fn layout<C: PastaCurve>(
 const fn cap(terms: usize, options: ArithmeticOptions) -> usize {
     min(8192, min(terms, options.chunk_cap()))
 }
-#[cfg(test)]
-const fn conservative<C: PastaCurve>(
+pub(super) const fn conservative<C: PastaCurve>(
     terms: usize,
     options: Options,
 ) -> Result<JobStorage, CurveError> {
@@ -283,7 +290,9 @@ const fn smaller(mut options: Options, n: usize) -> Option<Options> {
         Some(p) => min(n, p.get()),
         None => n,
     };
-    if pass > 128 {
+    if options.arithmetic.streaming() {
+        options.arithmetic.kernel = Kernel::Auto;
+    } else if pass > 128 {
         options.arithmetic.max_terms_per_pass = NonZeroUsize::new(128);
     } else if options.task_budget.get() > 1 {
         options.task_budget = match TaskBudget::new(options.task_budget.get().div_ceil(2)) {
@@ -340,7 +349,38 @@ pub(super) const fn single_requirements<C: PastaCurve>(
     Ok(r)
 }
 
-fn job<C: PastaCurve>(input: &Input<'_, C>, options: Options) -> Result<JobStorage, CurveError> {
+pub(super) fn unbound<C: PastaCurve>(
+    terms: usize,
+    options: ExecutionOptions,
+    source_fragment: Option<NonZeroUsize>,
+) -> Result<(JobStorage, ArithmeticOptions), CurveError> {
+    let mut requested = BatchOptions::from(options);
+    requested.arithmetic.chunk_size = source_fragment;
+    if terms >= 4096 && source_fragment.is_some_and(|fragment| fragment.get() < 1024) {
+        requested.arithmetic.kernel = Kernel::StreamingBooth { width: None };
+    }
+    let mut options = Options::new(requested);
+    loop {
+        let job = conservative::<C>(terms, options)?;
+        if options.memory_limit.is_none_or(|limit| {
+            job.requirements
+                .bytes::<C>()
+                .is_ok_and(|bytes| bytes <= limit)
+        }) {
+            return Ok((job, options.arithmetic));
+        }
+        options =
+            smaller(options, cap(terms, options.arithmetic)).ok_or(CurveError::MemoryLimit {
+                limit: options.memory_limit.unwrap(),
+                required: job.requirements.bytes::<C>()?,
+            })?;
+    }
+}
+
+pub(super) fn job<C: PastaCurve>(
+    input: &Input<'_, C>,
+    options: Options,
+) -> Result<JobStorage, CurveError> {
     let retained = match input.scalars {
         Scalars::Prepared(s) => Some(s),
         _ => None,
@@ -349,8 +389,8 @@ fn job<C: PastaCurve>(input: &Input<'_, C>, options: Options) -> Result<JobStora
     let geometry = retained.map_or_else(
         || options.geometry(n),
         |s| {
-            let shape = Geometry::for_shape(n, s.shape, options.arithmetic);
-            if n < 4096 && matches!(shape, Geometry::Short(_)) {
+            let shape = Geometry::select(n, s.shape, options.arithmetic, options.task_budget);
+            if matches!(shape, Geometry::Short(_)) {
                 shape
             } else {
                 options.geometry(n)
@@ -431,9 +471,33 @@ fn requirements<C: PastaCurve>(
 }
 pub(super) struct Plan {
     pub requirements: Requirements,
-    options: Options,
+    pub(super) options: Options,
 }
 impl Plan {
+    pub fn with_capacity<C: PastaCurve>(
+        inputs: &[Input<'_, C>],
+        options: BatchOptions,
+        capacity: Requirements,
+    ) -> Result<Self, CurveError> {
+        let mut plan = Self::new(inputs, options)?;
+        while !plan.requirements.fits(capacity)
+            || plan.options.memory_limit.is_some_and(|limit| {
+                plan.requirements
+                    .bytes::<C>()
+                    .is_ok_and(|bytes| bytes > limit)
+            })
+        {
+            let n = inputs
+                .iter()
+                .map(|i| cap(i.len(), plan.options.arithmetic))
+                .max()
+                .unwrap_or(0);
+            plan.options = smaller(plan.options, n)
+                .ok_or_else(|| plan.requirements.capacity_error(capacity))?;
+            plan.requirements = requirements(inputs, plan.options)?;
+        }
+        Ok(plan)
+    }
     pub fn new<C: PastaCurve>(
         inputs: &[Input<'_, C>],
         options: BatchOptions,
@@ -476,7 +540,6 @@ pub(super) fn split_scratch<C: PastaCurve>(
         Scratch::new(sb, db, ab, pb, fb, ib),
     )
 }
-#[cfg(test)]
 pub(super) fn execute<C: PastaCurve, X: Executor>(
     plan: &Plan,
     inputs: &[Input<'_, C>],
@@ -486,7 +549,6 @@ pub(super) fn execute<C: PastaCurve, X: Executor>(
 ) {
     execute_inputs(inputs, output, plan.options, executor, scratch);
 }
-#[cfg(test)]
 fn execute_inputs<C: PastaCurve, X: Executor>(
     inputs: &[Input<'_, C>],
     output: &mut [ProjectivePoint<C>],
@@ -528,16 +590,9 @@ fn execute_job<C: PastaCurve, X: Executor>(
         options.arithmetic,
         job,
         options.width.is_none(),
+        options.memory_limit,
     )
-    .execute(
-        *input,
-        // Preparation and streaming deposits use retained storage, so their
-        // concurrency need not stop at the number of window scratch bundles.
-        // The driver clamps temporary leases to the available windows.
-        NonZeroUsize::new(job.budget.get()).unwrap(),
-        executor,
-        scratch,
-    )
+    .execute(*input, executor, scratch)
     .expect("validated synchronous MSM storage")
 }
 
@@ -549,9 +604,8 @@ fn execute_job<C: PastaCurve, X: Executor>(
 ///
 /// Different output buffers and previously used scratch may be supplied on every
 /// execution, including concurrent calls with separate buffers. The
-/// [memory ceiling](BatchOptions::with_memory_limit) includes metadata
-/// prefixes reserved by [`Self::storage_len`] and scratch from
-/// [`Self::requirements`].
+/// [memory ceiling](ExecutionOptions::with_memory_limit) covers scratch from
+/// [`Self::requirements`]. Metadata sized by [`Self::storage_len`] is separate.
 pub struct BatchPlan<'a, 'i, C: PastaCurve> {
     inputs: &'a [Input<'i, C>],
     jobs: &'a [JobStorage],
@@ -568,6 +622,15 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     /// fewer worker ranges. Returns [`CurveError::SizeOverflow`] if either slice
     /// would be too large.
     pub const fn storage_len(
+        inputs: usize,
+        options: ExecutionOptions,
+    ) -> Result<(usize, usize), CurveError> {
+        Self::storage_len_with(
+            inputs,
+            BatchOptions::new(ArithmeticOptions::DEFAULT).with_task_budget(options.task_budget()),
+        )
+    }
+    pub(crate) const fn storage_len_with(
         inputs: usize,
         options: BatchOptions,
     ) -> Result<(usize, usize), CurveError> {
@@ -586,48 +649,28 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     /// [`CurveError::ScratchTooSmall`] for short buffers,
     /// [`CurveError::SizeOverflow`] for unrepresentable sizes, or
     /// [`CurveError::MemoryLimit`] under the
-    /// [memory policy](BatchOptions::with_memory_limit).
+    /// [workspace ceiling](ExecutionOptions::with_memory_limit).
     /// All returned errors precede writes; tails beyond the required metadata
     /// prefixes remain untouched.
     pub fn new(
+        inputs: &'a [Input<'i, C>],
+        options: ExecutionOptions,
+        jobs: &'a mut [JobStorage],
+        workers: &'a mut [WorkerStorage],
+    ) -> Result<Self, CurveError> {
+        Self::new_with(inputs, options.into(), jobs, workers)
+    }
+    pub(crate) fn new_with(
         inputs: &'a [Input<'i, C>],
         options: BatchOptions,
         jobs: &'a mut [JobStorage],
         workers: &'a mut [WorkerStorage],
     ) -> Result<Self, CurveError> {
-        let (j, w) = Self::storage_len(inputs.len(), options)?;
+        let (j, w) = Self::storage_len_with(inputs.len(), options)?;
         check_scratch("jobs", j, jobs.len())?;
         check_scratch("workers", w, workers.len())?;
-        let metadata = j
-            .checked_mul(core::mem::size_of::<JobStorage>())
-            .and_then(|n| {
-                w.checked_mul(core::mem::size_of::<WorkerStorage>())
-                    .and_then(|m| n.checked_add(m))
-            })
-            .ok_or(CurveError::SizeOverflow)?;
-        let mut adjusted = options;
-        if let Some(limit) = options.memory_limit {
-            adjusted.memory_limit =
-                Some(limit.checked_sub(metadata).ok_or(CurveError::MemoryLimit {
-                    limit,
-                    required: metadata,
-                })?);
-        }
-        let plan = Plan::new(inputs, adjusted).map_err(|error| match error {
-            CurveError::MemoryLimit { required, .. } => match required.checked_add(metadata) {
-                Some(required) => CurveError::MemoryLimit {
-                    limit: options.memory_limit.unwrap(),
-                    required,
-                },
-                None => CurveError::SizeOverflow,
-            },
-            e => e,
-        })?;
-        let temporary_bytes = plan
-            .requirements
-            .bytes::<C>()?
-            .checked_add(metadata)
-            .ok_or(CurveError::SizeOverflow)?;
+        let plan = Plan::new(inputs, options)?;
+        let temporary_bytes = plan.requirements.bytes::<C>()?;
         let jobs = &mut jobs[..j];
         let workers = &mut workers[..w];
         let used = fill_metadata(inputs, plan.options, jobs, workers, 0);
@@ -647,10 +690,7 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     pub const fn requirements(&self) -> Requirements {
         self.plan.requirements
     }
-    /// Total temporary bytes, including the reserved metadata prefixes.
-    ///
-    /// Uses the accounting of [`BatchOptions::with_memory_limit`], even if
-    /// the plan uses fewer worker entries than [`Self::storage_len`] reserves.
+    /// Arithmetic workspace bytes, excluding metadata and unused buffer tails.
     pub const fn temporary_bytes(&self) -> usize {
         self.temporary_bytes
     }
@@ -658,7 +698,8 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     ///
     /// A range may share scoped tasks across jobs or use tasks within each job.
     /// This count does not measure task concurrency or executor threads.
-    pub const fn worker_ranges(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) const fn worker_ranges(&self) -> usize {
         self.workers.len()
     }
     /// Executes the retained plan, writing one result per input in input order.
@@ -813,7 +854,7 @@ mod tests {
                 .with_memory_limit(usize::MAX);
             let mut jobs = [JobStorage::EMPTY; 4];
             let mut workers = [WorkerStorage::EMPTY; 4];
-            let plan = BatchPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+            let plan = BatchPlan::new_with(&inputs, options, &mut jobs, &mut workers).unwrap();
             assert_eq!(plan.worker_ranges(), 1);
             assert_eq!(plan.jobs[1].budget.get(), budget);
         }
@@ -824,7 +865,7 @@ mod tests {
                 .with_memory_limit(usize::MAX);
             let mut jobs = [JobStorage::EMPTY; 30];
             let mut workers = [WorkerStorage::EMPTY; 5];
-            let plan = BatchPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+            let plan = BatchPlan::new_with(&inputs, options, &mut jobs, &mut workers).unwrap();
             assert_eq!(plan.worker_ranges(), budget);
             for worker in plan.workers {
                 assert_eq!(worker.end - worker.begin, inputs.len() / budget);
@@ -858,18 +899,19 @@ mod tests {
                         .with_task_budget(TaskBudget::new(tasks).unwrap())
                         .with_memory_limit(limit);
                         let (j, w) =
-                            BatchPlan::<Pallas>::storage_len(inputs.len(), options).unwrap();
+                            BatchPlan::<Pallas>::storage_len_with(inputs.len(), options).unwrap();
                         let mut jobs = vec![JobStorage::EMPTY; j];
                         let mut workers = vec![WorkerStorage::EMPTY; w];
-                        let plan = match BatchPlan::new(&inputs, options, &mut jobs, &mut workers) {
-                            Ok(p) => p,
-                            Err(CurveError::MemoryLimit { .. }) => {
-                                assert!(jobs.iter().all(|j| *j == JobStorage::EMPTY));
-                                assert!(workers.iter().all(|w| *w == WorkerStorage::EMPTY));
-                                continue;
-                            }
-                            Err(e) => panic!("{e:?}"),
-                        };
+                        let plan =
+                            match BatchPlan::new_with(&inputs, options, &mut jobs, &mut workers) {
+                                Ok(p) => p,
+                                Err(CurveError::MemoryLimit { .. }) => {
+                                    assert!(jobs.iter().all(|j| *j == JobStorage::EMPTY));
+                                    assert!(workers.iter().all(|w| *w == WorkerStorage::EMPTY));
+                                    continue;
+                                }
+                                Err(e) => panic!("{e:?}"),
+                            };
                         let mut visits = vec![0; inputs.len()];
                         let mut live_budget = 0;
                         let mut scratch = super::super::tests::Buffers::new(plan.requirements());

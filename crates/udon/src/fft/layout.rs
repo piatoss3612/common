@@ -15,7 +15,7 @@ pub enum ElementOrder {
 
 /// Whether an inverse divides by the domain size.
 ///
-/// Both policies remove the coset shift as defined by [`Plan`](super::Plan).
+/// Both policies remove the coset shift as defined by [`Transform`](super::Transform).
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum InverseScale {
     /// Return the polynomial's coefficients.
@@ -36,7 +36,7 @@ pub enum InverseScale {
 /// Montgomery representations; this scale concerns the polynomial's values.
 /// Multiply an entry by [`Self::normalization_factor`] to recover `c[i]`.
 ///
-/// [`Plan::forward_prefix`](super::Plan::forward_prefix) and
+/// [`Transform::execute`](super::Transform::execute) and
 /// [`Expansion::coefficients`](super::Expansion::coefficients), among other
 /// coefficient consumers, accept the view directly and apply its scale during
 /// output initialization. The factor uses the source base size even when the
@@ -50,30 +50,33 @@ pub enum InverseScale {
 /// preserve it.
 ///
 /// ```
-/// use zakura_udon::{exec::SerialExecutor, field::Fp, fft::{
-///     Codelet, Domain, ElementOrder, ExecutionOptions, Expansion, ExpansionOrder,
-///     ExpansionStorage, InputSupport, InverseScale, Plan, run::ExpansionPlan,
+/// use zakura_udon::{exec::{ExecutionOptions, SerialExecutor}, field::Fp, fft::{
+///     Direction, Domain, ElementOrder, Expansion, ExpansionOrder, ExpansionStorage,
+///     InputStorage, InputSupport, InverseScale, StorageLayout, Transform,
+///     TransformRequest, run::ExpansionPlan,
 /// }};
 ///
-/// let base = Plan::without_tables(Domain::new(1)?.subgroup());
+/// let options = ExecutionOptions::default();
+/// let base = Transform::new(Domain::new(1)?.subgroup());
 /// let expansion = Expansion::new(base, base.domain(), None)?;
-/// let tasks = core::num::NonZeroUsize::new(1).unwrap();
 /// let operation = ExpansionPlan::new(expansion,
 ///     ExpansionStorage::DisposableInput { scale: InverseScale::Unscaled },
 ///     ExpansionOrder::Residues, InputSupport::Full, ElementOrder::Natural,
-///     core::num::NonZeroUsize::new(2).unwrap(), Codelet::Radix2,
+///     StorageLayout::Contiguous, options,
 /// )?;
 /// // Evaluations of 1 + x at the two subgroup points.
 /// let mut input = [Fp::from_u64(2), Fp::ZERO];
 /// let mut expanded = [Fp::ZERO; 2];
 /// let retained = operation.execute_disposable(
-///     &mut input, &mut expanded, None, &mut [], tasks, &SerialExecutor,
+///     &mut input, &mut expanded, None, &mut [], &SerialExecutor,
 /// )?;
-/// let next = Plan::without_tables(Domain::new(2)?.subgroup());
+/// let next = Transform::new(Domain::new(2)?.subgroup());
 /// let mut output = [Fp::ZERO; 4];
-/// next.forward_prefix(
-///     retained, &mut output, ExecutionOptions::serial(), &SerialExecutor, &mut [],
-/// )?;
+/// next.execute(TransformRequest {
+///     input_storage: InputStorage::Preserve,
+///     support: InputSupport::Prefix(retained.as_slice().len()),
+///     ..TransformRequest::new(Direction::Forward)
+/// }, Some(retained), &mut output, options, &SerialExecutor, &mut [])?;
 /// for (row, value) in output.iter().enumerate() {
 ///     let point = next.domain().domain().root().pow_u64(row as u64);
 ///     assert_eq!(*value, Fp::ONE.add(&point));

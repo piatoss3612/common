@@ -10,23 +10,23 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
     for size in [ordinary.len(), ordinary.len() * 4] {
         for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
             let domain = Domain::<M>::for_size(size).unwrap().coset(shift).unwrap();
-            let plan = Plan::without_tables(domain);
+            let plan = Transform::new(domain);
             let expected = direct(ordinary, domain);
             let mut output = vec![PastaField::ONE; size];
-            plan.forward_prefix(
+            plan.forward_prefix_with(
                 view,
                 &mut output,
-                ExecutionOptions::serial(),
+                Strategy::serial(),
                 &SerialExecutor,
                 &mut [],
             )
             .unwrap();
             assert_eq!(output, expected);
             if size == ordinary.len() {
-                plan.forward_into(
+                plan.forward_into_with(
                     view,
                     &mut output,
-                    ExecutionOptions::serial(),
+                    Strategy::serial(),
                     &SerialExecutor,
                     &mut [],
                 )
@@ -38,7 +38,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
             for columns in [false, true] {
                 for scatter in [false, true] {
                     for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
-                        let mut operation = FftPlan::new(
+                        let mut operation = FftPlan::with_strategy(
                             plan,
                             TransformRequest {
                                 support: if size == ordinary.len() {
@@ -74,7 +74,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                                 vec![PastaField::ONE; operation.retained_fields() + 1];
                             for factor in [None, Some(factor_values.as_slice())] {
                                 operation
-                                    .execute(
+                                    .execute_with(
                                         Some(view.as_slice()),
                                         &mut output,
                                         factor,
@@ -100,7 +100,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
             }
 
             let extended = Domain::for_size(size * 2).unwrap().coset(shift).unwrap();
-            let base = Plan::without_tables(domain.domain().subgroup());
+            let base = Transform::new(domain.domain().subgroup());
             let expected = direct(ordinary, extended);
             let mut output = vec![PastaField::ONE; extended.size()];
             for normalization in [
@@ -115,10 +115,10 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                 });
                 let expansion = Expansion::new(base, extended, scales).unwrap();
                 expansion
-                    .coefficients(
+                    .coefficients_with(
                         view,
                         &mut output,
-                        ExpansionOptions::serial(),
+                        ExpansionStrategy::serial(),
                         &SerialExecutor,
                         &mut [],
                     )
@@ -129,11 +129,11 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                 }
                 let factor_values = vec![PastaField::from_u64(11); extended.size()];
                 expansion
-                    .short_product(
+                    .short_product_with(
                         view,
                         expansion.view(&factor_values).unwrap(),
                         &mut output,
-                        ExpansionOptions::serial(),
+                        ExpansionStrategy::serial(),
                         &SerialExecutor,
                         &mut [],
                     )
@@ -143,7 +143,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                     assert_eq!(result.get(row), Some(&value.mul(&factor_values[0])));
                 }
                 for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
-                    let operation = ExpansionPlan::new(
+                    let operation = ExpansionPlan::with_strategy(
                         expansion,
                         ExpansionStorage::Coefficients,
                         order,
@@ -161,10 +161,10 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                         EvaluationLayout::BitReversed
                     };
                     let mut scratch =
-                        vec![PastaField::ONE; operation.scratch_fields(nz(3)).unwrap() + 1];
+                        vec![PastaField::ONE; operation.scratch_fields_with(nz(3)).unwrap() + 1];
                     for factor in [None, Some(factor_values.as_slice())] {
                         operation
-                            .execute(
+                            .execute_with(
                                 view.as_slice(),
                                 &mut output,
                                 &mut [],
@@ -194,10 +194,10 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                         let operation = expansion.residue(residue, inner_order).unwrap();
                         let mut output = vec![PastaField::ZERO; size];
                         operation
-                            .coefficients(
+                            .coefficients_with(
                                 view,
                                 &mut output,
-                                ExecutionOptions::serial(),
+                                Strategy::serial(),
                                 &SerialExecutor,
                                 &mut [],
                             )
@@ -226,11 +226,11 @@ fn coefficient_composition<M: PrimeModulus>() {
         let mut ordinary = inputs(size);
         ordinary[0] = PastaField::from_u64(13);
         let evaluations = direct(&ordinary, domain);
-        let expansion = Expansion::new(Plan::without_tables(domain), domain, None).unwrap();
+        let expansion = Expansion::new(Transform::new(domain), domain, None).unwrap();
         for scale in [InverseScale::Normalized, InverseScale::Unscaled] {
             let mut retained = evaluations.clone();
             let mut output = vec![PastaField::ZERO; size];
-            let view = ExpansionPlan::new(
+            let view = ExpansionPlan::with_strategy(
                 expansion,
                 ExpansionStorage::DisposableInput { scale },
                 ExpansionOrder::Residues,
@@ -240,7 +240,7 @@ fn coefficient_composition<M: PrimeModulus>() {
                 Codelet::Radix2,
             )
             .unwrap()
-            .execute_disposable(
+            .execute_disposable_with(
                 &mut retained,
                 &mut output,
                 None,
@@ -265,17 +265,17 @@ fn retained_views_feed_transforms_expansions_residues_and_products() {
 #[test]
 fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
     let domain = Domain::<PallasBase>::new(3).unwrap().subgroup();
-    let plan = Plan::without_tables(domain);
+    let plan = Transform::new(domain);
     let coefficients = inputs(domain.size());
     let view = CoefficientView::normalized(&coefficients);
     let joins = CountJoins::default();
     let mut output = vec![PastaField::ONE; domain.size()];
     let mut scratch = vec![PastaField::ONE; 128];
     assert!(matches!(
-        plan.forward_into(
+        plan.forward_into_with(
             CoefficientView::normalized(&coefficients[..1]),
             &mut output,
-            ExecutionOptions::serial(),
+            Strategy::serial(),
             &joins,
             &mut scratch,
         ),
@@ -285,22 +285,22 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
     let factor = EvaluationView::bind(&coefficients, other, EvaluationLayout::Natural).unwrap();
     let expansion = Expansion::new(plan, domain, None).unwrap();
     assert_eq!(
-        expansion.short_product(
+        expansion.short_product_with(
             view,
             factor,
             &mut output,
-            ExpansionOptions::serial(),
+            ExpansionStrategy::serial(),
             &joins,
             &mut scratch
         ),
         Err(FftError::InvalidLayout)
     );
-    let small = Plan::without_tables(Domain::new(2).unwrap().subgroup());
+    let small = Transform::new(Domain::new(2).unwrap().subgroup());
     assert!(matches!(
-        small.forward_prefix(
+        small.forward_prefix_with(
             view,
             &mut output[..4],
-            ExecutionOptions::serial(),
+            Strategy::serial(),
             &joins,
             &mut scratch
         ),
@@ -308,10 +308,10 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
     ));
     let small = Expansion::new(small, domain, None).unwrap();
     assert!(matches!(
-        small.coefficients(
+        small.coefficients_with(
             view,
             &mut output,
-            ExpansionOptions::serial(),
+            ExpansionStrategy::serial(),
             &joins,
             &mut scratch
         ),
@@ -321,10 +321,10 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
     assert_eq!(joins.take(), 0);
 
     // Empty ordinary prefixes remain valid through the view conversion.
-    plan.forward_prefix(
+    plan.forward_prefix_with(
         CoefficientView::normalized(&[]),
         &mut output,
-        ExecutionOptions::serial(),
+        Strategy::serial(),
         &joins,
         &mut scratch,
     )

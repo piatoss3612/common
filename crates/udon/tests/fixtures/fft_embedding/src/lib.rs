@@ -4,11 +4,11 @@
 #![deny(warnings)]
 
 use udon::{
-    exec::SerialExecutor,
+    exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     fft::{
-        Codelet, Direction, Domain, EvaluationLayout, EvaluationView, ExecutionOptions, Expansion,
-        ExpansionOptions, ExpansionScaleNormalization, ExpansionScales, Tables, TransformRequest,
-        TwiddleTable, run::FftPlan,
+        Direction, Domain, EvaluationLayout, EvaluationView, Expansion,
+        ExpansionScaleNormalization, ExpansionScales, InputStorage, StorageLayout, Tables,
+        TransformRequest, TwiddleTable, run::FftPlan,
     },
     field::{PastaField, PrimeModulus},
 };
@@ -55,29 +55,22 @@ fn exercise_field<M: PrimeModulus>(
         .expect("embedded metadata must match the domain");
     let plan = tables
         .bind(domain)
-        .expect("embedded FFT tables must match the domain")
-        .plan();
+        .expect("embedded FFT tables must match the domain");
     let twiddles = TwiddleTable::bind(record::TWIDDLES, packed)
         .expect("embedded packed twiddles must match the domain");
-    const OPTIONS: ExecutionOptions = ExecutionOptions {
-        tile_len: 4,
-        columns_per_task: 2,
-        max_tasks: 1,
-    };
-    const SCRATCH: usize = match OPTIONS.requirements(record::SIZE) {
-        Ok(required) => required.field_elements,
-        Err(_) => panic!("unsupported transform configuration"),
-    };
-    let mut scratch = [PastaField::ZERO; SCRATCH];
-    assert_eq!(
-        plan.scratch_requirements(OPTIONS).unwrap().field_elements,
-        scratch.len()
-    );
+    const OPTIONS: ExecutionOptions =
+        ExecutionOptions::DEFAULT.with_task_budget(TaskBudget::new(2).unwrap());
+    let mut scratch = [PastaField::ZERO; record::SIZE];
+    assert!(plan.scratch_requirements(OPTIONS).unwrap().field_elements <= scratch.len());
     let coefficients =
         core::array::from_fn::<_, { record::SIZE }, _>(|i| PastaField::from_u64(i as u64 + 1));
     let mut evaluations = [PastaField::ZERO; record::SIZE];
-    plan.forward_into(
-        &coefficients,
+    plan.execute(
+        TransformRequest {
+            input_storage: InputStorage::Preserve,
+            ..TransformRequest::new(Direction::Forward)
+        },
+        Some(coefficients.as_slice().into()),
         &mut evaluations,
         OPTIONS,
         &SerialExecutor,
@@ -85,8 +78,12 @@ fn exercise_field<M: PrimeModulus>(
     )
     .unwrap();
     let mut recovered = [PastaField::ZERO; record::SIZE];
-    plan.inverse_into(
-        &evaluations,
+    plan.execute(
+        TransformRequest {
+            input_storage: InputStorage::Preserve,
+            ..TransformRequest::new(Direction::Inverse)
+        },
+        Some(evaluations.as_slice().into()),
         &mut recovered,
         OPTIONS,
         &SerialExecutor,
@@ -96,12 +93,15 @@ fn exercise_field<M: PrimeModulus>(
     assert_eq!(recovered, coefficients);
     FftPlan::new(
         plan,
-        udon::fft::TransformRequest {
-            input_storage: udon::fft::InputStorage::Preserve,
+        TransformRequest {
+            input_storage: InputStorage::Preserve,
             ..TransformRequest::new(Direction::Forward)
         },
-        core::num::NonZeroUsize::new(record::SIZE).unwrap(),
-        Codelet::Radix2,
+        StorageLayout::Fragments {
+            length: core::num::NonZeroUsize::new(4).unwrap(),
+            whole_bank: false,
+        },
+        OPTIONS,
     )
     .unwrap()
     .with_twiddles(twiddles)
@@ -109,8 +109,7 @@ fn exercise_field<M: PrimeModulus>(
         Some(&coefficients),
         &mut recovered,
         None,
-        &mut [],
-        core::num::NonZeroUsize::new(1).unwrap(),
+        &mut scratch,
         &SerialExecutor,
     )
     .unwrap();
@@ -127,28 +126,18 @@ fn exercise_field<M: PrimeModulus>(
         .with_scales(scales)
         .unwrap();
     let mut output = [PastaField::ZERO; record::EXTENDED_SIZE];
-    const EXPANSION_OPTIONS: ExpansionOptions = ExpansionOptions {
-        max_residue_tasks: 2,
-        transform: OPTIONS,
-    };
-    const EXPANSION_SCRATCH: usize =
-        match EXPANSION_OPTIONS.evaluation_requirements(record::SIZE, record::EXTENDED_SIZE) {
-            Ok(required) => required.field_elements,
-            Err(_) => panic!("unsupported expansion configuration"),
-        };
-    let mut scratch = [PastaField::ZERO; EXPANSION_SCRATCH];
-    assert_eq!(
+    assert!(
         expansion
-            .evaluation_scratch(EXPANSION_OPTIONS)
+            .evaluation_scratch(OPTIONS)
             .unwrap()
-            .field_elements,
-        scratch.len()
+            .field_elements
+            <= scratch.len()
     );
     expansion
         .evaluations(
             &evaluations,
             &mut output,
-            EXPANSION_OPTIONS,
+            OPTIONS,
             &SerialExecutor,
             &mut scratch,
         )

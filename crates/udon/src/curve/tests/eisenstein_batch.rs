@@ -164,21 +164,23 @@ fn errors_preserve_preparation_and_multiplication_buffers() {
                 )
                 .is_err()
         );
-        if required != 0 {
-            assert!(
-                tables
-                    .mul(
-                        &PastaField::ONE,
-                        &mut output[..n],
-                        &mut field[..required - 1],
-                        TaskBudget::SERIAL,
-                        &SerialExecutor
-                    )
-                    .is_err()
-            );
-        }
         assert!(output.iter().all(|&p| p == ProjectivePoint::GENERATOR));
         assert!(field.iter().all(|&f| f == PastaField::ONE));
+        let scalar = PastaField::from_u64(1234567).invert().unwrap();
+        let expected = g.mul_projective(&scalar);
+        for capacity in [0, required / 2, required.saturating_sub(1), required] {
+            tables
+                .mul(
+                    &scalar,
+                    &mut output[..n],
+                    &mut field[..capacity],
+                    TaskBudget::new(3).unwrap(),
+                    &SerialExecutor,
+                )
+                .unwrap();
+            assert!(output[..n].iter().all(|p| *p == expected));
+            assert_eq!(output[n], ProjectivePoint::GENERATOR);
+        }
     }
     assert!(matches!(
         EisensteinTableBatch::<C>::bind(&[g; 7]),

@@ -13,7 +13,11 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
     /// across residues and within each transform. Returns
     /// [`FftError::SizeOverflow`] if the scratch count overflows `usize` or its
     /// field slice would exceed `isize::MAX` bytes.
-    pub fn scratch_fields(&self, max_tasks: NonZeroUsize) -> Result<usize, FftError> {
+    pub fn scratch_fields(&self) -> Result<usize, FftError> {
+        self.scratch_fields_with(NonZeroUsize::new(self.budget.get()).unwrap())
+    }
+
+    pub(crate) fn scratch_fields_with(&self, max_tasks: NonZeroUsize) -> Result<usize, FftError> {
         check_field_count(
             self.snapshot_fields()
                 .checked_mul(self.residues().min(max_tasks.get()))
@@ -43,7 +47,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
             check_length("factor", output, factor.len())?;
         }
         ScratchRequirements {
-            field_elements: self.scratch_fields(max_tasks)?,
+            field_elements: self.scratch_fields_with(max_tasks)?,
         }
         .check(scratch)
     }
@@ -62,7 +66,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
     /// [`ExpansionStorage`]. Returns a view of those coefficients, or `None`
     /// for other modes. `factor`, when present, must have the output length and
     /// physical order; it is multiplied pointwise into the output evaluations.
-    /// Scratch must meet [`Self::scratch_fields`] for the same `max_tasks`.
+    /// Scratch must meet [`Self::scratch_fields`].
     ///
     /// Returns [`FftError::InvalidExecution`] for disposable input, which needs
     /// [`Self::execute_disposable`]; [`FftError::LengthMismatch`] for incorrect
@@ -71,11 +75,31 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
     /// errors follow [`Self::scratch_fields`]. All errors precede mutation.
     /// No allocation occurs. Scoped tasks finish unwinding before a panic
     /// propagates; fields remain canonical, but results may be incomplete.
+    pub fn execute<'c, E: Executor>(
+        self,
+        input: &[PastaField<M>],
+        output: &mut [PastaField<M>],
+        coefficients: &'c mut [PastaField<M>],
+        factor: Option<&[PastaField<M>]>,
+        scratch: &mut [PastaField<M>],
+        executor: &E,
+    ) -> Result<Option<super::super::CoefficientView<'c, M>>, FftError> {
+        self.execute_with(
+            input,
+            output,
+            coefficients,
+            factor,
+            scratch,
+            NonZeroUsize::new(self.budget.get()).unwrap(),
+            executor,
+        )
+    }
+
     #[expect(
         clippy::too_many_arguments,
-        reason = "Caller owns each disjoint buffer and execution resource."
+        reason = "Internal driver receives disjoint buffers and a task allowance."
     )]
-    pub fn execute<'c, E: Executor>(
+    pub(crate) fn execute_with<'c, E: Executor>(
         self,
         input: &[PastaField<M>],
         output: &mut [PastaField<M>],
@@ -97,7 +121,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
                 self.residue_transforms(input, output, factor, 0, scratch, max_tasks, executor)
             }
             ExpansionStorage::CoefficientWorkspace { .. } => {
-                self.inverse()?.execute(
+                self.inverse()?.execute_with(
                     Some(input),
                     coefficients,
                     None,
@@ -126,7 +150,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
                 let copy_first =
                     self.expansion.extended.shift() == self.expansion.base.domain().shift();
                 if !rest.is_empty() || !copy_first {
-                    self.inverse()?.execute(
+                    self.inverse()?.execute_with(
                         Some(input),
                         first,
                         None,
@@ -162,7 +186,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
                         }
                     }
                 } else {
-                    self.transform(0, true)?.execute(
+                    self.transform(0, true)?.execute_with(
                         None,
                         first,
                         first_factor,
@@ -195,6 +219,24 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         output: &mut [PastaField<M>],
         factor: Option<&[PastaField<M>]>,
         scratch: &mut [PastaField<M>],
+        executor: &E,
+    ) -> Result<super::super::CoefficientView<'c, M>, FftError> {
+        self.execute_disposable_with(
+            input,
+            output,
+            factor,
+            scratch,
+            NonZeroUsize::new(self.budget.get()).unwrap(),
+            executor,
+        )
+    }
+
+    pub(crate) fn execute_disposable_with<'c, E: Executor>(
+        self,
+        input: &'c mut [PastaField<M>],
+        output: &mut [PastaField<M>],
+        factor: Option<&[PastaField<M>]>,
+        scratch: &mut [PastaField<M>],
         max_tasks: NonZeroUsize,
         executor: &E,
     ) -> Result<super::super::CoefficientView<'c, M>, FftError> {
@@ -203,7 +245,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
             return Err(FftError::InvalidExecution);
         };
         self.inverse()?
-            .execute(None, input, None, scratch, max_tasks, executor)?;
+            .execute_with(None, input, None, scratch, max_tasks, executor)?;
         self.residue_transforms(input, output, factor, 0, scratch, max_tasks, executor);
         Ok(super::super::CoefficientView::new(input, scale))
     }
@@ -261,7 +303,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
                 let factor = factor.map(|f| &f[i * size..(i + 1) * size]);
                 self.transform(first + i, false)
                     .expect("validated residue")
-                    .execute(Some(coefficients), block, factor, scratch, inner, executor)
+                    .execute_with(Some(coefficients), block, factor, scratch, inner, executor)
                     .expect("validated expansion buffers");
             }
         } else {

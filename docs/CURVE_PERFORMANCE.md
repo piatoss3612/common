@@ -127,10 +127,9 @@ execution scratch checks, recoding, initialization, and arithmetic are included.
 See the [testing guide](TESTING.md#msm-and-compact-table-batch-benchmarks) for
 cache-pressure cases and preparation timing boundaries.
 
-Automatic choices depend on input size, scalar shape, and available scratch.
-Explicit kernel families, widths, and non-automatic accumulation choices remain
-requirements when batch planning adapts memory use. Measure those choices with
-the intended pass cap and concurrency; a task allowance is not a worker count.
+Udon chooses kernels, recoding widths, and accumulation from input size, scalar
+shape, available scratch, and the task budget. Measure the operation under its
+intended workspace ceiling and concurrency; a task allowance is not a worker count.
 
 ### Arithmetic and bucket reduction
 
@@ -196,22 +195,23 @@ workspace instead of 512. Twelve tasks divide evenly across four workers;
 fewer windows also reduce input passes. The sweep does not isolate those
 contributions or establish every size/budget crossover. Current
 [plan geometry](../crates/udon/src/curve/msm/recode.rs) selects width eleven for
-automatic Booth plans at grains of at least 4,096, independently of the worker
-allowance. Use explicit widths to measure the tradeoff for a particular driver.
+automatic Booth plans at grains of at least 4,096 with more than one task.
+Serial plans retain width ten at that boundary. Preparation and execution use
+the same resolved geometry; callers do not select a width.
 The [execution report](EXECUTION_PERFORMANCE.md) compares stage and blocked FFTs
 and synchronous and bounded MSM execution under selected worker counts.
 
 Projective buckets retain sums across short passes without repeatedly inverting
 sparse affine levels. Automatic accumulation uses them below a 128-term pass;
 a single small pass can still favor affine. Hybrid accumulation remains an
-explicit alternative. These are replaceable heuristics, not universal occupancy
+internal experimental alternative. These are replaceable heuristics, not universal occupancy
 thresholds. Scalar shape can also favor short arithmetic, so the `short` corpus
 of coefficients `137 * i` cannot represent every dense 128-bit workload.
 
-A pass cap bounds staging, but does not by itself bound all preparation or
-concurrent window storage. Obtain requirements from the selected plan and use
-the [memory contract](CURVES.md#sizing-and-reusing-scratch) for its accounting
-scope. Streaming Booth retains all windows' projective buckets while recoding
+The workspace ceiling covers temporary arithmetic storage and retained
+intermediates. Obtain requirements from the resolved plan and use the
+[memory contract](CURVES.md#sizing-and-reusing-scratch) for its accounting scope.
+Streaming Booth retains all windows' projective buckets while recoding
 one chunk at a time. It avoids repeated chunk collapses at the cost of a larger
 fixed bucket floor. Application-wide accounting also includes idle scratch,
 retained preparation, and metadata outside one operation's ceiling.

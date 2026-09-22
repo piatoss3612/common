@@ -29,7 +29,9 @@ queues, scoped borrows, cancellation, and failure draining. The
 [`exec::run`](../crates/udon/src/exec/run/mod.rs) contains the common task and
 completion protocol. [`curve::msm::run`](../crates/udon/src/curve/msm/run.rs) and
 [`fft::run`](../crates/udon/src/fft/run.rs) supply arithmetic plans and runs.
-Arithmetic runs use private frontiers over caller-owned `TaskStorage`, with
+Plans resolve implementation choices from mathematical inputs, physical storage
+layout, and `exec::ExecutionOptions`. Arithmetic runs use private frontiers over
+caller-owned `TaskStorage`, with
 public `Task` and `Completion` envelopes. Applications own the dependency and
 admission policy for their kernels. No arithmetic task receives an executor or
 waits for a child task.
@@ -39,7 +41,7 @@ waits for a child task.
 The coordinator performs this sequence:
 
 1. Enumerate a bounded page of ready requests across admitted runs. A request
-   describes its work kind, logical ranges, and complete resource bundle.
+   describes logical ranges and a complete resource bundle.
 2. Acquire the bundle without blocking, including an output slot and dispatch
    and completion capacity. Roll back partial acquisitions if any part fails.
    Leave that request ready and consider other compatible work.
@@ -106,7 +108,8 @@ storage cannot be rebound while accessible tickets still borrow it.
 
 [`TaskError`](../crates/udon/src/exec/run/task.rs) distinguishes invalid input
 shape, range, or configuration (`InvalidRequest`) from missing run metadata
-capacity (`Storage`). Unrepresentable storage sizes or exhausted epoch identity
+capacity or a retained provision exceeding the plan's workspace ceiling
+(`Storage`). Unrepresentable storage sizes or exhausted epoch identity
 arithmetic return `Overflow`. Transition errors describe the current run or
 task state; they do not report arithmetic kernel results.
 
@@ -134,17 +137,17 @@ Results are not replicated per worker. Streaming MSM instead retains each
 window's buckets across bounded deposits and collapses them at the end.
 
 `FftRun` retains its own stage and buffer barriers. Local transforms, paired
-tiles, permutation copies, gathers, and final scaling are bounded tasks. Optional
-column panels have a declared size of `columns * fragments()` fields per task
-and a separately configured retained panel count. Natural-order permutation
+tiles, permutation copies, gathers, and final scaling are bounded tasks. Udon
+selects column panel dimensions and their retained count from the task budget
+and workspace ceiling. Requests report the required ranges. Natural-order permutation
 either uses a retained snapshot or exclusively leases a contiguous bank for
 bounded index swaps. The latter saves snapshot storage but serializes that
 run's permutation tasks.
 
-Separate-input initialization normally gathers into disjoint destination tiles.
-Explicit scatter initialization instead reads consecutive input tiles while
-exclusively leasing the contiguous destination bank. Its work remains bounded
-by the tile size, but those initialization tasks serialize within that run.
+`StorageLayout` declares the values bank's physical fragmentation and whether
+whole-bank leases are possible. It constrains which initialization and
+permutation schedules Udon can select; applications need not choose those
+schedules themselves.
 
 `ExpansionRun<SLOTS>` publishes each completed residue independently and reuses
 its transform slot. When coefficients occupy output block zero, that block is
@@ -159,7 +162,9 @@ data dependencies, as are round-challenge fences.
 ### Inputs published by application tasks
 
 `ProducedInput` binds base storage and a logical term count without borrowing
-unfinished scalar or index rows. `MsmRun::new_produced` and
+unfinished scalar or index rows. `MsmPlan::for_produced` resolves arithmetic
+from that descriptor, resource constraints, and the maximum consecutive source
+fragment the provider can lease. `MsmRun::new_produced` and
 `new_produced_partition` expose arithmetic requests normally. The provider
 declines a claim until the request's whole source range is available, then
 leases immutable fragments through `Resources::with_source` and `SourceBuffers`.
@@ -177,11 +182,12 @@ the kernel can recode each part directly into retained scalar and digit banks.
 Preparation writes those retained banks in place. Publication only transfers
 their ownership; it need not copy the prepared data under a scheduler lock.
 
-Borrowed inputs and existing `Resources` implementations keep their signatures
-and behavior. `new_partition` binds a range of an existing borrowed input, with
-global scalar and base-index offsets. Partial ranges discard a whole-input
-digit cache while preserving reusable scalar records. Completed produced runs
-can rebind to a new input and range; stale requests still fail their epoch check.
+`new_partition` binds a range of an existing borrowed input, with
+global scalar and base-index offsets. Nonempty partial ranges discard a
+whole-input digit cache while preserving reusable scalar records; a plan that
+requires that cache rejects those ranges. Empty ranges complete with the
+identity. Completed produced runs can rebind to a new input and range; stale
+requests still fail their epoch check.
 
 ## Admission with a progress reservation
 
@@ -193,8 +199,10 @@ does not free it while consumers remain.
 For MSM, `MsmPlan::retained_for_slots` bounds the retained buffers for the chosen
 number of active chunks, while `temporary` bounds one executing task's scratch.
 Count that temporary bundle once per simultaneous lease. The contiguous driver
-combines one retained chunk with its explicit lease count in `requirements`.
-These queries check representability without applying a memory ceiling. Add
+combines one retained chunk with temporary bundles selected from its task
+budget in `requirements`. Extra retained slots must fit the plan's workspace
+ceiling together with those temporary bundles. FFT plans likewise count
+retained snapshots and expansion coefficient workspace. Add
 metadata, queues, buffer alignment, and unused provider capacity when deciding
 what the application can admit. See
 [`MsmPlan`](../crates/udon/src/curve/msm/run.rs) for the individual query contracts.
@@ -241,11 +249,11 @@ transaction and fair enumeration avoid those scheduler-induced failures.
 
 Applications may account for additional capacity classes or prioritize work by
 measured arithmetic and traffic costs. These scheduling policies belong to the
-application; Udon requests describe work kinds and required resources.
+application; Udon requests describe logical ranges and required resources.
 
-## Choosing arithmetic grain
+## Arithmetic subdivisions
 
-Task size is part of the arithmetic plan. Increasing workers or scratch leases
+Udon selects task size as part of the arithmetic plan. Increasing workers or scratch leases
 does not alter an existing plan's decomposition. Smaller grains expose more
 parallelism and faster interleaving, but they add real work:
 
@@ -266,23 +274,18 @@ For a radix-2 FFT with `N` fields and tile `t`, the local stage has `ceil(N/t)`
 tasks and each remaining cross-tile stage has about `N/(2t)` paired tasks.
 Traffic and publication costs can dominate the arithmetic saved by concurrency.
 
-The default MSM grain is capped at 8,192 terms. Automatic full-width geometry
-uses width 11 at grains of at least 4,096. Preparation fragments contain at most
-256 terms. `MsmPlan::with_grain` reduces the term grain while retaining the
-original recoder and window width; constructing a new plan for a shorter input
-can instead select a different geometry. Independent partition runs can expose
-more window tasks, with the extra collapse work shown above. These
-choices reflect the measured cases in the performance report, not a universal
-minimum grain. Explicit widths, grains, accumulation modes, and FFT columns
-remain available for application measurements. Algorithm selection should be
-made with the retained and temporary provision together; oversubscribing a
-smaller, more expensive kernel need not improve throughput.
+The implementation weighs these costs against scalar shape, source availability,
+physical fragmentation, scratch capacity, and task allowance. A source fragment
+or buffer limit can force a smaller subdivision; the caller states that limit
+and Udon resolves the arithmetic. The performance report records the evidence
+behind current choices. Private differential tests retain forced variants to
+check and measure alternative implementations.
 
 ## Synchronous execution and integration
 
 `MsmPlan`, `BatchPlan`, `FftPlan`, `ExpansionPlan`, and `InterpolationPlan`
 provide synchronous execution over caller-owned storage and `Executor::join`.
-These drivers divide an explicit total task allowance and reuse the bounded
+These drivers divide the plan's total task allowance and reuse the bounded
 arithmetic kernels. The MSM driver owns disjoint scratch bundles and can execute
 successive ready windows with one bundle inside a joined branch. Preparation
 and streaming deposits can use the full structured task allowance without a

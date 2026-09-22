@@ -1,14 +1,6 @@
-#[path = "../support/admission.rs"]
-pub(crate) mod admission;
-#[path = "../support/fft_run.rs"]
-mod fft_run;
+use super::{admission, fft_run, msm_run, run_pool};
 #[path = "../support/mixed_run.rs"]
 mod mixed_run;
-#[path = "../support/msm_run.rs"]
-#[allow(dead_code)]
-mod msm_run;
-#[path = "../support/run_pool.rs"]
-pub(crate) mod run_pool;
 #[test]
 fn heterogeneous_shrinking_rounds_share_one_arena_and_release_consumers() {
     let fixture = mixed_run::Fixture::new(1024, 1);

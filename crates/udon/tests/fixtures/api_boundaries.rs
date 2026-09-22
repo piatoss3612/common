@@ -73,13 +73,11 @@ fn field<M: PrimeModulus>() {
 fn curve<C: PastaCurve>() {
     use arithmetic::{
         curve::msm::{
-            Accumulation, ArithmeticOptions, BatchOptions, Kernel, PreparedScalars, ScalarStorage,
+            PreparedScalars, ScalarStorage,
             run::{BatchPlan, MsmPlan},
         },
-        exec::{SerialExecutor, TaskBudget},
+        exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     };
-    use core::num::NonZeroUsize;
-
     let generator = AffinePoint::<C>::GENERATOR;
     assert_eq!(
         generator.mul_projective(&PastaField::<C::Scalar>::from_u64(2)),
@@ -95,19 +93,11 @@ fn curve<C: PastaCurve>() {
     #[cfg(feature = "glv-b")]
     let _ = C::GLV_B;
 
-    let options = ArithmeticOptions::DEFAULT
-        .with_kernel(Kernel::Booth {
-            width: Some(4),
-            accumulation: Accumulation::Auto,
-        })
-        .unwrap();
-    let batch = BatchOptions::new(options)
+    let options = ExecutionOptions::default()
         .with_task_budget(TaskBudget::new(3).unwrap())
         .with_memory_limit(8192);
-    assert_eq!(batch.arithmetic(), options);
-    let plan = MsmPlan::<C>::new(1, options, NonZeroUsize::MIN).unwrap();
-    assert_eq!(plan.grain(), 1);
-    assert_eq!(BatchPlan::<C>::storage_len(1, batch).unwrap(), (1, 1));
+    let plan = MsmPlan::<C>::new(1, options).unwrap();
+    assert_eq!(BatchPlan::<C>::storage_len(1, options).unwrap(), (1, 1));
     let mut records = [ScalarStorage::<C>::ZERO];
     let prepared = PreparedScalars::prepare(
         &[PastaField::ONE],
@@ -116,19 +106,21 @@ fn curve<C: PastaCurve>() {
         &SerialExecutor,
     )
     .unwrap();
-    let mut digits = vec![0; prepared.cache_len(options).unwrap()];
-    assert_eq!(prepared.cache(options, &mut digits).unwrap().len(), 1);
+    let mut digits = vec![0; prepared.cache_len(&plan).unwrap()];
+    assert_eq!(prepared.cache(&plan, &mut digits).unwrap().len(), 1);
 
-    #[cfg(feature = "arithmetic-budget")]
-    let _ = options.with_task_budget(TaskBudget::SERIAL);
-    #[cfg(feature = "arithmetic-limit")]
-    let _ = options.with_memory_limit(8192);
-    #[cfg(feature = "plan-batch-options")]
-    let _ = MsmPlan::<C>::new(1, batch, NonZeroUsize::MIN);
-    #[cfg(feature = "cache-batch-options")]
-    let _ = prepared.cache_len(batch);
-    #[cfg(feature = "batch-arithmetic-options")]
-    let _ = BatchPlan::<C>::storage_len(1, options);
+    #[cfg(feature = "msm-arithmetic")]
+    let _ = arithmetic::curve::msm::ArithmeticOptions::default();
+    #[cfg(feature = "msm-kernel")]
+    let _ = arithmetic::curve::msm::Kernel::Auto;
+    #[cfg(feature = "msm-accumulation")]
+    let _ = arithmetic::curve::msm::Accumulation::Auto;
+    #[cfg(feature = "fft-codelet")]
+    let _ = arithmetic::fft::Codelet::Radix2;
+    #[cfg(feature = "fft-strategy")]
+    let _ = arithmetic::fft::Strategy::serial();
+    #[cfg(feature = "cache-options")]
+    let _ = prepared.cache_len(options);
 }
 
 #[cfg(any(feature = "foreign-modulus", feature = "foreign-curve"))]

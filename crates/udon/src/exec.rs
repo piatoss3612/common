@@ -24,27 +24,23 @@
 //!
 //! Independent tiles can share a total task budget with nested FFTs. Each
 //! callback receives its own allowance, passed here to
-//! [`ExecutionOptions::max_tasks`](crate::fft::ExecutionOptions::max_tasks).
+//! [`ExecutionOptions::with_task_budget`].
 //! A slice of `Vec`s or other owners works the same way:
 //!
 //! ```
 //! use zakura_udon::{
-//!     exec::{SerialExecutor, TaskBudget, for_each_mut},
-//!     fft::{Domain, ExecutionOptions, Plan},
+//!     exec::{ExecutionOptions, SerialExecutor, TaskBudget, for_each_mut},
+//!     fft::{Domain, Transform},
 //!     field::Fp,
 //! };
 //!
-//! let plan = Plan::without_tables(Domain::new(2).unwrap().subgroup());
+//! let plan = Transform::new(Domain::new(2).unwrap().subgroup());
 //! let mut first = [Fp::ONE; 4];
 //! let mut second = [Fp::from_u64(2); 4];
 //! let mut tiles = [&mut first[..], &mut second[..]];
 //! let budget = TaskBudget::new(4).unwrap();
 //! for_each_mut(&mut tiles, budget, &SerialExecutor, |_, tile, inner| {
-//!     let options = ExecutionOptions {
-//!         tile_len: 2,
-//!         columns_per_task: 1,
-//!         max_tasks: inner.get(),
-//!     };
+//!     let options = ExecutionOptions::default().with_task_budget(inner);
 //!     let mut scratch = [Fp::ZERO; 4];
 //!     plan.forward(tile, options, &SerialExecutor, &mut scratch).unwrap();
 //!     plan.inverse(tile, options, &SerialExecutor, &mut scratch).unwrap();
@@ -56,6 +52,68 @@
 use core::num::NonZeroUsize;
 
 pub mod run;
+
+/// Resource constraints for one arithmetic operation.
+///
+/// Udon selects the implementation within these limits. The byte ceiling covers
+/// the used prefixes of arithmetic scratch and retained intermediates. Inputs,
+/// outputs, persistent preparation, scheduling metadata, unused buffer tails,
+/// alignment padding, stack frames, and executor resources are separate.
+/// Supplied buffer capacities are always hard limits, even without a byte
+/// ceiling. Reusing these options for concurrent invocations gives each its own
+/// allowance; callers must account for their combined storage and concurrency.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ExecutionOptions {
+    task_budget: TaskBudget,
+    memory_limit: Option<usize>,
+}
+
+impl ExecutionOptions {
+    /// One task with no additional workspace ceiling.
+    pub const DEFAULT: Self = Self {
+        task_budget: TaskBudget::SERIAL,
+        memory_limit: None,
+    };
+
+    /// Sets the total allowance, including nested arithmetic work.
+    ///
+    /// Scoped execution divides this budget among its jobs. Incremental run
+    /// callers control dispatch and must limit simultaneous task leases.
+    pub const fn with_task_budget(mut self, budget: TaskBudget) -> Self {
+        self.task_budget = budget;
+        self
+    }
+
+    /// Limits arithmetic workspace to `bytes`; planning may use less.
+    ///
+    /// Zero permits implementations that need no arithmetic workspace. Planning
+    /// returns a memory-limit error if required intermediates cannot fit.
+    pub const fn with_memory_limit(mut self, bytes: usize) -> Self {
+        self.memory_limit = Some(bytes);
+        self
+    }
+
+    /// Requested concurrency allowance.
+    pub const fn task_budget(self) -> TaskBudget {
+        self.task_budget
+    }
+
+    /// Optional arithmetic workspace ceiling in bytes.
+    pub const fn memory_limit(self) -> Option<usize> {
+        self.memory_limit
+    }
+
+    pub(crate) fn for_scratch<T>(self, fields: usize) -> Self {
+        let bytes = fields.saturating_mul(core::mem::size_of::<T>());
+        self.with_memory_limit(self.memory_limit.map_or(bytes, |limit| limit.min(bytes)))
+    }
+}
+
+impl Default for ExecutionOptions {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
 
 /// Caller-supplied scoped fork/join execution.
 ///

@@ -24,7 +24,7 @@ pub(super) enum Geometry {
 }
 
 impl Geometry {
-    pub const fn for_len(n: usize, options: ArithmeticOptions) -> Self {
+    const fn for_len(n: usize, options: ArithmeticOptions) -> Self {
         match options.kernel {
             Kernel::Joint => return Self::Joint,
             Kernel::Booth {
@@ -38,7 +38,8 @@ impl Geometry {
             Self::Joint
         } else {
             // Larger windows reduce recoding work but enlarge each bucket
-            // workspace. Geometry does not depend on scheduling capacity.
+            // workspace. The shared selector can widen buckets when independent
+            // workers amortize them.
             Self::Booth(if n < 192 {
                 6
             } else if n < 512 {
@@ -53,8 +54,16 @@ impl Geometry {
         }
     }
 
-    pub const fn for_plan(n: usize, options: ArithmeticOptions) -> Self {
+    pub const fn select(
+        n: usize,
+        shape: Shape,
+        options: ArithmeticOptions,
+        budget: crate::exec::TaskBudget,
+    ) -> Self {
+        let geometry = Self::for_shape(n, shape, options);
         if n >= 4096
+            && budget.get() > 1
+            && matches!(geometry, Self::Booth(_))
             && matches!(
                 options.kernel,
                 Kernel::Auto | Kernel::Booth { width: None, .. }
@@ -62,7 +71,7 @@ impl Geometry {
         {
             Self::Booth(11)
         } else {
-            Self::for_len(n, options)
+            geometry
         }
     }
 

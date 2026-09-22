@@ -1,11 +1,11 @@
 use super::transform::Run;
 use super::{
-    Class, ClassState, ElementOrder, ExecutionOptions, Executor, FftError, PastaField,
-    PrimeModulus, interpolation_scratch,
+    Class, ClassState, ElementOrder, Executor, FftError, PastaField, PrimeModulus, Strategy,
+    interpolation_scratch,
 };
 fn inverse<M: PrimeModulus, E: Executor>(
     class: &mut Class<'_, M>,
-    options: ExecutionOptions,
+    options: Strategy,
     executor: &E,
     scratch: &mut [PastaField<M>],
 ) {
@@ -15,7 +15,7 @@ fn inverse<M: PrimeModulus, E: Executor>(
     }
     let fields = class
         .plan
-        .scratch_requirements(options)
+        .scratch_requirements_with(options)
         .unwrap()
         .field_elements;
     class.plan.run(
@@ -56,7 +56,7 @@ fn merge_evaluations<M: PrimeModulus>(output: &mut Class<'_, M>, lift: &mut Clas
 pub fn interpolate_sum<M: PrimeModulus, E: Executor>(
     output: &mut Class<'_, M>,
     lifts: &mut [Class<'_, M>],
-    options: ExecutionOptions,
+    options: Strategy,
     executor: &E,
     scratch: &mut [PastaField<M>],
 ) -> Result<(), FftError> {

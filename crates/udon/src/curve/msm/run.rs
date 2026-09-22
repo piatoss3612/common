@@ -18,6 +18,7 @@ use super::{
     recode::{self, Geometry, Shape},
     schedule,
 };
+use crate::exec::ExecutionOptions;
 use crate::exec::run::{
     Completion, Frontier, Identity, Kernel, Outcome, ReadView, Task, TaskError, TaskKey,
     TaskStorage,
@@ -90,13 +91,11 @@ pub struct SourceBuffers<'a, C: PastaCurve> {
     pub indices: &'a dyn ReadView<u32>,
 }
 
-/// Arithmetic and storage requirements for bounded MSM tasks.
+/// Resolved arithmetic and storage requirements for bounded MSM tasks.
 ///
-/// `grain` is a maximum number of terms processed by one preparation or window
-/// task. It is independent of available workers. Smaller chunks add window
-/// collapses and partial reductions; explicit streaming instead retains every
-/// window's buckets and deposits one chunk per task. The caller must reserve
-/// all those buckets before admitting streaming work.
+/// Construction selects recoding, subdivisions, and accumulation from input
+/// facts and resource constraints. The caller supplies storage and schedules
+/// the resulting resource requests; the implementation choice remains private.
 #[derive(Clone, Copy, Debug)]
 pub struct MsmPlan<C: PastaCurve> {
     terms: usize,
@@ -108,10 +107,81 @@ pub struct MsmPlan<C: PastaCurve> {
     specialize_short: bool,
     job: schedule::JobStorage,
     retained: Requirements,
+    memory_limit: Option<usize>,
     marker: PhantomData<C>,
 }
 
 impl<C: PastaCurve> MsmPlan<C> {
+    /// Resolves a reusable plan from the term count and resource constraints.
+    ///
+    /// This conservative plan accepts any scalar row and ordinary bases of the
+    /// stated length. Use [`Self::for_input`] to account for retained preparation.
+    /// No storage is allocated or written; impossible sizes or workspace limits
+    /// return [`CurveError::SizeOverflow`] or [`CurveError::MemoryLimit`].
+    pub fn new(terms: usize, options: ExecutionOptions) -> Result<Self, CurveError> {
+        let (job, arithmetic) = schedule::unbound::<C>(terms, options, None)?;
+        Ok(Self::from_job(
+            terms,
+            arithmetic,
+            job,
+            true,
+            options.memory_limit(),
+        ))
+    }
+
+    /// Resolves a plan using this input's scalar shape and retained preparation.
+    ///
+    /// The input is not borrowed by the plan. Execution checks the term count
+    /// and preparation before writing. Requirements are fixed: if planning
+    /// omits scalar preparation or digit storage, later inputs must supply the
+    /// corresponding retained records or matching cache. A plan specialized
+    /// for short scalars requires prepared scalars with no larger bit width;
+    /// a plan relying on compact bases requires compact bases again.
+    /// Incompatible inputs return [`CurveError::IncompatibleMsmInput`] from
+    /// [`Self::execute`] or [`TaskError::InvalidRequest`] when binding a run.
+    /// Use [`Self::new`] for reuse across arbitrary scalar rows and bases.
+    ///
+    /// Construction does not write storage. Size and workspace errors follow
+    /// [`Self::new`]. Retained preparation is separate from the workspace ceiling.
+    pub fn for_input(input: &Input<'_, C>, options: ExecutionOptions) -> Result<Self, CurveError> {
+        let plan = schedule::Plan::new(core::slice::from_ref(input), options.into())?;
+        let job = schedule::job(input, plan.options)?;
+        Ok(Self::from_job(
+            input.len(),
+            plan.options.arithmetic,
+            job,
+            false,
+            options.memory_limit(),
+        ))
+    }
+
+    /// Plans sources published in independently available fragments.
+    ///
+    /// `source_fragment` is the maximum consecutive source range the provider
+    /// can lease. Udon chooses preparation and arithmetic subdivisions within it.
+    /// The plan retains no source borrow. Construction writes no storage and
+    /// has the size and workspace errors of [`Self::new`].
+    pub fn for_produced(
+        input: ProducedInput<'_, C>,
+        source_fragment: NonZeroUsize,
+        options: ExecutionOptions,
+    ) -> Result<Self, CurveError> {
+        let (job, arithmetic) =
+            schedule::unbound::<C>(input.len(), options, Some(source_fragment))?;
+        Ok(Self::from_job(
+            input.len(),
+            arithmetic,
+            job,
+            true,
+            options.memory_limit(),
+        ))
+    }
+
+    pub(super) fn cache_geometry(&self, terms: usize) -> Option<Geometry> {
+        (self.terms == terms && terms <= self.cap && !self.options.streaming())
+            .then_some(self.job.geometry)
+    }
+
     /// Plans bounded tasks without binding inputs or allocating storage.
     ///
     /// The effective grain is the smaller of `grain`, the arithmetic chunk cap,
@@ -121,14 +191,23 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// also account for metadata, queues, unused provider capacity, and alignment.
     /// Returns [`CurveError::SizeOverflow`] for unrepresentable storage counts
     /// or bytes, before binding or writing any storage.
-    pub fn new(
+    #[cfg(test)]
+    pub(crate) fn new_with(
         terms: usize,
         mut options: ArithmeticOptions,
         grain: NonZeroUsize,
     ) -> Result<Self, CurveError> {
         let cap = terms.min(grain.get()).min(options.chunk_cap());
         options.chunk_size = NonZeroUsize::new(cap.max(1));
-        let geometry = Geometry::for_plan(cap, options);
+        let geometry = Geometry::select(
+            cap,
+            Shape {
+                bits: 255,
+                weight: 0,
+            },
+            options,
+            crate::exec::TaskBudget::SERIAL,
+        );
         let job = schedule::layout::<C>(
             cap,
             geometry,
@@ -167,6 +246,7 @@ impl<C: PastaCurve> MsmPlan<C> {
             specialize_short: cap < 4096,
             job,
             retained,
+            memory_limit: None,
             marker: PhantomData,
         })
     }
@@ -176,6 +256,7 @@ impl<C: PastaCurve> MsmPlan<C> {
         options: ArithmeticOptions,
         job: schedule::JobStorage,
         specialize_short: bool,
+        memory_limit: Option<usize>,
     ) -> Self {
         let retained = Requirements {
             scalars: job.requirements.scalars,
@@ -199,15 +280,16 @@ impl<C: PastaCurve> MsmPlan<C> {
             specialize_short,
             job,
             retained,
+            memory_limit,
             marker: PhantomData,
         }
     }
 
     /// Upper bounds on typed storage retained by one active term chunk.
     ///
-    /// Prepared inputs can reuse their scalar records or matching digit cache.
-    /// These counts provision a chunk without assuming that reuse and exclude
-    /// run metadata and executing tasks' temporary scratch.
+    /// Plans made with [`Self::for_input`] account for retained scalar records
+    /// and matching digit caches. Execution requires compatible preparation.
+    /// These counts exclude run metadata and executing tasks' temporary scratch.
     pub fn retained(&self) -> Requirements {
         self.retained
     }
@@ -220,10 +302,18 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// application admission accounting. Streaming
     /// uses [`MsmRun`] with one complete set of retained window buckets.
     /// Returns [`CurveError::SizeOverflow`] if the requested slice counts or
-    /// their total bytes are unrepresentable. This does not enforce a ceiling.
+    /// their total bytes are unrepresentable, or [`CurveError::MemoryLimit`]
+    /// if these slots and the plan's simultaneous temporary bundles exceed its
+    /// workspace ceiling.
     pub fn retained_for_slots(&self, slots: NonZeroUsize) -> Result<Requirements, CurveError> {
         let r = self.retained.times::<C>(slots.get())?;
-        r.bytes::<C>()?;
+        let tasks = self.output_slots().min(self.job.budget.get()).min(32);
+        let required = r.plus(self.temporary().times::<C>(tasks)?)?.bytes::<C>()?;
+        if let Some(limit) = self.memory_limit
+            && required > limit
+        {
+            return Err(CurveError::MemoryLimit { required, limit });
+        }
         Ok(r)
     }
 
@@ -256,7 +346,8 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// kernel family. Independent partitions can therefore add scheduling
     /// slack without implicitly selecting a different recoder. Extra window
     /// collapses and retained slots still belong in the caller's cost model.
-    pub fn with_grain(mut self, grain: NonZeroUsize) -> Result<Self, CurveError> {
+    #[cfg(test)]
+    pub(crate) fn with_grain(mut self, grain: NonZeroUsize) -> Result<Self, CurveError> {
         self.cap = self.cap.min(grain.get());
         self.options.chunk_size = NonZeroUsize::new(self.cap.max(1));
         self.job = schedule::layout::<C>(
@@ -273,8 +364,8 @@ impl<C: PastaCurve> MsmPlan<C> {
         Ok(self)
     }
 
-    /// Number of ordinary window tasks per full-width chunk.
-    pub fn windows(&self) -> usize {
+    /// Number of retained projective result slots per active input chunk.
+    pub fn output_slots(&self) -> usize {
         if self.terms == 0 {
             0
         } else {
@@ -297,8 +388,36 @@ impl<C: PastaCurve> MsmPlan<C> {
         }
     }
 
+    fn accepts(&self, input: Input<'_, C>) -> bool {
+        if input.is_empty() {
+            return true;
+        }
+        let prepared = match input.scalars {
+            Scalars::Prepared(s) => Some(s),
+            _ => None,
+        };
+        if self.job.requirements.scalars == 0 && prepared.is_none() {
+            return false;
+        }
+        if self.job.requirements.digits == 0
+            && self.job.geometry.stride() != 0
+            && self.cached(input, self.job.geometry).is_none()
+        {
+            return false;
+        }
+        if let Geometry::Short(bits) = self.job.geometry
+            && prepared.is_none_or(|s| s.shape.bits > bits)
+        {
+            return false;
+        }
+        self.job.geometry != Geometry::Joint
+            || self.job.work.affine != 0
+            || matches!(input.bases, Bases::Compact(_) | Bases::CompactPrepared(_))
+    }
+
     fn initial_geometry(&self, input: Input<'_, C>) -> Geometry {
-        if !self.options.streaming()
+        if self.cached(input, self.job.geometry).is_none()
+            && !self.options.streaming()
             && self.specialize_short
             && let Scalars::Prepared(s) = input.scalars
         {
@@ -313,7 +432,7 @@ impl<C: PastaCurve> MsmPlan<C> {
 
 /// Work kind with distinct storage lifetime requirements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorkKind {
+pub(crate) enum WorkKind {
     /// Writes one retained scalar and recoding chunk.
     Prepare,
     /// Reads a prepared chunk and computes or deposits one window.
@@ -329,8 +448,8 @@ pub enum WorkKind {
 pub struct Request<'a> {
     /// Claim identity, valid only for this run and dependency epoch.
     pub key: TaskKey<'a>,
-    /// Kernel kind.
-    pub kind: WorkKind,
+    #[cfg(test)]
+    pub(crate) kind: WorkKind,
     /// First input term processed by this task.
     pub offset: usize,
     /// Terms in this chunk.
@@ -340,7 +459,7 @@ pub struct Request<'a> {
     /// First retained recoding byte written during preparation.
     pub digit_start: usize,
     /// Window index, or zero for preparation and reduction.
-    pub window: usize,
+    pub(crate) window: usize,
     /// Exclusive task scratch. During preparation its scalar and digit fields
     /// describe writes into retained storage, not additional temporary blocks.
     pub scratch: Requirements,
@@ -348,10 +467,16 @@ pub struct Request<'a> {
     pub read_scalars: usize,
     /// Shared retained digit prefix for a window task.
     pub read_digits: usize,
-    /// Exclusive retained projective bucket prefix for streaming tasks.
+    /// First retained bucket requested by this task.
+    pub bucket_start: usize,
+    /// Exclusive retained projective bucket count.
     pub buckets: usize,
-    /// Exclusive single logical partial output for window or collapse tasks.
-    pub write_partial: bool,
+    /// Logical output slot, when this task writes a partial result.
+    pub output_slot: Option<usize>,
+    /// Number of produced source scalars read starting at `offset`.
+    pub source_scalars: usize,
+    /// Number of produced source indices read starting at `offset`.
+    pub source_indices: usize,
     /// Number of shared logical partials read by a reduction task.
     pub read_partials: usize,
 }
@@ -678,9 +803,11 @@ pub struct MsmRun<'a, 'i, C: PastaCurve> {
 }
 
 impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
-    /// Binds an input and exclusive run metadata without touching arithmetic
-    /// buffers. Returns [`TaskError::InvalidRequest`] if its term count differs
-    /// from the plan, or [`TaskError::Storage`] if no frontier storage is supplied.
+    /// Binds an input and exclusive run metadata without touching arithmetic buffers.
+    ///
+    /// Returns [`TaskError::InvalidRequest`] if the term count differs or the
+    /// input lacks preparation required by [`MsmPlan::for_input`], or
+    /// [`TaskError::Storage`] if no frontier storage is supplied.
     pub fn new(
         plan: MsmPlan<C>,
         input: Input<'i, C>,
@@ -698,9 +825,12 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
     /// The plan describes the full input and fixes geometry; `range` selects
     /// the terms contributed by this run. Partition results can be reduced
     /// outside the scheduler. Each live partition needs its own retained
-    /// storage and metadata. A mismatched input length or invalid/reversed range
-    /// returns [`TaskError::InvalidRequest`]; an empty frontier returns
-    /// [`TaskError::Storage`].
+    /// storage and metadata. Nonempty partial ranges discard a whole-input digit
+    /// cache; plans that require that cache cannot bind those ranges. Empty
+    /// ranges complete with the identity. Scalar records remain reusable.
+    /// A mismatched input length, incompatible preparation, or
+    /// invalid/reversed range returns [`TaskError::InvalidRequest`]; an empty
+    /// frontier returns [`TaskError::Storage`].
     pub fn new_partition(
         plan: MsmPlan<C>,
         input: Input<'i, C>,
@@ -751,10 +881,15 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         identity: &'a mut Identity,
         storage: &'a mut [TaskStorage],
     ) -> Result<Self, TaskError> {
-        if range != (0..input.len())
+        // Empty parallel slots do no arithmetic and can retain a required cache.
+        if !range.is_empty()
+            && range != (0..input.len())
             && let Scalars::Prepared(ref mut prepared) = input.scalars
         {
             prepared.cached = None;
+        }
+        if !plan.accepts(input) {
+            return Err(TaskError::InvalidRequest);
         }
         let complete = range.is_empty();
         let frontier = Frontier::new(
@@ -841,18 +976,38 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
             }
             output[written] = Some(Request {
                 key,
+                #[cfg(test)]
                 kind: self.kind,
                 offset: self.offset + scalar_start,
                 terms,
                 scalar_start,
                 digit_start,
                 window: key.index(),
+                bucket_start: key.index()
+                    * if self.plan.options.streaming() {
+                        self.geometry.buckets()
+                    } else {
+                        0
+                    },
+                output_slot: (self.kind == WorkKind::Collapse
+                    || self.kind == WorkKind::Window && !self.plan.options.streaming())
+                .then_some(key.index()),
                 scratch,
                 read_scalars,
                 read_digits,
                 buckets,
-                write_partial: self.kind == WorkKind::Collapse
-                    || (self.kind == WorkKind::Window && !self.plan.options.streaming()),
+                source_scalars: if self.produced.is_some() && self.kind == WorkKind::Prepare {
+                    terms
+                } else {
+                    0
+                },
+                source_indices: if self.produced.is_some_and(|input| input.indexed)
+                    && matches!(self.kind, WorkKind::Prepare | WorkKind::Window)
+                {
+                    terms
+                } else {
+                    0
+                },
                 read_partials: if self.kind == WorkKind::Reduce {
                     self.geometry.windows()
                 } else {
@@ -940,7 +1095,10 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
         if !self.failed && self.frontier.is_complete() {
             let total = match self.kind {
                 WorkKind::Prepare => {
-                    if !self.plan.options.streaming() && self.plan.specialize_short {
+                    if !self.plan.options.streaming()
+                        && self.plan.specialize_short
+                        && self.plan.cached(self.input, self.geometry).is_none()
+                    {
                         let actual = Geometry::for_shape(
                             self.plan.cap.min(self.end - self.offset),
                             self.shape,
@@ -1023,7 +1181,8 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
     /// epochs so old task keys remain stale. Consumers must release retained
     /// buffers before the application reuses their storage. Returns
     /// [`TaskError::Busy`] before completion, [`TaskError::Failed`] on failure,
-    /// or [`TaskError::InvalidRequest`] for a mismatched input length.
+    /// or [`TaskError::InvalidRequest`] for a mismatched input length or
+    /// preparation incompatible with [`MsmPlan::for_input`].
     /// Epoch overflow returns [`TaskError::Overflow`].
     pub fn rebind(&mut self, plan: MsmPlan<C>, input: Input<'i, C>) -> Result<(), TaskError> {
         if input.len() != plan.terms {
@@ -1073,10 +1232,14 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
             return Err(TaskError::Busy);
         }
         let complete = range.is_empty();
-        if range != (0..input.len())
+        if !complete
+            && range != (0..input.len())
             && let Scalars::Prepared(ref mut prepared) = input.scalars
         {
             prepared.cached = None;
+        }
+        if !plan.accepts(input) {
+            return Err(TaskError::InvalidRequest);
         }
         self.frontier
             .restart(range.len().min(plan.cap).div_ceil(recode::CHUNK))?;

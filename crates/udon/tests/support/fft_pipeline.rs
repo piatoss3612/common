@@ -1,6 +1,7 @@
 //! Fixed fragment banks shared by dependent FFT runs, with no claim allocation.
 use core::ops::Range;
 use spin::{RwLock, RwLockReadGuard as Read, RwLockWriteGuard as Write};
+use std::{vec, vec::Vec};
 use zakura_udon::{
     exec::run::ReadView,
     fft::run::{Bank, Buffers, Request, Resources},
@@ -9,26 +10,38 @@ use zakura_udon::{
 
 pub struct Banks<M: PrimeModulus> {
     banks: Vec<Vec<RwLock<Vec<PastaField<M>>>>>,
-    tile: usize,
+    tiles: Vec<usize>,
 }
 
 impl<M: PrimeModulus> Banks<M> {
-    pub fn new(sizes: &[usize], tile: usize) -> Self {
+    pub fn new(sizes: &[usize], tile: usize, contiguous: Range<usize>) -> Self {
         assert!(sizes.iter().all(|size| size.div_ceil(tile) <= 32));
+        let tiles: Vec<_> = sizes
+            .iter()
+            .enumerate()
+            .map(|(i, &size)| {
+                if contiguous.contains(&i) {
+                    size.max(1)
+                } else {
+                    tile
+                }
+            })
+            .collect();
         Self {
             banks: sizes
                 .iter()
-                .map(|size| {
+                .zip(&tiles)
+                .map(|(size, &tile)| {
                     (0..size.div_ceil(tile))
                         .map(|_| RwLock::new(vec![PastaField::ZERO; tile]))
                         .collect()
                 })
                 .collect(),
-            tile,
+            tiles,
         }
     }
     pub fn write(&self, bank: usize, values: &[PastaField<M>]) {
-        for (slot, values) in self.banks[bank].iter().zip(values.chunks(self.tile)) {
+        for (slot, values) in self.banks[bank].iter().zip(values.chunks(self.tiles[bank])) {
             slot.write()[..values.len()].copy_from_slice(values);
         }
     }
@@ -42,17 +55,15 @@ impl<M: PrimeModulus> Banks<M> {
         let mut result = Source {
             slots: core::array::from_fn(|_| None),
             len: range.len(),
-            tile: self.tile,
-            offset: range.start % self.tile,
+            tile: self.tiles[bank],
+            offset: range.start % self.tiles[bank],
         };
         if range.is_empty() {
             return Some(result);
         }
-        for (entry, slot) in result
-            .slots
-            .iter_mut()
-            .zip(&self.banks[bank][range.start / self.tile..range.end.div_ceil(self.tile)])
-        {
+        for (entry, slot) in result.slots.iter_mut().zip(
+            &self.banks[bank][range.start / self.tiles[bank]..range.end.div_ceil(self.tiles[bank])],
+        ) {
             *entry = Some(slot.try_read()?);
         }
         Some(result)
@@ -70,9 +81,11 @@ impl<M: PrimeModulus> Banks<M> {
             Bank::Values => values,
             Bank::Snapshot => snapshot,
         };
-        let write = self.banks[bank(task.write.0)][task.write.1.start / self.tile].try_write()?;
+        let write_bank = bank(task.write.0);
+        let write_tile = self.tiles[write_bank];
+        let write = self.banks[write_bank][task.write.1.start / write_tile].try_write()?;
         let pair = match &task.pair {
-            Some(range) => Some(self.banks[values][range.start / self.tile].try_write()?),
+            Some(range) => Some(self.banks[values][range.start / self.tiles[values]].try_write()?),
             None => None,
         };
         let source = match &task.read {
@@ -85,8 +98,8 @@ impl<M: PrimeModulus> Banks<M> {
             pair,
             source,
             factor,
-            range: task.write.1.start % self.tile
-                ..task.write.1.start % self.tile + task.write.1.len(),
+            range: task.write.1.start % write_tile
+                ..task.write.1.start % write_tile + task.write.1.len(),
         })
     }
 }

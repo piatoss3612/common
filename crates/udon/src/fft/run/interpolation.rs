@@ -17,9 +17,110 @@ pub struct InterpolationPlan<'t, M: PrimeModulus, const CLASSES: usize> {
     transforms: [FftPlan<'t, M>; CLASSES],
     merge_into: [Option<usize>; CLASSES],
     consume: bool,
+    budget: crate::exec::TaskBudget,
 }
 
 impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES> {
+    /// Resolves inverse transforms for classes described by domain, tables, and order.
+    ///
+    /// Class zero receives the coefficient sum. Smaller classes contribute zero
+    /// above their degree bound. `consume` permits merging equal-domain evaluations
+    /// before interpolation; otherwise each lift retains its own coefficients.
+    /// Every physical fragment layout is interpreted relative to that class size.
+    /// The task and workspace limits cover all classes together, including
+    /// concurrently retained transform scratch. Tables remain borrowed; no
+    /// working storage is bound or written.
+    ///
+    /// Returns [`FftError::InvalidExecution`] for no classes or a fragment length
+    /// that is not a power of two, [`FftError::InvalidLayout`] for a class larger
+    /// than class zero, [`FftError::SizeOverflow`] for unrepresentable workspace,
+    /// or [`FftError::MemoryLimit`] if required scratch exceeds the byte ceiling.
+    pub fn new(
+        classes: [(Transform<'t, M>, ElementOrder); CLASSES],
+        consume: bool,
+        layout: super::super::StorageLayout,
+        options: crate::exec::ExecutionOptions,
+    ) -> Result<Self, FftError> {
+        if CLASSES == 0 {
+            return Err(FftError::InvalidExecution);
+        }
+        if classes
+            .iter()
+            .any(|(transform, _)| transform.domain().size() > classes[0].0.domain().size())
+        {
+            return Err(FftError::InvalidLayout);
+        }
+        let merged: [bool; CLASSES] = core::array::from_fn(|i| {
+            consume
+                && classes[..i]
+                    .iter()
+                    .any(|(transform, _)| transform.domain().same_domain(classes[i].0.domain()))
+        });
+        let active = merged.iter().filter(|merged| !**merged).count();
+        let mandatory: [usize; CLASSES] = core::array::from_fn(|i| match layout {
+            super::super::StorageLayout::Fragments {
+                length,
+                whole_bank: false,
+            } if !merged[i]
+                && length.get() < classes[i].0.domain().size()
+                && classes[i].1 == ElementOrder::Natural =>
+            {
+                classes[i].0.domain().size()
+            }
+            _ => 0,
+        });
+        let required = mandatory
+            .iter()
+            .try_fold(0usize, |n, fields| n.checked_add(*fields))
+            .and_then(|n| n.checked_mul(core::mem::size_of::<PastaField<M>>()))
+            .ok_or(FftError::SizeOverflow)?;
+        let extra = options
+            .memory_limit()
+            .map(|limit| {
+                limit
+                    .checked_sub(required)
+                    .ok_or(FftError::MemoryLimit { required, limit })
+            })
+            .transpose()?;
+        let inner = options.task_budget().partition(active).unwrap().1;
+        let build = |i: usize, layout| {
+            let mut options = crate::exec::ExecutionOptions::default().with_task_budget(inner);
+            if let Some(extra) = extra
+                && !merged[i]
+            {
+                options = options.with_memory_limit(
+                    mandatory[i] * core::mem::size_of::<PastaField<M>>() + extra / active,
+                );
+            }
+            FftPlan::new(
+                classes[i].0,
+                TransformRequest {
+                    input_order: classes[i].1,
+                    ..TransformRequest::new(Direction::Inverse)
+                },
+                layout,
+                options,
+            )
+        };
+        let first = build(0, layout)?;
+        // Coefficient additions use a common physical subdivision. Contiguous
+        // banks can accommodate whichever subdivision the output selected.
+        let layout = match layout {
+            super::super::StorageLayout::Contiguous => super::super::StorageLayout::Fragments {
+                length: NonZeroUsize::new(first.tile()).unwrap(),
+                whole_bank: true,
+            },
+            layout => layout,
+        };
+        let mut transforms = [first; CLASSES];
+        for (i, target) in transforms.iter_mut().enumerate().skip(1) {
+            *target = build(i, layout)?;
+        }
+        let mut result = Self::with_transforms(transforms, consume)?;
+        result.budget = options.task_budget();
+        Ok(result)
+    }
+
     /// Validates the class transforms and selects whether lifts may be consumed.
     ///
     /// Every plan must describe an in-place, full-support, normalized inverse
@@ -28,7 +129,10 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     ///
     /// Returns [`FftError::InvalidExecution`] for other requests or no classes,
     /// and [`FftError::InvalidLayout`] for a lift larger than the output.
-    pub fn new(transforms: [FftPlan<'t, M>; CLASSES], consume: bool) -> Result<Self, FftError> {
+    pub(crate) fn with_transforms(
+        transforms: [FftPlan<'t, M>; CLASSES],
+        consume: bool,
+    ) -> Result<Self, FftError> {
         if CLASSES == 0 {
             return Err(FftError::InvalidExecution);
         }
@@ -62,6 +166,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
             transforms,
             merge_into,
             consume,
+            budget: crate::exec::TaskBudget::SERIAL,
         })
     }
 
@@ -100,35 +205,44 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     /// on a different coset, retaining the constant's coefficients:
     ///
     /// ```
-    /// use core::num::NonZeroUsize;
     /// use zakura_udon::{
-    ///     exec::SerialExecutor,
+    ///     exec::{ExecutionOptions, SerialExecutor},
     ///     field::Fp,
-    ///     fft::{Codelet, Direction, Domain, Plan, TransformRequest,
-    ///           run::{FftPlan, InterpolationPlan}},
+    ///     fft::{Domain, ElementOrder, StorageLayout, Transform, run::InterpolationPlan},
     /// };
     ///
     /// let output_domain = Domain::new(1).unwrap()
     ///     .coset(Fp::from_u64(7)).unwrap();
     /// let lift_domain = Domain::new(0).unwrap().subgroup();
-    /// let inverse = |domain| FftPlan::new(
-    ///     Plan::without_tables(domain), TransformRequest::new(Direction::Inverse),
-    ///     NonZeroUsize::new(2).unwrap(), Codelet::Radix2,
-    /// ).unwrap();
-    /// let plan = InterpolationPlan::new(
-    ///     [inverse(output_domain), inverse(lift_domain)], false,
-    /// ).unwrap();
+    /// let plan = InterpolationPlan::new([
+    ///     (Transform::new(output_domain), ElementOrder::Natural),
+    ///     (Transform::new(lift_domain), ElementOrder::Natural),
+    /// ], false, StorageLayout::Contiguous, ExecutionOptions::default()).unwrap();
     /// // 1 + x at 7 and -7, plus the constant polynomial 5.
     /// let mut output = [Fp::from_u64(8), Fp::from_u64(6).neg()];
     /// let mut lift = [Fp::from_u64(5)];
     /// plan.execute(
     ///     [&mut output, &mut lift], [&mut [], &mut []],
-    ///     NonZeroUsize::MIN, &SerialExecutor,
+    ///     &SerialExecutor,
     /// ).unwrap();
     /// assert_eq!(output, [Fp::from_u64(6), Fp::ONE]); // 6 + x
     /// assert_eq!(lift, [Fp::from_u64(5)]);
     /// ```
     pub fn execute<E: crate::exec::Executor>(
+        self,
+        values: [&mut [PastaField<M>]; CLASSES],
+        scratch: [&mut [PastaField<M>]; CLASSES],
+        executor: &E,
+    ) -> Result<(), FftError> {
+        self.execute_with(
+            values,
+            scratch,
+            NonZeroUsize::new(self.budget.get()).unwrap(),
+            executor,
+        )
+    }
+
+    pub(crate) fn execute_with<E: crate::exec::Executor>(
         self,
         mut values: [&mut [PastaField<M>]; CLASSES],
         mut scratch: [&mut [PastaField<M>]; CLASSES],
@@ -159,7 +273,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                 .expect("validated class")
             });
             let (output, lifts) = classes.split_first_mut().unwrap();
-            let options = super::super::ExecutionOptions::serial();
+            let options = super::super::Strategy::serial();
             return if self.consume {
                 super::super::interpolate_sum(output, lifts, options, executor, &mut [])
             } else {
@@ -194,7 +308,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                     plans.iter().zip(merged).zip(values).zip(scratch)
                 {
                     if merged.is_none() {
-                        plan.execute(None, values, None, scratch, tasks, executor)
+                        plan.execute_with(None, values, None, scratch, tasks, executor)
                             .expect("validated interpolation buffers");
                     }
                 }

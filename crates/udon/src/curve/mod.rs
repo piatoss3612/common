@@ -143,7 +143,10 @@ pub enum CurveError {
         /// The supplied width.
         bits: u32,
     },
+    /// The input does not meet the scalar or preparation facts of its resolved plan.
+    IncompatibleMsmInput,
     /// An MSM Booth width is outside `4..=12`.
+    #[cfg(test)]
     InvalidMsmWindow {
         /// Supplied window width.
         bits: u32,
@@ -156,15 +159,13 @@ pub enum CurveError {
     },
     /// The planner found no layout within the caller's temporary byte ceiling.
     ///
-    /// The search follows [`msm::BatchOptions::with_memory_limit`] and is not
+    /// The search follows [`crate::exec::ExecutionOptions`] and is not
     /// exhaustive; this does not establish a global minimum storage requirement.
     MemoryLimit {
         /// Supplied byte ceiling.
         limit: usize,
-        /// Bytes required at the planner's stopping point, including metadata.
-        ///
-        /// This can be the metadata alone if it already exceeds the limit. An
-        /// unrepresentable total is reported as `usize::MAX`.
+        /// Arithmetic workspace bytes required at the planner's stopping point.
+        /// An unrepresentable total is reported as `usize::MAX`.
         required: usize,
     },
     /// The base has unreduced coordinates or fails the curve equation.
@@ -208,6 +209,10 @@ impl fmt::Display for CurveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidWindowBits { bits } => write!(f, "window width {bits} is outside 2..=8"),
+            Self::IncompatibleMsmInput => {
+                f.write_str("input is incompatible with resolved MSM plan")
+            }
+            #[cfg(test)]
             Self::InvalidMsmWindow { bits } => write!(f, "MSM width {bits} is outside 4..=12"),
             Self::InvalidScalar { position } => {
                 write!(f, "invalid MSM scalar at position {position}")

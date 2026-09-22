@@ -4,7 +4,7 @@
 //! oracles. They use no auxiliary buffers; allocations and timing behavior of
 //! caller-provided arithmetic and cloning depend on those implementations.
 //! Callers supply roots and inverse lengths. The optimized Pasta API is
-//! [`super::Plan`].
+//! [`super::Transform`].
 //!
 //! [`PastaField`] values transform over their own field. [`ProjectivePoint`]
 //! values transform over their curve's scalar field, supporting coefficient

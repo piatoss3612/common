@@ -203,7 +203,7 @@ fn phases() {
             timing("weighted_collapse_window_0", n, count * 64, || {
                 black_box(buckets::collapse(&survivors, &lens));
             });
-            let r = input.requirements(options).unwrap();
+            let r = input.requirements_with(options).unwrap();
             let mut affine = vec![AffinePoint::GENERATOR; r.affine()];
             let mut projective = vec![ProjectivePoint::IDENTITY; r.projective()];
             let mut fields = vec![PastaField::ZERO; r.field()];
@@ -247,7 +247,7 @@ fn phases() {
             assert_eq!(
                 fold(),
                 input
-                    .execute(options, &SerialExecutor, buffers.borrow())
+                    .execute_with(options, &SerialExecutor, buffers.borrow())
                     .unwrap()
             );
             timing("final_recombination", n, results.len() * 96, || {
@@ -418,9 +418,9 @@ fn native_controls() {
         for n in [128, 1024, 8192] {
             let input = Input::new(Bases::Affine(&bases[..n]), &scalars[..n]).unwrap();
             let options = BatchOptions::default();
-            let mut buffers = tests::Buffers::new(input.requirements(options).unwrap());
+            let mut buffers = tests::Buffers::new(input.requirements_with(options).unwrap());
             let expected = input
-                .execute(options, &SerialExecutor, buffers.borrow())
+                .execute_with(options, &SerialExecutor, buffers.borrow())
                 .unwrap();
             for width in [4, 6, 8] {
                 let geometry = recode::Geometry::Booth(width);
@@ -494,10 +494,12 @@ fn native_controls() {
                             .unwrap()
                             .with_chunk_size(NonZeroUsize::new(chunk).unwrap()),
                     );
-                    let r = input.requirements(o).unwrap();
+                    let r = input.requirements_with(o).unwrap();
                     let mut buffers = tests::Buffers::new(r);
                     assert_eq!(
-                        input.execute(o, &SerialExecutor, buffers.borrow()).unwrap(),
+                        input
+                            .execute_with(o, &SerialExecutor, buffers.borrow())
+                            .unwrap(),
                         expected
                     );
                     timing(
@@ -505,7 +507,11 @@ fn native_controls() {
                         n,
                         r.bytes::<C>().unwrap(),
                         || {
-                            black_box(input.execute(o, &SerialExecutor, buffers.borrow()).unwrap());
+                            black_box(
+                                input
+                                    .execute_with(o, &SerialExecutor, buffers.borrow())
+                                    .unwrap(),
+                            );
                         },
                     );
                 }

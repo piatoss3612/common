@@ -660,7 +660,6 @@ fn expanded<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
         group.bench_function("prepare", |b| {
             b.iter(|| {
                 let table = FixedBaseTable::prepare(
-                    black_box(description),
                     black_box(affine),
                     black_box(&mut entries),
                     black_box(&mut projective),
@@ -670,14 +669,8 @@ fn expanded<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
                 black_box(table.as_slice());
             })
         });
-        let table = FixedBaseTable::prepare(
-            description,
-            affine,
-            &mut entries,
-            &mut projective,
-            &mut field,
-        )
-        .unwrap();
+        let table =
+            FixedBaseTable::prepare(affine, &mut entries, &mut projective, &mut field).unwrap();
         assert_eq!(table.mul(&dense), affine.mul_projective(&dense));
         assert_eq!(
             table.mul(&PastaField::ONE.neg()),

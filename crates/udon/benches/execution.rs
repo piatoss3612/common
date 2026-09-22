@@ -2,21 +2,17 @@
 
 #[path = "support/msm.rs"]
 mod bench_msm;
-use bench_msm::MsmBench;
 
-use std::{hint::black_box, num::NonZeroUsize, time::Duration};
+use std::{hint::black_box, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use zakura_udon::{
     curve::{
         AffinePoint, Pallas, ProjectivePoint,
-        msm::{self, Bases, BatchOptions, Input, Requirements, ScalarStorage, Scratch},
+        msm::{self, Bases, Input, Requirements, ScalarStorage, Scratch},
     },
-    exec::{Executor, TaskBudget},
-    fft::{
-        Codelet, Direction, Domain, ExecutionOptions as FftOptions, Plan, TransformRequest,
-        run::FftPlan,
-    },
+    exec::{ExecutionOptions, Executor, TaskBudget},
+    fft::{Direction, Domain, StorageLayout, Transform, TransformRequest, run::FftPlan},
     field::{CanonicalUint, Fp, Fq},
 };
 
@@ -140,7 +136,7 @@ fn mixed(c: &mut Criterion) {
         .collect();
     let coefficients: Vec<_> = (0..16384).map(|i| Fp::from_u64(i * i + 1)).collect();
     let plans: Vec<_> = (11..=14)
-        .map(|log| Plan::without_tables(Domain::new(log).unwrap().subgroup()))
+        .map(|log| Transform::new(Domain::new(log).unwrap().subgroup()))
         .collect();
     let mut group = c.benchmark_group("execution/synchronous/shrinking");
     group.sample_size(10);
@@ -164,7 +160,7 @@ fn mixed(c: &mut Criterion) {
                 threads
             };
             let mut options =
-                BatchOptions::default().with_task_budget(TaskBudget::new(tasks).unwrap());
+                ExecutionOptions::default().with_task_budget(TaskBudget::new(tasks).unwrap());
             if matches!(mode, Mode::UnlimitedCap) {
                 options = options.with_memory_limit(usize::MAX);
             } else if matches!(mode, Mode::Capped) {
@@ -184,10 +180,8 @@ fn mixed(c: &mut Criterion) {
                     .filter(|_| independent)
                     .map(|inputs| inputs[1].requirements(options).unwrap()),
             );
-            let fft_options = FftOptions {
-                max_tasks: tasks,
-                ..FftOptions::default()
-            };
+            let fft_options =
+                ExecutionOptions::default().with_task_budget(TaskBudget::new(tasks).unwrap());
             let fields = plans[3]
                 .scratch_requirements(fft_options)
                 .unwrap()
@@ -305,7 +299,6 @@ fn mixed(c: &mut Criterion) {
 }
 
 fn isolated(c: &mut Criterion) {
-    let nz = |n| NonZeroUsize::new(n).unwrap();
     let mut group = c.benchmark_group("execution/isolated");
     group.sample_size(20);
     group.warm_up_time(Duration::from_millis(300));
@@ -322,12 +315,11 @@ fn isolated(c: &mut Criterion) {
                 .collect();
             let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
             let options =
-                BatchOptions::default().with_task_budget(TaskBudget::new(threads).unwrap());
-            let plan = msm::run::MsmPlan::new(terms, options.arithmetic(), nz(8192)).unwrap();
+                ExecutionOptions::default().with_task_budget(TaskBudget::new(threads).unwrap());
+            let plan = msm::run::MsmPlan::new(terms, options).unwrap();
             let mut synchronous =
                 Buffers::new(core::iter::once(input.requirements(options).unwrap()));
-            let mut bounded =
-                Buffers::new(core::iter::once(plan.requirements(nz(threads)).unwrap()));
+            let mut bounded = Buffers::new(core::iter::once(plan.requirements().unwrap()));
             for mode in ["synchronous", "runs"] {
                 group.bench_function(
                     BenchmarkId::new(format!("msm/{terms}/{mode}"), threads),
@@ -340,9 +332,9 @@ fn isolated(c: &mut Criterion) {
                                         "synchronous" => input
                                             .execute(options, &Pool, synchronous.borrow())
                                             .unwrap(),
-                                        "runs" => plan
-                                            .execute(input, nz(threads), &Pool, bounded.borrow())
-                                            .unwrap(),
+                                        "runs" => {
+                                            plan.execute(input, &Pool, bounded.borrow()).unwrap()
+                                        }
                                         _ => unreachable!(),
                                     });
                                 }
@@ -356,33 +348,27 @@ fn isolated(c: &mut Criterion) {
         for size in [64, 2048, 16384] {
             let domain = Domain::for_size(size).unwrap();
             for coset in [false, true] {
-                let plan = Plan::without_tables(
+                let plan = Transform::new(
                     domain
                         .coset(if coset { Fp::from_u64(7) } else { Fp::ONE })
                         .unwrap(),
                 );
-                let options = FftOptions {
-                    max_tasks: threads,
-                    ..FftOptions::default()
-                };
+                let options =
+                    ExecutionOptions::default().with_task_budget(TaskBudget::new(threads).unwrap());
                 let fields = plan.scratch_requirements(options).unwrap().field_elements;
                 let mut synchronous_scratch = vec![Fp::ZERO; fields];
                 for direction in [Direction::Forward, Direction::Inverse] {
-                    let stage = FftPlan::new(
+                    let planned = FftPlan::new(
                         plan,
                         TransformRequest::new(direction),
-                        nz(1024),
-                        Codelet::Radix2,
+                        StorageLayout::Contiguous,
+                        options,
                     )
-                    .unwrap()
-                    .with_contiguous_permutation();
-                    let blocked = stage
-                        .with_columns(nz(options.columns_per_task), nz(threads))
-                        .unwrap();
-                    let mut bounded_scratch = vec![Fp::ZERO; blocked.retained_fields()];
+                    .unwrap();
+                    let mut bounded_scratch = vec![Fp::ZERO; planned.retained_fields()];
                     let input: Vec<_> = (0..size).map(|i| Fp::from_u64(i as u64 + 1)).collect();
                     let mut values = input.clone();
-                    for mode in ["synchronous", "stage", "blocked"] {
+                    for mode in ["synchronous", "planned"] {
                         group.bench_function(
                             BenchmarkId::new(
                                 format!("fft/{size}/{coset}/{direction:?}/{mode}"),
@@ -414,23 +400,12 @@ fn isolated(c: &mut Criterion) {
                                                         .unwrap();
                                                     }
                                                 }
-                                                "stage" => stage
+                                                _ => planned
                                                     .execute(
                                                         None,
                                                         &mut values,
                                                         None,
                                                         &mut bounded_scratch,
-                                                        nz(threads),
-                                                        &Pool,
-                                                    )
-                                                    .unwrap(),
-                                                _ => blocked
-                                                    .execute(
-                                                        None,
-                                                        &mut values,
-                                                        None,
-                                                        &mut bounded_scratch,
-                                                        nz(threads),
                                                         &Pool,
                                                     )
                                                     .unwrap(),

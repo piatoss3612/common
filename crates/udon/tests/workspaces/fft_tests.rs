@@ -2,17 +2,14 @@ use crate::bridge::{
     executor::RayonExecutor,
     fft::{ClassBuilder, FftWorkspace, OwnedTables},
 };
-use std::{
-    num::NonZeroUsize,
-    panic::{AssertUnwindSafe, catch_unwind},
-};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use zakura_udon::{
-    exec::{Executor, SerialExecutor, TaskBudget, for_each_mut},
+    exec::{ExecutionOptions, Executor, SerialExecutor, TaskBudget, for_each_mut},
     fft::{
-        self, Codelet, Direction, Domain, ElementOrder, EvaluationLayout, EvaluationView,
-        ExecutionOptions, Expansion, ExpansionOrder, ExpansionStorage, InputSupport, InverseScale,
+        self, Direction, Domain, ElementOrder, EvaluationLayout, EvaluationView, Expansion,
+        ExpansionOrder, ExpansionStorage, InputStorage, InputSupport, InverseScale, StorageLayout,
         TransformRequest, reference,
-        run::{ExpansionPlan, FftPlan, InterpolationPlan},
+        run::{ExpansionPlan, InterpolationPlan},
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -42,15 +39,7 @@ fn evaluate<M: PrimeModulus>(
 }
 
 fn geometry(budget: TaskBudget) -> ExecutionOptions {
-    ExecutionOptions {
-        tile_len: 64,
-        columns_per_task: 2,
-        max_tasks: budget.get(),
-    }
-}
-
-fn nz(n: usize) -> NonZeroUsize {
-    NonZeroUsize::new(n).unwrap()
+    ExecutionOptions::default().with_task_budget(budget)
 }
 
 fn pipeline<M: PrimeModulus>() {
@@ -111,8 +100,8 @@ fn pipeline<M: PrimeModulus>() {
             ExpansionOrder::Residues,
             InputSupport::Full,
             ElementOrder::Natural,
-            nz(64),
-            Codelet::Radix2,
+            StorageLayout::Contiguous,
+            geometry(inner),
         )
         .unwrap();
         let forward = ExpansionPlan::new(
@@ -121,31 +110,24 @@ fn pipeline<M: PrimeModulus>() {
             ExpansionOrder::Residues,
             InputSupport::Full,
             ElementOrder::Natural,
-            nz(64),
-            Codelet::Radix2,
+            StorageLayout::Contiguous,
+            geometry(inner),
         )
         .unwrap();
-        let transforms = [plans[3], plans[0], plans[1], plans[2]].map(|plan| {
-            FftPlan::new(
-                plan,
-                TransformRequest {
-                    input_order: ElementOrder::BitReversed,
-                    ..TransformRequest::new(Direction::Inverse)
-                },
-                nz(64),
-                Codelet::Radix2,
-            )
-            .unwrap()
-            .with_contiguous_permutation()
-        });
-        let interpolation = InterpolationPlan::new(transforms, false).unwrap();
+        let interpolation = InterpolationPlan::new(
+            [plans[3], plans[0], plans[1], plans[2]].map(|plan| (plan, ElementOrder::BitReversed)),
+            false,
+            StorageLayout::Contiguous,
+            geometry(inner).with_memory_limit(0),
+        )
+        .unwrap();
         let scratch = retained
-            .scratch_fields(nz(inner.get()))
+            .scratch_fields()
             .unwrap()
-            .max(forward.scratch_fields(nz(inner.get())).unwrap())
+            .max(forward.scratch_fields().unwrap())
             .max(
-                geometry(inner)
-                    .requirements(output_size)
+                plans[3]
+                    .scratch_requirements(geometry(inner))
                     .unwrap()
                     .field_elements,
             );
@@ -169,7 +151,6 @@ fn pipeline<M: PrimeModulus>() {
                             &mut work.coefficients,
                             None,
                             &mut work.scratch,
-                            nz(inner.get()),
                             &executor,
                         )
                         .unwrap()
@@ -202,14 +183,18 @@ fn pipeline<M: PrimeModulus>() {
                             &mut [],
                             None,
                             &mut work.scratch,
-                            nz(inner.get()),
                             &executor,
                         )
                         .unwrap();
                     assert_eq!(work.output, work.product);
                     plans[3]
-                        .forward_prefix(
-                            view,
+                        .execute(
+                            TransformRequest {
+                                input_storage: InputStorage::Preserve,
+                                support: InputSupport::Prefix(view.as_slice().len()),
+                                ..TransformRequest::new(Direction::Forward)
+                            },
+                            Some(view),
                             &mut work.product,
                             geometry(inner),
                             &executor,
@@ -224,8 +209,8 @@ fn pipeline<M: PrimeModulus>() {
                         ExpansionOrder::Residues,
                         InputSupport::Prefix(prefix.len()),
                         ElementOrder::Natural,
-                        nz(64),
-                        Codelet::Radix2,
+                        StorageLayout::Contiguous,
+                        geometry(inner),
                     )
                     .unwrap()
                     .execute(
@@ -234,7 +219,6 @@ fn pipeline<M: PrimeModulus>() {
                         &mut [],
                         Some(&work.output),
                         &mut work.scratch,
-                        nz(inner.get()),
                         &executor,
                     )
                     .unwrap();
@@ -280,7 +264,6 @@ fn pipeline<M: PrimeModulus>() {
                         .execute(
                             [output, a, b, c],
                             [&mut [], &mut [], &mut [], &mut []],
-                            nz(inner.get()),
                             &executor,
                         )
                         .unwrap();
@@ -318,7 +301,7 @@ fn expansion_products_and_fused_classes() {
 #[test]
 fn incomplete_producers_and_panics_require_refill() {
     let domain = Domain::<PallasBase>::for_size(16).unwrap().subgroup();
-    let plan = fft::Plan::without_tables(domain);
+    let plan = fft::Transform::new(domain);
     let mut storage = [PastaField::ZERO; 16];
     {
         let mut builder = ClassBuilder::new(plan, &mut storage, 2);
@@ -349,15 +332,13 @@ fn incomplete_producers_and_panics_require_refill() {
         }
     }
     let mut lift_storage = [PastaField::ONE; 16];
-    let transform = FftPlan::new(
-        plan,
-        TransformRequest::new(Direction::Inverse),
-        nz(2),
-        Codelet::Radix2,
+    let interpolation = InterpolationPlan::new(
+        [(plan, ElementOrder::Natural); 2],
+        false,
+        StorageLayout::Contiguous,
+        ExecutionOptions::default().with_task_budget(TaskBudget::new(2).unwrap()),
     )
-    .unwrap()
-    .with_contiguous_permutation();
-    let interpolation = InterpolationPlan::new([transform; 2], false).unwrap();
+    .unwrap();
     storage.fill(PastaField::ONE);
     assert!(
         catch_unwind(AssertUnwindSafe(|| {
@@ -365,7 +346,6 @@ fn incomplete_producers_and_panics_require_refill() {
                 .execute(
                     [&mut storage, &mut lift_storage],
                     [&mut [], &mut []],
-                    nz(2),
                     &PanicExecutor,
                 )
                 .unwrap();
@@ -379,7 +359,6 @@ fn incomplete_producers_and_panics_require_refill() {
         .execute(
             [&mut storage, &mut lift_storage],
             [&mut [], &mut []],
-            nz(2),
             &SerialExecutor,
         )
         .unwrap();

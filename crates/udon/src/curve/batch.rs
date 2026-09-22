@@ -1,18 +1,20 @@
 //! Batch normalization with a shared field inversion.
 
-use super::{CurveError, PastaCurve, Point, ProjectivePoint, check_length, check_scratch};
+use super::{CurveError, PastaCurve, Point, ProjectivePoint, check_length};
 use crate::field::{NonzeroInversionLanes, PastaField};
 
 /// Normalizes points in order, preserving identity positions.
 ///
-/// `output` must have exactly `points.len()` elements; `scratch` needs at least
-/// that many field elements. Initial scratch contents do not matter, and its
-/// unused tail is untouched. Returns [`CurveError::LengthMismatch`] for an
-/// incorrect output length or [`CurveError::ScratchTooSmall`] for short scratch.
+/// `output` must have exactly `points.len()` elements. Scratch bounds the batch
+/// size: one field per point shares one inversion across the entire input;
+/// smaller buffers process bounded batches and empty scratch normalizes
+/// individually. Initial scratch contents do not matter, and its unused tail
+/// is untouched. Returns [`CurveError::LengthMismatch`] for an
+/// incorrect output length.
 /// Every returned error leaves both buffers unchanged.
 ///
-/// A batch containing nonidentity points uses one inversion; an empty or
-/// all-identity batch uses none.
+/// Each batch containing nonidentity points uses one inversion; empty or
+/// all-identity batches use none.
 ///
 /// ```
 /// use zakura_udon::{
@@ -33,16 +35,34 @@ pub fn batch_normalize<C: PastaCurve>(
     scratch: &mut [PastaField<C::Base>],
 ) -> Result<(), CurveError> {
     check_length("output", points.len(), output.len())?;
-    check_scratch("field", points.len(), scratch.len())?;
-    normalize(points, &mut scratch[..points.len()], |index, point| {
-        output[index] = point
-    });
+    normalize(points, scratch, |index, point| output[index] = point);
     Ok(())
 }
 
 // Callers check lengths before any mutation. A sink lets table preparation
 // write directly into the selected entry representation without a Point buffer.
 pub(super) fn normalize<C: PastaCurve>(
+    points: &[ProjectivePoint<C>],
+    scratch: &mut [PastaField<C::Base>],
+    mut write: impl FnMut(usize, Point<C>),
+) {
+    if scratch.len() < points.len() {
+        if scratch.is_empty() {
+            for (index, point) in points.iter().enumerate() {
+                write(index, point.to_point());
+            }
+        } else {
+            for (chunk, points) in points.chunks(scratch.len()).enumerate() {
+                let offset = chunk * scratch.len();
+                normalize_full(points, scratch, |index, point| write(offset + index, point));
+            }
+        }
+        return;
+    }
+    normalize_full(points, scratch, write);
+}
+
+fn normalize_full<C: PastaCurve>(
     points: &[ProjectivePoint<C>],
     scratch: &mut [PastaField<C::Base>],
     mut write: impl FnMut(usize, Point<C>),

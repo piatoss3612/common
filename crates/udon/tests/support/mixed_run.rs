@@ -18,16 +18,19 @@ use zakura_udon::{
     curve::{
         AffinePoint, Pallas, ProjectivePoint,
         msm::{
-            ArithmeticOptions, Bases, Input,
+            Bases, Input,
             run::{
                 Buffers as MsmBuffers, MsmKernel, MsmOutput, MsmPlan, MsmRun,
                 Resources as MsmResources,
             },
         },
     },
-    exec::run::{Completion, Frontier, Identity, Kernel, Outcome, Task, TaskStorage},
+    exec::{
+        ExecutionOptions, TaskBudget,
+        run::{Completion, Frontier, Identity, Kernel, Outcome, Task, TaskStorage},
+    },
     fft::{
-        Codelet, Direction, Domain, Plan, TransformRequest,
+        Direction, Domain, StorageLayout, Transform, TransformRequest,
         run::{Buffers as FftBuffers, FftKernel, FftPlan, FftRun, Resources as FftResources},
     },
     field::{CanonicalUint, Fp, Fq, PallasBase},
@@ -56,10 +59,10 @@ pub struct Fixture {
 
 impl Fixture {
     pub fn new(terms: usize, scratch_slots: usize) -> Self {
-        Self::with_grain(terms, scratch_slots, 2048)
+        Self::build(terms, scratch_slots)
     }
 
-    pub fn with_grain(terms: usize, scratch_slots: usize, grain: usize) -> Self {
+    fn build(terms: usize, scratch_slots: usize) -> Self {
         assert!(terms >= 8 && terms.is_power_of_two() && scratch_slots > 0);
         let bases = (0..terms)
             .scan(ProjectivePoint::<Pallas>::GENERATOR, |point, _| {
@@ -88,8 +91,8 @@ impl Fixture {
                 [n, (n / 8).max(1)].map(|n| {
                     MsmPlan::new(
                         n,
-                        ArithmeticOptions::DEFAULT,
-                        NonZeroUsize::new(grain).unwrap(),
+                        ExecutionOptions::default()
+                            .with_task_budget(TaskBudget::new(scratch_slots).unwrap()),
                     )
                     .unwrap()
                 })
@@ -99,10 +102,14 @@ impl Fixture {
             .map(|round| {
                 [14 - round.min(3) as u32, 11].map(|log| {
                     FftPlan::new(
-                        Plan::without_tables(Domain::new(log).unwrap().subgroup()),
+                        Transform::new(Domain::new(log).unwrap().subgroup()),
                         TransformRequest::new(Direction::Forward),
-                        NonZeroUsize::new(1024).unwrap(),
-                        Codelet::Radix2,
+                        StorageLayout::Fragments {
+                            length: NonZeroUsize::new(1024).unwrap(),
+                            whole_bank: false,
+                        },
+                        ExecutionOptions::default()
+                            .with_task_budget(TaskBudget::new(scratch_slots).unwrap()),
                     )
                     .unwrap()
                 })

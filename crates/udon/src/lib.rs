@@ -76,8 +76,5 @@ mod test_support;
 #[cfg(test)]
 extern crate self as zakura_udon;
 #[cfg(test)]
-#[path = "../tests/execution/frontier.rs"]
-mod frontier_tests;
-#[cfg(test)]
-#[path = "../tests/execution/mixed.rs"]
-mod mixed_tests;
+#[path = "../tests/execution/kernels.rs"]
+mod kernel_tests;

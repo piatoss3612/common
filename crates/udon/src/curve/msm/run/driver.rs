@@ -144,18 +144,20 @@ impl<C: PastaCurve> Windows<'_, '_, '_, C> {
 }
 
 impl<C: PastaCurve> MsmPlan<C> {
-    /// Typed storage for the contiguous driver and its explicit lease count.
+    /// Typed workspace for the contiguous driver under this plan's task budget.
     ///
-    /// Includes one retained chunk and at most `leases` complete temporary
-    /// bundles, clamped to the window count and the driver's 32 task envelopes.
-    /// Streaming retains all windows' buckets and needs no temporary bundle.
-    /// These prefixes provision execution without assuming reuse of prepared
-    /// input storage. They exclude fixed driver metadata, queues, buffer tails,
-    /// alignment between buffers, and stack/executor costs. The caller owns
-    /// total memory admission. Returns [`CurveError::SizeOverflow`] for
-    /// unrepresentable counts or bytes before mutating any storage.
-    pub fn requirements(&self, leases: NonZeroUsize) -> Result<Requirements, CurveError> {
-        let count = self.windows().min(leases.get()).min(32);
+    /// Includes retained intermediates and simultaneous temporary bundles.
+    /// Metadata, buffer tails, alignment, and stack/executor costs are separate.
+    /// Returns [`CurveError::SizeOverflow`] for unrepresentable counts or bytes.
+    pub fn requirements(&self) -> Result<Requirements, CurveError> {
+        self.requirements_with(NonZeroUsize::new(self.job.budget.get()).unwrap())
+    }
+
+    pub(crate) fn requirements_with(
+        &self,
+        leases: NonZeroUsize,
+    ) -> Result<Requirements, CurveError> {
+        let count = self.output_slots().min(leases.get()).min(32);
         let r = self
             .retained
             .plus(self.temporary().times::<C>(count)?)?
@@ -166,14 +168,30 @@ impl<C: PastaCurve> MsmPlan<C> {
 
     /// Executes bounded tasks with contiguous storage and a scoped executor.
     ///
-    /// `leases` explicitly provisions simultaneous temporary bundles, using
-    /// [`Self::requirements`]. Every executing task owns a distinct bundle;
-    /// nested execution never obtains storage by worker identity. Arithmetic
-    /// grain is unchanged. The driver allocates nothing and publishes receipts
-    /// after each structured join. Input length, sizing, and scratch errors
-    /// precede mutation. A panic waits for joined work before propagating;
-    /// scratch can be reused for a later invocation after unwinding.
+    /// Scratch must meet [`Self::requirements`]. Every executing task owns a
+    /// distinct bundle; nested work never obtains storage by worker identity.
+    /// Returns [`CurveError::LengthMismatch`] for the wrong term count,
+    /// [`CurveError::IncompatibleMsmInput`] for missing preparation required by
+    /// [`Self::for_input`], or [`CurveError::ScratchTooSmall`] for short scratch.
+    /// Size errors follow [`Self::requirements`]. All checks precede mutation;
+    /// unused scratch tails are untouched. An empty input returns identity.
+    /// The driver allocates nothing. A panic waits for joined work before
+    /// propagating; scratch can be reused after unwinding.
     pub fn execute<E: Executor>(
+        self,
+        input: Input<'_, C>,
+        executor: &E,
+        scratch: Scratch<'_, C>,
+    ) -> Result<ProjectivePoint<C>, CurveError> {
+        self.execute_with(
+            input,
+            NonZeroUsize::new(self.job.budget.get()).unwrap(),
+            executor,
+            scratch,
+        )
+    }
+
+    pub(crate) fn execute_with<E: Executor>(
         self,
         input: Input<'_, C>,
         leases: NonZeroUsize,
@@ -181,7 +199,10 @@ impl<C: PastaCurve> MsmPlan<C> {
         scratch: Scratch<'_, C>,
     ) -> Result<ProjectivePoint<C>, CurveError> {
         super::super::check_length("input", self.terms, input.len())?;
-        let scratch = scratch.checked(self.requirements(leases)?)?;
+        if !self.accepts(input) {
+            return Err(CurveError::IncompatibleMsmInput);
+        }
+        let scratch = scratch.checked(self.requirements_with(leases)?)?;
         if input.is_empty() {
             return Ok(ProjectivePoint::IDENTITY);
         }
@@ -192,7 +213,7 @@ impl<C: PastaCurve> MsmPlan<C> {
             projective,
             ..
         } = retained;
-        let (partials, buckets) = projective.split_at_mut(self.windows());
+        let (partials, buckets) = projective.split_at_mut(self.output_slots());
         let mut identity = Identity::new();
         let mut slots = [const { TaskStorage::EMPTY }; 32];
         let mut run = MsmRun::new(self, input, &mut identity, &mut slots).expect("fixed frontier");
@@ -202,7 +223,7 @@ impl<C: PastaCurve> MsmPlan<C> {
                 return Ok(result);
             }
             let limit = if run.kind == WorkKind::Window && !self.options.streaming() {
-                self.windows().min(32)
+                self.output_slots().min(32)
             } else {
                 leases.get().min(32)
             };

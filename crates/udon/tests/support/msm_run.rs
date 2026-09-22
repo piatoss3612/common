@@ -73,9 +73,9 @@ impl<C: PastaCurve> Arena<C> {
             if r.scalars() != 0 {
                 digits = digits.max(r.digits() / r.scalars() * 256);
             }
-            windows = windows.max(plan.windows());
-            if plan.windows() != 0 {
-                buckets = buckets.max((r.projective() - plan.windows()) / plan.windows());
+            windows = windows.max(plan.output_slots());
+            if plan.output_slots() != 0 {
+                buckets = buckets.max((r.projective() - plan.output_slots()) / plan.output_slots());
             }
         }
         assert!(scalars.div_ceil(256) <= 32);
@@ -167,10 +167,10 @@ impl<C: PastaCurve> Arena<C> {
             })?);
         }
         if request.buckets > 0 {
-            lease.buckets = Some(self.buckets[request.window].try_write()?);
+            lease.buckets = Some(self.buckets[request.bucket_start / request.buckets].try_write()?);
         }
-        if request.write_partial {
-            lease.output = Some(self.partials[request.window].try_write()?);
+        if let Some(slot) = request.output_slot {
+            lease.output = Some(self.partials[slot].try_write()?);
         }
         for (target, slot) in lease
             .partials

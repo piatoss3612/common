@@ -113,7 +113,9 @@ generator and consumer workflow.
 Use [`batch_normalize`](../crates/udon/src/curve/batch.rs) when several
 projective results need affine coordinates. It shares one inversion across
 nonidentity points and preserves input order and identity positions. Provide
-one output point and one field scratch element per input point. The function
+one output point per input point. One field scratch element per input permits a
+single shared inversion; smaller scratch works in chunks, including individual
+inversion with empty scratch. The function
 docs include an executable example and the complete buffer and error contract.
 
 ## Fixed-base multiplication
@@ -167,12 +169,11 @@ prepares the scalar. The const `multiplication_scratch(number_of_bases)` query
 reports field scratch for these batch methods. The type docs include an
 executable example that reuses field scratch after preparation.
 
-For repeated large batches, `scalar.certify_batch()` optionally retains the
-check for exceptional affine intermediates. Ordinary scalar preparation leaves
-this check unevaluated. Certification preserves complete projective arithmetic
-for ladders with exceptional intermediates. See
-[`EisensteinScalar::certify_batch`](../crates/udon/src/curve/eisenstein.rs) for the
-reuse contract.
+`EisensteinScalar::new` also determines whether the scalar permits batched affine
+arithmetic. Callers retain the opaque preparation; Udon selects the batch
+implementation from that fact and the available scratch. The multiplication
+scratch query reports the preferred size. Smaller scratch selects smaller
+batches or complete projective arithmetic, and empty scratch remains valid.
 
 Use `bind` or `bind_trusted` for stored entries, following the
 [table validation workflow](#preparation-binding-and-stored-formats). A single
@@ -187,16 +188,22 @@ describes when shared preparation and same-scalar multiplication pay off.
 multiplication. Select the curve with `FixedBaseTable<Pallas>` or
 `FixedBaseTable<Vesta>`, and optionally specify a prepared entry type.
 
-`FixedBaseDescription { window_bits: w }` accepts widths `2..=8`, with width 4
-as the default. The two GLV halves share `ceil(128 / w)` windows, each storing
+`FixedBaseTable::prepare` selects a representation from the supplied entry and
+scratch capacities, using only the required prefixes. More retained entries
+can reduce repeated multiplication work; the caller owns that storage tradeoff.
+The returned table's `description()` identifies its stored representation.
+
+For binding existing artifacts, `FixedBaseDescription { window_bits: w }`
+describes widths `2..=8`. The two GLV halves share `ceil(128 / w)` windows, each storing
 `2^(w - 1)` shifted multiples of the base. An additional entry handles the final
 carry from signed-digit recoding; the second half applies the endomorphism to
 its lookups. The [description docs](../crates/udon/src/curve/fixed_base.rs)
 define the entry order and multiples required for binding stored tables.
 
-Use the const query `description.requirements()` to size the entry destination
-and both scratch buffers. The destination length must match exactly; scratch
-can be larger and can be reused after preparation.
+The const query `description.requirements()` reports the exact stored entry
+count and preparation scratch for an existing format. Binding requires exactly
+that entry count. Preparation chooses a format that fits all supplied buffers
+and leaves unused tails untouched.
 
 | Window bits | Entries | Affine bytes | Cached bytes | Projective scratch | Field scratch | Total scratch bytes |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -208,34 +215,8 @@ current implementation: each projective element is 96 bytes and each field
 element is 32 bytes. Larger windows trade additional stored multiples for
 fewer additions during execution.
 
-```rust
-use udon::{
-    curve::{
-        CurveTableRequirements, FixedBaseDescription, PallasAffine,
-        FixedBaseTable, Pallas, PallasProjective,
-    },
-    field::{Fp, Fq},
-};
-
-const DESCRIPTION: FixedBaseDescription = FixedBaseDescription { window_bits: 4 };
-const REQUIRED: CurveTableRequirements = match DESCRIPTION.requirements() {
-    Ok(required) => required,
-    Err(_) => panic!("invalid table description"),
-};
-let base = PallasAffine::GENERATOR;
-let mut entries = [base; REQUIRED.table_entries];
-let mut projective = [PallasProjective::IDENTITY; REQUIRED.projective_scratch];
-let mut field = [Fp::ZERO; REQUIRED.field_scratch];
-let table = FixedBaseTable::<Pallas>::prepare(
-    DESCRIPTION,
-    &base,
-    &mut entries,
-    &mut projective,
-    &mut field,
-).unwrap();
-let scalar = Fq::from_u64(42);
-assert_eq!(table.mul(&scalar), base.mul_projective(&scalar));
-```
+The executable [preparation example](../crates/udon/src/curve/fixed_base.rs)
+shows multiplication and rebinding with the selected description and entries.
 
 To cache endomorphism coordinates, initialize `entries` with
 `PreparedAffinePoint::from_affine(&base)` and select
@@ -245,8 +226,9 @@ same scratch lengths for either entry type.
 ### Preparation, binding, and stored formats
 
 Compact and expanded tables, including compact batches, return views borrowing
-only the entries, leaving scratch available for other work. Entry lengths must
-match exactly; scratch may be longer, and preparation leaves unused tails
+only the entries, leaving scratch available for other work. Compact preparation
+and all table bindings require exact entry lengths; expanded preparation selects
+a prefix of the entry capacity. Scratch may be longer, and unused tails remain
 untouched. Preparation errors leave all buffers unchanged.
 
 Checked `bind` validates each entry against its specified multiple, including
@@ -300,63 +282,45 @@ For reuse across base sets, allocate initialized `ScalarStorage::ZERO` entries
 using `PreparedScalars::<C>::storage_len(terms)`, then call
 `PreparedScalars::prepare(scalars, storage, budget, executor)`. Preparation
 retains signed GLV components and small-integer classification and releases the
-original scalar borrow. It remains usable across chunk sizes, widths, and
-backends. Its optional `cache(arithmetic, bytes)` retains recoding as well; pass
-`ArithmeticOptions` to it and `cache_len(arithmetic)`. Cache allocation covers
-the complete scalar vector independently of batch memory policy. See
-[`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs) for the
-geometry and chunking conditions that permit reuse.
+original scalar borrow. Preparation is independent of execution choices.
+`cache_len(&plan)` and `cache(&plan, bytes)` optionally retain the recoding
+selected by an `MsmPlan`. A plan that cannot reuse a whole-row cache reports
+zero cache bytes and leaves preparation unchanged. The same resolved geometry
+sizes and consumes the cache, including at algorithm boundaries.
+Resolve `MsmPlan::for_input` with the cached handle to size workspace without
+duplicating the retained cache; caching does not change an existing plan's counts.
 `retained_bytes()` counts the borrowed records and optional cache. This storage
 is separate from execution scratch and is not a POD serialization format.
 
 ### Sizing and reusing scratch
 
-[`ArithmeticOptions`](../crates/udon/src/curve/msm/mod.rs) holds reusable kernel,
-accumulation, and staging choices. `with_max_terms_per_pass` caps affine bucket
-and temporary table staging; it alone does not bound scalar records or recoding
-bytes. `with_chunk_size` caps the terms prepared together. Independent chunk
-MSMs reuse temporary buffers, trading repeated collapses for storage independent
-of total input size.
+[`ExecutionOptions`](../crates/udon/src/exec.rs) provides the same resource contract
+for MSMs and FFTs: a total task budget and an optional workspace byte ceiling.
+The default is serial execution without an additional ceiling. Udon chooses
+recoding, window width, accumulation, and chunking from those limits and the
+input's scalar and base facts.
 
-`BatchOptions::new(arithmetic)` adds serial execution without a memory ceiling;
-`BatchOptions::default()` also uses automatic arithmetic choices. Its
-`with_task_budget` and `with_memory_limit` control batch concurrency and adaptive
-storage planning. The batch chunk cap defaults to 8,192 terms. A memory ceiling
-can reduce pass size, concurrency, or chunk size and change automatic kernel
-choices.
+For a single operation, `input.requirements(options)` reports preferred typed
+scratch. `input.execute(options, executor, scratch)` can select a smaller layout
+when actual buffer capacities require it. For reusable or incremental work,
+`MsmPlan::for_input(&input, options)` resolves an opaque plan and its fixed
+requirements. Reuse requires compatible scalar preparation and base storage,
+as specified by the [plan contract](../crates/udon/src/curve/msm/run.rs).
+`MsmPlan::new(terms, options)` is conservative when inputs are not yet available.
+`MsmPlan::for_produced` additionally takes the maximum source
+fragment the provider can lease; Udon chooses the arithmetic subdivisions.
 
-`ArithmeticOptions::with_kernel` replaces the complete arithmetic selection.
-`Kernel::Auto` selects joint, short-scalar, or nonstreaming Booth arithmetic.
-`Kernel::Joint` requires the joint ladder. `Kernel::Booth { width, accumulation }`
-requires Booth even for small inputs or short scalars, which can forgo faster
-short-scalar arithmetic. `None` chooses a width within that family; supplied
-widths must be in `4..=12`. Only `Accumulation::Auto` permits strategy changes.
+The ceiling counts used arithmetic scratch and retained intermediates. It
+excludes input/output, persistent preparation, metadata, unused buffer tails,
+and executor resources. A `MemoryLimit` error reports storage at the planner's
+stopping point, not a proven global minimum. Planning and scratch errors precede
+writes.
 
-`Kernel::StreamingBooth { width }` retains projective buckets for all windows
-while preparing and recoding one chunk at a time. It avoids repeating each
-chunk's weighted collapse, with a larger fixed workspace floor. Each deposit
-owns one window's buckets; different windows can execute concurrently. This
-choice supports indexed and retained bases. Streaming always uses projective
-accumulation. A batch memory ceiling preserves explicit family, streaming mode,
-width, and accumulation requirements, and returns `MemoryLimit` when its search
-cannot fit them. See the [performance guide](CURVE_PERFORMANCE.md#multiscalar-multiplication)
-for tuning evidence and measurement limits.
-
-The ceiling counts required execution buffer prefixes and reserved plan metadata;
-it excludes retained preparation and surplus buffer tails. The accounting and
-search contract lives on
-[`BatchOptions::with_memory_limit`](../crates/udon/src/curve/msm/mod.rs).
-The search is not exhaustive. A `MemoryLimit` error reports the storage needed
-at its stopping point, which may be the metadata alone; it does not establish
-the minimum possible storage. Planning and scratch errors precede writes.
-
-For application-controlled scheduling, `MsmPlan::new` takes `ArithmeticOptions`
-and a term grain. Its retained-slot and per-task scratch queries return bounds;
-they do not apply a batch concurrency or memory policy. The caller accounts for
-all simultaneous scratch bundles, retained intermediates, metadata, and idle
-provider capacity. See the
-[run admission protocol](EXECUTION.md#admission-with-a-progress-reservation)
-for composing those requirements under an application-wide ceiling.
+Incremental callers use the plan's retained-slot and per-task scratch queries
+to provision their provider. Additional retained slots must also fit the plan's
+ceiling. The application still accounts for total simultaneous operations,
+metadata, queues, alignment, and unused capacity. See the
+[run admission protocol](EXECUTION.md#admission-with-a-progress-reservation).
 
 `msm::run::BatchPlan::requirements()` returns counts for six private `Scratch`
 slices: `scalars()`, `digits()`, `affine()`, `projective()`, `field()`, and
@@ -384,8 +348,8 @@ curve. Its `storage_len(input_count, options)` returns job and worker metadata
 counts; initialize those slices with `JobStorage::EMPTY` and
 `WorkerStorage::EMPTY`, then call `BatchPlan::new`. Planning validates resource
 limits before modifying metadata. Use the plan's `requirements()` to size its
-execution scratch; metadata counts against the memory ceiling. Its
-`temporary_bytes()` includes reserved metadata prefixes.
+execution scratch. Its `temporary_bytes()` reports arithmetic workspace bytes,
+excluding metadata and unused tails.
 
 `plan.execute(&mut output, executor, scratch)` writes one output per input in
 input order. Jobs share the task budget, and sequential jobs reuse scratch.
@@ -399,7 +363,7 @@ Compose fixed-base products or other work with
 [`Executor::join`](../crates/udon/src/exec.rs). Choose per-operation budgets and
 account for simultaneous scratch as described under
 [scoped execution](WORKSPACES.md#scoped-execution), then pass the MSM branch's
-budget to its `BatchOptions`. Ordinary fixed-base products need no executor.
+budget to its `ExecutionOptions`. Ordinary fixed-base products need no executor.
 This uses the same scoped execution contract as FFTs and works inside an
 existing pool, including a one-thread pool.
 

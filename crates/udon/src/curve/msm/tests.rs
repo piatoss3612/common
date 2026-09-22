@@ -192,28 +192,32 @@ fn differentials<C: PastaCurve>() {
                             ArithmeticOptions::DEFAULT.with_max_terms_per_pass(cap),
                         )
                         .with_task_budget(TaskBudget::new(tasks).unwrap());
-                        let r = input.requirements(options).unwrap();
+                        let r = input.requirements_with(options).unwrap();
                         assert_eq!(r, batch_requirements(&[input], options).unwrap());
                         let mut buffers = Buffers::new(r);
                         assert_eq!(
                             input
-                                .execute(options, &SerialExecutor, buffers.borrow())
+                                .execute_with(options, &SerialExecutor, buffers.borrow())
                                 .unwrap(),
                             expected,
                             "n={n}, tasks={tasks}"
                         );
                         // Reuse dirty working storage while allowing parallel joins.
                         assert_eq!(
-                            input.execute(options, &Pool, buffers.borrow()).unwrap(),
+                            input
+                                .execute_with(options, &Pool, buffers.borrow())
+                                .unwrap(),
                             expected
                         );
                         buffers.tails(r);
-                        let r = reused.requirements(options).unwrap();
+                        let r = reused.requirements_with(options).unwrap();
                         assert_eq!(r.scalars, 0);
                         assert_eq!(r, batch_requirements(&[reused], options).unwrap());
                         let mut buffers = Buffers::new(r);
                         assert_eq!(
-                            reused.execute(options, &Pool, buffers.borrow()).unwrap(),
+                            reused
+                                .execute_with(options, &Pool, buffers.borrow())
+                                .unwrap(),
                             expected
                         );
                         buffers.tails(r);
@@ -341,11 +345,11 @@ fn scalar_boundaries<C: PastaCurve>() {
                         ArithmeticOptions::DEFAULT.with_max_terms_per_pass(NonZeroUsize::new(cap)),
                     )
                     .with_task_budget(TaskBudget::new(tasks).unwrap());
-                    let r = input.requirements(options).unwrap();
+                    let r = input.requirements_with(options).unwrap();
                     let mut buffers = Buffers::new(r);
                     assert_eq!(
                         input
-                            .execute(options, &SerialExecutor, buffers.borrow())
+                            .execute_with(options, &SerialExecutor, buffers.borrow())
                             .unwrap(),
                         expected,
                         "bits={bits}, n={n}, tasks={tasks}, cap={cap}"
@@ -353,7 +357,7 @@ fn scalar_boundaries<C: PastaCurve>() {
                     buffers.tails(r);
                     assert_eq!(
                         reused
-                            .execute(options, &SerialExecutor, buffers.borrow())
+                            .execute_with(options, &SerialExecutor, buffers.borrow())
                             .unwrap(),
                         expected,
                         "prepared bits={bits}, n={n}, tasks={tasks}, cap={cap}"
@@ -410,8 +414,8 @@ fn dense_and_sparse_bounded_rows_cross_chunk_policies() {
                     )
                     .unwrap();
                     let cache_options = ArithmeticOptions::DEFAULT;
-                    let mut digits = vec![73; prepared.cache_len(cache_options).unwrap()];
-                    let cached = prepared.cache(cache_options, &mut digits).unwrap();
+                    let mut digits = vec![73; prepared.cache_len_with(cache_options).unwrap()];
+                    let cached = prepared.cache_with(cache_options, &mut digits).unwrap();
                     let reused = raw.selection().with_prepared_scalars(cached).unwrap();
                     for chunk in [n, 257] {
                         let options = BatchOptions::new(
@@ -420,10 +424,12 @@ fn dense_and_sparse_bounded_rows_cross_chunk_policies() {
                         )
                         .with_task_budget(TaskBudget::new(3).unwrap());
                         for input in [raw, reused] {
-                            let r = input.requirements(options).unwrap();
+                            let r = input.requirements_with(options).unwrap();
                             let mut buffers = Buffers::new(r);
                             assert_eq!(
-                                input.execute(options, &Pool, buffers.borrow()).unwrap(),
+                                input
+                                    .execute_with(options, &Pool, buffers.borrow())
+                                    .unwrap(),
                                 expected
                             );
                             buffers.tails(r);
@@ -474,7 +480,7 @@ fn scratch_can_be_reused_after_executor_unwind() {
         ArithmeticOptions::DEFAULT.with_max_terms_per_pass(NonZeroUsize::new(37)),
     )
     .with_task_budget(TaskBudget::new(4).unwrap());
-    let r = input.requirements(options).unwrap();
+    let r = input.requirements_with(options).unwrap();
     let mut buffers = Buffers::new(r);
     // The first two joins prepare three scalar-record chunks; later joins evaluate
     // windows. Exercise an unwind after writes in either scoped phase.
@@ -485,22 +491,26 @@ fn scratch_can_be_reused_after_executor_unwind() {
         };
         assert!(
             catch_unwind(AssertUnwindSafe(|| {
-                input.execute(options, &executor, buffers.borrow()).unwrap();
+                input
+                    .execute_with(options, &executor, buffers.borrow())
+                    .unwrap();
             }))
             .is_err()
         );
         buffers.tails(r);
         assert_eq!(
-            input.execute(options, &Pool, buffers.borrow()).unwrap(),
+            input
+                .execute_with(options, &Pool, buffers.borrow())
+                .unwrap(),
             expected
         );
         buffers.tails(r);
     }
     let inputs = [input, input];
-    let (j, w) = BatchPlan::<Pallas>::storage_len(inputs.len(), options).unwrap();
+    let (j, w) = BatchPlan::<Pallas>::storage_len_with(inputs.len(), options).unwrap();
     let mut jobs = vec![JobStorage::EMPTY; j];
     let mut workers = vec![WorkerStorage::EMPTY; w];
-    let plan = BatchPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+    let plan = BatchPlan::new_with(&inputs, options, &mut jobs, &mut workers).unwrap();
     let mut planned_buffers = Buffers::new(plan.requirements());
     let mut output = [ProjectivePoint::IDENTITY; 2];
     for at in [0, 2] {
@@ -544,7 +554,9 @@ fn scratch_can_be_reused_after_executor_unwind() {
             .unwrap();
     let reused = Input::new_prepared(Bases::Affine(&bases), retained).unwrap();
     assert_eq!(
-        reused.execute(options, &Pool, buffers.borrow()).unwrap(),
+        reused
+            .execute_with(options, &Pool, buffers.borrow())
+            .unwrap(),
         expected
     );
     buffers.tails(r);
@@ -574,10 +586,10 @@ fn collisions<C: PastaCurve>() {
                 let options = BatchOptions::new(
                     ArithmeticOptions::DEFAULT.with_max_terms_per_pass(NonZeroUsize::new(cap)),
                 );
-                let mut buffers = Buffers::new(input.requirements(options).unwrap());
+                let mut buffers = Buffers::new(input.requirements_with(options).unwrap());
                 assert_eq!(
                     input
-                        .execute(options, &SerialExecutor, buffers.borrow())
+                        .execute_with(options, &SerialExecutor, buffers.borrow())
                         .unwrap(),
                     expected
                 );
@@ -611,9 +623,9 @@ fn grouped_jobs_share_workers_with_side_work_and_reuse_dirty_scratch() {
     let prepared =
         PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
             .unwrap();
-    let mut digits = vec![0; prepared.cache_len(ArithmeticOptions::DEFAULT).unwrap()];
+    let mut digits = vec![0; prepared.cache_len_with(ArithmeticOptions::DEFAULT).unwrap()];
     let retained = prepared
-        .cache(ArithmeticOptions::DEFAULT, &mut digits)
+        .cache_with(ArithmeticOptions::DEFAULT, &mut digits)
         .unwrap();
     jobs[1] = jobs[1].selection().with_prepared_scalars(retained).unwrap();
     for workers in [1, 2, 4] {
@@ -637,10 +649,10 @@ fn grouped_jobs_share_workers_with_side_work_and_reuse_dirty_scratch() {
             });
             assert_eq!(output, expected);
             buffers.tails(r);
-            let (j, w) = BatchPlan::<Pallas>::storage_len(jobs.len(), options).unwrap();
+            let (j, w) = BatchPlan::<Pallas>::storage_len_with(jobs.len(), options).unwrap();
             let mut metadata = vec![JobStorage::EMPTY; j + 1];
             let mut ranges = vec![WorkerStorage::EMPTY; w + 1];
-            let plan = BatchPlan::new(&jobs, options, &mut metadata, &mut ranges).unwrap();
+            let plan = BatchPlan::new_with(&jobs, options, &mut metadata, &mut ranges).unwrap();
             assert_eq!(plan.requirements(), r);
             // Dirty scratch checks that workers clear unclaimed result slots.
             for _ in 0..2 {
@@ -699,7 +711,7 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
         Err(_) => panic!("valid length"),
     };
     let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
-    assert_eq!(input.requirements(BatchOptions::default()).unwrap(), R);
+    assert_eq!(input.requirements_with(BatchOptions::default()).unwrap(), R);
     for short in 0..7 {
         let mut b = Buffers::<C>::new(R);
         let mut scratch = b.borrow();
@@ -927,12 +939,12 @@ fn forced_kernels_chunks_and_incompatible_caches() {
                 accumulation: Accumulation::Auto,
             })
             .unwrap();
-        let mut bytes = vec![73; prepared.cache_len(cached_options).unwrap() + 1];
-        let cached = prepared.cache(cached_options, &mut bytes).unwrap();
+        let mut bytes = vec![73; prepared.cache_len_with(cached_options).unwrap() + 1];
+        let cached = prepared.cache_with(cached_options, &mut bytes).unwrap();
         let reused = raw.selection().with_prepared_scalars(cached).unwrap();
         assert_eq!(
             reused
-                .requirements(BatchOptions::new(cached_options))
+                .requirements_with(BatchOptions::new(cached_options))
                 .unwrap()
                 .digits(),
             0
@@ -964,17 +976,19 @@ fn forced_kernels_chunks_and_incompatible_caches() {
                             .with_max_terms_per_pass(pass),
                     )
                     .with_task_budget(TaskBudget::new(3).unwrap());
-                    let r = raw.requirements(options).unwrap();
+                    let r = raw.requirements_with(options).unwrap();
                     let mut buffers = Buffers::new(r);
                     assert_eq!(
-                        raw.execute(options, &Pool, buffers.borrow()).unwrap(),
+                        raw.execute_with(options, &Pool, buffers.borrow()).unwrap(),
                         expected
                     );
                     buffers.tails(r);
-                    let r = reused.requirements(options).unwrap();
+                    let r = reused.requirements_with(options).unwrap();
                     let mut buffers = Buffers::new(r);
                     assert_eq!(
-                        reused.execute(options, &Pool, buffers.borrow()).unwrap(),
+                        reused
+                            .execute_with(options, &Pool, buffers.borrow())
+                            .unwrap(),
                         expected
                     );
                     buffers.tails(r);
@@ -1040,10 +1054,10 @@ fn typed_sources_validate_bounds_and_signed_extremes() {
                             .unwrap(),
                     )
                 });
-                let mut buffers = Buffers::new(typed.requirements(options).unwrap());
+                let mut buffers = Buffers::new(typed.requirements_with(options).unwrap());
                 assert_eq!(
                     typed
-                        .execute(options, &SerialExecutor, buffers.borrow())
+                        .execute_with(options, &SerialExecutor, buffers.borrow())
                         .unwrap(),
                     expected
                 );
@@ -1099,7 +1113,7 @@ fn memory_ceiling_and_reusable_weighted_plans() {
     assert_eq!(
         serial.digits(),
         inputs[1]
-            .requirements(BatchOptions::default())
+            .requirements_with(BatchOptions::default())
             .unwrap()
             .digits()
     );
@@ -1112,10 +1126,10 @@ fn memory_ceiling_and_reusable_weighted_plans() {
             assert!(r.bytes::<C>().unwrap() <= limit);
             let conservative = Input::<C>::requirements_for_len(1025, options).unwrap();
             assert!(conservative.bytes::<C>().unwrap() <= limit);
-            let (j, w) = BatchPlan::<C>::storage_len(inputs.len(), options).unwrap();
+            let (j, w) = BatchPlan::<C>::storage_len_with(inputs.len(), options).unwrap();
             let mut jobs = vec![JobStorage::EMPTY; j + 1];
             let mut workers = vec![WorkerStorage::EMPTY; w + 1];
-            let plan = BatchPlan::new(&inputs, options, &mut jobs, &mut workers).unwrap();
+            let plan = BatchPlan::new_with(&inputs, options, &mut jobs, &mut workers).unwrap();
             assert!(plan.temporary_bytes() <= limit);
             assert!(plan.worker_ranges() <= tasks);
             let r = plan.requirements();
@@ -1134,7 +1148,7 @@ fn memory_ceiling_and_reusable_weighted_plans() {
     let mut jobs = [JobStorage::EMPTY; 6];
     let mut workers = [WorkerStorage::EMPTY; 1];
     assert!(matches!(
-        BatchPlan::new(&inputs, options, &mut jobs, &mut workers),
+        BatchPlan::new_with(&inputs, options, &mut jobs, &mut workers),
         Err(CurveError::MemoryLimit { .. })
     ));
     assert!(jobs.iter().all(|j| *j == JobStorage::EMPTY));
@@ -1198,9 +1212,11 @@ fn compact_tables_and_selection_rebind_across_scalar_rows() {
                     ),
                     BatchOptions::default().with_memory_limit(8192),
                 ] {
-                    let mut buffers = Buffers::new(input.requirements(options).unwrap());
+                    let mut buffers = Buffers::new(input.requirements_with(options).unwrap());
                     assert_eq!(
-                        input.execute(options, &Pool, buffers.borrow()).unwrap(),
+                        input
+                            .execute_with(options, &Pool, buffers.borrow())
+                            .unwrap(),
                         expected
                     );
                 }
@@ -1331,7 +1347,7 @@ fn optional_compact_batch_certificate_preserves_fallbacks() {
             .chain(field_samples::<C::Scalar>().take(64))
         {
             let prepared = EisensteinScalar::new(&scalar);
-            let certified = prepared.certify_batch();
+            let certified = prepared;
             assert_eq!(prepared.digits(), certified.digits());
             assert_eq!(prepared.batch_safe(), certified.batch_safe());
             let mut plain = [ProjectivePoint::IDENTITY; 32];
@@ -1398,12 +1414,12 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
                     raw,
                     raw.selection().with_prepared_scalars(prepared).unwrap(),
                 ] {
-                    let r = input.requirements(options).unwrap();
+                    let r = input.requirements_with(options).unwrap();
                     let mut buffers = Buffers::new(r);
                     for _ in 0..2 {
                         assert_eq!(
                             input
-                                .execute(options, &SerialExecutor, buffers.borrow())
+                                .execute_with(options, &SerialExecutor, buffers.borrow())
                                 .unwrap(),
                             expected
                         );
@@ -1418,11 +1434,12 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
                 .unwrap(),
         )
         .with_memory_limit(32768);
-        let r = raw.requirements(o).unwrap();
+        let r = raw.requirements_with(o).unwrap();
         assert!(r.bytes::<C>().unwrap() <= 32768);
         let mut buffers = Buffers::new(r);
         assert_eq!(
-            raw.execute(o, &SerialExecutor, buffers.borrow()).unwrap(),
+            raw.execute_with(o, &SerialExecutor, buffers.borrow())
+                .unwrap(),
             expected
         );
     }

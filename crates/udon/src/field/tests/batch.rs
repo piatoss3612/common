@@ -1,5 +1,5 @@
 use super::*;
-use crate::field::{BatchInversionError, batch_invert, batch_invert_groups};
+use crate::field::{BatchInversionError, batch_invert, batch_invert_groups, try_batch_invert_by};
 use crate::test_support::field_samples;
 
 fn exercise<M: PrimeModulus>() {
@@ -23,21 +23,17 @@ fn exercise<M: PrimeModulus>() {
     assert_eq!(values, original);
     assert_eq!(&scratch[values.len()..], &[sentinel; 3]);
 
-    let before = values.clone();
-    let mut short = vec![sentinel; values.len() - 1];
-    let (a, b) = values.split_at_mut(1);
-    assert_eq!(
-        batch_invert_groups(&mut [a, b], &mut short),
-        Err(BatchInversionError::ScratchTooSmall {
-            required: before.len(),
-            provided: short.len()
-        })
-    );
-    assert_eq!(values, before);
-    assert!(short.iter().all(|value| *value == sentinel));
-    assert!(batch_invert(&mut values, &mut short).is_err());
-    assert_eq!(values, before);
-    assert!(short.iter().all(|value| *value == sentinel));
+    for capacity in [0, 1, 2, 7, values.len() - 1] {
+        let mut short = vec![sentinel; capacity];
+        let mut values = original.clone();
+        let (a, b) = values.split_at_mut(1);
+        batch_invert_groups(&mut [a, b], &mut short).unwrap();
+        for (value, original) in values.iter().zip(&original) {
+            assert_eq!(*value, original.invert().unwrap_or(PastaField::ZERO));
+        }
+        batch_invert(&mut values, &mut short).unwrap();
+        assert_eq!(values, original);
+    }
 
     for len in [0, 1, 2, 7] {
         let mut zeros = vec![PastaField::<M>::ZERO; len];
@@ -128,4 +124,90 @@ fn inversion_endpoints<M: PrimeModulus>() {
 fn batch_inversion_handles_lane_endpoints() {
     inversion_endpoints::<crate::field::PallasBase>();
     inversion_endpoints::<crate::field::PallasScalar>();
+}
+
+#[derive(Debug, PartialEq)]
+enum VisitError {
+    Inversion(BatchInversionError),
+    Stop,
+}
+impl From<BatchInversionError> for VisitError {
+    fn from(error: BatchInversionError) -> Self {
+        Self::Inversion(error)
+    }
+}
+
+fn record_inversion<M: PrimeModulus>() {
+    // The records deliberately have data unrelated to their denominators.
+    let records: Vec<_> = (0..37)
+        .map(|i| (i * 17, PastaField::<M>::from_u64(i as u64 + 1)))
+        .collect();
+    let sentinel = PastaField::from_u64(99);
+    for len in [0, 1, 2, 7, 36, 37] {
+        for capacity in [0, 1, 2, 7, 37, 40] {
+            let mut scratch = vec![sentinel; capacity];
+            let mut seen = vec![false; len];
+            try_batch_invert_by(
+                &records[..len],
+                |record| record.1,
+                &mut scratch,
+                |index, record, inverse| {
+                    assert_eq!(record, &records[index]);
+                    assert_eq!(record.1.mul(&inverse), PastaField::ONE);
+                    assert!(!seen[index]);
+                    seen[index] = true;
+                    Ok::<_, VisitError>(())
+                },
+            )
+            .unwrap();
+            assert!(seen.iter().all(|x| *x));
+            assert!(scratch[len.min(capacity)..].iter().all(|x| *x == sentinel));
+        }
+    }
+    for zero in [0, 18, 36] {
+        let mut invalid = records.clone();
+        invalid[zero].1 = PastaField::ZERO;
+        for capacity in [0, 2, 40] {
+            let mut scratch = vec![sentinel; capacity];
+            assert_eq!(
+                try_batch_invert_by(
+                    &invalid,
+                    |record| record.1,
+                    &mut scratch,
+                    |_, _, _| -> Result<(), VisitError> { panic!("visited invalid batch") },
+                ),
+                Err(VisitError::Inversion(
+                    BatchInversionError::ZeroDenominator { index: zero }
+                ))
+            );
+            assert!(scratch.iter().all(|x| *x == sentinel));
+        }
+    }
+    for capacity in [0, 2, 40] {
+        let mut seen = Vec::new();
+        let mut scratch = vec![sentinel; capacity];
+        assert_eq!(
+            try_batch_invert_by(
+                &records,
+                |record| record.1,
+                &mut scratch,
+                |index, record, inverse| {
+                    assert_eq!(record.1.mul(&inverse), PastaField::ONE);
+                    if seen.len() == 3 {
+                        return Err(VisitError::Stop);
+                    }
+                    seen.push(index);
+                    Ok(())
+                },
+            ),
+            Err(VisitError::Stop)
+        );
+        assert_eq!(seen.len(), 3);
+    }
+}
+
+#[test]
+fn records_preserve_indices_and_validate_before_visiting() {
+    record_inversion::<PallasBase>();
+    record_inversion::<PallasScalar>();
 }

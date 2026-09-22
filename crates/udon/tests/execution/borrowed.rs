@@ -1,12 +1,12 @@
 //! Minimal movable owners: typed borrows cross threads, erased views stay local.
-use std::{num::NonZeroUsize, thread};
+use std::thread;
 use zakura_udon::{
     curve::{
         AffinePoint, Pallas, ProjectivePoint,
         msm::{self, run as msm_run},
     },
     exec::{
-        SerialExecutor, TaskBudget,
+        ExecutionOptions, SerialExecutor, TaskBudget,
         run::{Identity, TaskStorage},
     },
     fft::{self, run as fft_run},
@@ -36,13 +36,13 @@ fn fft_task_owns_nonstatic_slices_on_a_scoped_worker() {
     let mut values = [Fp::ZERO; 4];
     let domain = fft::Domain::for_size(4).unwrap().subgroup();
     let plan = fft_run::FftPlan::new(
-        fft::Plan::without_tables(domain),
+        fft::Transform::new(domain),
         fft::TransformRequest {
             input_storage: fft::InputStorage::Preserve,
             ..fft::TransformRequest::new(fft::Direction::Forward)
         },
-        NonZeroUsize::new(4).unwrap(),
-        fft::Codelet::Radix4,
+        fft::StorageLayout::Contiguous,
+        ExecutionOptions::default(),
     )
     .unwrap();
     let mut identity = Identity::new();
@@ -105,12 +105,7 @@ fn msm_tasks_own_nonstatic_slices_on_scoped_workers() {
         msm::PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
             .unwrap();
     let input = msm::Input::new_prepared(msm::Bases::Affine(&bases), prepared).unwrap();
-    let plan = msm_run::MsmPlan::new(
-        2,
-        msm::ArithmeticOptions::DEFAULT,
-        NonZeroUsize::new(2).unwrap(),
-    )
-    .unwrap();
+    let plan = msm_run::MsmPlan::new(2, ExecutionOptions::default()).unwrap();
     let required = plan.temporary();
     let mut affine = vec![AffinePoint::GENERATOR; required.affine()];
     let mut projective = vec![ProjectivePoint::IDENTITY; required.projective()];
@@ -127,7 +122,7 @@ fn msm_tasks_own_nonstatic_slices_on_scoped_workers() {
         // Prepared small scalars need no shared recoding or preparation writes.
         assert_eq!(request.scratch.scalars() + request.scratch.digits(), 0);
         assert_eq!(request.read_scalars + request.read_digits, 0);
-        let (output, partials) = if request.write_partial {
+        let (output, partials) = if request.output_slot.is_some() {
             (&mut partial[..], &[][..])
         } else {
             (&mut [][..], &partial[..])

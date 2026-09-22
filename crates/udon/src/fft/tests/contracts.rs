@@ -12,7 +12,6 @@ fn imports<M: PrimeModulus>() {
             .tables()
             .bind(domain)
             .unwrap()
-            .plan()
             .domain()
             .same_domain(domain)
     );
@@ -26,16 +25,11 @@ fn imports<M: PrimeModulus>() {
         inverse: Some(&prepared.inverse),
         ..Tables::default()
     };
-    let plan = twiddles.bind(other).unwrap().plan();
+    let plan = twiddles.bind(other).unwrap();
     let coefficients = inputs(other.size());
     let mut output = coefficients.clone();
-    plan.forward(
-        &mut output,
-        ExecutionOptions::serial(),
-        &SerialExecutor,
-        &mut [],
-    )
-    .unwrap();
+    plan.forward_with(&mut output, Strategy::serial(), &SerialExecutor, &mut [])
+        .unwrap();
     assert_eq!(output, direct(&coefficients, other));
 
     let invalid: &PastaField<M> = bento::AlignedBytes([0xff; 32]).as_value();
@@ -242,7 +236,7 @@ fn twiddle_recurrences_match_independent_exponentiation() {
 }
 
 fn product_domain<M: PrimeModulus>() {
-    let base = Plan::without_tables(Domain::<M>::new(3).unwrap().subgroup());
+    let base = Transform::new(Domain::<M>::new(3).unwrap().subgroup());
     let domain = Domain::new(5)
         .unwrap()
         .coset(PastaField::from_u64(7))
@@ -250,16 +244,16 @@ fn product_domain<M: PrimeModulus>() {
     let expansion = Expansion::new(base, domain, None).unwrap();
     let coefficients = inputs(base.domain().size());
     let values = inputs(domain.size());
-    let options = ExpansionOptions {
+    let options = ExpansionStrategy {
         max_residue_tasks: 2,
-        transform: ExecutionOptions {
+        transform: Strategy {
             tile_len: 2,
             columns_per_task: 2,
             max_tasks: 4,
         },
     };
     let required = expansion
-        .coefficient_scratch(options)
+        .coefficient_scratch_with(options)
         .unwrap()
         .field_elements;
     let mut scratch = vec![PastaField::ONE; required + 1];
@@ -281,7 +275,7 @@ fn product_domain<M: PrimeModulus>() {
         )
         .unwrap();
         assert_eq!(
-            expansion.short_product(
+            expansion.short_product_with(
                 &coefficients,
                 factor,
                 &mut output,
@@ -296,7 +290,7 @@ fn product_domain<M: PrimeModulus>() {
     }
     let factor = EvaluationView::bind(&values, domain, EvaluationLayout::Natural).unwrap();
     assert_eq!(
-        expansion.short_product(
+        expansion.short_product_with(
             &coefficients,
             factor,
             &mut output,
@@ -309,7 +303,7 @@ fn product_domain<M: PrimeModulus>() {
     assert!(output.iter().chain(&scratch).all(|v| *v == PastaField::ONE));
     assert_eq!(joins.take(), 0);
     expansion
-        .short_product(
+        .short_product_with(
             &coefficients,
             expansion.view(&values).unwrap(),
             &mut output,
@@ -353,14 +347,13 @@ fn retained_with_base_tables<M: PrimeModulus>() {
             inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
         }
         .bind(domain)
-        .unwrap()
-        .plan();
+        .unwrap();
         let expansion = Expansion::new(base, extended, None).unwrap();
         for scale in [InverseScale::Normalized, InverseScale::Unscaled] {
             for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
                 let mut retained = vec![PastaField::ONE; domain.size()];
                 let view = {
-                    let operation = ExpansionPlan::new(
+                    let operation = ExpansionPlan::with_strategy(
                         expansion,
                         ExpansionStorage::CoefficientWorkspace { scale },
                         order,
@@ -378,7 +371,7 @@ fn retained_with_base_tables<M: PrimeModulus>() {
                     let mut output = vec![PastaField::ONE; extended.size()];
                     let mut scratch = [PastaField::ONE];
                     let view = operation
-                        .execute(
+                        .execute_with(
                             &evaluations,
                             &mut output,
                             &mut retained,
@@ -435,14 +428,14 @@ fn reused_cosets<M: PrimeModulus>() {
             for shift in [PastaField::from_u64(7), PastaField::ONE, PastaField::zeta()] {
                 let domain = subgroup.coset(shift).unwrap();
                 let rebound = bound.for_coset(domain).unwrap();
-                let tables = rebound.tables();
+                let tables = rebound.tables;
                 assert_eq!(
                     tables.forward.map(|s| s.as_ptr()),
-                    bound.tables().forward.map(|s| s.as_ptr())
+                    bound.tables.forward.map(|s| s.as_ptr())
                 );
                 assert_eq!(
                     tables.inverse.map(|s| s.as_ptr()),
-                    bound.tables().inverse.map(|s| s.as_ptr())
+                    bound.tables.inverse.map(|s| s.as_ptr())
                 );
                 assert_eq!(
                     tables.inverse_finish.is_some(),
@@ -455,23 +448,11 @@ fn reused_cosets<M: PrimeModulus>() {
                 let coefficients = inputs(domain.size());
                 let mut output = coefficients.clone();
                 rebound
-                    .plan()
-                    .forward(
-                        &mut output,
-                        ExecutionOptions::serial(),
-                        &SerialExecutor,
-                        &mut [],
-                    )
+                    .forward_with(&mut output, Strategy::serial(), &SerialExecutor, &mut [])
                     .unwrap();
                 assert_eq!(output, direct(&coefficients, domain));
                 rebound
-                    .plan()
-                    .inverse(
-                        &mut output,
-                        ExecutionOptions::serial(),
-                        &SerialExecutor,
-                        &mut [],
-                    )
+                    .inverse_with(&mut output, Strategy::serial(), &SerialExecutor, &mut [])
                     .unwrap();
                 assert_eq!(output, coefficients);
             }

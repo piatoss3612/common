@@ -1,6 +1,6 @@
 //! Power-of-two field transforms with caller-owned tables, buffers, and execution.
 //!
-//! [`Plan`] binds a domain and borrowed tables, with synchronous transform
+//! [`Transform`] binds a domain and borrowed tables, with synchronous transform
 //! conveniences. [`run::FftPlan`] fixes reusable transform semantics and geometry;
 //! its working buffers are borrowed only for execution. [`Expansion`]
 //! evaluates a base polynomial on a larger coset without constructing a full
@@ -8,9 +8,9 @@
 //! several domains into one coefficient vector.
 //!
 //! Setup and execution never allocate. Tables may be prepared into mutable
-//! slices or borrowed from downstream Bento POD artifacts. [`ExecutionOptions`]
-//! and [`ExpansionOptions`] determine the scratch requirements; their serial
-//! settings need no scratch. The scoped [`Executor`] lets callers supply parallel
+//! slices or borrowed from downstream Bento POD artifacts. Shared resource limits
+//! come from [`ExecutionOptions`](crate::exec::ExecutionOptions). Udon chooses
+//! arithmetic schedules within those limits. The scoped [`Executor`] supplies parallel
 //! execution without requiring a particular runtime or an allocator in Udon.
 //! An executor's own allocations are outside Udon's storage requirements.
 //! [`run::FftPlan`] fixes order, normalization, and transform geometry.
@@ -24,7 +24,7 @@
 //!
 //! # Validation and working storage
 //!
-//! Plan construction validates configuration without binding working buffers.
+//! Transform construction validates configuration without binding working buffers.
 //! Synchronous drivers validate their complete buffer and scratch bindings before
 //! mutation. Incremental tasks validate their own resource lengths before they
 //! write; a later task error does not undo writes from earlier tasks. Publication
@@ -52,30 +52,32 @@
 //!
 //! # Examples
 //!
+//! A transform can execute with no precomputation or scratch:
+//!
 //! ```
 //! use zakura_udon::{
-//!     exec::SerialExecutor,
+//!     exec::{ExecutionOptions, SerialExecutor},
 //!     field::Fp,
-//!     fft::{Domain, ExecutionOptions, Plan},
+//!     fft::{Domain, Transform},
 //! };
 //!
-//! let domain = Domain::new(2).unwrap().subgroup();
-//! let plan = Plan::without_tables(domain);
+//! let transform = Transform::new(Domain::new(2)?.subgroup());
 //! let original = [Fp::ONE, Fp::from_u64(2), Fp::ZERO, Fp::ZERO];
 //! let mut values = original;
-//! plan.forward(&mut values, ExecutionOptions::serial(), &SerialExecutor, &mut []).unwrap();
-//! plan.inverse(&mut values, ExecutionOptions::serial(), &SerialExecutor, &mut []).unwrap();
+//! transform.forward(&mut values, ExecutionOptions::default(), &SerialExecutor, &mut [])?;
+//! transform.inverse(&mut values, ExecutionOptions::default(), &SerialExecutor, &mut [])?;
 //! assert_eq!(values, original);
+//! # Ok::<(), zakura_udon::fft::FftError>(())
 //! ```
 //!
-//! Tables and scratch can also live in ordinary arrays. Prepare tables once,
-//! then reuse the plan and scratch across transforms:
+//! Prepare optional tables once into caller-owned arrays. Preparation returns
+//! the same transform handle used for execution:
 //!
 //! ```
 //! use zakura_udon::{
-//!     exec::SerialExecutor,
+//!     exec::{ExecutionOptions, SerialExecutor},
 //!     field::Fq,
-//!     fft::{Domain, ExecutionOptions, Plan, TableRequirements, TablesMut},
+//!     fft::{Domain, TableRequirements, TablesMut},
 //! };
 //!
 //! const SIZE: usize = 8;
@@ -83,70 +85,61 @@
 //!     Ok(required) => required,
 //!     Err(_) => panic!("unsupported table size"),
 //! };
-//! const OPTIONS: ExecutionOptions = ExecutionOptions {
-//!     tile_len: 2,
-//!     columns_per_task: 1,
-//!     max_tasks: 2,
-//! };
-//! const SCRATCH: usize = match OPTIONS.requirements(SIZE) {
-//!     Ok(required) => required.field_elements,
-//!     Err(_) => panic!("unsupported transform configuration"),
-//! };
-//! let domain = Domain::for_size(SIZE).unwrap().coset(Fq::from_u64(7)).unwrap();
+//! let domain = Domain::for_size(SIZE)?.coset(Fq::from_u64(7))?;
 //! let mut forward = [Fq::ZERO; TABLES.twiddles];
 //! let mut inverse = [Fq::ZERO; TABLES.twiddles];
-//! let tables = TablesMut {
+//! let transform = TablesMut {
 //!     forward: Some(&mut forward),
 //!     inverse: Some(&mut inverse),
 //!     ..TablesMut::default()
-//! }.prepare(domain).unwrap();
-//! let plan = Plan::new(tables);
-//! let mut scratch = [Fq::ZERO; SCRATCH];
+//! }.prepare(domain)?;
 //! let coefficients = [Fq::ONE; SIZE];
 //! let mut values = coefficients;
-//! plan.forward(&mut values, OPTIONS, &SerialExecutor, &mut scratch).unwrap();
-//! plan.inverse(&mut values, OPTIONS, &SerialExecutor, &mut scratch).unwrap();
+//! transform.forward(&mut values, ExecutionOptions::default(), &SerialExecutor, &mut [])?;
+//! transform.inverse(&mut values, ExecutionOptions::default(), &SerialExecutor, &mut [])?;
 //! assert_eq!(values, coefficients);
+//! # Ok::<(), zakura_udon::fft::FftError>(())
 //! ```
 //!
 //! Keep bit-reversed evaluations through a product and feed them directly into
-//! interpolation. Expansion reverses both residue blocks and their inner rows:
+//! interpolation. These orders describe the mathematical layout; Udon selects
+//! the arithmetic schedule:
 //!
 //! ```
-//! use core::num::NonZeroUsize;
 //! use zakura_udon::{
 //!     field::Fp,
-//!     exec::SerialExecutor,
-//!     fft::{Codelet, Direction, Domain, Expansion, ExpansionOrder, ExpansionStorage,
-//!         ElementOrder, InputSupport, Plan, TransformRequest,
+//!     exec::{ExecutionOptions, SerialExecutor},
+//!     fft::{Direction, Domain, Expansion, ExpansionOrder, ExpansionStorage,
+//!         ElementOrder, InputSupport, StorageLayout, Transform, TransformRequest,
 //!         run::{ExpansionPlan, FftPlan}},
 //! };
 //!
-//! let tasks = NonZeroUsize::new(1).unwrap();
-//! let tile = NonZeroUsize::new(4).unwrap();
-//! let base = Plan::without_tables(Domain::new(2).unwrap().subgroup());
-//! let extended = Domain::new(3).unwrap().coset(Fp::from_u64(7)).unwrap();
+//! let options = ExecutionOptions::default();
+//! let base = Transform::new(Domain::new(2)?.subgroup());
+//! let extended = Domain::new(3)?.coset(Fp::from_u64(7))?;
 //! let expansion = ExpansionPlan::new(
-//!     Expansion::new(base, extended, None).unwrap(),
+//!     Expansion::new(base, extended, None)?,
 //!     ExpansionStorage::Coefficients, ExpansionOrder::BitReversed,
-//!     InputSupport::Prefix(2), ElementOrder::Natural, tile, Codelet::Radix2,
-//! ).unwrap();
+//!     InputSupport::Prefix(2), ElementOrder::Natural,
+//!     StorageLayout::Contiguous, options,
+//! )?;
 //! let coefficients = [Fp::ONE, Fp::from_u64(2)];
 //! let mut factor = [Fp::ZERO; 8];
 //! expansion.execute(&coefficients, &mut factor, &mut [], None,
-//!     &mut [], tasks, &SerialExecutor).unwrap();
+//!     &mut [], &SerialExecutor)?;
 //! let mut product = [Fp::ZERO; 8];
 //! expansion.execute(&coefficients, &mut product, &mut [], Some(&factor),
-//!     &mut [], tasks, &SerialExecutor).unwrap();
-//! let inverse = FftPlan::new(Plan::without_tables(extended),
+//!     &mut [], &SerialExecutor)?;
+//! let inverse = FftPlan::new(Transform::new(extended),
 //!     TransformRequest {
 //!         input_order: ElementOrder::BitReversed,
 //!         ..TransformRequest::new(Direction::Inverse)
-//!     }, tile, Codelet::Radix2,
-//! ).unwrap();
-//! inverse.execute(None, &mut product, None, &mut [], tasks, &SerialExecutor).unwrap();
+//!     }, StorageLayout::Contiguous, options,
+//! )?;
+//! inverse.execute(None, &mut product, None, &mut [], &SerialExecutor)?;
 //! assert_eq!(&product[..3], &[Fp::ONE, Fp::from_u64(4), Fp::from_u64(4)]);
 //! assert!(product[3..].iter().all(|value| *value == Fp::ZERO));
+//! # Ok::<(), zakura_udon::fft::FftError>(())
 //! ```
 
 use crate::exec::Executor;
@@ -172,8 +165,11 @@ mod tables;
 mod transform;
 
 pub use domain::{CosetDomain, Domain};
-pub use execution::{ExecutionOptions, ScratchRequirements};
-pub use expansion::{Expansion, ExpansionOptions};
+pub use execution::ScratchRequirements;
+pub(crate) use execution::Strategy;
+pub use expansion::Expansion;
+#[cfg(test)]
+use expansion::ExpansionStrategy;
 pub use expansion_operation::{ExpansionOrder, ExpansionStorage, Residue};
 pub use expansion_scales::{ExpansionScaleNormalization, ExpansionScales};
 pub use interpolation::ClassState;
@@ -182,10 +178,11 @@ use interpolation_parallel::interpolate_sum;
 pub use layout::{
     CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, InverseScale, ResidueLayout,
 };
-pub use operation::{Codelet, Direction, InputStorage, InputSupport, TransformRequest};
+pub(crate) use operation::Codelet;
+pub use operation::{Direction, InputStorage, InputSupport, StorageLayout, TransformRequest};
 pub use powers::{PowerTable, TwiddleDescription, TwiddleStorage, TwiddleTable};
-pub use tables::{BoundTables, TableRequirements, Tables, TablesMut};
-pub use transform::Plan;
+pub use tables::{TableRequirements, Tables, TablesMut};
+pub use transform::Transform;
 
 /// An invalid FFT description or insufficient caller storage.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -209,6 +206,13 @@ pub enum FftError {
     InvalidShift,
     /// An execution setting or combination of request options is invalid.
     InvalidExecution,
+    /// Required arithmetic workspace exceeds the caller's byte ceiling.
+    MemoryLimit {
+        /// Required bytes for the selected storage layout.
+        required: usize,
+        /// Caller-provided byte ceiling.
+        limit: usize,
+    },
     /// A buffer has the wrong length.
     LengthMismatch {
         /// Name of the buffer parameter or table field with the wrong length.
@@ -246,6 +250,10 @@ impl core::fmt::Display for FftError {
             Self::SizeOverflow => f.write_str("FFT storage or index size overflow"),
             Self::ZeroShift => f.write_str("coset shift must be nonzero"),
             Self::InvalidShift => f.write_str("coset shift must have reduced Montgomery limbs"),
+            Self::MemoryLimit { required, limit } => write!(
+                f,
+                "FFT workspace requires {required} bytes, limit is {limit}"
+            ),
             Self::InvalidExecution => f.write_str("invalid FFT execution settings"),
             Self::LengthMismatch {
                 buffer,

@@ -3,7 +3,7 @@
 //! For domain size `n`, shift `s`, and coefficient index `i`, a normalized
 //! inverse needs the factor `n^-1 * s^-i`. An unscaled inverse needs only `s^-i`.
 
-use super::{CosetDomain, PastaField, Plan, PrimeModulus};
+use super::{CosetDomain, PastaField, PrimeModulus, Transform};
 
 /// Where a normalized inverse applies its size and shift factors.
 #[derive(Clone, Copy)]
@@ -67,7 +67,7 @@ impl<'a, M: PrimeModulus> Factors<'a, M> {
         }
     }
 
-    pub fn normalized(plan: Plan<'a, M>) -> Self {
+    pub fn normalized(plan: Transform<'a, M>) -> Self {
         if let Some(values) = plan.tables.inverse_scales.filter(|v| !v.is_empty()) {
             Self::Table {
                 values,

@@ -1,12 +1,12 @@
 # FFT strategy performance
 
 FFT strategy selection depends on memory, ordering, and concurrency constraints.
-The [strategy suite](../crates/udon/benches/fft_strategies.rs) measures explicit
-choices; it does not select runtime defaults. See the [FFT guide](FFT.md) for
+The [strategy suite](../crates/udon/benches/fft_strategies.rs) measures Udon's
+choices under supplied constraints. See the [FFT guide](FFT.md) for
 operation contracts and resource queries.
 
 The tables below were collected on September 12, 2026. They retain comparisons
-between supported strategies, but the current `fft::run` drivers, interpolation
+between internal strategies, but the current `fft::run` drivers, interpolation
 plan binding, and scratch requirements differ from the measured versions.
 Use these results as evidence of tradeoffs and the commands below for current
 timings. Obtain temporary storage counts from the current plans.
@@ -44,18 +44,18 @@ with:
 
 ```console
 cargo bench --locked -p zakura-udon --bench fft_strategies -- 'Fp/(strategies/2048/generic_7/tasks_1|expansion_strategies/tasks_4|class_strategies/tasks_4|strategy_preparation)'
-cargo bench --locked -p zakura-udon --bench fft_strategies -- 'Fp/(strategies/1048576/generic_7/tasks_4/(columns_(false|true)|DIF)|batch_strategies/tasks_4)|Fq/strategies/2048/generic_7/tasks_1'
+cargo bench --locked -p zakura-udon --bench fft_strategies -- 'Fp/(strategies/1048576/generic_7/tasks_4|batch_strategies/tasks_4)|Fq/strategies/2048/generic_7/tasks_1'
 ```
 
-Criterion retains local samples under `target/criterion`. A downstream tuner
-can measure candidate descriptions under its own limits and persist a selected
-description. A mathematically valid table does not identify the fastest strategy
-on another machine. These results do not establish x86-64 performance or
+Criterion retains local samples under `target/criterion`. Measure the memory,
+concurrency, and persistent-table tradeoffs in the consuming application.
+Udon owns kernel and decomposition choices within those constraints. These
+results do not establish x86-64 performance or
 constant-time behavior.
 
 ## Avoiding repeated work
 
-Prepared stages reuse validated `Plan` twiddles without rescanning entries.
+Prepared stages reuse validated `Transform` twiddles without rescanning entries.
 Imported contents are checked by `Tables::bind`; trusted binding retains its
 caller obligations. A forward-oriented half-table can also serve inverse
 transforms by reconstructing opposite powers.

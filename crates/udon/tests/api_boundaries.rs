@@ -1,4 +1,4 @@
-//! Public arithmetic boundaries reject private parameters and misplaced policy.
+//! Public arithmetic boundaries keep implementation choices private.
 
 #[path = "support/consumer.rs"]
 mod consumer;
@@ -7,7 +7,7 @@ use consumer::Consumer;
 
 #[test]
 #[ignore = "slow nested Cargo builds; run explicitly with --ignored"]
-fn public_boundaries_hide_parameters_and_separate_msm_policy() {
+fn public_boundaries_hide_parameters_and_implementation_choices() {
     let constants = [
         ("roots", "ROOTS"),
         ("inverse-roots", "INVERSE_ROOTS"),
@@ -35,11 +35,12 @@ fn public_boundaries_hide_parameters_and_separate_msm_policy() {
             "sqrt-large",
             "foreign-modulus",
             "foreign-curve",
-            "arithmetic-budget",
-            "arithmetic-limit",
-            "plan-batch-options",
-            "cache-batch-options",
-            "batch-arithmetic-options",
+            "msm-arithmetic",
+            "msm-kernel",
+            "msm-accumulation",
+            "fft-codelet",
+            "fft-strategy",
+            "cache-options",
         ])
         .collect();
     let consumer = Consumer::new(
@@ -83,19 +84,14 @@ fn public_boundaries_hide_parameters_and_separate_msm_policy() {
             ),
             ("foreign-modulus", "Sealed` is not satisfied"),
             ("foreign-curve", "Sealed` is not satisfied"),
-            ("arithmetic-budget", "no method named `with_task_budget`"),
-            ("arithmetic-limit", "no method named `with_memory_limit`"),
+            ("msm-arithmetic", "struct `ArithmeticOptions` is private"),
+            ("msm-kernel", "enum `Kernel` is private"),
+            ("msm-accumulation", "enum `Accumulation` is private"),
+            ("fft-codelet", "enum `Codelet` is private"),
+            ("fft-strategy", "struct `Strategy` is private"),
             (
-                "plan-batch-options",
-                "expected `ArithmeticOptions`, found `BatchOptions`",
-            ),
-            (
-                "cache-batch-options",
-                "expected `ArithmeticOptions`, found `BatchOptions`",
-            ),
-            (
-                "batch-arithmetic-options",
-                "expected `BatchOptions`, found `ArithmeticOptions`",
+                "cache-options",
+                "expected `&MsmPlan<C>`, found `ExecutionOptions`",
             ),
         ] {
             consumer.check(

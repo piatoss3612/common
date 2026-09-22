@@ -15,7 +15,7 @@ use core::{num::NonZeroUsize, ops::Range};
 
 use super::{
     Codelet, Direction, Domain, ElementOrder, FftError, InputStorage, InputSupport, InverseScale,
-    PastaField, Plan, PrimeModulus, TransformRequest, TwiddleTable, reverse,
+    PastaField, PrimeModulus, Transform, TransformRequest, TwiddleTable, reverse,
     stages::{StageKernel, twiddle_table},
 };
 use crate::{
@@ -45,12 +45,12 @@ mod expansion_driver;
 /// Use [`Self::execute`] for one contiguous transform, [`Self::execute_batch`]
 /// for consecutive polynomials, or [`FftRun`] for incremental scheduling.
 /// Plans borrow tables for `'t` and can be reused with new working buffers.
-/// The underlying [`Plan`] binds the domain and tables; this plan adds storage,
+/// The underlying [`Transform`] binds the domain and tables; this plan adds storage,
 /// ordering, normalization, and task geometry. An [`FftRun`] binds one invocation
 /// to frontier storage; it does not extend the lifetime of borrowed tables.
 #[derive(Clone, Copy, Debug)]
 pub struct FftPlan<'t, M: PrimeModulus> {
-    plan: Plan<'t, M>,
+    plan: Transform<'t, M>,
     request: TransformRequest,
     tile: usize,
     codelet: Codelet,
@@ -61,9 +61,79 @@ pub struct FftPlan<'t, M: PrimeModulus> {
     contiguous_permutation: bool,
     scatter_input: bool,
     resume: Option<(usize, ElementOrder)>,
+    budget: crate::exec::TaskBudget,
+    memory_limit: Option<usize>,
 }
 
 impl<'t, M: PrimeModulus> FftPlan<'t, M> {
+    /// Resolves a transform using its mathematical request and available storage.
+    ///
+    /// Udon selects kernels, subdivisions, and intermediate storage. The plan
+    /// borrows tables, binds no working buffers, and fixes the workspace reported
+    /// by [`Self::retained_fields`]. Execution requires that workspace even when
+    /// another implementation could use less.
+    ///
+    /// Prefix lengths range from zero through the domain size; larger prefixes
+    /// return [`FftError::InvalidPrefix`]. Bit-reversed prefix input, an unscaled
+    /// forward request, or a non-power-of-two fragment length returns
+    /// [`FftError::InvalidExecution`]. Fragment lengths are clamped to the domain
+    /// size after validation. Required workspace exceeding the byte ceiling
+    /// returns [`FftError::MemoryLimit`]. Construction does not write storage.
+    pub fn new(
+        plan: Transform<'t, M>,
+        request: TransformRequest,
+        storage: super::StorageLayout,
+        options: crate::exec::ExecutionOptions,
+    ) -> Result<Self, FftError> {
+        let size = plan.domain().size();
+        let (tile, whole_bank) = match storage {
+            super::StorageLayout::Contiguous => (
+                super::Strategy::select(size, options, usize::MAX)
+                    .tile_len
+                    .min(size),
+                true,
+            ),
+            super::StorageLayout::Fragments { length, whole_bank } => {
+                if !length.get().is_power_of_two() {
+                    return Err(FftError::InvalidExecution);
+                }
+                (length.get().min(size), whole_bank)
+            }
+        };
+        let mut result = Self::with_strategy(
+            plan,
+            request,
+            NonZeroUsize::new(tile).unwrap(),
+            Codelet::Radix2,
+        )?;
+        result.budget = options.task_budget();
+        result.memory_limit = options.memory_limit();
+        result.contiguous_permutation = whole_bank;
+        // Panels change the native order as well as scratch use. Compare complete
+        // layouts so an order conversion cannot escape the workspace ceiling.
+        if result.fragments() > 1
+            && let Some((columns, panels)) =
+                super::Strategy::columns(tile, result.fragments(), options, usize::MAX)
+        {
+            let candidate = result.with_columns(
+                NonZeroUsize::new(columns).unwrap(),
+                NonZeroUsize::new(panels).unwrap(),
+            )?;
+            if options.memory_limit().is_none_or(|limit| {
+                candidate.retained_fields() <= limit / core::mem::size_of::<PastaField<M>>()
+            }) {
+                result = candidate;
+            }
+        }
+        if let Some(limit) = options.memory_limit() {
+            let required = result.retained_fields() * core::mem::size_of::<PastaField<M>>();
+            if required > limit {
+                return Err(FftError::MemoryLimit { required, limit });
+            }
+        }
+        Ok(result)
+    }
+
     /// Validates the mathematical request and power-of-two tile size.
     ///
     /// The request selects in-place or preserved separate input. `tile` must
@@ -75,8 +145,8 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// unscaled forward transform, or non-power-of-two tile returns
     /// [`FftError::InvalidExecution`]. No storage is bound or modified. Tables in
     /// `plan` remain borrowed across runs.
-    pub fn new(
-        plan: Plan<'t, M>,
+    pub(crate) fn with_strategy(
+        plan: Transform<'t, M>,
         request: TransformRequest,
         tile: NonZeroUsize,
         codelet: Codelet,
@@ -110,6 +180,8 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
             contiguous_permutation: false,
             scatter_input: false,
             resume: None,
+            budget: crate::exec::TaskBudget::SERIAL,
+            memory_limit: None,
         })
     }
 
@@ -140,6 +212,25 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         }
         self.input_scale = scale;
         Ok(self)
+    }
+
+    pub(in crate::fft) fn with_residue_scales(
+        mut self,
+        expansion: super::Expansion<'t, M>,
+        residue: usize,
+        mut scale: PastaField<M>,
+    ) -> Result<Self, FftError> {
+        self.forward_scales = expansion
+            .scales
+            .map(|scales| &scales[residue * self.size()..(residue + 1) * self.size()]);
+        if self.forward_scales.is_some()
+            && expansion.normalization == super::ExpansionScaleNormalization::UnscaledInverse
+        {
+            // The table already divides by the base size. Cancel that factor
+            // here so the input's own normalization is applied exactly once.
+            scale = scale.mul(&PastaField::from_u64(self.size() as u64));
+        }
+        self.with_input_scale(scale)
     }
 
     /// Borrows validated forward coset powers without rescanning them.
@@ -174,7 +265,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Returns [`FftError::SizeOverflow`] if the retained field count overflows
     /// `usize` or its field slice would exceed `isize::MAX` bytes.
     /// A single-fragment transform keeps its local kernel without panels.
-    pub fn with_columns(
+    pub(crate) fn with_columns(
         mut self,
         columns: NonZeroUsize,
         panels: NonZeroUsize,
@@ -197,7 +288,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Each task leases the whole values bank exclusively. This avoids a full
     /// retained snapshot, at the cost of serializing permutation tasks for this run.
     /// Other phases still use bounded fragment leases.
-    pub fn with_contiguous_permutation(mut self) -> Self {
+    pub(crate) fn with_contiguous_permutation(mut self) -> Self {
         self.contiguous_permutation = true;
         self
     }
@@ -210,7 +301,8 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Sparse initialization retains its fused broadcast optimization. In-place
     /// execution is unchanged. Without this option, tasks gather into disjoint
     /// destination tiles.
-    pub fn with_scatter_initialization(mut self) -> Self {
+    #[cfg(test)]
+    pub(crate) fn with_scatter_initialization(mut self) -> Self {
         self.scatter_input = true;
         self
     }
@@ -267,6 +359,8 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         if self.inverse()
             || self.columns.is_some()
             || self.fragments() == 1 && self.request.output_order == ElementOrder::Natural
+            || self.separate()
+                && matches!(self.request.support, InputSupport::Prefix(n) if n <= self.size() / 16)
         {
             ElementOrder::BitReversed
         } else {
@@ -378,7 +472,7 @@ pub enum Bank {
 
 /// A bounded FFT kernel family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum WorkKind {
+pub(crate) enum WorkKind {
     /// Complete a transform that fits one local tile, fusing its phases.
     Fused,
     /// Initialize a destination tile, zeroing unsupported input positions.
@@ -410,8 +504,8 @@ pub enum WorkKind {
 pub struct Request<'a> {
     /// Nonforgeable claim identity.
     pub key: TaskKey<'a>,
-    /// Arithmetic phase.
-    pub kind: WorkKind,
+    #[cfg(test)]
+    pub(crate) kind: WorkKind,
     /// Bank and global range of the first exclusive output fragment.
     pub write: (Bank, Range<usize>),
     /// Second exclusive fragment for a butterfly pair.
@@ -663,7 +757,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     plan.plan.local(values, plan.inverse(), plan.first());
                 } else {
                     StageKernel {
-                        plan: Plan::without_tables(Domain::for_size(tile)?.subgroup()),
+                        plan: Transform::new(Domain::for_size(tile)?.subgroup()),
                         inverse: plan.inverse(),
                         dif: plan.native_input() == ElementOrder::Natural,
                         scale: InverseScale::Unscaled,
@@ -1000,6 +1094,7 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
         };
         Request {
             key,
+            #[cfg(test)]
             kind: self.kind,
             write: (
                 if matches!(self.kind, WorkKind::Snapshot | WorkKind::Column) {

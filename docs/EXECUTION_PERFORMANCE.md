@@ -1,9 +1,9 @@
 # Execution measurements
 
 The [execution benchmark](../crates/udon/benches/execution.rs) compares caller
-concurrency policies and operation geometry. Use it with the
-[execution guide](EXECUTION.md) to measure an application's choice of task grain,
-scratch capacity, and worker allowance. A faster isolated kernel does not by
+concurrency policies and memory limits. Use it with the
+[execution guide](EXECUTION.md) to measure an application's scratch capacity
+and worker allowance. A faster isolated kernel does not by
 itself establish a better mixed-workload policy.
 
 ## Workload and accounting
@@ -32,7 +32,7 @@ counts. Obtain the printed capacity and admission decision from the current
 run instead of reusing byte totals for another plan or driver.
 
 Application-controlled mixed incremental execution is covered by the
-[execution integration tests](../crates/udon/tests/execution/main.rs), including
+[execution tests](../crates/udon/tests/execution/mixed.rs), including
 independent arithmetic checks and admission. The current mixed benchmark does
 not time that driver.
 
@@ -42,7 +42,8 @@ The isolated suite covers 32-, 1,024-, and 8,192-term Pallas MSMs and Fp FFTs
 of 64, 2,048, and 16,384 elements. FFTs include both directions on subgroups and
 cosets. Every shape runs at one, four, and sixteen workers. MSM modes compare
 `synchronous` convenience execution and bounded `runs`; FFT modes compare
-`synchronous`, explicit `stage`, and `blocked` plans.
+`synchronous` execution and reusable `planned` execution.
+The recorded measurements below compare stage and blocked implementations.
 
 Input binding, reusable plans, scratch allocation, and pool entry are outside
 isolated timing. FFT input copying is included in every mode. Per-call
@@ -55,9 +56,9 @@ The [measurement data](measurements/execution.csv) retains the complete
 candidate based on `d454936`. The session label identifies the recorded data;
 it is not a comparison against another revision. Measurements used Criterion
 0.8, Rust 1.91.0, default features, and a 16-CPU Apple M4 Max with 128 GiB RAM.
-Drivers have since changed, so these estimates illustrate geometry tradeoffs
-and do not measure current latency. The CSV retains estimate and confidence
-interval endpoints in microseconds.
+The measured drivers differ from the current suite, so these estimates
+illustrate geometry tradeoffs and do not measure current latency. The CSV
+retains estimate and confidence interval endpoints in microseconds.
 
 Representative 8,192-term MSM estimates from that session were:
 

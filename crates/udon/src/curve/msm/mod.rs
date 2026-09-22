@@ -13,11 +13,15 @@
 //! borrows its inputs and frontier storage. [`run::BatchPlan`] instead borrows
 //! both its immutable inputs and mutable planning metadata for its lifetime.
 //!
+//! [`Input::execute`] selects an implementation from the input's scalar and base
+//! facts, [`ExecutionOptions`], and supplied scratch capacities. Resolved plans
+//! retain that choice for repeated or incremental execution. Window widths,
+//! recoding, and accumulation are implementation details. Digit caches are
+//! prepared against a resolved plan so preparation and execution agree.
+//!
 //! All runtime operations are allocation-free and variable-time, with no
-//! constant-time guarantee for secret bases, scalars, or indices. Resource
-//! limits for batches are explicit; see [`BatchOptions::with_memory_limit`].
-//! Incremental plans accept [`ArithmeticOptions`] and report storage separately
-//! from the caller's scheduling and admission policy.
+//! constant-time guarantee for secret bases, scalars, or indices. Callers own
+//! storage and execution; [`ExecutionOptions`] defines workspace accounting.
 //!
 //! Reuse cached bases and validated indices across two signed scalar rows.
 //! Rebuild the batch plan when its immutable scalar inputs change:
@@ -26,7 +30,7 @@
 //! use zakura_udon::{
 //!     curve::{AffinePoint, Pallas, PreparedAffinePoint, ProjectivePoint, msm::*,
 //!         msm::run::{BatchPlan, JobStorage, WorkerStorage}},
-//!     exec::SerialExecutor,
+//!     exec::{ExecutionOptions, SerialExecutor},
 //!     field::PastaField,
 //! };
 //! let bases = [AffinePoint::<Pallas>::GENERATOR; 2];
@@ -37,7 +41,7 @@
 //! let mut workers = [WorkerStorage::EMPTY; 1];
 //! for row in [[1_i128, -1, 3], [0, 2, 1]] {
 //!     let inputs = [selection.with_signed(&row)?];
-//!     let plan = BatchPlan::new(&inputs, BatchOptions::default(),
+//!     let plan = BatchPlan::new(&inputs, ExecutionOptions::default(),
 //!         &mut jobs, &mut workers)?;
 //!     let r = plan.requirements();
 //!     let mut records = vec![ScalarStorage::ZERO; r.scalars()];
@@ -59,13 +63,16 @@ use super::{
     AffinePoint, CurveError, EisensteinTableBatch, PastaCurve, Point, PreparedAffinePoint,
     ProjectivePoint, check_length, check_scratch, checked_count,
 };
+use crate::exec::{ExecutionOptions, Executor};
+use crate::field::{CanonicalUint, PastaField};
 #[cfg(test)]
-use crate::exec::Executor;
-use crate::{
-    exec::TaskBudget,
-    field::{CanonicalUint, PastaField},
-};
 use core::num::NonZeroUsize;
+
+#[cfg(test)]
+use crate::exec::TaskBudget;
+
+mod policy;
+pub(crate) use policy::{Accumulation, ArithmeticOptions, BatchOptions, Kernel};
 
 mod buckets;
 mod kernels;
@@ -362,6 +369,47 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     pub const fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Resolves scratch requirements from the input and resource constraints.
+    ///
+    /// Returns [`CurveError::SizeOverflow`] if storage counts or byte sizes
+    /// cannot be represented, or [`CurveError::MemoryLimit`] if planning finds
+    /// no layout within the workspace ceiling. This query does not write or
+    /// reserve buffers. Execution can also use smaller supplied buffers by
+    /// selecting a fitting implementation.
+    pub fn requirements(&self, options: ExecutionOptions) -> Result<Requirements, CurveError> {
+        Ok(schedule::Plan::new(core::slice::from_ref(self), options.into())?.requirements)
+    }
+
+    /// Computes this sum using caller-owned scratch and scoped execution.
+    ///
+    /// Udon adapts to every supplied buffer capacity and the workspace ceiling.
+    /// An empty input returns the identity. Errors from [`Self::requirements`]
+    /// or [`CurveError::ScratchTooSmall`] for insufficient capacity occur before
+    /// writes; surplus tails remain untouched. A panic may change scratch,
+    /// which can be reused after scoped work has finished unwinding.
+    pub fn execute<X: Executor>(
+        &self,
+        options: ExecutionOptions,
+        executor: &X,
+        scratch: Scratch<'_, C>,
+    ) -> Result<ProjectivePoint<C>, CurveError> {
+        let plan = schedule::Plan::with_capacity(
+            core::slice::from_ref(self),
+            options.into(),
+            scratch.capacity(),
+        )?;
+        let scratch = scratch.checked(plan.requirements)?;
+        let mut output = [ProjectivePoint::IDENTITY];
+        schedule::execute(
+            &plan,
+            core::slice::from_ref(self),
+            &mut output,
+            executor,
+            scratch,
+        );
+        Ok(output[0])
+    }
+
     /// Conservative const scratch counts for unprepared scalars and ordinary bases.
     ///
     /// Supports field and integer scalar rows with [`Bases::Affine`],
@@ -383,7 +431,10 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     ///
     /// Errors and memory accounting match [`batch_requirements`].
     #[cfg(test)]
-    pub(crate) fn requirements(&self, options: BatchOptions) -> Result<Requirements, CurveError> {
+    pub(crate) fn requirements_with(
+        &self,
+        options: BatchOptions,
+    ) -> Result<Requirements, CurveError> {
         batch_requirements(core::slice::from_ref(self), options)
     }
     /// Computes the sum with caller-owned scratch and execution resources.
@@ -397,7 +448,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     /// An executor panic may leave scratch partially written; scoped work must
     /// finish unwinding before reuse, as required by [`Executor`].
     #[cfg(test)]
-    pub(crate) fn execute<X: Executor>(
+    pub(crate) fn execute_with<X: Executor>(
         &self,
         options: BatchOptions,
         executor: &X,
@@ -415,193 +466,6 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     }
 }
 
-/// Accumulation strategy for [`Kernel::Booth`].
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Accumulation {
-    /// Select a policy using the effective pass size.
-    Auto,
-    /// Affine pair trees with batch inversion.
-    Affine,
-    /// Projective buckets, with no affine pair scratch.
-    Projective,
-    /// Affine early passes and a projective final pass.
-    Hybrid,
-}
-/// Arithmetic family required by an MSM operation.
-///
-/// Explicit choices apply even to small inputs and short scalars. Forcing Booth
-/// can forgo short-scalar optimizations. Empty operations return the identity.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Kernel {
-    /// Automatically select joint, short-scalar, or nonstreaming Booth arithmetic.
-    Auto,
-    /// Use the joint ladder, reusing compact tables or staging ordinary bases.
-    Joint,
-    /// Use nonstreaming Booth buckets with the selected accumulation strategy.
-    Booth {
-        /// Required width in `4..=12`, or automatic selection within Booth.
-        width: Option<u32>,
-        /// Required strategy, or adaptive selection with [`Accumulation::Auto`].
-        accumulation: Accumulation,
-    },
-    /// Retain projective buckets across chunks, collapsing each window once.
-    ///
-    /// Each deposit task owns one window's buckets; different windows may run
-    /// concurrently. The caller must provision all retained buckets.
-    StreamingBooth {
-        /// Required width in `4..=12`, or automatic selection within streaming.
-        width: Option<u32>,
-    },
-}
-
-/// Reusable MSM arithmetic requirements and staging caps.
-///
-/// Pass and chunk limits are upper bounds; the planner may use less.
-/// Explicit kernel selections are preserved during batch memory adaptation.
-/// Automatic choices may change between releases; streaming is always opt-in.
-/// [`run::MsmPlan`] and [`PreparedScalars::cache`] accept these settings directly;
-/// [`BatchOptions`] adds batch concurrency and memory policy.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ArithmeticOptions {
-    max_terms_per_pass: Option<NonZeroUsize>,
-    chunk_size: Option<NonZeroUsize>,
-    kernel: Kernel,
-}
-impl ArithmeticOptions {
-    /// Automatic kernel and accumulation choices with no caller-imposed caps.
-    pub const DEFAULT: Self = Self {
-        max_terms_per_pass: None,
-        chunk_size: None,
-        kernel: Kernel::Auto,
-    };
-    /// Caps terms staged for affine buckets or temporary joint tables.
-    ///
-    /// `None` removes the cap. This does not bound scalar records or recoding
-    /// bytes; use [`Self::with_chunk_size`] for those. Kernels without this
-    /// staging, including projective buckets and
-    /// short-scalar ladders, do not split their arithmetic at the cap.
-    pub const fn with_max_terms_per_pass(mut self, cap: Option<NonZeroUsize>) -> Self {
-        self.max_terms_per_pass = cap;
-        self
-    }
-    /// Caps the terms prepared and recoded together.
-    ///
-    /// By default, execution completes each chunk's MSM and reuses its workspace.
-    /// [`Kernel::StreamingBooth`] instead retains window
-    /// buckets across chunks. Both bound scratch independently of the total term
-    /// count; a batch [memory ceiling](BatchOptions::with_memory_limit) may
-    /// reduce the chunk size further.
-    pub const fn with_chunk_size(mut self, terms: NonZeroUsize) -> Self {
-        self.chunk_size = Some(terms);
-        self
-    }
-    /// Replaces the entire kernel selection, including width and accumulation.
-    ///
-    /// Returns [`CurveError::InvalidMsmWindow`] for supplied widths outside
-    /// `4..=12`, even when the operation will be empty. Chunk and pass caps are
-    /// independent and remain unchanged. No scalar values are needed to validate
-    /// this selection or provision an incremental plan.
-    pub const fn with_kernel(mut self, kernel: Kernel) -> Result<Self, CurveError> {
-        if let Kernel::Booth {
-            width: Some(bits), ..
-        }
-        | Kernel::StreamingBooth { width: Some(bits) } = kernel
-            && (bits < 4 || bits > 12)
-        {
-            return Err(CurveError::InvalidMsmWindow { bits });
-        }
-        self.kernel = kernel;
-        Ok(self)
-    }
-    const fn streaming(self) -> bool {
-        matches!(self.kernel, Kernel::StreamingBooth { .. })
-    }
-    const fn accumulation(self) -> Accumulation {
-        match self.kernel {
-            Kernel::Booth { accumulation, .. } => accumulation,
-            Kernel::StreamingBooth { .. } => Accumulation::Projective,
-            _ => Accumulation::Auto,
-        }
-    }
-    const fn chunk_cap(self) -> usize {
-        match self.chunk_size {
-            Some(cap) => cap.get(),
-            None if self.streaming() => 256,
-            None => usize::MAX,
-        }
-    }
-    /// Requested per-pass term cap.
-    pub const fn max_terms_per_pass(&self) -> Option<NonZeroUsize> {
-        self.max_terms_per_pass
-    }
-}
-impl Default for ArithmeticOptions {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
-}
-
-/// Arithmetic settings and scheduling policy for a [`run::BatchPlan`].
-///
-/// The task budget and memory ceiling apply to one batch execution. Repeated
-/// or concurrent executions need their own scratch; the limit does not account
-/// for the combined capacity of multiple invocations.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BatchOptions {
-    arithmetic: ArithmeticOptions,
-    task_budget: TaskBudget,
-    memory_limit: Option<usize>,
-}
-impl BatchOptions {
-    /// Uses `arithmetic` with serial execution and no memory ceiling.
-    pub const fn new(arithmetic: ArithmeticOptions) -> Self {
-        Self {
-            arithmetic,
-            task_budget: TaskBudget::SERIAL,
-            memory_limit: None,
-        }
-    }
-    /// Sets the total scoped concurrency allowance; planning may use less.
-    pub const fn with_task_budget(mut self, budget: TaskBudget) -> Self {
-        self.task_budget = budget;
-        self
-    }
-    /// Bounds typed batch storage in bytes.
-    ///
-    /// Counts the required [`Scratch`] prefixes, including intermediate results
-    /// and streaming buckets, plus the [`run::BatchPlan`] metadata prefixes
-    /// reserved by its sizing query. Excludes surplus buffer tails, inputs,
-    /// outputs, retained preparation, alignment between buffers, fixed stack
-    /// frames, and executor resources. This is not a process memory limit.
-    ///
-    /// The planner may reduce staging, concurrency, or chunk size and change
-    /// automatic choices. Explicit family, streaming mode, width, and
-    /// accumulation requirements are preserved. It returns
-    /// [`CurveError::MemoryLimit`] if its search finds no fitting layout. The
-    /// search is not exhaustive and does not prove that no possible layout fits.
-    pub const fn with_memory_limit(mut self, bytes: usize) -> Self {
-        self.memory_limit = Some(bytes);
-        self
-    }
-    /// Requested arithmetic settings, before any batch memory adaptation.
-    pub const fn arithmetic(&self) -> ArithmeticOptions {
-        self.arithmetic
-    }
-    /// Requested task budget; a memory-constrained plan may use fewer workers.
-    pub const fn task_budget(&self) -> TaskBudget {
-        self.task_budget
-    }
-    /// Requested byte ceiling, if any.
-    pub const fn memory_limit(&self) -> Option<usize> {
-        self.memory_limit
-    }
-}
-impl Default for BatchOptions {
-    fn default() -> Self {
-        Self::new(ArithmeticOptions::DEFAULT)
-    }
-}
-
 /// Element counts for initialized, typed caller-owned temporary buffers.
 ///
 /// Obtain these counts from [`run::MsmPlan::requirements`] or
@@ -616,6 +480,30 @@ pub struct Requirements {
     indices: usize,
 }
 impl Requirements {
+    fn fits(self, available: Self) -> bool {
+        self.scalars <= available.scalars
+            && self.digits <= available.digits
+            && self.affine <= available.affine
+            && self.projective <= available.projective
+            && self.field <= available.field
+            && self.indices <= available.indices
+    }
+    fn capacity_error(self, available: Self) -> CurveError {
+        for (buffer, required, provided) in [
+            ("scalars", self.scalars, available.scalars),
+            ("digits", self.digits, available.digits),
+            ("affine", self.affine, available.affine),
+            ("projective", self.projective, available.projective),
+            ("field", self.field, available.field),
+            ("indices", self.indices, available.indices),
+        ] {
+            if let Err(error) = check_scratch(buffer, required, provided) {
+                return error;
+            }
+        }
+        unreachable!("capacity is insufficient")
+    }
+
     /// Scalar classification and GLV records.
     pub const fn scalars(&self) -> usize {
         self.scalars
@@ -724,6 +612,16 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
             projective: self.projective,
             field: self.field,
             indices: self.indices,
+        }
+    }
+    fn capacity(&self) -> Requirements {
+        Requirements {
+            scalars: self.scalars.len(),
+            digits: self.digits.len(),
+            affine: self.affine.len(),
+            projective: self.projective.len(),
+            field: self.field.len(),
+            indices: self.indices.len(),
         }
     }
     fn checked(self, r: Requirements) -> Result<Self, CurveError> {

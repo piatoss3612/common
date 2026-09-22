@@ -1,12 +1,13 @@
 use super::{fft_run::Arena, run_pool};
 use std::num::NonZeroUsize;
+use std::{vec, vec::Vec};
 use zakura_udon::{
     exec::{
         SerialExecutor,
         run::{Identity, TaskStorage},
     },
     fft::{
-        Codelet, Direction, Domain, ElementOrder, InputSupport, InverseScale, Plan,
+        Codelet, Direction, Domain, ElementOrder, InputSupport, InverseScale, Transform,
         TransformRequest,
         run::{FftPlan, FftRun},
     },
@@ -16,7 +17,7 @@ use zakura_udon::{
 // Compare fragmented execution with the contiguous production path. Independent
 // direct-sum oracles live in the FFT unit tests.
 fn reference_transform<M: PrimeModulus>(
-    plan: Plan<'_, M>,
+    plan: Transform<'_, M>,
     request: TransformRequest,
     input: &[PastaField<M>],
     output: &mut [PastaField<M>],
@@ -35,13 +36,13 @@ fn reference_transform<M: PrimeModulus>(
     if request.input_order == ElementOrder::BitReversed {
         permute(output);
     }
-    let options = zakura_udon::fft::ExecutionOptions::serial();
+    let options = zakura_udon::fft::Strategy::serial();
     match request.direction {
         Direction::Forward => plan
-            .forward(output, options, &SerialExecutor, &mut [])
+            .forward_with(output, options, &SerialExecutor, &mut [])
             .unwrap(),
         Direction::Inverse => {
-            plan.inverse(output, options, &SerialExecutor, &mut [])
+            plan.inverse_with(output, options, &SerialExecutor, &mut [])
                 .unwrap();
             if request.inverse_scale == InverseScale::Unscaled {
                 let size = PastaField::from_u64(output.len() as u64);
@@ -58,7 +59,7 @@ fn reference_transform<M: PrimeModulus>(
 
 fn check<M: PrimeModulus>() {
     for size in [1, 8, 64, 1024] {
-        let plan = Plan::without_tables(
+        let plan = Transform::new(
             Domain::<M>::for_size(size)
                 .unwrap()
                 .coset(PastaField::from_u64(7))
@@ -71,7 +72,7 @@ fn check<M: PrimeModulus>() {
             for input_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
                 for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
                     for (tile, codelet, separate, workers) in [
-                        (1, Codelet::Radix2, false, 1),
+                        (size.div_ceil(128), Codelet::Radix2, false, 1),
                         (8, Codelet::Radix4, true, 3),
                         (32, Codelet::Radix8, false, 4),
                         (size, Codelet::Radix2, true, 2),
@@ -109,7 +110,7 @@ fn check<M: PrimeModulus>() {
                                 *value = value.mul(factor);
                             }
                         }
-                        let arithmetic = FftPlan::new(
+                        let arithmetic = FftPlan::with_strategy(
                             plan,
                             zakura_udon::fft::TransformRequest {
                                 input_storage: if separate {
@@ -195,7 +196,7 @@ fn fused_scales<M: PrimeModulus>() {
 
     for size in [1, 64] {
         let shift = PastaField::<M>::from_u64(7);
-        let plan = Plan::without_tables(Domain::for_size(size).unwrap().coset(shift).unwrap());
+        let plan = Transform::new(Domain::for_size(size).unwrap().coset(shift).unwrap());
         let original: Vec<_> = (0..size)
             .map(|i| PastaField::from_u64((i * i + 3) as u64))
             .collect();
@@ -207,7 +208,7 @@ fn fused_scales<M: PrimeModulus>() {
             let mut expected = vec![PastaField::ZERO; size];
             reference_transform(plan, request, &scaled, &mut expected);
             for table in [false, true] {
-                let mut arithmetic = FftPlan::new(
+                let mut arithmetic = FftPlan::with_strategy(
                     plan,
                     zakura_udon::fft::TransformRequest {
                         input_storage: zakura_udon::fft::InputStorage::Preserve,
@@ -260,7 +261,7 @@ fn fused_full_inputs_apply_coset_tables_and_input_scale_once() {
 fn blocked<M: PrimeModulus>() {
     use super::fft_pipeline::Banks;
     for (size, tile) in [(64, 8), (1024, 32)] {
-        let plan = Plan::without_tables(
+        let plan = Transform::new(
             Domain::<M>::for_size(size)
                 .unwrap()
                 .coset(PastaField::from_u64(7))
@@ -280,7 +281,7 @@ fn blocked<M: PrimeModulus>() {
                         };
                         let mut expected = vec![PastaField::ZERO; size];
                         reference_transform(plan, request, &original, &mut expected);
-                        let arithmetic = FftPlan::new(
+                        let arithmetic = FftPlan::with_strategy(
                             plan,
                             request,
                             NonZeroUsize::new(tile).unwrap(),
@@ -289,7 +290,7 @@ fn blocked<M: PrimeModulus>() {
                         .unwrap()
                         .with_columns(NonZeroUsize::MIN, NonZeroUsize::new(panels).unwrap())
                         .unwrap();
-                        let banks = Banks::new(&[size, size], tile);
+                        let banks = Banks::new(&[size, size], tile, 0..0);
                         banks.write(0, &original);
                         let mut id = Identity::new();
                         let mut slots = [const { TaskStorage::EMPTY }; 5];
@@ -326,7 +327,7 @@ fn blocked<M: PrimeModulus>() {
                         let mut values = original.clone();
                         let mut scratch = vec![PastaField::ZERO; contiguous.retained_fields()];
                         contiguous
-                            .execute(
+                            .execute_with(
                                 None,
                                 &mut values,
                                 None,
@@ -342,7 +343,7 @@ fn blocked<M: PrimeModulus>() {
                         output_order,
                         ..TransformRequest::new(direction)
                     };
-                    let stage = FftPlan::new(
+                    let stage = FftPlan::with_strategy(
                         plan,
                         request,
                         NonZeroUsize::new(tile).unwrap(),
@@ -353,7 +354,7 @@ fn blocked<M: PrimeModulus>() {
                     assert_eq!(stage.retained_fields(), 0);
                     let mut values = original.clone();
                     stage
-                        .execute(
+                        .execute_with(
                             None,
                             &mut values,
                             None,
@@ -381,7 +382,7 @@ fn sparse_tables<M: PrimeModulus>() {
     use zakura_udon::fft::{TwiddleDescription, TwiddleStorage, TwiddleTable};
     let nz = |n| NonZeroUsize::new(n).unwrap();
     let size = 64;
-    let plan = Plan::without_tables(
+    let plan = Transform::new(
         Domain::<M>::for_size(size)
             .unwrap()
             .coset(PastaField::from_u64(7))
@@ -414,7 +415,7 @@ fn sparse_tables<M: PrimeModulus>() {
                             let mut expected = vec![PastaField::ZERO; size];
                             reference_transform(plan, request, &original[..prefix], &mut expected);
                             for (tile, columns) in [(8, 3), (8, 9), (64, 3)] {
-                                let arithmetic = FftPlan::new(
+                                let arithmetic = FftPlan::with_strategy(
                                     plan,
                                     zakura_udon::fft::TransformRequest {
                                         input_storage: zakura_udon::fft::InputStorage::Preserve,
@@ -431,7 +432,7 @@ fn sparse_tables<M: PrimeModulus>() {
                                 let mut scratch =
                                     vec![PastaField::ZERO; arithmetic.retained_fields()];
                                 arithmetic
-                                    .execute(
+                                    .execute_with(
                                         Some(&original[..prefix]),
                                         &mut values,
                                         None,
@@ -485,9 +486,9 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
         values: core::array::from_fn(|i| Fp::from_u64(i as u64 + 1)),
         reads: RefCell::new(Vec::new()),
     };
-    let plan = Plan::without_tables(Domain::for_size(64).unwrap().subgroup());
+    let plan = Transform::new(Domain::for_size(64).unwrap().subgroup());
     let request = TransformRequest::new(Direction::Inverse);
-    let arithmetic = FftPlan::new(
+    let arithmetic = FftPlan::with_strategy(
         plan,
         zakura_udon::fft::TransformRequest {
             input_storage: zakura_udon::fft::InputStorage::Preserve,
@@ -544,7 +545,7 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
                 let mut expected = [Fp::ZERO; 64];
                 reference_transform(plan, request, &source.values, &mut expected);
                 for tile in [8, 64] {
-                    FftPlan::new(
+                    FftPlan::with_strategy(
                         plan,
                         zakura_udon::fft::TransformRequest {
                             input_storage: zakura_udon::fft::InputStorage::Preserve,
@@ -556,7 +557,7 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
                     .unwrap()
                     .with_scatter_initialization()
                     .with_contiguous_permutation()
-                    .execute(
+                    .execute_with(
                         Some(&source.values),
                         &mut values,
                         None,
@@ -606,8 +607,8 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
         }
     }
 
-    let plan = Plan::without_tables(Domain::for_size(64).unwrap().subgroup());
-    let arithmetic = FftPlan::new(
+    let plan = Transform::new(Domain::for_size(64).unwrap().subgroup());
+    let arithmetic = FftPlan::with_strategy(
         plan,
         zakura_udon::fft::TransformRequest {
             input_storage: zakura_udon::fft::InputStorage::Preserve,
@@ -677,7 +678,7 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
         values.fill(Fp::ZERO);
         let mut scratch = vec![Fp::ZERO; arithmetic.retained_fields()];
         arithmetic
-            .execute(
+            .execute_with(
                 Some(&source.0),
                 &mut values,
                 None,
@@ -700,7 +701,7 @@ fn batch_planning_orders_panels_and_validation() {
         field::Fp,
     };
     let nz = |n| NonZeroUsize::new(n).unwrap();
-    let base = Plan::without_tables(
+    let base = Transform::new(
         Domain::for_size(64)
             .unwrap()
             .coset(Fp::from_u64(7))
@@ -713,7 +714,8 @@ fn batch_planning_orders_panels_and_validation() {
                 ..TransformRequest::new(direction)
             };
             for columns in [false, true] {
-                let mut plan = FftPlan::new(base, request, nz(8), Codelet::Radix4).unwrap();
+                let mut plan =
+                    FftPlan::with_strategy(base, request, nz(8), Codelet::Radix4).unwrap();
                 if columns {
                     plan = plan.with_columns(nz(3), nz(4)).unwrap();
                 }
@@ -729,12 +731,12 @@ fn batch_planning_orders_panels_and_validation() {
                     }
                     for tasks in [1, 3, 7] {
                         let tasks = nz(tasks);
-                        let required = plan.batch_fields(count, tasks).unwrap();
+                        let required = plan.batch_fields_with(count, tasks).unwrap();
                         let mut scratch = vec![Fp::ZERO; required];
                         let mut values = input.clone();
                         if required != 0 {
                             assert!(matches!(
-                                plan.execute_batch(
+                                plan.execute_batch_with(
                                     &mut values,
                                     &mut scratch[..required - 1],
                                     tasks,
@@ -744,7 +746,7 @@ fn batch_planning_orders_panels_and_validation() {
                             ));
                             assert_eq!(values, input);
                         }
-                        plan.execute_batch(&mut values, &mut scratch, tasks, &SerialExecutor)
+                        plan.execute_batch_with(&mut values, &mut scratch, tasks, &SerialExecutor)
                             .unwrap();
                         assert_eq!(values, expected);
                     }
@@ -752,7 +754,7 @@ fn batch_planning_orders_panels_and_validation() {
             }
         }
     }
-    let plan = FftPlan::new(
+    let plan = FftPlan::with_strategy(
         base,
         TransformRequest {
             input_storage: InputStorage::Preserve,
@@ -763,7 +765,7 @@ fn batch_planning_orders_panels_and_validation() {
     )
     .unwrap();
     assert_eq!(
-        plan.execute_batch(&mut [], &mut [], nz(1), &SerialExecutor),
+        plan.execute_batch_with(&mut [], &mut [], nz(1), &SerialExecutor),
         Err(FftError::InvalidExecution)
     );
 }
@@ -776,12 +778,12 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
         field::Fp,
     };
     let nz = |n| NonZeroUsize::new(n).unwrap();
-    let base = Plan::without_tables(Domain::for_size(64).unwrap().subgroup());
+    let base = Transform::new(Domain::for_size(64).unwrap().subgroup());
     let source = [Fp::ONE; 64];
     let sentinel = Fp::from_u64(17);
     let mut values = [sentinel; 64];
     for storage in [InputStorage::InPlace, InputStorage::Preserve] {
-        let plan = FftPlan::new(
+        let plan = FftPlan::with_strategy(
             base,
             TransformRequest {
                 input_storage: storage,
@@ -793,7 +795,7 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
         .unwrap();
         let wrong_input = (storage == InputStorage::InPlace).then_some(source.as_slice());
         assert_eq!(
-            plan.execute(
+            plan.execute_with(
                 wrong_input,
                 &mut values,
                 None,
@@ -806,7 +808,7 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
         assert_eq!(values, [sentinel; 64]);
         let input = (storage == InputStorage::Preserve).then_some(source.as_slice());
         assert!(matches!(
-            plan.execute(
+            plan.execute_with(
                 input,
                 &mut values[..63],
                 None,
@@ -818,7 +820,7 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
         ));
         assert_eq!(values, [sentinel; 64]);
     }
-    let plan = FftPlan::new(
+    let plan = FftPlan::with_strategy(
         base,
         TransformRequest {
             input_storage: InputStorage::Preserve,

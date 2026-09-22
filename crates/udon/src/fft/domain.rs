@@ -101,7 +101,7 @@ impl<M: PrimeModulus> Domain<M> {
 ///
 /// Natural evaluation row `j` is the point `shift * domain.root()^j`, for
 /// `0 <= j < size`. Shifts need not be outside the subgroup. The
-/// [`Plan::inverse`](super::Plan::inverse) transform returns coefficients of
+/// [`Transform::inverse`](super::Transform::inverse) transform returns coefficients of
 /// the original polynomial, removing the shift and normalizing by the size.
 #[derive(Clone, Copy)]
 pub struct CosetDomain<M: PrimeModulus> {

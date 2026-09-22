@@ -122,20 +122,20 @@ fn small_transforms<M: PrimeModulus>() {
     fn assert_debug<T: core::fmt::Debug>() {}
     assert_debug::<Domain<M>>();
     assert_debug::<CosetDomain<M>>();
-    assert_debug::<Plan<'_, M>>();
+    assert_debug::<Transform<'_, M>>();
     assert_debug::<Tables<'_, M>>();
     assert_debug::<TablesMut<'_, M>>();
     assert_debug::<Expansion<'_, M>>();
     assert_debug::<Class<'_, M>>();
 
-    const OPTIONS: [ExecutionOptions; 3] = [
-        ExecutionOptions::serial(),
-        ExecutionOptions {
+    const OPTIONS: [Strategy; 3] = [
+        Strategy::serial(),
+        Strategy {
             tile_len: 1,
             columns_per_task: 3,
             max_tasks: 3,
         },
-        ExecutionOptions {
+        Strategy {
             tile_len: 4,
             columns_per_task: 3,
             max_tasks: 5,
@@ -184,17 +184,19 @@ fn small_transforms<M: PrimeModulus>() {
                     inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
                     inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 };
-                let plan = Plan::new(tables.bind(domain).unwrap());
+                let plan = tables.bind(domain).unwrap();
                 for (index, options) in OPTIONS.into_iter().enumerate() {
                     let count = SCRATCH[log as usize][index];
                     assert_eq!(
-                        plan.scratch_requirements(options).unwrap().field_elements,
+                        plan.scratch_requirements_with(options)
+                            .unwrap()
+                            .field_elements,
                         count
                     );
                     let sentinel = PastaField::from_u64(99);
                     let mut scratch = vec![sentinel; count + 3];
                     let mut output = vec![PastaField::ZERO; coefficients.len()];
-                    plan.forward_into(
+                    plan.forward_into_with(
                         &coefficients,
                         &mut output,
                         options,
@@ -204,11 +206,11 @@ fn small_transforms<M: PrimeModulus>() {
                     .unwrap();
                     assert_eq!(output, expected, "forward log={log}");
                     assert_canonical(&output);
-                    plan.inverse(&mut output, options, &SerialExecutor, &mut scratch)
+                    plan.inverse_with(&mut output, options, &SerialExecutor, &mut scratch)
                         .unwrap();
                     assert_eq!(output, coefficients, "inverse log={log}");
                     let evaluations = expected.clone();
-                    plan.inverse_into(
+                    plan.inverse_into_with(
                         &evaluations,
                         &mut output,
                         options,
@@ -218,13 +220,18 @@ fn small_transforms<M: PrimeModulus>() {
                     .unwrap();
                     assert_eq!(output, coefficients, "inverse_into log={log}");
                     assert_eq!(evaluations, expected);
-                    // Construct the input order independently of Plan::permute.
+                    // Construct the input order independently of Transform::permute.
                     for (row, value) in expected.iter().enumerate() {
                         let bits = (0..log).fold(0, |bits, bit| (bits << 1) | ((row >> bit) & 1));
                         output[bits] = *value;
                     }
-                    plan.inverse_bit_reversed(&mut output, options, &SerialExecutor, &mut scratch)
-                        .unwrap();
+                    plan.inverse_bit_reversed_with(
+                        &mut output,
+                        options,
+                        &SerialExecutor,
+                        &mut scratch,
+                    )
+                    .unwrap();
                     assert_eq!(output, coefficients, "inverse_bit_reversed log={log}");
                     assert_eq!(&scratch[count..], &[sentinel; 3]);
                     assert_canonical(&scratch);
@@ -249,7 +256,7 @@ fn prefixes<M: PrimeModulus>() {
         let prepared = Prepared::new(domain);
         let input = inputs(domain.size());
         for table in [Tables::default(), prepared.tables()] {
-            let plan = Plan::new(table.bind(domain).unwrap());
+            let plan = table.bind(domain).unwrap();
             for len in [
                 0,
                 1,
@@ -265,18 +272,19 @@ fn prefixes<M: PrimeModulus>() {
             {
                 let expected = reference_coset(&input[..len], domain);
                 for tile_len in [1, 4, 16, 256] {
-                    let options = ExecutionOptions {
+                    let options = Strategy {
                         tile_len,
                         columns_per_task: 3,
                         max_tasks: 3,
                     };
-                    let mut scratch =
-                        vec![
-                            PastaField::ZERO;
-                            plan.scratch_requirements(options).unwrap().field_elements
-                        ];
+                    let mut scratch = vec![
+                        PastaField::ZERO;
+                        plan.scratch_requirements_with(options)
+                            .unwrap()
+                            .field_elements
+                    ];
                     let mut output = vec![PastaField::ONE; domain.size()];
-                    plan.forward_prefix(
+                    plan.forward_prefix_with(
                         &input[..len],
                         &mut output,
                         options,
@@ -328,21 +336,25 @@ fn source_sizes<M: PrimeModulus>() {
             .coset(PastaField::zeta())
             .unwrap();
         let prepared = Prepared::new(domain);
-        let plan = Plan::new(prepared.tables().bind(domain).unwrap());
+        let plan = prepared.tables().bind(domain).unwrap();
         let coefficients = inputs(domain.size());
         let expected = reference_coset(&coefficients, domain);
-        let options = ExecutionOptions {
+        let options = Strategy {
             tile_len: 2048,
             columns_per_task: 257,
             max_tasks: 3,
         };
-        let mut scratch =
-            vec![PastaField::ZERO; plan.scratch_requirements(options).unwrap().field_elements];
+        let mut scratch = vec![
+            PastaField::ZERO;
+            plan.scratch_requirements_with(options)
+                .unwrap()
+                .field_elements
+        ];
         let mut output = coefficients.clone();
-        plan.forward(&mut output, options, &Threads, &mut scratch)
+        plan.forward_with(&mut output, options, &Threads, &mut scratch)
             .unwrap();
         assert_eq!(output, expected);
-        plan.inverse(&mut output, options, &Threads, &mut scratch)
+        plan.inverse_with(&mut output, options, &Threads, &mut scratch)
             .unwrap();
         assert_eq!(output, coefficients);
     }
@@ -371,22 +383,26 @@ fn larger_transform<M: PrimeModulus>() {
     assert_eq!(subgroup.log_size(), 16);
     let domain = subgroup.coset(PastaField::from_u64(7)).unwrap();
     let prepared = Prepared::new(domain);
-    let plan = Plan::new(prepared.tables().bind(domain).unwrap());
+    let plan = prepared.tables().bind(domain).unwrap();
     let coefficients = inputs(domain.size());
     let expected = reference_coset(&coefficients, domain);
-    let options = ExecutionOptions {
+    let options = Strategy {
         max_tasks: 8,
-        ..ExecutionOptions::default()
+        ..Strategy::default()
     };
-    let mut scratch =
-        vec![PastaField::ZERO; plan.scratch_requirements(options).unwrap().field_elements];
+    let mut scratch = vec![
+        PastaField::ZERO;
+        plan.scratch_requirements_with(options)
+            .unwrap()
+            .field_elements
+    ];
     let executor = CountJoins::default();
     let mut output = coefficients.clone();
-    plan.forward(&mut output, options, &executor, &mut scratch)
+    plan.forward_with(&mut output, options, &executor, &mut scratch)
         .unwrap();
     assert_eq!(output, expected);
     assert!(executor.0.load(Ordering::Relaxed) > 0);
-    plan.inverse(&mut output, options, &executor, &mut scratch)
+    plan.inverse_with(&mut output, options, &executor, &mut scratch)
         .unwrap();
     assert_eq!(output, coefficients);
 
@@ -410,7 +426,7 @@ fn expansions<M: PrimeModulus>() {
     for log in [0, 1, 3, 6] {
         let base_domain = Domain::<M>::new(log).unwrap();
         let base_tables = Prepared::new(base_domain.subgroup());
-        let base = Plan::new(base_tables.tables().bind(base_domain.subgroup()).unwrap());
+        let base = base_tables.tables().bind(base_domain.subgroup()).unwrap();
         let coefficients = inputs(base_domain.size());
         let evaluations = direct(&coefficients, base_domain.subgroup());
         for extra in [0, 1, 2, 3] {
@@ -424,22 +440,22 @@ fn expansions<M: PrimeModulus>() {
                     expansion.validate_scales().unwrap();
                     let expected = direct(&coefficients, domain);
                     for options in [
-                        ExpansionOptions::serial(),
-                        ExpansionOptions {
+                        ExpansionStrategy::serial(),
+                        ExpansionStrategy {
                             max_residue_tasks: 3,
-                            ..ExpansionOptions::serial()
+                            ..ExpansionStrategy::serial()
                         },
-                        ExpansionOptions {
+                        ExpansionStrategy {
                             max_residue_tasks: 1,
-                            transform: ExecutionOptions {
+                            transform: Strategy {
                                 tile_len: 4,
                                 columns_per_task: 3,
                                 max_tasks: 3,
                             },
                         },
-                        ExpansionOptions {
+                        ExpansionStrategy {
                             max_residue_tasks: 3,
-                            transform: ExecutionOptions {
+                            transform: Strategy {
                                 tile_len: 4,
                                 columns_per_task: 3,
                                 max_tasks: 3,
@@ -448,12 +464,12 @@ fn expansions<M: PrimeModulus>() {
                     ] {
                         let mut output = vec![PastaField::ZERO; domain.size()];
                         let count = expansion
-                            .coefficient_scratch(options)
+                            .coefficient_scratch_with(options)
                             .unwrap()
                             .field_elements;
                         let mut scratch = vec![PastaField::ONE; count + 1];
                         expansion
-                            .coefficients(
+                            .coefficients_with(
                                 &coefficients,
                                 &mut output,
                                 options,
@@ -467,12 +483,12 @@ fn expansions<M: PrimeModulus>() {
                             assert_eq!(view.get(row), Some(expected));
                         }
                         let count = expansion
-                            .evaluation_scratch(options)
+                            .evaluation_scratch_with(options)
                             .unwrap()
                             .field_elements;
                         scratch.fill(PastaField::ONE);
                         expansion
-                            .evaluations(
+                            .evaluations_with(
                                 &evaluations,
                                 &mut output,
                                 options,
@@ -493,7 +509,7 @@ fn expansions<M: PrimeModulus>() {
                             let short = &coefficients[..len];
                             let mut product = vec![PastaField::ZERO; domain.size()];
                             expansion
-                                .short_product(
+                                .short_product_with(
                                     short,
                                     view,
                                     &mut product,
@@ -512,7 +528,13 @@ fn expansions<M: PrimeModulus>() {
                             }
                         }
                         expansion
-                            .coefficients(&[], &mut output, options, &SerialExecutor, &mut scratch)
+                            .coefficients_with(
+                                &[],
+                                &mut output,
+                                options,
+                                &SerialExecutor,
+                                &mut scratch,
+                            )
                             .unwrap();
                         assert!(output.iter().all(|value| *value == PastaField::ZERO));
                     }
@@ -531,7 +553,7 @@ fn residue_expansion_and_fused_short_products_match_direct_evaluation() {
 fn large_expansion<M: PrimeModulus>() {
     let base_domain = Domain::<M>::new(11).unwrap();
     let prepared = Prepared::new(base_domain.subgroup());
-    let base = Plan::new(prepared.tables().bind(base_domain.subgroup()).unwrap());
+    let base = prepared.tables().bind(base_domain.subgroup()).unwrap();
     let coefficients = inputs(base_domain.size());
     for extra in [1, 3] {
         let domain = Domain::new(11 + extra)
@@ -541,9 +563,9 @@ fn large_expansion<M: PrimeModulus>() {
         let expansion = Expansion::new(base, domain, None).unwrap();
         let expected = reference_coset(&coefficients, domain);
         let mut output = vec![PastaField::ZERO; domain.size()];
-        let options = ExpansionOptions {
+        let options = ExpansionStrategy {
             max_residue_tasks: 3,
-            transform: ExecutionOptions {
+            transform: Strategy {
                 tile_len: 256,
                 columns_per_task: 127,
                 max_tasks: 3,
@@ -552,12 +574,12 @@ fn large_expansion<M: PrimeModulus>() {
         let mut scratch = vec![
             PastaField::ZERO;
             expansion
-                .coefficient_scratch(options)
+                .coefficient_scratch_with(options)
                 .unwrap()
                 .field_elements
         ];
         expansion
-            .coefficients(&coefficients, &mut output, options, &Threads, &mut scratch)
+            .coefficients_with(&coefficients, &mut output, options, &Threads, &mut scratch)
             .unwrap();
         let mut natural = vec![PastaField::ZERO; domain.size()];
         expansion
@@ -567,7 +589,7 @@ fn large_expansion<M: PrimeModulus>() {
         assert_eq!(natural, expected);
         let evaluations = reference_coset(&coefficients, base_domain.subgroup());
         expansion
-            .evaluations(&evaluations, &mut output, options, &Threads, &mut scratch)
+            .evaluations_with(&evaluations, &mut output, options, &Threads, &mut scratch)
             .unwrap();
         expansion
             .layout()
@@ -577,7 +599,7 @@ fn large_expansion<M: PrimeModulus>() {
         let factor = expansion.view(&output).unwrap();
         let mut product = vec![PastaField::ZERO; domain.size()];
         expansion
-            .short_product(
+            .short_product_with(
                 &coefficients[..5],
                 factor,
                 &mut product,
@@ -649,12 +671,12 @@ impl Executor for FailAt {
 
 #[test]
 fn every_expansion_transform_uses_the_callers_executor_and_options() {
-    let base = Plan::without_tables(Domain::<PallasBase>::new(6).unwrap().subgroup());
+    let base = Transform::new(Domain::<PallasBase>::new(6).unwrap().subgroup());
     let coefficients = inputs(base.domain().size());
-    let options = ExpansionOptions {
+    let options = ExpansionStrategy {
         // With no joins across residues, every observed join is intra-residue.
         max_residue_tasks: 1,
-        transform: ExecutionOptions {
+        transform: Strategy {
             tile_len: 8,
             columns_per_task: 3,
             max_tasks: 4,
@@ -662,17 +684,17 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
     };
     let mut scratch = vec![
         Fp::ZERO;
-        base.scratch_requirements(options.transform)
+        base.scratch_requirements_with(options.transform)
             .unwrap()
             .field_elements
     ];
     let executor = CountJoins::default();
     let mut evaluations = coefficients.clone();
-    base.forward(&mut evaluations, options.transform, &executor, &mut scratch)
+    base.forward_with(&mut evaluations, options.transform, &executor, &mut scratch)
         .unwrap();
     let forward_joins = executor.take();
     let mut inverse = evaluations.clone();
-    base.inverse(&mut inverse, options.transform, &executor, &mut scratch)
+    base.inverse_with(&mut inverse, options.transform, &executor, &mut scratch)
         .unwrap();
     let inverse_joins = executor.take();
     assert!(forward_joins > 0 && inverse_joins > 0);
@@ -686,19 +708,19 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
         let residues = expansion.layout().residues();
         let mut output = vec![Fp::ZERO; domain.size()];
         expansion
-            .coefficients(&coefficients, &mut output, options, &executor, &mut scratch)
+            .coefficients_with(&coefficients, &mut output, options, &executor, &mut scratch)
             .unwrap();
         assert!(executor.take() >= residues);
         let expected = output.clone();
         expansion
-            .evaluations(&evaluations, &mut output, options, &executor, &mut scratch)
+            .evaluations_with(&evaluations, &mut output, options, &executor, &mut scratch)
             .unwrap();
         assert!(executor.take() > residues);
         assert_eq!(output, expected);
         let ones = vec![Fp::ONE; domain.size()];
         let factor = expansion.view(&ones).unwrap();
         expansion
-            .short_product(
+            .short_product_with(
                 &coefficients[..5],
                 factor,
                 &mut output,
@@ -717,19 +739,19 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
 
         // Whole transforms still allow callers to parallelize only residues
         // without reserving scratch for tiled transforms.
-        let options = ExpansionOptions {
+        let options = ExpansionStrategy {
             max_residue_tasks: 3,
-            ..ExpansionOptions::serial()
+            ..ExpansionStrategy::serial()
         };
         assert_eq!(
             expansion
-                .coefficient_scratch(options)
+                .coefficient_scratch_with(options)
                 .unwrap()
                 .field_elements,
             0
         );
         expansion
-            .coefficients(&coefficients, &mut output, options, &executor, &mut [])
+            .coefficients_with(&coefficients, &mut output, options, &executor, &mut [])
             .unwrap();
         assert_eq!(executor.take(), residues.min(3) - 1);
         assert_eq!(output, expected);
@@ -747,7 +769,7 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
             let extended = Domain::new(6 + extra).unwrap().coset(shift).unwrap();
             let expected = reference_coset(&coefficients, extended);
             let mut scales = vec![PastaField::ZERO; extended.size()];
-            let scales = Expansion::new(Plan::without_tables(subgroup), extended, None)
+            let scales = Expansion::new(Transform::new(subgroup), extended, None)
                 .unwrap()
                 .prepare_scales(&mut scales)
                 .unwrap();
@@ -758,32 +780,28 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
                     inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
                     inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 };
-                let expansion = Expansion::new(
-                    Plan::new(tables.bind(subgroup).unwrap()),
-                    extended,
-                    Some(scales),
-                )
-                .unwrap();
+                let expansion =
+                    Expansion::new(tables.bind(subgroup).unwrap(), extended, Some(scales)).unwrap();
                 for transform in [
-                    ExecutionOptions::serial(),
-                    ExecutionOptions {
+                    Strategy::serial(),
+                    Strategy {
                         tile_len: 8,
                         columns_per_task: 3,
                         max_tasks: 3,
                     },
                 ] {
-                    let options = ExpansionOptions {
+                    let options = ExpansionStrategy {
                         max_residue_tasks: 3,
                         transform,
                     };
                     let count = expansion
-                        .evaluation_scratch(options)
+                        .evaluation_scratch_with(options)
                         .unwrap()
                         .field_elements;
                     let mut scratch = vec![PastaField::ONE; count + 1];
                     let mut output = vec![PastaField::ZERO; extended.size()];
                     expansion
-                        .evaluations(
+                        .evaluations_with(
                             &evaluations,
                             &mut output,
                             options,
@@ -812,13 +830,13 @@ fn prepared_evaluation_expansion_supports_every_base_table_subset() {
 }
 
 fn constant_prefixes<M: PrimeModulus>() {
-    let base = Plan::without_tables(Domain::<M>::new(6).unwrap().subgroup());
-    let transform = ExecutionOptions {
+    let base = Transform::new(Domain::<M>::new(6).unwrap().subgroup());
+    let transform = Strategy {
         tile_len: 8,
         columns_per_task: 3,
         max_tasks: 4,
     };
-    let options = ExpansionOptions {
+    let options = ExpansionStrategy {
         max_residue_tasks: 3,
         transform,
     };
@@ -827,13 +845,17 @@ fn constant_prefixes<M: PrimeModulus>() {
     for extra in [0, 1, 3] {
         for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
             let domain = Domain::new(6 + extra).unwrap().coset(shift).unwrap();
-            let plan = Plan::without_tables(domain);
+            let plan = Transform::new(domain);
             let expansion = Expansion::new(base, domain, None).unwrap();
             let required = expansion
-                .coefficient_scratch(options)
+                .coefficient_scratch_with(options)
                 .unwrap()
                 .field_elements
-                .max(plan.scratch_requirements(transform).unwrap().field_elements);
+                .max(
+                    plan.scratch_requirements_with(transform)
+                        .unwrap()
+                        .field_elements,
+                );
             let mut scratch = vec![PastaField::ONE; required + 1];
             let mut output = vec![PastaField::ZERO; domain.size()];
             for coefficients in [&constant[..0], &constant[..]] {
@@ -841,7 +863,7 @@ fn constant_prefixes<M: PrimeModulus>() {
                 for expanded in [false, true] {
                     if expanded {
                         expansion
-                            .coefficients(
+                            .coefficients_with(
                                 coefficients,
                                 &mut output,
                                 options,
@@ -850,7 +872,7 @@ fn constant_prefixes<M: PrimeModulus>() {
                             )
                             .unwrap();
                     } else {
-                        plan.forward_prefix(
+                        plan.forward_prefix_with(
                             coefficients,
                             &mut output,
                             transform,
@@ -866,7 +888,7 @@ fn constant_prefixes<M: PrimeModulus>() {
             }
             let factor = inputs::<M>(domain.size());
             expansion
-                .short_product(
+                .short_product_with(
                     &constant,
                     expansion.view(&factor).unwrap(),
                     &mut output,
@@ -886,7 +908,7 @@ fn constant_prefixes<M: PrimeModulus>() {
             if extra == 0 && shift == PastaField::ONE {
                 let input = inputs::<M>(base.domain().size());
                 expansion
-                    .evaluations(&input, &mut output, options, &executor, &mut scratch)
+                    .evaluations_with(&input, &mut output, options, &executor, &mut scratch)
                     .unwrap();
                 assert_eq!(output, input);
                 assert_eq!(executor.take(), 0);
@@ -904,14 +926,17 @@ fn constant_prefixes_and_subgroup_copies_skip_transform_scheduling() {
 
 #[test]
 fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
-    let base = Plan::without_tables(Domain::<PallasBase>::new(6).unwrap().subgroup());
+    let base = Transform::new(Domain::<PallasBase>::new(6).unwrap().subgroup());
     let input = inputs(base.domain().size());
-    let transform = ExecutionOptions {
+    let transform = Strategy {
         tile_len: 8,
         columns_per_task: 3,
         max_tasks: 3,
     };
-    let per_transform = base.scratch_requirements(transform).unwrap().field_elements;
+    let per_transform = base
+        .scratch_requirements_with(transform)
+        .unwrap()
+        .field_elements;
     for extra in [0, 1, 3] {
         let expansion =
             Expansion::new(base, Domain::new(6 + extra).unwrap().subgroup(), None).unwrap();
@@ -919,16 +944,16 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
         let factors = output.clone();
         let factor = expansion.view(&factors).unwrap();
         for tasks in [1, 2, 3, usize::MAX] {
-            let options = ExpansionOptions {
+            let options = ExpansionStrategy {
                 max_residue_tasks: tasks,
                 transform,
             };
             let count = expansion
-                .coefficient_scratch(options)
+                .coefficient_scratch_with(options)
                 .unwrap()
                 .field_elements;
             let eval_count = expansion
-                .evaluation_scratch(options)
+                .evaluation_scratch_with(options)
                 .unwrap()
                 .field_elements;
             assert_eq!(
@@ -945,15 +970,27 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
                 provided: count - 1,
             });
             assert_eq!(
-                expansion.coefficients(&input, &mut output, options, &SerialExecutor, &mut scratch),
+                expansion.coefficients_with(
+                    &input,
+                    &mut output,
+                    options,
+                    &SerialExecutor,
+                    &mut scratch
+                ),
                 error
             );
             assert_eq!(
-                expansion.coefficients(&[], &mut output, options, &SerialExecutor, &mut scratch),
+                expansion.coefficients_with(
+                    &[],
+                    &mut output,
+                    options,
+                    &SerialExecutor,
+                    &mut scratch
+                ),
                 error
             );
             assert_eq!(
-                expansion.short_product(
+                expansion.short_product_with(
                     &input[..5],
                     factor,
                     &mut output,
@@ -964,7 +1001,7 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
                 error
             );
             assert_eq!(
-                expansion.evaluations(
+                expansion.evaluations_with(
                     &input,
                     &mut output,
                     options,
@@ -979,31 +1016,31 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
             assert_eq!(output, factors);
             assert!(scratch.iter().all(|value| *value == Fp::ONE));
         }
-        let valid = ExpansionOptions {
+        let valid = ExpansionStrategy {
             max_residue_tasks: 2,
             transform,
         };
         for options in [
-            ExpansionOptions {
+            ExpansionStrategy {
                 max_residue_tasks: 0,
                 ..valid
             },
-            ExpansionOptions {
-                transform: ExecutionOptions {
+            ExpansionStrategy {
+                transform: Strategy {
                     tile_len: 3,
                     ..transform
                 },
                 ..valid
             },
-            ExpansionOptions {
-                transform: ExecutionOptions {
+            ExpansionStrategy {
+                transform: Strategy {
                     columns_per_task: 0,
                     ..transform
                 },
                 ..valid
             },
-            ExpansionOptions {
-                transform: ExecutionOptions {
+            ExpansionStrategy {
+                transform: Strategy {
                     max_tasks: 0,
                     ..transform
                 },
@@ -1012,23 +1049,35 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
         ] {
             let mut scratch = vec![Fp::ONE; 512];
             assert_eq!(
-                expansion.coefficient_scratch(options),
+                expansion.coefficient_scratch_with(options),
                 Err(FftError::InvalidExecution)
             );
             assert_eq!(
-                expansion.evaluation_scratch(options),
+                expansion.evaluation_scratch_with(options),
                 Err(FftError::InvalidExecution)
             );
             assert_eq!(
-                expansion.coefficients(&input, &mut output, options, &SerialExecutor, &mut scratch),
+                expansion.coefficients_with(
+                    &input,
+                    &mut output,
+                    options,
+                    &SerialExecutor,
+                    &mut scratch
+                ),
                 Err(FftError::InvalidExecution)
             );
             assert_eq!(
-                expansion.evaluations(&input, &mut output, options, &SerialExecutor, &mut scratch),
+                expansion.evaluations_with(
+                    &input,
+                    &mut output,
+                    options,
+                    &SerialExecutor,
+                    &mut scratch
+                ),
                 Err(FftError::InvalidExecution)
             );
             assert_eq!(
-                expansion.short_product(
+                expansion.short_product_with(
                     &input[..5],
                     factor,
                     &mut output,
@@ -1075,8 +1124,8 @@ fn classed<M: PrimeModulus>(log: u32) {
     let smallest_values = reference_coset(&smallest_coefficients, smallest);
     let prepared = Prepared::new(domain);
     let small_prepared = Prepared::new(smaller);
-    let plan = Plan::new(prepared.tables().bind(domain).unwrap());
-    let small_plan = Plan::new(small_prepared.tables().bind(smaller).unwrap());
+    let plan = prepared.tables().bind(domain).unwrap();
+    let small_plan = small_prepared.tables().bind(smaller).unwrap();
     for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
         let layout = if order == ElementOrder::Natural {
             EvaluationLayout::Natural
@@ -1099,8 +1148,8 @@ fn classed<M: PrimeModulus>(log: u32) {
         }
         for tasks in [1, 3] {
             let mut values = [full.clone(), small.clone(), smallest_values.clone()];
-            let transforms = [plan, small_plan, Plan::without_tables(smallest)].map(|plan| {
-                run::FftPlan::new(
+            let transforms = [plan, small_plan, Transform::new(smallest)].map(|plan| {
+                run::FftPlan::with_strategy(
                     plan,
                     TransformRequest {
                         input_order: if plan.domain().size() == smallest.size() {
@@ -1115,11 +1164,11 @@ fn classed<M: PrimeModulus>(log: u32) {
                 )
                 .unwrap()
             });
-            let plan = run::InterpolationPlan::new(transforms, false).unwrap();
+            let plan = run::InterpolationPlan::with_transforms(transforms, false).unwrap();
             let mut scratch: [_; 3] = core::array::from_fn(|i| {
                 vec![PastaField::ONE; plan.snapshot_fields(i).unwrap() + 2]
             });
-            plan.execute(
+            plan.execute_with(
                 values.each_mut().map(Vec::as_mut_slice),
                 scratch.each_mut().map(Vec::as_mut_slice),
                 core::num::NonZeroUsize::new(tasks).unwrap(),
@@ -1210,8 +1259,8 @@ fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
 #[test]
 fn size_queries_validate_without_constructing_domains() {
     const _: () = {
-        let serial = ExecutionOptions::serial();
-        let expansion = ExpansionOptions::serial();
+        let serial = Strategy::serial();
+        let expansion = ExpansionStrategy::serial();
         let tables = match TableRequirements::for_size(1) {
             Ok(required) => required,
             Err(_) => panic!("singleton rejected"),
@@ -1252,19 +1301,19 @@ fn size_queries_validate_without_constructing_domains() {
             index += 1;
         }
         let invalid_options = [
-            ExecutionOptions {
+            Strategy {
                 tile_len: 0,
                 ..serial
             },
-            ExecutionOptions {
+            Strategy {
                 tile_len: 3,
                 ..serial
             },
-            ExecutionOptions {
+            Strategy {
                 columns_per_task: 0,
                 ..serial
             },
-            ExecutionOptions {
+            Strategy {
                 max_tasks: 0,
                 ..serial
             },
@@ -1276,7 +1325,7 @@ fn size_queries_validate_without_constructing_domains() {
                 options.requirements(1),
                 Err(FftError::InvalidExecution)
             ));
-            let expansion = ExpansionOptions {
+            let expansion = ExpansionStrategy {
                 transform: options,
                 ..expansion
             };
@@ -1290,7 +1339,7 @@ fn size_queries_validate_without_constructing_domains() {
             ));
             index += 1;
         }
-        let invalid = ExpansionOptions {
+        let invalid = ExpansionStrategy {
             max_residue_tasks: 0,
             ..expansion
         };
@@ -1316,30 +1365,27 @@ fn size_queries_validate_without_constructing_domains() {
         let size = 1usize << log;
         let expected = Domain::<PallasBase>::for_size(size).map(|_| ());
         assert_eq!(TableRequirements::for_size(size).map(|_| ()), expected);
+        assert_eq!(Strategy::serial().requirements(size).map(|_| ()), expected);
         assert_eq!(
-            ExecutionOptions::serial().requirements(size).map(|_| ()),
-            expected
-        );
-        assert_eq!(
-            ExpansionOptions::serial()
+            ExpansionStrategy::serial()
                 .coefficient_requirements(size, size)
                 .map(|_| ()),
             expected
         );
         assert_eq!(
-            ExpansionOptions::serial()
+            ExpansionStrategy::serial()
                 .evaluation_requirements(1, size)
                 .map(|_| ()),
             expected
         );
     }
-    let saturated = ExecutionOptions {
+    let saturated = Strategy {
         tile_len: 4,
         columns_per_task: usize::MAX,
         max_tasks: usize::MAX,
     };
     assert!(saturated.requirements(16).is_ok());
-    let expansion = ExpansionOptions {
+    let expansion = ExpansionStrategy {
         max_residue_tasks: usize::MAX,
         transform: saturated,
     };
@@ -1376,29 +1422,32 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
             1u64 << 32
         );
     }
-    let plan = Plan::without_tables(domain);
-    let options = ExecutionOptions {
+    let plan = Transform::new(domain);
+    let options = Strategy {
         tile_len: 8,
         columns_per_task: 3,
         max_tasks: 3,
     };
-    let required = plan.scratch_requirements(options).unwrap().field_elements;
+    let required = plan
+        .scratch_requirements_with(options)
+        .unwrap()
+        .field_elements;
     let original = inputs::<PallasBase>(64);
     let mut output = original.clone();
     let mut scratch = vec![Fp::ONE; required - 1];
     assert!(matches!(
-        plan.forward(&mut output, options, &SerialExecutor, &mut scratch),
+        plan.forward_with(&mut output, options, &SerialExecutor, &mut scratch),
         Err(FftError::ScratchTooSmall { .. })
     ));
     assert_eq!(output, original);
     assert_eq!(scratch, vec![Fp::ONE; required - 1]);
     assert!(matches!(
-        plan.inverse_bit_reversed(&mut output, options, &SerialExecutor, &mut scratch),
+        plan.inverse_bit_reversed_with(&mut output, options, &SerialExecutor, &mut scratch),
         Err(FftError::ScratchTooSmall { .. })
     ));
     assert_eq!(output, original);
     assert!(matches!(
-        plan.forward_into(
+        plan.forward_into_with(
             &original,
             &mut output,
             options,
@@ -1410,7 +1459,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     assert_eq!(output, original);
     assert_eq!(scratch, vec![Fp::ONE; required - 1]);
     assert!(matches!(
-        plan.inverse_into(
+        plan.inverse_into_with(
             &original,
             &mut output,
             options,
@@ -1425,20 +1474,20 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         let input = vec![Fp::ONE; input_len];
         let mut output = vec![Fp::ZERO; output_len];
         let forward_error = plan
-            .forward_into(
+            .forward_into_with(
                 &input,
                 &mut output,
-                ExecutionOptions::serial(),
+                Strategy::serial(),
                 &SerialExecutor,
                 &mut [],
             )
             .unwrap_err();
         assert_eq!(output, vec![Fp::ZERO; output_len]);
         let error = plan
-            .inverse_into(
+            .inverse_into_with(
                 &input,
                 &mut output,
-                ExecutionOptions::serial(),
+                Strategy::serial(),
                 &SerialExecutor,
                 &mut [],
             )
@@ -1464,9 +1513,9 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         assert_eq!(output, vec![Fp::ZERO; output_len]);
         if output_len != 64 {
             assert!(matches!(
-                plan.inverse_bit_reversed(
+                plan.inverse_bit_reversed_with(
                     &mut output,
-                    ExecutionOptions::serial(),
+                    Strategy::serial(),
                     &SerialExecutor,
                     &mut []
                 ),
@@ -1479,28 +1528,28 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         }
     }
     for options in [
-        ExecutionOptions {
+        Strategy {
             tile_len: 3,
             ..options
         },
-        ExecutionOptions {
+        Strategy {
             columns_per_task: 0,
             ..options
         },
-        ExecutionOptions {
+        Strategy {
             max_tasks: 0,
             ..options
         },
     ] {
         assert_eq!(
-            plan.forward(&mut output, options, &SerialExecutor, &mut []),
+            plan.forward_with(&mut output, options, &SerialExecutor, &mut []),
             Err(FftError::InvalidExecution)
         );
         assert_eq!(output, original);
     }
     let inverse = |domain| {
-        run::FftPlan::new(
-            Plan::without_tables(domain),
+        run::FftPlan::with_strategy(
+            Transform::new(domain),
             TransformRequest::new(Direction::Inverse),
             core::num::NonZeroUsize::new(8).unwrap(),
             Codelet::Radix2,
@@ -1508,7 +1557,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         .unwrap()
     };
     assert!(matches!(
-        run::InterpolationPlan::new(
+        run::InterpolationPlan::with_transforms(
             [inverse(domain), inverse(Domain::new(7).unwrap().subgroup()),],
             false
         ),
@@ -1516,14 +1565,14 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     ));
     assert_eq!(output, original);
     let expansion = Expansion::new(plan, Domain::new(7).unwrap().subgroup(), None).unwrap();
-    let options = ExpansionOptions {
+    let options = ExpansionStrategy {
         max_residue_tasks: 2,
         transform: options,
     };
     let mut expanded = [Fp::ONE; 128];
     assert!(
         expansion
-            .evaluations(&original, &mut expanded, options, &SerialExecutor, &mut [])
+            .evaluations_with(&original, &mut expanded, options, &SerialExecutor, &mut [])
             .is_err()
     );
     assert_eq!(expanded, [Fp::ONE; 128]);
@@ -1533,7 +1582,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         actual: 65,
     };
     assert_eq!(
-        expansion.coefficients(
+        expansion.coefficients_with(
             &[Fp::ONE; 65],
             &mut expanded,
             options,
@@ -1544,10 +1593,10 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     );
     assert_eq!(expanded, [Fp::ONE; 128]);
     assert_eq!(
-        plan.forward_prefix(
+        plan.forward_prefix_with(
             &[Fp::ONE; 65],
             &mut output,
-            ExecutionOptions::serial(),
+            Strategy::serial(),
             &SerialExecutor,
             &mut []
         ),
@@ -1562,11 +1611,11 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
     let factor = expansion.view(&factor_values).unwrap();
     for len in [0, 65] {
         let error = expansion
-            .short_product(
+            .short_product_with(
                 &vec![Fp::ONE; len],
                 factor,
                 &mut expanded,
-                ExpansionOptions::serial(),
+                ExpansionStrategy::serial(),
                 &SerialExecutor,
                 &mut [],
             )
@@ -1639,12 +1688,8 @@ fn table_preparation_checks_all_lengths_before_writing_and_validates_contents() 
         prepared.tables().validate(domain),
         Err(FftError::InvalidTables)
     );
-    let expansion = Expansion::new(
-        Plan::without_tables(domain.domain().subgroup()),
-        domain,
-        None,
-    )
-    .unwrap();
+    let expansion =
+        Expansion::new(Transform::new(domain.domain().subgroup()), domain, None).unwrap();
     let mut scales = [Fp::ZERO; 8];
     expansion.prepare_scales(&mut scales).unwrap();
     scales[2] = Fp::ZERO;
@@ -1704,16 +1749,21 @@ fn executor_panics_leave_public_buffers_canonical() {
         }
     }
     let domain = Domain::<PallasBase>::new(6).unwrap().subgroup();
-    let plan = Plan::without_tables(domain);
-    let options = ExecutionOptions {
+    let plan = Transform::new(domain);
+    let options = Strategy {
         tile_len: 8,
         columns_per_task: 4,
         max_tasks: 2,
     };
     let mut values = inputs(domain.size());
-    let mut scratch = vec![Fp::ZERO; plan.scratch_requirements(options).unwrap().field_elements];
+    let mut scratch = vec![
+        Fp::ZERO;
+        plan.scratch_requirements_with(options)
+            .unwrap()
+            .field_elements
+    ];
     assert!(
-        catch_unwind(AssertUnwindSafe(|| plan.forward(
+        catch_unwind(AssertUnwindSafe(|| plan.forward_with(
             &mut values,
             options,
             &Panics,
@@ -1750,7 +1800,7 @@ fn executor_panics_leave_public_buffers_canonical() {
 #[test]
 fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
     fn check<M: PrimeModulus>() {
-        let options = ExecutionOptions {
+        let options = Strategy {
             tile_len: 16,
             columns_per_task: 3,
             max_tasks: 3,
@@ -1766,11 +1816,14 @@ fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
             let domain = subgroup.coset(shift).unwrap();
             let prepared = Prepared::new(domain);
             for tables in [Tables::default(), prepared.tables()] {
-                let plan = Plan::new(tables.bind(domain).unwrap());
-                let count = plan.scratch_requirements(options).unwrap().field_elements;
+                let plan = tables.bind(domain).unwrap();
+                let count = plan
+                    .scratch_requirements_with(options)
+                    .unwrap()
+                    .field_elements;
                 let mut scratch = vec![PastaField::ONE; count + 2];
                 let joins = CountJoins::default();
-                plan.inverse(&mut input.clone(), options, &joins, &mut scratch)
+                plan.inverse_with(&mut input.clone(), options, &joins, &mut scratch)
                     .unwrap();
                 // Interrupt each scheduling boundary, including after terminal
                 // kernels have disarmed scratch guards and after only some
@@ -1783,7 +1836,7 @@ fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
                         index,
                     };
                     assert!(
-                        catch_unwind(AssertUnwindSafe(|| plan.inverse(
+                        catch_unwind(AssertUnwindSafe(|| plan.inverse_with(
                             &mut values,
                             options,
                             &executor,
@@ -1804,11 +1857,11 @@ fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
 
 #[test]
 fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
-    let base = Plan::without_tables(Domain::<PallasBase>::new(6).unwrap().subgroup());
+    let base = Transform::new(Domain::<PallasBase>::new(6).unwrap().subgroup());
     let expansion = Expansion::new(base, Domain::new(9).unwrap().subgroup(), None).unwrap();
-    let options = ExpansionOptions {
+    let options = ExpansionStrategy {
         max_residue_tasks: 3,
-        transform: ExecutionOptions {
+        transform: Strategy {
             tile_len: 8,
             columns_per_task: 3,
             max_tasks: 3,
@@ -1818,12 +1871,12 @@ fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
     let mut scratch = vec![
         Fp::ONE;
         expansion
-            .coefficient_scratch(options)
+            .coefficient_scratch_with(options)
             .unwrap()
             .field_elements
     ];
     let count = CountJoins::default();
-    base.inverse(&mut input.clone(), options.transform, &count, &mut scratch)
+    base.inverse_with(&mut input.clone(), options.transform, &count, &mut scratch)
         .unwrap();
     let inverse_joins = count.take();
     let factors = vec![Fp::ONE; expansion.layout().size()];
@@ -1837,9 +1890,21 @@ fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
         };
         assert!(
             catch_unwind(AssertUnwindSafe(|| match operation {
-                0 => expansion.coefficients(&input, &mut output, options, &executor, &mut scratch),
-                1 => expansion.evaluations(&input, &mut output, options, &executor, &mut scratch),
-                _ => expansion.short_product(
+                0 => expansion.coefficients_with(
+                    &input,
+                    &mut output,
+                    options,
+                    &executor,
+                    &mut scratch
+                ),
+                1 => expansion.evaluations_with(
+                    &input,
+                    &mut output,
+                    options,
+                    &executor,
+                    &mut scratch
+                ),
+                _ => expansion.short_product_with(
                     &input[..5],
                     factor,
                     &mut output,

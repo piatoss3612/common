@@ -91,6 +91,24 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         values: &mut [PastaField<M>],
         factor: Option<&[PastaField<M>]>,
         scratch: &mut [PastaField<M>],
+        executor: &E,
+    ) -> Result<(), FftError> {
+        self.execute_with(
+            input,
+            values,
+            factor,
+            scratch,
+            NonZeroUsize::new(self.budget.get()).unwrap(),
+            executor,
+        )
+    }
+
+    pub(crate) fn execute_with<E: Executor>(
+        self,
+        input: Option<&[PastaField<M>]>,
+        values: &mut [PastaField<M>],
+        factor: Option<&[PastaField<M>]>,
+        scratch: &mut [PastaField<M>],
         max_tasks: NonZeroUsize,
         executor: &E,
     ) -> Result<(), FftError> {
@@ -298,7 +316,15 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
     /// An empty batch otherwise needs no scratch. Returns
     /// [`FftError::SizeOverflow`] if the scratch count overflows `usize` or its
     /// field slice would exceed `isize::MAX` bytes.
-    pub fn batch_fields(self, count: usize, max_tasks: NonZeroUsize) -> Result<usize, FftError> {
+    pub fn batch_fields(self, count: usize) -> Result<usize, FftError> {
+        self.batch_fields_with(count, NonZeroUsize::new(self.budget.get()).unwrap())
+    }
+
+    pub(crate) fn batch_fields_with(
+        self,
+        count: usize,
+        max_tasks: NonZeroUsize,
+    ) -> Result<usize, FftError> {
         let (plan, jobs, _) = self.batch_geometry(count, max_tasks)?;
         super::super::check_field_count(
             plan.retained_fields()
@@ -315,11 +341,34 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         if self.separate() || self.request.support != InputSupport::Full {
             return Err(FftError::InvalidExecution);
         }
-        let jobs = count.min(max_tasks.get());
-        let inner = NonZeroUsize::new(max_tasks.get() / jobs.max(1)).unwrap();
-        if let Some((columns, tasks)) = self.columns {
-            self.columns = Some((columns, tasks.min(inner.get())));
-        }
+        let mut jobs = count.min(max_tasks.get());
+        let inner = loop {
+            let inner = NonZeroUsize::new(max_tasks.get() / jobs.max(1)).unwrap();
+            if let Some(limit) = self.memory_limit {
+                let options = crate::exec::ExecutionOptions::DEFAULT
+                    .with_task_budget(crate::exec::TaskBudget::new(inner.get()).unwrap())
+                    .with_memory_limit(limit / jobs.max(1));
+                self.columns = super::super::Strategy::columns(
+                    self.tile,
+                    self.fragments(),
+                    options,
+                    usize::MAX,
+                );
+                if self
+                    .retained_fields()
+                    .saturating_mul(jobs)
+                    .saturating_mul(core::mem::size_of::<PastaField<M>>())
+                    > limit
+                    && jobs > 1
+                {
+                    jobs = jobs.div_ceil(2);
+                    continue;
+                }
+            } else if let Some((columns, tasks)) = self.columns {
+                self.columns = Some((columns, tasks.min(inner.get())));
+            }
+            break inner;
+        };
         Ok((self, jobs, inner))
     }
 
@@ -327,14 +376,28 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
     ///
     /// Each consecutive [`Self::size`]-element block holds one polynomial and
     /// follows the order and scaling contract of [`Self::execute`]. Scratch
-    /// must meet [`Self::batch_fields`] for this polynomial count and the same
-    /// `max_tasks`. Empty batches are accepted when the plan supports batching.
+    /// must meet [`Self::batch_fields`] for this polynomial count. Empty batches
+    /// are accepted when the plan supports batching.
     ///
     /// Returns [`FftError::InvalidLayout`] if `values.len()` is not a multiple
     /// of [`Self::size`], or [`FftError::ScratchTooSmall`] for insufficient
-    /// scratch. Plan and size errors follow [`Self::batch_fields`]. All
+    /// scratch. Transform and size errors follow [`Self::batch_fields`]. All
     /// validation precedes writes; panic behavior follows [`Self::execute`].
     pub fn execute_batch<E: Executor>(
+        self,
+        values: &mut [PastaField<M>],
+        scratch: &mut [PastaField<M>],
+        executor: &E,
+    ) -> Result<(), FftError> {
+        self.execute_batch_with(
+            values,
+            scratch,
+            NonZeroUsize::new(self.budget.get()).unwrap(),
+            executor,
+        )
+    }
+
+    pub(crate) fn execute_batch_with<E: Executor>(
         self,
         values: &mut [PastaField<M>],
         scratch: &mut [PastaField<M>],
@@ -345,7 +408,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
             return Err(FftError::InvalidLayout);
         }
         let count = values.len() / self.size();
-        let fields = self.batch_fields(count, max_tasks)?;
+        let fields = self.batch_fields_with(count, max_tasks)?;
         super::super::ScratchRequirements {
             field_elements: fields,
         }
@@ -361,7 +424,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         ) {
             if jobs <= 1 {
                 for values in values.chunks_exact_mut(plan.size()) {
-                    plan.execute(None, values, None, scratch, inner, executor)
+                    plan.execute_with(None, values, None, scratch, inner, executor)
                         .expect("validated batch buffers");
                 }
             } else {

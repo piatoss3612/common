@@ -31,12 +31,19 @@ pub struct EisensteinScalar<C: PastaCurve> {
 }
 
 impl<C: PastaCurve> EisensteinScalar<C> {
-    /// Decomposes a reduced scalar and records its joint doubling-ladder digits.
+    /// Records joint doubling-ladder digits and eligibility for affine batch ladders.
+    ///
+    /// Eligibility depends only on the scalar and can be reused across any
+    /// nonidentity bases on this curve. Scalars unsuitable for affine batch
+    /// arithmetic remain valid for multiplication. Preparing this reusable
+    /// value includes that eligibility check; individual table
+    /// multiplication need not perform it. Preparation is variable-time and
+    /// allocates no storage.
     ///
     /// The scalar must satisfy [`PastaField`]'s reduced-residue invariant.
     /// Violations remain memory-safe but can cause panics or incorrect results.
     pub fn new(scalar: &PastaField<C::Scalar>) -> Self {
-        Self::from_canonical(scalar.to_canonical_uint())
+        Self::for_single(scalar).certify_batch()
     }
 
     /// Recodes a canonical scalar integer into signed Eisenstein digits.
@@ -54,15 +61,11 @@ impl<C: PastaCurve> EisensteinScalar<C> {
         }
     }
 
-    /// Retains the check for exceptional intermediates in affine batch ladders.
-    ///
-    /// The variable-time check depends only on the scalar and applies to every
-    /// nonidentity base on this curve. [`super::EisensteinTableBatch::mul_prepared`]
-    /// reuses its result across calls; [`Self::new`] leaves it unevaluated.
-    /// A ladder with exceptional intermediates uses complete projective
-    /// arithmetic. This choice concerns mathematical validity and performance;
-    /// memory safety does not depend on calling this method.
-    pub fn certify_batch(mut self) -> Self {
+    pub(super) fn for_single(scalar: &PastaField<C::Scalar>) -> Self {
+        Self::from_canonical(scalar.to_canonical_uint())
+    }
+
+    fn certify_batch(mut self) -> Self {
         self.batch_safe = Some(super::eisenstein_batch::ladder_safe::<C>(self.digits()));
         self
     }
@@ -314,7 +317,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
     /// requirements. Uses bounded stack storage without caller scratch or
     /// allocation. Execution is variable-time.
     pub fn mul(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
-        self.mul_prepared(&EisensteinScalar::new(scalar))
+        self.mul_prepared(&EisensteinScalar::for_single(scalar))
     }
 
     /// Multiplies using digits that can be reused across tables and batches.

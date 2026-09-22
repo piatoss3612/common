@@ -1,9 +1,11 @@
 use super::execution::Geometry;
 use super::finish::InverseFinish;
 use super::{
-    BoundTables, CoefficientView, CosetDomain, ExecutionOptions, Executor, FftError, PastaField,
-    PrimeModulus, ScratchRequirements, Tables, check_length, check_prefix, reverse,
+    CoefficientView, CosetDomain, Executor, FftError, PastaField, PrimeModulus,
+    ScratchRequirements, Strategy, Tables, reverse,
 };
+#[cfg(test)]
+use super::{check_length, check_prefix};
 use crate::exec::{TaskBudget, for_each_chunk_mut};
 use crate::field::fft::{
     Guard, butterfly, divide_by_power_of_two, normalize, scale as scale_loose,
@@ -20,36 +22,37 @@ use crate::field::fft::{
 /// methods accepting other orders document them. A singleton transform preserves
 /// its sole value.
 ///
-/// Plans can be shared across executions with independent mutable buffers.
+/// Transforms can be shared across executions with independent mutable buffers.
 /// Every full input and output slice must contain exactly `n` fields.
-/// [`Self::forward_prefix`] accepts shorter coefficient inputs.
-/// [`super::run::FftPlan`] also supports evaluation prefixes for inverse transforms.
-/// Scratch for direct transforms must meet [`Self::scratch_requirements`];
-/// [`super::run::FftPlan::retained_fields`] sizes its configured transforms.
-/// Incorrect buffer lengths return
-/// [`FftError::LengthMismatch`]; insufficient scratch returns
-/// [`FftError::ScratchTooSmall`]. Invalid execution options or storage overflow
-/// return the errors described by [`Self::scratch_requirements`].
+/// [`Self::execute`] accepts shorter coefficient or evaluation inputs through
+/// [`super::TransformRequest`]. Direct transforms adapt to scratch capacity;
+/// [`Self::scratch_requirements`] reports the preferred size under the given
+/// resource limits. [`super::run::FftPlan::retained_fields`] sizes the fixed
+/// workspace of a resolved plan.
+/// Direct transforms accept empty scratch. Resolved plans require their declared
+/// workspace, returning [`FftError::ScratchTooSmall`] when it is absent.
+/// Incorrect full buffer lengths return [`FftError::LengthMismatch`]; request
+/// validation follows [`Self::execute`].
 ///
 /// Table contents follow [`Tables`]' validity contract. The module's
 /// [validation and working-storage rules](super) apply to all executions,
 /// including errors and panics.
 #[derive(Clone, Copy)]
-pub struct Plan<'a, M: PrimeModulus> {
+pub struct Transform<'a, M: PrimeModulus> {
     pub(super) domain: CosetDomain<M>,
     pub(super) tables: Tables<'a, M>,
 }
 
-impl<M: PrimeModulus> core::fmt::Debug for Plan<'_, M> {
+impl<M: PrimeModulus> core::fmt::Debug for Transform<'_, M> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Plan")
+        f.debug_struct("Transform")
             .field("domain", &self.domain)
             .field("tables", &self.tables)
             .finish()
     }
 }
 
-impl<'a, M: PrimeModulus> Plan<'a, M> {
+impl<'a, M: PrimeModulus> Transform<'a, M> {
     // A detached column task has already gathered its complete panel. It
     // never joins or obtains scratch while executing this bounded kernel.
     pub(super) fn columns(
@@ -107,26 +110,8 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         }
         .local(values);
     }
-    /// Constructs a plan using the domain retained by its table handle.
-    ///
-    /// Prepare tables with [`super::TablesMut::prepare`] or check imported
-    /// entries with [`Tables::bind`]. Construction does not rescan contents.
-    /// Raw table descriptors cannot be used without binding their domain:
-    ///
-    /// ```compile_fail
-    /// use zakura_udon::{field::PallasBase, fft::{Plan, Tables}};
-    /// let raw = Tables::<PallasBase>::default();
-    /// let plan = Plan::new(raw);
-    /// ```
-    pub const fn new(tables: BoundTables<'a, M>) -> Self {
-        Self {
-            domain: tables.domain(),
-            tables: tables.tables(),
-        }
-    }
-
-    /// Constructs a plan that computes powers and permutations as needed.
-    pub fn without_tables(domain: CosetDomain<M>) -> Self {
+    /// Constructs a transform that computes powers and permutations as needed.
+    pub fn new(domain: CosetDomain<M>) -> Self {
         Self {
             domain,
             tables: Tables::default(),
@@ -138,41 +123,148 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         self.domain
     }
 
+    /// Scratch selected for either full in-place transform direction.
+    ///
+    /// Direct execution can use smaller storage and select another implementation.
+    /// The query does not allocate or reserve storage; it resolves a contiguous
+    /// transform through [`super::run::FftPlan::new`].
+    pub fn scratch_requirements(
+        self,
+        options: crate::exec::ExecutionOptions,
+    ) -> Result<ScratchRequirements, FftError> {
+        Ok(ScratchRequirements {
+            field_elements: super::run::FftPlan::new(
+                self,
+                super::TransformRequest::new(super::Direction::Forward),
+                super::StorageLayout::Contiguous,
+                options,
+            )?
+            .retained_fields(),
+        })
+    }
+
+    /// Replaces natural-order coefficients with coset evaluations in natural order.
+    ///
+    /// `values` must have the domain's size. Resource limits, errors, and buffer
+    /// state follow [`Self::execute`] with a full in-place forward request.
+    pub fn forward<E: Executor>(
+        self,
+        values: &mut [PastaField<M>],
+        options: crate::exec::ExecutionOptions,
+        executor: &E,
+        scratch: &mut [PastaField<M>],
+    ) -> Result<(), FftError> {
+        self.execute(
+            super::TransformRequest::new(super::Direction::Forward),
+            None,
+            values,
+            options,
+            executor,
+            scratch,
+        )
+    }
+
+    /// Replaces natural-order evaluations with normalized natural coefficients.
+    ///
+    /// `values` must have the domain's size. Resource limits, errors, and buffer
+    /// state follow [`Self::execute`] with a full in-place inverse request.
+    pub fn inverse<E: Executor>(
+        self,
+        values: &mut [PastaField<M>],
+        options: crate::exec::ExecutionOptions,
+        executor: &E,
+        scratch: &mut [PastaField<M>],
+    ) -> Result<(), FftError> {
+        self.execute(
+            super::TransformRequest::new(super::Direction::Inverse),
+            None,
+            values,
+            options,
+            executor,
+            scratch,
+        )
+    }
+
+    /// Executes a mathematical request within the supplied resource constraints.
+    ///
+    /// `values` must have the domain's size. Supply `input` exactly when
+    /// [`super::InputStorage::Preserve`] is requested, with the full domain size
+    /// or the declared prefix length. Forward initialization applies its
+    /// [`CoefficientView::normalization_factor`]; inverse input must have factor
+    /// one. In-place prefixes ignore and overwrite the remaining values.
+    /// Scratch, including an empty slice, limits the implementation selected for
+    /// this call; unused scratch tails are untouched.
+    ///
+    /// Request errors follow [`super::run::FftPlan::new`]. Missing or unexpected
+    /// input, or scaled inverse input, returns [`FftError::InvalidExecution`].
+    /// Incorrect slice lengths return [`FftError::LengthMismatch`]. All returned
+    /// errors precede writes. A panic may partially change data; the module's
+    /// [working-storage rules](super) describe validity during unwinding.
+    pub fn execute<E: Executor>(
+        self,
+        request: super::TransformRequest,
+        input: Option<CoefficientView<'_, M>>,
+        values: &mut [PastaField<M>],
+        options: crate::exec::ExecutionOptions,
+        executor: &E,
+        scratch: &mut [PastaField<M>],
+    ) -> Result<(), FftError> {
+        let options = options.for_scratch::<PastaField<M>>(scratch.len());
+        let mut plan =
+            super::run::FftPlan::new(self, request, super::StorageLayout::Contiguous, options)?;
+        if let Some(input) = input {
+            if request.direction == super::Direction::Forward {
+                plan = plan.with_input_scale(input.normalization_factor())?;
+            } else if input.normalization_factor() != PastaField::ONE {
+                return Err(FftError::InvalidExecution);
+            }
+        }
+        plan.execute(
+            input.map(|view| view.as_slice()),
+            values,
+            None,
+            scratch,
+            executor,
+        )
+    }
+
     /// Required temporary field storage for either transform direction.
     ///
-    /// Delegates to [`ExecutionOptions::requirements`] with this domain's size.
+    /// Delegates to [`Strategy::requirements`] with this domain's size.
     /// That query also sizes arrays in const contexts without constructing a plan.
     ///
-    /// Returns [`FftError::InvalidExecution`] for invalid [`ExecutionOptions`],
+    /// Returns [`FftError::InvalidExecution`] for invalid [`Strategy`],
     /// or [`FftError::SizeOverflow`] if the scratch field slice would exceed
     /// `isize::MAX` bytes or its element count overflows `usize`.
-    pub const fn scratch_requirements(
+    pub(crate) const fn scratch_requirements_with(
         self,
-        options: ExecutionOptions,
+        options: Strategy,
     ) -> Result<ScratchRequirements, FftError> {
         options.requirements(self.domain.size())
     }
 
+    #[cfg(test)]
     pub(super) fn check(
         self,
         buffer: &'static str,
         len: usize,
-        options: ExecutionOptions,
+        options: Strategy,
         scratch_len: usize,
     ) -> Result<usize, FftError> {
         check_length(buffer, self.domain.size(), len)?;
-        let required = self.scratch_requirements(options)?;
+        let required = self.scratch_requirements_with(options)?;
         required.check(scratch_len)?;
         Ok(required.field_elements)
     }
 
     /// Replaces natural-order coefficients with natural-order coset evaluations.
     ///
-    /// Buffer lengths, errors, and the evaluation formula are defined by [`Plan`].
-    pub fn forward<E: Executor>(
+    /// Buffer lengths, errors, and the evaluation formula are defined by [`Transform`].
+    #[cfg(test)]
+    pub(crate) fn forward_with<E: Executor>(
         self,
         values: &mut [PastaField<M>],
-        options: ExecutionOptions,
+        options: Strategy,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
@@ -182,7 +274,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
             super::TransformRequest::new(super::Direction::Forward),
             false,
         )?
-        .execute(
+        .execute_with(
             None,
             values,
             None,
@@ -194,11 +286,12 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
 
     /// Replaces natural-order evaluations with normalized polynomial coefficients.
     ///
-    /// Both sides use the ordering, lengths, and error contract of [`Plan`].
-    pub fn inverse<E: Executor>(
+    /// Both sides use the ordering, lengths, and error contract of [`Transform`].
+    #[cfg(test)]
+    pub(crate) fn inverse_with<E: Executor>(
         self,
         values: &mut [PastaField<M>],
-        options: ExecutionOptions,
+        options: Strategy,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
@@ -208,7 +301,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
             super::TransformRequest::new(super::Direction::Inverse),
             false,
         )?
-        .execute(
+        .execute_with(
             None,
             values,
             None,
@@ -225,17 +318,18 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     /// row `j` must be stored at the reversal of its low `log2(n)` bits, where
     /// `n` is the domain size. Output coefficients are in increasing degree
     /// order, with the same normalization, lengths, and errors as [`Self::inverse`].
-    pub fn inverse_bit_reversed<E: Executor>(
+    #[cfg(test)]
+    pub(crate) fn inverse_bit_reversed_with<E: Executor>(
         self,
         values: &mut [PastaField<M>],
-        options: ExecutionOptions,
+        options: Strategy,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         let required = self.check("values", values.len(), options, scratch.len())?;
         let mut request = super::TransformRequest::new(super::Direction::Inverse);
         request.input_order = super::ElementOrder::BitReversed;
-        self.bounded(options, request, false)?.execute(
+        self.bounded(options, request, false)?.execute_with(
             None,
             values,
             None,
@@ -251,11 +345,12 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     /// folded into output initialization.
     /// Both input and output must have the domain size. Ordering, scratch
     /// requirements, and errors are the same as for [`Self::forward`].
-    pub fn forward_into<'input, E: Executor>(
+    #[cfg(test)]
+    pub(crate) fn forward_into_with<'input, E: Executor>(
         self,
         input: impl Into<CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],
-        options: ExecutionOptions,
+        options: Strategy,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
@@ -270,7 +365,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
             true,
         )?
         .with_input_scale(extra)?
-        .execute(
+        .execute_with(
             Some(input),
             output,
             None,
@@ -284,11 +379,12 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     ///
     /// Both slices must have the domain size. Ordering, scratch requirements,
     /// and errors are the same as for [`Self::inverse`].
-    pub fn inverse_into<E: Executor>(
+    #[cfg(test)]
+    pub(crate) fn inverse_into_with<E: Executor>(
         self,
         input: &[PastaField<M>],
         output: &mut [PastaField<M>],
-        options: ExecutionOptions,
+        options: Strategy,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
@@ -299,7 +395,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
             super::TransformRequest::new(super::Direction::Inverse),
             true,
         )?
-        .execute(
+        .execute_with(
             Some(input),
             output,
             None,
@@ -319,11 +415,12 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     /// domain returns [`FftError::InvalidPrefix`]. Output uses natural evaluation
     /// order and must have the full domain size. Scratch requirements and other
     /// errors are those of [`Self::forward`], even for an empty prefix.
-    pub fn forward_prefix<'input, E: Executor>(
+    #[cfg(test)]
+    pub(crate) fn forward_prefix_with<'input, E: Executor>(
         self,
         coefficients: impl Into<CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],
-        options: ExecutionOptions,
+        options: Strategy,
         executor: &E,
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
@@ -336,7 +433,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         request.support = super::InputSupport::Prefix(coefficients.len());
         self.bounded(options, request, true)?
             .with_input_scale(extra)?
-            .execute(
+            .execute_with(
                 Some(coefficients),
                 output,
                 None,
@@ -348,12 +445,12 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
 
     fn bounded(
         self,
-        options: ExecutionOptions,
+        options: Strategy,
         request: super::TransformRequest,
         separate: bool,
     ) -> Result<super::run::FftPlan<'a, M>, FftError> {
         let nz = |n| core::num::NonZeroUsize::new(n).unwrap();
-        super::run::FftPlan::new(
+        super::run::FftPlan::with_strategy(
             self,
             crate::fft::TransformRequest {
                 input_storage: if separate {
@@ -370,6 +467,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         .with_columns(nz(options.columns_per_task), nz(options.max_tasks))
     }
 
+    #[cfg(test)]
     pub(super) fn scatter(self, input: &[PastaField<M>], output: &mut [PastaField<M>]) {
         for (index, &value) in input.iter().enumerate() {
             output[self.reversed(index)] = value;
@@ -389,6 +487,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         reverse(index, self.domain.domain().log_size())
     }
 
+    #[cfg(test)]
     pub(super) fn scale_coefficients(self, values: &mut [PastaField<M>], extra: PastaField<M>) {
         let shift = self.domain.shift();
         if shift == PastaField::ONE && extra == PastaField::ONE {
@@ -483,7 +582,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
     pub(super) fn run<E: Executor>(
         self,
         values: &mut [PastaField<M>],
-        options: ExecutionOptions,
+        options: Strategy,
         executor: &E,
         scratch: &mut [PastaField<M>],
         run: Run<'_, '_, M>,
@@ -503,7 +602,7 @@ impl<'a, M: PrimeModulus> Plan<'a, M> {
         plan.bounded(options, request, false)
             .expect("validated transform geometry")
             .resume(run.first, super::ElementOrder::BitReversed)
-            .execute(
+            .execute_with(
                 None,
                 values,
                 run.factor,
@@ -571,6 +670,7 @@ impl<'a, 'b, M: PrimeModulus> Run<'a, 'b, M> {
             factor: None,
         }
     }
+    #[cfg(test)]
     pub(super) fn forward_product(first: usize, factor: &'a [PastaField<M>]) -> Self {
         Self {
             factor: Some(factor),
@@ -580,7 +680,7 @@ impl<'a, 'b, M: PrimeModulus> Run<'a, 'b, M> {
 }
 
 struct Kernel<'a, 'b, 'c, M: PrimeModulus> {
-    plan: Plan<'a, M>,
+    plan: Transform<'a, M>,
     run: Run<'b, 'c, M>,
     finish: InverseFinish<M>,
 }

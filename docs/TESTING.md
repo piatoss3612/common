@@ -139,7 +139,7 @@ base layouts, full-width and short scalars, compact-table batches, and grouped
 jobs. The `msm_corpus` cases add dense 96/128-bit scalars, sparse scalars,
 repeated/inverse bases, and cancellation. `ipa` groups two equal indexed jobs;
 `commitments` groups unequal dense jobs. Serial and four-worker cases compare
-uncapped passes with a 512-term cap.
+unrestricted workspace with a 64 KiB workspace ceiling.
 
 `warm` reuses buffers. `cold` touches each 64-byte interval of a 64 MiB eviction
 buffer before execution, excluding that work from timing. This creates repeatable
@@ -188,12 +188,13 @@ equivalent coefficient prefixes and factors. `native` retains each output
 layout; compare natural-order methods with `residues/natural` when the consumer
 needs natural order, including its timed conversion.
 
-The [strategy suite](../crates/udon/benches/fft_strategies.rs) compares stage and
-blocked geometry, initialization, codelets, retained twiddles/powers, expansion
-storage/normalization, batches, and class interpolation. Compare codelets with
-the same output order. Interpolation plans are bound outside timing. Both suites
-measure table preparation into allocated buffers separately. In-place cases
-restore inputs outside timing; separate-output cases include initialization.
+The [strategy suite](../crates/udon/benches/fft_strategies.rs) compares task budgets,
+workspace ceilings, output orders, retained twiddles/powers, expansion
+storage/normalization, batches, and class interpolation. Udon selects the
+implementation under those constraints. Interpolation plans are bound outside
+timing. Both suites measure table preparation into allocated buffers separately.
+In-place cases restore inputs outside timing; separate-output cases include
+initialization.
 Persistent pool creation and entry are outside timing. Task allowances cover
 both outer jobs and inner transforms; scratch counts exclude input/output and
 executor storage. Callers supply the executor; Rayon is a development dependency.

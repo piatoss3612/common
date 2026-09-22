@@ -29,7 +29,7 @@ mod sqrt;
 mod uint;
 pub(crate) mod word;
 
-pub use batch::{BatchInversionError, batch_invert, batch_invert_groups};
+pub use batch::{BatchInversionError, batch_invert, batch_invert_groups, try_batch_invert_by};
 pub(crate) use batch::{NonzeroInversionLanes, invert_nonzero};
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub use products::ProductSum;

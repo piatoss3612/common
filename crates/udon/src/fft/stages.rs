@@ -6,7 +6,7 @@
 
 use super::finish::{Factors, InverseFinish};
 use super::{
-    Codelet, ElementOrder, Executor, InverseScale, PastaField, Plan, PrimeModulus,
+    Codelet, ElementOrder, Executor, InverseScale, PastaField, PrimeModulus, Transform,
     TwiddleDescription, TwiddleStorage, TwiddleTable, reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
@@ -16,7 +16,7 @@ use crate::field::fft::{
 
 #[derive(Clone, Copy)]
 pub(super) struct StageKernel<'a, 'b, M: PrimeModulus> {
-    pub plan: Plan<'a, M>,
+    pub plan: Transform<'a, M>,
     pub inverse: bool,
     pub dif: bool,
     pub scale: InverseScale,
@@ -133,11 +133,12 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
 
     // Continues an initialized transform, including the fused interpolation
     // paths. Kernel-local calls use `run` with a serial executor.
+    #[cfg(test)]
     pub fn drive<E: Executor>(
         &self,
         values: &mut [PastaField<M>],
         first: usize,
-        options: super::ExecutionOptions,
+        options: super::Strategy,
         executor: &E,
     ) {
         let nz = |n| core::num::NonZeroUsize::new(n).unwrap();
@@ -148,22 +149,26 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
         });
         request.inverse_scale = self.scale;
         request.output_order = self.output_order;
-        let mut plan =
-            super::run::FftPlan::new(self.plan, request, nz(options.tile_len), self.codelet)
-                .expect("validated stage request")
-                .with_contiguous_permutation()
-                .resume(
-                    first,
-                    if self.dif {
-                        ElementOrder::Natural
-                    } else {
-                        ElementOrder::BitReversed
-                    },
-                );
+        let mut plan = super::run::FftPlan::with_strategy(
+            self.plan,
+            request,
+            nz(options.tile_len),
+            self.codelet,
+        )
+        .expect("validated stage request")
+        .with_contiguous_permutation()
+        .resume(
+            first,
+            if self.dif {
+                ElementOrder::Natural
+            } else {
+                ElementOrder::BitReversed
+            },
+        );
         if let Some(table) = self.twiddles {
             plan = plan.with_twiddles(table);
         }
-        plan.execute(
+        plan.execute_with(
             None,
             values,
             self.factor,
@@ -200,7 +205,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
 }
 
 pub(super) fn twiddle_table<'a, M: PrimeModulus>(
-    plan: Plan<'a, M>,
+    plan: Transform<'a, M>,
     explicit: Option<TwiddleTable<'a, M>>,
     inverse: bool,
     block: usize,
@@ -361,7 +366,9 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         let size = guard.values.len();
         let radix = match self.codelet {
             Codelet::Radix2 => 2,
+            #[cfg(test)]
             Codelet::Radix4 => 4,
+            #[cfg(test)]
             Codelet::Radix8 => 8,
         }
         .min(size);

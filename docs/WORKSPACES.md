@@ -11,10 +11,10 @@ The examples use deterministic inputs to check arithmetic and capacity reuse;
 allocation policy and application-wide resource limits belong to the caller.
 
 For scheduling across operations with a shared scratch provision, use the
-[incremental run protocol](EXECUTION.md). Its plans separate arithmetic grain
-from worker count, and its task leases let returned scratch serve any compatible
-ready operation. The structured workspace examples below retain their explicit
-nested budget and disjoint-buffer policies.
+[incremental run protocol](EXECUTION.md). Its plans resolve arithmetic from
+resource constraints, and its task leases let returned scratch serve any
+compatible ready operation. The structured workspace examples below retain
+their explicit nested budget and disjoint-buffer policies.
 
 ## Scoped execution
 
@@ -49,10 +49,9 @@ budget divides work within an operation; it does not cap all concurrent requests
 
 The [MSM workspace](../crates/udon/tests/support/workspaces/msm.rs) holds
 initialized scratch and plan metadata. Its `prepare` method accepts
-`BatchOptions`, sizes metadata, and constructs a `msm::run::BatchPlan`, then grows
-scratch to that plan's requirements. This order matters because reserved
-metadata prefixes count against the batch memory ceiling and can affect the
-selected scratch layout. The ceiling excludes excess workspace capacity. The
+`exec::ExecutionOptions`, sizes metadata, and constructs a `msm::run::BatchPlan`,
+then grows scratch to that plan's requirements. The ceiling covers the used
+arithmetic workspace; metadata and excess workspace capacity are separate. The
 [grouped-job guide](CURVES.md#grouped-jobs-and-other-work) explains planning and
 how long plans borrow scalar rows.
 

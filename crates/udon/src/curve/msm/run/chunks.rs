@@ -38,10 +38,11 @@ pub struct ParallelMsmRun<'a, 'i, C: PastaCurve, const SLOTS: usize> {
 impl<'a, 'i, C: PastaCurve, const SLOTS: usize> ParallelMsmRun<'a, 'i, C, SLOTS> {
     /// Binds independent chunks without allocating or writing arithmetic data.
     ///
-    /// Returns [`TaskError::Storage`] for zero slots or frontier capacity,
-    /// [`TaskError::InvalidRequest`] for mismatched input length or streaming,
-    /// and [`TaskError::Overflow`] for unrepresentable retained storage counts
-    /// or bytes. Frontiers can contain a single task entry; more entries
+    /// Returns [`TaskError::Storage`] for zero slots or frontier capacity, or
+    /// slots exceeding the plan's workspace ceiling; [`TaskError::InvalidRequest`]
+    /// for incompatible input or streaming; and [`TaskError::Overflow`] for
+    /// unrepresentable retained storage counts or bytes. Frontiers can contain
+    /// a single task entry; more entries
     /// allow more windows from each prepared chunk to be detached at once.
     pub fn new<const TASKS: usize>(
         plan: MsmPlan<C>,
@@ -75,11 +76,14 @@ impl<'a, 'i, C: PastaCurve, const SLOTS: usize> ParallelMsmRun<'a, 'i, C, SLOTS>
 
     fn validate(plan: MsmPlan<C>, input: Input<'i, C>) -> Result<(), TaskError> {
         let slots = NonZeroUsize::new(SLOTS).ok_or(TaskError::Storage)?;
-        if input.len() != plan.terms || plan.options.streaming() {
+        if input.len() != plan.terms || plan.options.streaming() || !plan.accepts(input) {
             return Err(TaskError::InvalidRequest);
         }
         plan.retained_for_slots(slots)
-            .map_err(|_| TaskError::Overflow)?;
+            .map_err(|error| match error {
+                CurveError::MemoryLimit { .. } => TaskError::Storage,
+                _ => TaskError::Overflow,
+            })?;
         Ok(())
     }
 

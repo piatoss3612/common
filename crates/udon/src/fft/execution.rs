@@ -11,7 +11,7 @@ use super::{FftError, check_domain_size, check_field_count, min};
 /// concurrency when the transform exceeds one tile. Use [`Self::serial`] for a
 /// single whole-transform tile with no scratch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ExecutionOptions {
+pub(crate) struct Strategy {
     /// Number of consecutive elements processed by each local tile transform.
     pub tile_len: usize,
     /// Maximum columns in each cross-tile scratch partition, clamped to a tile.
@@ -20,7 +20,53 @@ pub struct ExecutionOptions {
     pub max_tasks: usize,
 }
 
-impl ExecutionOptions {
+impl Strategy {
+    pub(crate) const fn select(
+        size: usize,
+        options: crate::exec::ExecutionOptions,
+        available: usize,
+    ) -> Self {
+        if options.task_budget().get() == 1 || size <= 1024 {
+            return Self::serial();
+        }
+        // Keep enough local work to amortize task dispatch while allowing at
+        // least two tiles at the first parallel size.
+        let tile_len = min(size / 2, 2048);
+        match Self::columns(tile_len, size / tile_len, options, available) {
+            Some((columns_per_task, max_tasks)) => Self {
+                tile_len,
+                columns_per_task,
+                max_tasks,
+            },
+            None => Self::serial(),
+        }
+    }
+
+    pub(crate) const fn columns(
+        tile: usize,
+        tiles: usize,
+        options: crate::exec::ExecutionOptions,
+        available: usize,
+    ) -> Option<(usize, usize)> {
+        let mut jobs = min(options.task_budget().get(), tile.div_ceil(128));
+        let mut columns = min(tile, 128);
+        let fields = match options.memory_limit() {
+            Some(bytes) => min(available, bytes / 32),
+            None => available,
+        };
+        while tiles > 1 && columns * jobs > fields / tiles {
+            if jobs > 1 {
+                jobs = jobs.div_ceil(2);
+            } else {
+                columns /= 2;
+            }
+            if columns == 0 {
+                return None;
+            }
+        }
+        Some((columns, jobs))
+    }
+
     /// One whole-transform tile, with no transform scratch or fork/join calls.
     ///
     /// Increasing only [`Self::max_tasks`] retains the whole-transform tile.
@@ -94,7 +140,7 @@ impl ExecutionOptions {
     }
 }
 
-impl Default for ExecutionOptions {
+impl Default for Strategy {
     fn default() -> Self {
         Self {
             tile_len: 1024,

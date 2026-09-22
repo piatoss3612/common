@@ -46,7 +46,7 @@ fn operations<M: PrimeModulus>() {
     for log in 0..=6 {
         for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
             let domain = Domain::<M>::new(log).unwrap().coset(shift).unwrap();
-            let plan = Plan::without_tables(domain);
+            let plan = Transform::new(domain);
             let input = inputs(domain.size());
             let forward = direct(&input, domain);
             let inverse = inverse_direct(&input, domain, true);
@@ -69,7 +69,8 @@ fn operations<M: PrimeModulus>() {
                                         ..TransformRequest::new(direction)
                                     };
                                     let mut operation =
-                                        FftPlan::new(plan, request, nz(4), codelet).unwrap();
+                                        FftPlan::with_strategy(plan, request, nz(4), codelet)
+                                            .unwrap();
                                     if columns {
                                         operation = operation.with_columns(nz(3), nz(3)).unwrap();
                                     }
@@ -84,7 +85,7 @@ fn operations<M: PrimeModulus>() {
                                         let mut scratch =
                                             vec![PastaField::ONE; operation.retained_fields() + 1];
                                         operation
-                                            .execute(
+                                            .execute_with(
                                                 (input_storage == InputStorage::Preserve)
                                                     .then_some(original.as_slice()),
                                                 &mut output,
@@ -181,7 +182,7 @@ fn prefixes_and_products<M: PrimeModulus>() {
         .unwrap()
         .coset(PastaField::from_u64(7))
         .unwrap();
-    let plan = Plan::without_tables(domain);
+    let plan = Transform::new(domain);
     let values = inputs(domain.size());
     let factors = direct(&values, domain);
     for len in [0, 1, 2, 3, 7, 16, 31, 32] {
@@ -212,7 +213,8 @@ fn prefixes_and_products<M: PrimeModulus>() {
                                 ..TransformRequest::new(direction)
                             };
                             let mut operation =
-                                FftPlan::new(plan, request, nz(4), Codelet::Radix2).unwrap();
+                                FftPlan::with_strategy(plan, request, nz(4), Codelet::Radix2)
+                                    .unwrap();
                             if columns {
                                 operation = operation.with_columns(nz(3), nz(3)).unwrap();
                             }
@@ -222,7 +224,7 @@ fn prefixes_and_products<M: PrimeModulus>() {
                                 vec![PastaField::ONE; operation.retained_fields() + 1];
                             let mut output = values.clone();
                             operation
-                                .execute(
+                                .execute_with(
                                     input,
                                     &mut output,
                                     None,
@@ -239,7 +241,7 @@ fn prefixes_and_products<M: PrimeModulus>() {
                             let factor = ordered(&factors, output_order);
                             output.copy_from_slice(&values);
                             operation
-                                .execute(
+                                .execute_with(
                                     input,
                                     &mut output,
                                     Some(&factor),
@@ -274,7 +276,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
         .unwrap()
         .coset(PastaField::from_u64(7))
         .unwrap();
-    let plan = Plan::without_tables(domain);
+    let plan = Transform::new(domain);
     let input = inputs(domain.size());
     for size in [1, 8, 64, 256] {
         for inverse in [false, true] {
@@ -287,7 +289,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
                 let mut values = vec![PastaField::ZERO; description.requirements().unwrap()];
                 let table = TwiddleTable::prepare(description, &mut values).unwrap();
                 for direction in [Direction::Forward, Direction::Inverse] {
-                    let operation = FftPlan::new(
+                    let operation = FftPlan::with_strategy(
                         plan,
                         TransformRequest::new(direction),
                         nz(4),
@@ -299,7 +301,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
                     let mut output = input.clone();
                     let mut scratch = vec![PastaField::ZERO; operation.retained_fields()];
                     operation
-                        .execute(None, &mut output, None, &mut scratch, nz(3), executor)
+                        .execute_with(None, &mut output, None, &mut scratch, nz(3), executor)
                         .unwrap();
                     let expected = if direction == Direction::Forward {
                         direct(&input, domain)
@@ -323,7 +325,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
     }
     let mut scales = vec![PastaField::ZERO; domain.size()];
     let scales = PowerTable::prepare(PastaField::ONE, domain.shift(), &mut scales).unwrap();
-    let operation = FftPlan::new(
+    let operation = FftPlan::with_strategy(
         plan,
         TransformRequest::new(Direction::Forward),
         nz(4),
@@ -335,7 +337,7 @@ fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
     .with_contiguous_permutation();
     let mut output = input.clone();
     operation
-        .execute(None, &mut output, None, &mut [], nz(3), &Threads)
+        .execute_with(None, &mut output, None, &mut [], nz(3), &Threads)
         .unwrap();
     assert_eq!(output, direct(&input, domain));
 }
@@ -363,16 +365,14 @@ fn bound_plan_tables<M: PrimeModulus>() {
             let inverse = inverse_direct(&input, domain, true);
             let raw = inverse_direct(&input, domain, false);
             for mask in 0..16 {
-                let plan = Plan::new(
-                    Tables {
-                        forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
-                        inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
-                        inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
-                        inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
-                    }
-                    .bind(domain)
-                    .unwrap(),
-                );
+                let plan = Tables {
+                    forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
+                    inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
+                    inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
+                    inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
+                }
+                .bind(domain)
+                .unwrap();
                 for (direction, inverse_scale, expected) in [
                     (Direction::Forward, InverseScale::Normalized, &forward),
                     (Direction::Inverse, InverseScale::Normalized, &inverse),
@@ -388,14 +388,15 @@ fn bound_plan_tables<M: PrimeModulus>() {
                                         inverse_scale,
                                         ..TransformRequest::new(direction)
                                     };
-                                    let operation = FftPlan::new(plan, request, nz(128), codelet)
-                                        .unwrap()
-                                        .with_contiguous_permutation();
+                                    let operation =
+                                        FftPlan::with_strategy(plan, request, nz(128), codelet)
+                                            .unwrap()
+                                            .with_contiguous_permutation();
                                     let mut output = ordered(&input, input_order);
                                     // Serial joins still exercise every task region, including
                                     // the paired terminal split at size 256.
                                     operation
-                                        .execute(
+                                        .execute_with(
                                             None,
                                             &mut output,
                                             None,
@@ -427,10 +428,10 @@ fn bound_plan_table_directions_and_inverse_scales_match_direct_sums() {
 
 #[test]
 fn transform_configuration_and_scratch_are_checked_before_mutation() {
-    let plan = Plan::<PallasBase>::without_tables(Domain::new(4).unwrap().subgroup());
+    let plan = Transform::<PallasBase>::new(Domain::new(4).unwrap().subgroup());
     let request = TransformRequest::new(Direction::Forward);
     assert!(matches!(
-        FftPlan::new(plan, request, nz(3), Codelet::Radix2),
+        FftPlan::with_strategy(plan, request, nz(3), Codelet::Radix2),
         Err(FftError::InvalidExecution)
     ));
     for request in [
@@ -448,9 +449,9 @@ fn transform_configuration_and_scratch_are_checked_before_mutation() {
             ..request
         },
     ] {
-        assert!(FftPlan::new(plan, request, nz(4), Codelet::Radix2).is_err());
+        assert!(FftPlan::with_strategy(plan, request, nz(4), Codelet::Radix2).is_err());
     }
-    let operation = FftPlan::new(plan, request, nz(4), Codelet::Radix2)
+    let operation = FftPlan::with_strategy(plan, request, nz(4), Codelet::Radix2)
         .unwrap()
         .with_columns(nz(3), nz(2))
         .unwrap();
@@ -459,7 +460,7 @@ fn transform_configuration_and_scratch_are_checked_before_mutation() {
     let mut scratch = vec![Fp::ONE; operation.retained_fields() - 1];
     let joins = CountJoins::default();
     assert!(matches!(
-        operation.execute(None, &mut values, None, &mut scratch, nz(3), &joins),
+        operation.execute_with(None, &mut values, None, &mut scratch, nz(3), &joins),
         Err(FftError::ScratchTooSmall { .. })
     ));
     assert_eq!(values, original);
@@ -475,12 +476,12 @@ fn parallel_panics_restore_all_field_buffers() {
         .unwrap();
     let prepared = Prepared::new(domain);
     for tables in [Tables::default(), prepared.tables()] {
-        let plan = Plan::new(tables.bind(domain).unwrap());
+        let plan = tables.bind(domain).unwrap();
         for columns in [false, true] {
             for codelet in [Codelet::Radix2, Codelet::Radix4, Codelet::Radix8] {
                 for direction in [Direction::Forward, Direction::Inverse] {
                     for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
-                        let mut operation = FftPlan::new(
+                        let mut operation = FftPlan::with_strategy(
                             plan,
                             TransformRequest {
                                 output_order,
@@ -497,12 +498,12 @@ fn parallel_panics_restore_all_field_buffers() {
                         let mut scratch = vec![PastaField::ONE; operation.retained_fields()];
                         let joins = CountJoins::default();
                         operation
-                            .execute(None, &mut values, None, &mut scratch, nz(3), &joins)
+                            .execute_with(None, &mut values, None, &mut scratch, nz(3), &joins)
                             .unwrap();
                         for index in 0..joins.take() {
                             let mut values = inputs(domain.size());
                             let failed = catch_unwind(AssertUnwindSafe(|| {
-                                operation.execute(
+                                operation.execute_with(
                                     None,
                                     &mut values,
                                     None,
@@ -531,7 +532,7 @@ fn finish_tables_preserve_prefix_and_codelet_results() {
         for shift in [Fp::ONE, Fp::zeta(), Fp::zeta_inverse(), Fp::from_u64(7)] {
             let domain = Domain::new(log).unwrap().coset(shift).unwrap();
             let prepared = Prepared::new(domain);
-            let plan = Plan::new(prepared.tables().bind(domain).unwrap());
+            let plan = prepared.tables().bind(domain).unwrap();
             let dense = TwiddleTable::bind(
                 TwiddleDescription {
                     size: domain.size(),
@@ -551,7 +552,8 @@ fn finish_tables_preserve_prefix_and_codelet_results() {
                             support: InputSupport::Prefix(len),
                             ..TransformRequest::new(Direction::Inverse)
                         };
-                        let mut operation = FftPlan::new(plan, request, nz(4), codelet).unwrap();
+                        let mut operation =
+                            FftPlan::with_strategy(plan, request, nz(4), codelet).unwrap();
                         if columns {
                             operation = operation.with_columns(nz(3), nz(3)).unwrap();
                         }
@@ -560,7 +562,7 @@ fn finish_tables_preserve_prefix_and_codelet_results() {
                             let mut output = input.clone();
                             output.resize(domain.size(), Fp::ONE);
                             operation
-                                .execute(
+                                .execute_with(
                                     (input_storage == InputStorage::Preserve)
                                         .then_some(input.as_slice()),
                                     &mut output,

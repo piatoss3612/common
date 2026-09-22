@@ -131,7 +131,7 @@ fn caches<C: PastaCurve>() {
     let mut compact = [PreparedAffinePoint::from_affine(&base); 8];
     let mut projective = [ProjectivePoint::IDENTITY; 8];
     let mut field = [PastaField::ZERO; 8];
-    FixedBaseTable::prepare(
+    FixedBaseTable::prepare_with(
         description,
         &base,
         &mut expanded,

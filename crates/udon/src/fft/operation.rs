@@ -68,14 +68,33 @@ impl TransformRequest {
     }
 }
 
-/// Small straight-line radix schedules; larger radices are opt-in candidates.
+/// Writable storage available to an incremental transform.
+///
+/// Fragment lengths describe the provider's physical storage, not an arithmetic
+/// radix. A whole-bank lease permits order conversion without a retained copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Codelet {
+pub enum StorageLayout {
+    /// One bank whose complete mutable slice can be leased.
+    Contiguous,
+    /// Independently leased, equal power-of-two fragments.
+    Fragments {
+        /// Elements per physical fragment; clamped to the domain size.
+        length: core::num::NonZeroUsize,
+        /// Whether the provider can also lease the complete bank exclusively.
+        whole_bank: bool,
+    },
+}
+
+/// Small straight-line radix schedules, including differential-test candidates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Codelet {
     /// Individual radix-2 rounds.
     Radix2,
     /// Four-value local schedules.
+    #[cfg(test)]
     Radix4,
     /// Eight-value local schedules.
+    #[cfg(test)]
     Radix8,
 }
 

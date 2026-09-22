@@ -103,7 +103,7 @@ impl<C: PastaCurve> ScalarStorage<C> {
 /// ```
 /// use zakura_udon::{
 ///     curve::{AffinePoint, Pallas, ProjectivePoint, msm::*},
-///     exec::{SerialExecutor, TaskBudget},
+///     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
 ///     field::{Fq, PastaField},
 /// };
 /// let mut scalars = [Fq::from_u64(1), Fq::from_u64(2)];
@@ -118,7 +118,7 @@ impl<C: PastaCurve> ScalarStorage<C> {
 ///     Input::new_prepared(Bases::Affine(&bases), prepared)?,
 ///     Input::new_prepared(Bases::Affine(&opposite), prepared)?,
 /// ];
-/// let options = BatchOptions::default();
+/// let options = ExecutionOptions::default();
 /// let mut jobs = [run::JobStorage::EMPTY; 2];
 /// let mut workers = [run::WorkerStorage::EMPTY; 1];
 /// let plan = run::BatchPlan::new(&inputs, options, &mut jobs, &mut workers)?;
@@ -232,6 +232,48 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
         })
     }
 
+    /// Additional bytes for this resolved plan's reusable recoding cache.
+    ///
+    /// Returns zero when the plan has a different term count, splits the input
+    /// into chunks, or cannot reuse retained digits. Scalar records remain
+    /// independently reusable. Returns [`CurveError::SizeOverflow`] if the
+    /// required byte slice is unrepresentable. The cache is persistent
+    /// preparation, separate from the plan's workspace ceiling.
+    pub fn cache_len(&self, plan: &super::run::MsmPlan<C>) -> Result<usize, CurveError> {
+        plan.cache_geometry(self.len())
+            .map_or(Ok(0), |geometry| geometry.storage_len(self.len()))
+    }
+
+    /// Retains exactly the resolved plan's recoding in caller-owned bytes.
+    ///
+    /// That plan reuses the cache when executed over these records. Unsupported
+    /// caching returns the unchanged scalar handle and needs no byte storage.
+    /// Size storage with [`Self::cache_len`]. Existing plan requirements remain
+    /// fixed; use [`super::run::MsmPlan::for_input`] with the returned handle to
+    /// resolve requirements that account for the retained cache.
+    ///
+    /// Returns [`CurveError::ScratchTooSmall`] for short storage or
+    /// [`CurveError::SizeOverflow`] for an unrepresentable byte slice, before
+    /// writing anything. Unused storage tails are untouched.
+    pub fn cache(
+        &self,
+        plan: &super::run::MsmPlan<C>,
+        storage: &'a mut [u8],
+    ) -> Result<Self, CurveError> {
+        let Some(geometry) = plan.cache_geometry(self.len()) else {
+            return Ok(*self);
+        };
+        let len = geometry.storage_len(self.len())?;
+        check_scratch("digits", len, storage.len())?;
+        let digits = &mut storage[..len];
+        super::recode::write(self.records, geometry, digits);
+        Ok(Self {
+            records: self.records,
+            shape: self.shape,
+            cached: Some(super::recode::Cache { geometry, digits }),
+        })
+    }
+
     /// Returns additional bytes needed to cache recoding for `options`.
     ///
     /// The scalar shape and requested kernel select a recoding for the complete
@@ -239,7 +281,11 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// constrain this retained allocation; it is separate from execution scratch
     /// and scalar record storage. Returns [`CurveError::SizeOverflow`] if the
     /// byte slice would be too large. See [`Self::cache`] for reuse conditions.
-    pub fn cache_len(&self, options: super::ArithmeticOptions) -> Result<usize, CurveError> {
+    #[cfg(test)]
+    pub(crate) fn cache_len_with(
+        &self,
+        options: super::ArithmeticOptions,
+    ) -> Result<usize, CurveError> {
         super::recode::Geometry::for_shape(self.len(), self.shape, options).storage_len(self.len())
     }
 
@@ -252,7 +298,8 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     ///
     /// Returns [`CurveError::SizeOverflow`] or [`CurveError::ScratchTooSmall`]
     /// before writes. Bytes beyond the required prefix remain untouched.
-    pub fn cache(
+    #[cfg(test)]
+    pub(crate) fn cache_with(
         &self,
         options: super::ArithmeticOptions,
         storage: &'a mut [u8],

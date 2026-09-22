@@ -238,10 +238,12 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         })
     }
 
-    /// Returns the minimum number of field elements for batch multiplication.
+    /// Returns the field capacity for a single batch multiplication pass.
     ///
     /// Pass the number of tables as `bases`. Counts are independent of the scalar
     /// and task budget and apply to both [`Self::mul`] and [`Self::mul_prepared`].
+    /// This is a preferred capacity, not a minimum: smaller or empty scratch is
+    /// accepted, as described by [`Self::mul_prepared`].
     /// Returns [`CurveError::SizeOverflow`] if the buffer exceeds slice limits.
     pub const fn multiplication_scratch(bases: usize) -> Result<usize, CurveError> {
         checked_count::<PastaField<C::Base>>(bases, if bases < LADDER_AFFINE_MIN { 0 } else { 5 })
@@ -249,8 +251,9 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
 
     /// Multiplies every base by the same reduced scalar, in table order.
     ///
-    /// Equivalent to preparing an [`EisensteinScalar`] and calling
-    /// [`Self::mul_prepared`], including its buffer, error, and panic contracts.
+    /// Has the mathematical result and buffer, error, and panic contracts of
+    /// [`Self::mul_prepared`]. Retain an [`EisensteinScalar`] to reuse scalar
+    /// preparation and its batch eligibility check across calls.
     /// The scalar must satisfy [`PastaField`]'s reduced-residue invariant.
     pub fn mul<X: Executor>(
         &self,
@@ -261,7 +264,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         executor: &X,
     ) -> Result<(), CurveError> {
         self.mul_prepared(
-            &EisensteinScalar::new(scalar),
+            &EisensteinScalar::for_single(scalar),
             output,
             field,
             budget,
@@ -275,14 +278,13 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
     /// Initial buffer contents do not matter; scratch beyond the reported count
     /// is untouched. A zero scalar writes identities. Entries must satisfy the
     /// mathematical contract of [`EisensteinTable::mul`].
-    /// [`EisensteinScalar::certify_batch`] can retain the scalar-only check for
-    /// exceptional affine intermediates across repeated calls.
+    /// Scalar preparation retains the eligibility check for affine arithmetic.
+    /// Smaller scratch uses bounded batches or complete projective arithmetic.
     ///
     /// # Errors
     ///
     /// Returns [`CurveError::LengthMismatch`] unless `output.len() == self.len()`,
-    /// [`CurveError::ScratchTooSmall`] for insufficient field scratch, or
-    /// [`CurveError::SizeOverflow`] if sizing exceeds slice limits. All checks
+    /// or [`CurveError::SizeOverflow`] if sizing exceeds slice limits. All checks
     /// precede writes, so returned errors leave output and scratch unchanged.
     ///
     /// # Panics
@@ -299,22 +301,37 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         executor: &X,
     ) -> Result<(), CurveError> {
         let n = self.len();
-        let required = Self::multiplication_scratch(n)?;
+        Self::multiplication_scratch(n)?;
         check_length("output", n, output.len())?;
-        check_scratch("field", required, field.len())?;
         let digits = scalar.digits();
         // The exceptional-intermediate check depends only on the scalar, so its
         // result applies to every base. A certificate also reuses it across calls.
-        let affine = n >= LADDER_AFFINE_MIN && !digits.is_empty() && scalar.batch_safe();
-        multiply_inner(
-            self.entries,
-            digits,
-            output,
-            &mut field[..required],
-            affine,
-            budget.get(),
-            executor,
-        );
+        let batch = n.min(field.len() / 5);
+        let affine = batch >= LADDER_AFFINE_MIN && !digits.is_empty() && scalar.batch_safe();
+        if affine {
+            for (entries, output) in self.entries.chunks(batch * 8).zip(output.chunks_mut(batch)) {
+                let fields = output.len() * 5;
+                multiply_inner(
+                    entries,
+                    digits,
+                    output,
+                    &mut field[..fields],
+                    true,
+                    budget.get(),
+                    executor,
+                );
+            }
+        } else {
+            multiply_inner(
+                self.entries,
+                digits,
+                output,
+                &mut [],
+                false,
+                budget.get(),
+                executor,
+            );
+        }
         Ok(())
     }
 }
@@ -483,7 +500,7 @@ fn multiply_inner<C: PastaCurve, E: CurveTableEntry<C>, X: Executor>(
         let left_tasks = tasks / 2;
         let mid = n / tasks * left_tasks;
         let (a, b) = output.split_at_mut(mid);
-        let (fa, fb) = field.split_at_mut(mid * 5);
+        let (fa, fb) = field.split_at_mut(if affine { mid * 5 } else { 0 });
         executor.join(
             || {
                 multiply_inner(

@@ -53,18 +53,10 @@ fn batches<C: PastaCurve>() {
             );
             assert_eq!(wrong, old_output);
             assert_eq!(scratch, old_scratch);
-            if size != 0 {
-                let old_output = output.clone();
-                assert_eq!(
-                    batch_normalize(&points, &mut output, &mut scratch[..size - 1]),
-                    Err(CurveError::ScratchTooSmall {
-                        buffer: "field",
-                        required: size,
-                        provided: size - 1,
-                    })
-                );
-                assert_eq!(output, old_output);
-                assert_eq!(scratch, old_scratch);
+            for capacity in [0, size / 2, size.saturating_sub(1)] {
+                batch_normalize(&points, &mut output, &mut scratch[..capacity]).unwrap();
+                assert_eq!(output, expected);
+                assert_eq!(&scratch[size..], &[sentinel; 3]);
             }
         }
     }

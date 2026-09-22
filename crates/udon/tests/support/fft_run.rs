@@ -53,7 +53,8 @@ impl<M: PrimeModulus> Arena<M> {
         let (values, range) = match request.write.0 {
             Bank::Values => (
                 self.values[request.write.1.start / self.tile].try_write()?,
-                0..self.tile,
+                request.write.1.start % self.tile
+                    ..request.write.1.start % self.tile + request.write.1.len(),
             ),
             Bank::Snapshot => (self.snapshot.try_write()?, request.write.1.clone()),
             Bank::Input => return None,
@@ -66,10 +67,23 @@ impl<M: PrimeModulus> Arena<M> {
         let source = match &request.read {
             None => Source::Slice(&[]),
             Some((Bank::Input, range)) => Source::Slice(&input[range.clone()]),
-            Some((Bank::Values, range)) => Source::Guard(
-                self.values[range.start / self.tile].try_read()?,
-                0..range.len(),
-            ),
+            Some((Bank::Values, range)) => {
+                let start = range.start / self.tile;
+                let end = range.end.div_ceil(self.tile);
+                let mut guards = core::array::from_fn(|_| None);
+                for (guard, values) in guards
+                    .get_mut(..end - start)?
+                    .iter_mut()
+                    .zip(&self.values[start..end])
+                {
+                    *guard = Some(values.try_read()?);
+                }
+                Source::Fragments {
+                    guards,
+                    range: range.start % self.tile..range.start % self.tile + range.len(),
+                    tile: self.tile,
+                }
+            }
             Some((Bank::Snapshot, range)) => {
                 Source::Guard(self.snapshot.try_read()?, range.clone())
             }
@@ -100,21 +114,41 @@ impl<T> TransposeOption<T> for Option<Option<T>> {
     }
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "borrowed guards use fixed task envelopes"
+)]
 enum Source<'a, M: PrimeModulus> {
     Slice(&'a [PastaField<M>]),
     Guard(Read<'a, Vec<PastaField<M>>>, Range<usize>),
+    Fragments {
+        guards: [Option<Read<'a, Vec<PastaField<M>>>>; 128],
+        range: Range<usize>,
+        tile: usize,
+    },
 }
 impl<M: PrimeModulus> ReadView<PastaField<M>> for Source<'_, M> {
     fn len(&self) -> usize {
         match self {
             Self::Slice(s) => s.len(),
-            Self::Guard(_, range) => range.len(),
+            Self::Guard(_, range) | Self::Fragments { range, .. } => range.len(),
         }
     }
     fn get(&self, index: usize) -> Option<&PastaField<M>> {
         match self {
             Self::Slice(s) => s.get(index),
             Self::Guard(g, range) => g[range.clone()].get(index),
+            Self::Fragments {
+                guards,
+                range,
+                tile,
+            } => {
+                if index >= range.len() {
+                    return None;
+                }
+                let index = range.start + index;
+                guards[index / tile].as_ref()?.get(index % tile)
+            }
         }
     }
 }

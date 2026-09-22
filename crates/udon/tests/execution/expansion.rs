@@ -2,12 +2,12 @@ use super::{fft_pipeline::Banks, run_pool};
 use std::num::NonZeroUsize;
 use zakura_udon::{
     exec::{
-        SerialExecutor,
+        ExecutionOptions, SerialExecutor, TaskBudget,
         run::{Identity, TaskStorage},
     },
     fft::{
-        Codelet, Domain, ElementOrder, Expansion, ExpansionOptions, ExpansionOrder,
-        ExpansionStorage, InputSupport, InverseScale, Plan,
+        Domain, ElementOrder, Expansion, ExpansionOrder, ExpansionStorage, InputSupport,
+        InverseScale, StorageLayout, Transform,
         run::{ExpansionBank, ExpansionPlan, ExpansionRun},
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
@@ -16,7 +16,7 @@ use zakura_udon::{
 fn check<M: PrimeModulus>() {
     const SLOTS: usize = 3;
     for size in [8, 64] {
-        let base = Plan::without_tables(Domain::<M>::for_size(size).unwrap().subgroup());
+        let base = Transform::new(Domain::<M>::for_size(size).unwrap().subgroup());
         for (residues, shift) in [1, 2, 8].into_iter().flat_map(|n| [(n, 1), (n, 7)]) {
             let domain = Domain::for_size(size * residues)
                 .unwrap()
@@ -73,7 +73,7 @@ fn check<M: PrimeModulus>() {
                             .coefficients(
                                 &coefficients[..count],
                                 &mut expected,
-                                ExpansionOptions::serial(),
+                                ExecutionOptions::default(),
                                 &SerialExecutor,
                                 &mut [],
                             )
@@ -98,13 +98,17 @@ fn check<M: PrimeModulus>() {
                             order,
                             support,
                             input_order,
-                            NonZeroUsize::new(8).unwrap(),
-                            Codelet::Radix4,
+                            StorageLayout::Fragments {
+                                length: NonZeroUsize::new(8).unwrap(),
+                                whole_bank: false,
+                            },
+                            ExecutionOptions::default()
+                                .with_task_budget(TaskBudget::new(3).unwrap()),
                         )
                         .unwrap();
                         let mut sizes = vec![size; 2 + residues + SLOTS + residues];
                         sizes[0] = count;
-                        let banks = Banks::new(&sizes, 8);
+                        let banks = Banks::new(&sizes, 8, 2 + residues..2 + residues + SLOTS);
                         banks.write(0, &input[..count]);
                         let factor: Vec<_> = (0..size)
                             .map(|i| PastaField::from_u64((i + 1) as u64))
@@ -120,10 +124,20 @@ fn check<M: PrimeModulus>() {
                         }
                         // Synchronous execution shares the planned semantics and storage modes.
                         for tasks in [1, 3, 4] {
-                            let tasks = NonZeroUsize::new(tasks).unwrap();
+                            let plan = ExpansionPlan::new(
+                                expansion,
+                                storage,
+                                order,
+                                support,
+                                input_order,
+                                StorageLayout::Contiguous,
+                                ExecutionOptions::default()
+                                    .with_task_budget(TaskBudget::new(tasks).unwrap()),
+                            )
+                            .unwrap();
                             let mut output = vec![PastaField::ZERO; expected.len()];
                             let mut scratch =
-                                vec![PastaField::ZERO; plan.scratch_fields(tasks).unwrap()];
+                                vec![PastaField::ZERO; plan.scratch_fields().unwrap()];
                             let mut workspace = vec![PastaField::ZERO; plan.coefficient_fields()];
                             let mut disposable = input[..count].to_vec();
                             let factors = factor.repeat(residues);
@@ -135,7 +149,6 @@ fn check<M: PrimeModulus>() {
                                             &mut output,
                                             Some(&factors),
                                             &mut scratch,
-                                            tasks,
                                             &SerialExecutor,
                                         )
                                         .unwrap(),
@@ -147,7 +160,6 @@ fn check<M: PrimeModulus>() {
                                         &mut workspace,
                                         Some(&factors),
                                         &mut scratch,
-                                        tasks,
                                         &SerialExecutor,
                                     )
                                     .unwrap()

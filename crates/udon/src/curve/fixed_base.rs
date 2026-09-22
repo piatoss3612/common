@@ -65,7 +65,7 @@ impl FixedBaseDescription {
 /// [`prepare`](Self::prepare) fills caller buffers. [`bind`](Self::bind) checks
 /// stored entries; [`bind_trusted`](Self::bind_trusted) skips entry validation
 /// when the caller has already established their mathematical validity.
-/// All constructors check the base, description, and exact table length.
+/// Binding checks the base, description, and exact table length.
 /// Multiplication is variable-time, performs no doublings, and uses no caller
 /// scratch or allocation. Table preparation, validation, and multiplication
 /// provide no constant-time guarantee for secret inputs.
@@ -87,45 +87,77 @@ impl<C: PastaCurve, E: CurveTableEntry<C>> core::fmt::Debug for FixedBaseTable<'
 }
 
 impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
-    /// Fills an expanded table and returns a borrowed view of it.
+    /// Prepares an expanded table within the supplied buffer capacities.
     ///
-    /// `entries` must have exactly [`CurveTableRequirements::table_entries`]
-    /// elements, as reported by [`FixedBaseDescription::requirements`]. Scratch
-    /// slices must meet the reported minimum lengths. Initial buffer contents
-    /// do not matter, and scratch tails beyond those lengths are untouched.
-    /// The returned table borrows only `entries`; both scratch buffers can be
-    /// reused immediately.
+    /// Udon selects the window from retained entry capacity and both scratch
+    /// capacities. At least 129 entries and two elements of each scratch type
+    /// are required. Only the selected prefixes are written; surplus tails are
+    /// untouched. The returned view borrows only the used entries and reports
+    /// their format through [`Self::description`]. Scratch can be reused
+    /// immediately.
     ///
-    /// Returns [`CurveError::InvalidWindowBits`] for an unsupported width,
-    /// [`CurveError::InvalidBase`] for unreduced or off-curve base coordinates,
-    /// [`CurveError::LengthMismatch`] for an incorrect table length, or
-    /// [`CurveError::ScratchTooSmall`] for either short scratch buffer. Every
-    /// error leaves all buffers unchanged.
+    /// Returns [`CurveError::InvalidBase`] for an invalid base,
+    /// [`CurveError::LengthMismatch`] for too few entries, or
+    /// [`CurveError::ScratchTooSmall`] for insufficient scratch. All checks
+    /// precede writes. Preparation is variable-time and performs no allocation.
     ///
     /// ```
     /// use zakura_udon::{
-    ///     curve::{
-    ///         FixedBaseDescription, CurveTableRequirements, PallasAffine,
-    ///         FixedBaseTable, Pallas, PallasProjective,
-    ///     },
+    ///     curve::{FixedBaseTable, Pallas, PallasAffine, PallasProjective},
     ///     field::{Fp, Fq},
     /// };
-    /// const DESCRIPTION: FixedBaseDescription = FixedBaseDescription { window_bits: 4 };
-    /// const REQUIRED: CurveTableRequirements = match DESCRIPTION.requirements() {
-    ///     Ok(required) => required,
-    ///     Err(_) => panic!("invalid table description"),
-    /// };
+    ///
     /// let base = PallasAffine::GENERATOR;
-    /// let mut entries = [base; REQUIRED.table_entries];
-    /// let mut projective = [PallasProjective::IDENTITY; REQUIRED.projective_scratch];
-    /// let mut field = [Fp::ZERO; REQUIRED.field_scratch];
+    /// let mut entries = [base; 257];
+    /// let mut projective = [PallasProjective::IDENTITY; 8];
+    /// let mut field = [Fp::ZERO; 8];
     /// let table = FixedBaseTable::<Pallas>::prepare(
-    ///     DESCRIPTION, &base, &mut entries, &mut projective, &mut field,
+    ///     &base, &mut entries, &mut projective, &mut field,
     /// ).unwrap();
     /// let scalar = Fq::from_u64(42);
     /// assert_eq!(table.mul(&scalar), base.mul_projective(&scalar));
+    /// // Store the selected description alongside the used entries.
+    /// let rebound = FixedBaseTable::bind(
+    ///     table.description(), &base, table.as_slice(),
+    /// ).unwrap();
+    /// assert_eq!(rebound.mul(&scalar), table.mul(&scalar));
     /// ```
     pub fn prepare(
+        base: &AffinePoint<C>,
+        entries: &'a mut [E],
+        projective_scratch: &mut [ProjectivePoint<C>],
+        field_scratch: &mut [PastaField<C::Base>],
+    ) -> Result<Self, CurveError> {
+        let mut description = FixedBaseDescription { window_bits: 2 };
+        for window_bits in 3..=8 {
+            let candidate = FixedBaseDescription { window_bits };
+            let required = candidate.requirements()?;
+            if entries.len() < required.table_entries
+                || projective_scratch.len() < required.projective_scratch
+                || field_scratch.len() < required.field_scratch
+            {
+                break;
+            }
+            description = candidate;
+        }
+        let required = description.requirements()?;
+        if entries.len() < required.table_entries {
+            return Err(CurveError::LengthMismatch {
+                buffer: "table",
+                expected: required.table_entries,
+                actual: entries.len(),
+            });
+        }
+        Self::prepare_with(
+            description,
+            base,
+            &mut entries[..required.table_entries],
+            projective_scratch,
+            field_scratch,
+        )
+    }
+
+    pub(super) fn prepare_with(
         description: FixedBaseDescription,
         base: &AffinePoint<C>,
         entries: &'a mut [E],

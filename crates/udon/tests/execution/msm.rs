@@ -4,6 +4,7 @@ use super::{
 };
 use spin::RwLock;
 use std::num::NonZeroUsize;
+use std::{string::ToString, vec, vec::Vec};
 use zakura_udon::{
     curve::{
         AffinePoint, CurveError, EisensteinTableBatch, Pallas, PastaCurve, Point,
@@ -97,11 +98,11 @@ fn produced<C: PastaCurve>() {
                 ArithmeticOptions::DEFAULT
             };
             let original =
-                MsmPlan::<C>::new(TERMS, options, NonZeroUsize::new(TERMS).unwrap()).unwrap();
+                MsmPlan::<C>::new_with(TERMS, options, NonZeroUsize::new(TERMS).unwrap()).unwrap();
             let plan = original
                 .with_grain(NonZeroUsize::new(512).unwrap())
                 .unwrap();
-            assert_eq!(plan.windows(), original.windows());
+            assert_eq!(plan.output_slots(), original.output_slots());
             assert_eq!(plan.preparation_terms(), 256);
             let input = if indexed {
                 ProducedInput::indexed(Bases::Affine(&bases), TERMS)
@@ -213,7 +214,7 @@ fn invalid_produced_sources_preserve_destinations_and_drain_admitted_tasks() {
     let indices = [0; 256];
     let mut invalid_indices = indices;
     invalid_indices[19] = bases.len() as u32;
-    let plan = MsmPlan::new(
+    let plan = MsmPlan::new_with(
         513,
         ArithmeticOptions::DEFAULT,
         NonZeroUsize::new(513).unwrap(),
@@ -323,15 +324,15 @@ fn cached_borrowed_partitions_preserve_global_scalar_and_index_offsets() {
     let prepared =
         PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
             .unwrap();
-    let mut digits = vec![0; prepared.cache_len(ArithmeticOptions::DEFAULT).unwrap()];
+    let mut digits = vec![0; prepared.cache_len_with(ArithmeticOptions::DEFAULT).unwrap()];
     let cached = prepared
-        .cache(ArithmeticOptions::DEFAULT, &mut digits)
+        .cache_with(ArithmeticOptions::DEFAULT, &mut digits)
         .unwrap();
     let input = Selection::indexed(Bases::Affine(&bases), &indices)
         .unwrap()
         .with_prepared_scalars(cached)
         .unwrap();
-    let original = MsmPlan::new(
+    let original = MsmPlan::new_with(
         input.len(),
         ArithmeticOptions::DEFAULT,
         NonZeroUsize::new(input.len()).unwrap(),
@@ -418,7 +419,7 @@ fn check<C: PastaCurve>() {
             .unwrap(),
     ];
     for options in options {
-        let plan = MsmPlan::<C>::new(TERMS, options, NonZeroUsize::new(256).unwrap()).unwrap();
+        let plan = MsmPlan::<C>::new_with(TERMS, options, NonZeroUsize::new(256).unwrap()).unwrap();
         let retained = counts(plan.retained());
         let temporary = counts(plan.temporary());
         for slots in [1, 3] {
@@ -472,15 +473,15 @@ fn check<C: PastaCurve>() {
             });
             assert_eq!(run.result(), Some(expected));
             let leases = NonZeroUsize::new(workers).unwrap();
-            let required = plan.requirements(leases).unwrap();
-            let executing = workers.min(plan.windows()).min(32);
+            let required = plan.requirements_with(leases).unwrap();
+            let executing = workers.min(plan.output_slots()).min(32);
             assert_eq!(
                 counts(required),
                 core::array::from_fn(|i| retained[i] + executing * temporary[i]),
             );
             assert_eq!(plan.grain(), 256);
             let result = plan
-                .execute(
+                .execute_with(
                     Input::new(Bases::Affine(&bases), &scalars).unwrap(),
                     leases,
                     &SerialExecutor,
@@ -552,11 +553,11 @@ fn batch_limits<C: PastaCurve>() {
                 .unwrap()
                 .with_max_terms_per_pass(NonZeroUsize::new(17));
             // One term and one task leave no smaller layout for these explicit
-            // compatible choices. Compare adaptation with that public plan.
+            // compatible choices. Compare adaptation with that forced plan.
             let floor = {
                 let mut jobs = [JobStorage::EMPTY; 3];
                 let mut workers = [WorkerStorage::EMPTY; 1];
-                BatchPlan::new(
+                BatchPlan::new_with(
                     &inputs,
                     BatchOptions::new(
                         arithmetic
@@ -578,14 +579,13 @@ fn batch_limits<C: PastaCurve>() {
             assert_eq!(options.arithmetic(), arithmetic);
             assert_eq!(options.task_budget().get(), 3);
             assert_eq!(options.memory_limit(), None);
-            let (j, w) = BatchPlan::<C>::storage_len(inputs.len(), options).unwrap();
+            let (j, w) = BatchPlan::<C>::storage_len_with(inputs.len(), options).unwrap();
             assert_eq!((j, w), (3, 3));
-            let metadata = j * size_of::<JobStorage>() + w * size_of::<WorkerStorage>();
-            let minimum = floor.bytes::<C>().unwrap() + metadata;
+            let minimum = floor.bytes::<C>().unwrap();
             let mut jobs = vec![JobStorage::EMPTY; j + 1];
             let mut workers = vec![WorkerStorage::EMPTY; w + 1];
             assert_eq!(
-                BatchPlan::new(
+                BatchPlan::new_with(
                     &inputs,
                     options.with_memory_limit(minimum - 1),
                     &mut jobs,
@@ -600,7 +600,7 @@ fn batch_limits<C: PastaCurve>() {
             assert!(jobs.iter().all(|j| *j == JobStorage::EMPTY));
             assert!(workers.iter().all(|w| *w == WorkerStorage::EMPTY));
             {
-                let plan = BatchPlan::new(
+                let plan = BatchPlan::new_with(
                     &inputs,
                     options.with_memory_limit(minimum),
                     &mut jobs,
@@ -608,7 +608,7 @@ fn batch_limits<C: PastaCurve>() {
                 )
                 .unwrap();
                 assert_eq!(plan.requirements(), floor);
-                // Charge all three reserved worker entries, even with one range.
+                // Metadata capacity is separate from arithmetic workspace.
                 assert_eq!(plan.worker_ranges(), 1);
                 assert_eq!(plan.temporary_bytes(), minimum);
                 let r = plan.requirements();
@@ -664,19 +664,19 @@ fn batch_limits<C: PastaCurve>() {
     let prepared =
         PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
             .unwrap();
-    let mut digits = vec![0; prepared.cache_len(arithmetic).unwrap()];
-    let cached = prepared.cache(arithmetic, &mut digits).unwrap();
+    let mut digits = vec![0; prepared.cache_len_with(arithmetic).unwrap()];
+    let cached = prepared.cache_with(arithmetic, &mut digits).unwrap();
     let inputs = [Selection::new(Bases::Affine(&bases))
         .with_prepared_scalars(cached)
         .unwrap()];
     let mut jobs = [JobStorage::EMPTY];
     let mut workers = [WorkerStorage::EMPTY];
     let options = BatchOptions::new(arithmetic);
-    let bytes = BatchPlan::new(&inputs, options, &mut jobs, &mut workers)
+    let bytes = BatchPlan::new_with(&inputs, options, &mut jobs, &mut workers)
         .unwrap()
         .temporary_bytes();
     assert!(cached.retained_bytes() > bytes);
-    let plan = BatchPlan::new(
+    let plan = BatchPlan::new_with(
         &inputs,
         options.with_memory_limit(bytes),
         &mut jobs,
@@ -685,10 +685,7 @@ fn batch_limits<C: PastaCurve>() {
     .unwrap();
     let r = plan.requirements();
     assert_eq!((r.scalars(), r.digits()), (0, 0));
-    assert_eq!(
-        bytes,
-        r.bytes::<C>().unwrap() + size_of::<JobStorage>() + size_of::<WorkerStorage>()
-    );
+    assert_eq!(bytes, r.bytes::<C>().unwrap());
     let mut output = [ProjectivePoint::IDENTITY];
     plan.execute(
         &mut output,
@@ -707,10 +704,10 @@ fn batch_limits<C: PastaCurve>() {
 }
 
 #[test]
-fn batch_limits_include_reserved_metadata_and_preserve_explicit_booth_choices() {
+fn batch_limits_exclude_metadata_and_preserve_private_booth_choices() {
     batch_limits::<Pallas>();
     batch_limits::<Vesta>();
-    let plan = BatchPlan::<Pallas>::new(
+    let plan = BatchPlan::<Pallas>::new_with(
         &[],
         BatchOptions::default().with_memory_limit(0),
         &mut [],
@@ -729,7 +726,7 @@ fn run_binding_distinguishes_invalid_requests_from_metadata_capacity() {
     let short = Input::new(Bases::Affine(&bases[..1]), &scalars[..1]).unwrap();
     let produced = ProducedInput::dense(Bases::Affine(&bases));
     let short_produced = ProducedInput::dense(Bases::Affine(&bases[..1]));
-    let plan = MsmPlan::new(2, ArithmeticOptions::DEFAULT, NonZeroUsize::MIN).unwrap();
+    let plan = MsmPlan::new_with(2, ArithmeticOptions::DEFAULT, NonZeroUsize::MIN).unwrap();
     let mut identity = Identity::new();
     let mut storage = [const { TaskStorage::EMPTY }; 1];
     assert_eq!(
@@ -800,7 +797,7 @@ fn run_binding_distinguishes_invalid_requests_from_metadata_capacity() {
         ParallelMsmRun::new(plan, short, &mut identities, &mut storage).err(),
         Some(TaskError::InvalidRequest),
     );
-    let streaming = MsmPlan::new(
+    let streaming = MsmPlan::new_with(
         2,
         ArithmeticOptions::DEFAULT
             .with_kernel(Kernel::StreamingBooth { width: None })
@@ -813,7 +810,7 @@ fn run_binding_distinguishes_invalid_requests_from_metadata_capacity() {
         Some(TaskError::InvalidRequest),
     );
     let empty = Input::new(Bases::Affine(&[]), &[]).unwrap();
-    let empty_plan = MsmPlan::new(0, ArithmeticOptions::DEFAULT, NonZeroUsize::MIN).unwrap();
+    let empty_plan = MsmPlan::new_with(0, ArithmeticOptions::DEFAULT, NonZeroUsize::MIN).unwrap();
     let mut run = ParallelMsmRun::new(empty_plan, empty, &mut identities, &mut storage).unwrap();
     assert_eq!(run.rebind(plan, short), Err(TaskError::InvalidRequest));
     assert_eq!(run.rebind(streaming, input), Err(TaskError::InvalidRequest));
@@ -835,7 +832,7 @@ fn chunks<C: PastaCurve>(
     cached: bool,
     skew: bool,
 ) {
-    let plan = MsmPlan::new(input.len(), options, NonZeroUsize::new(grain).unwrap()).unwrap();
+    let plan = MsmPlan::new_with(input.len(), options, NonZeroUsize::new(grain).unwrap()).unwrap();
     let arenas: [_; 3] = core::array::from_fn(|_| Arena::new(plan));
     let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
     let mut identities = core::array::from_fn(|_| Identity::new());
@@ -1016,9 +1013,9 @@ fn representations<C: PastaCurve>() {
                 &SerialExecutor,
             )
             .unwrap();
-            let mut digits = vec![0; prepared.cache_len(ArithmeticOptions::DEFAULT).unwrap()];
+            let mut digits = vec![0; prepared.cache_len_with(ArithmeticOptions::DEFAULT).unwrap()];
             let cached = prepared
-                .cache(ArithmeticOptions::DEFAULT, &mut digits)
+                .cache_with(ArithmeticOptions::DEFAULT, &mut digits)
                 .unwrap();
             for (input, answer, retained) in [
                 (
@@ -1105,7 +1102,8 @@ fn independent_booth_chunks_and_empty_runs() {
             true,
         );
         let empty = Input::new(Bases::Affine(&bases[..0]), &scalars[..0]).unwrap();
-        let plan = MsmPlan::<Pallas>::new(0, options, NonZeroUsize::new(128).unwrap()).unwrap();
+        let plan =
+            MsmPlan::<Pallas>::new_with(0, options, NonZeroUsize::new(128).unwrap()).unwrap();
         assert_eq!(plan.retained().bytes::<Pallas>().unwrap(), 0);
         assert_eq!(plan.temporary().bytes::<Pallas>().unwrap(), 0);
         assert_eq!(
@@ -1113,7 +1111,7 @@ fn independent_booth_chunks_and_empty_runs() {
             Requirements::default()
         );
         assert_eq!(
-            plan.requirements(NonZeroUsize::MAX).unwrap(),
+            plan.requirements_with(NonZeroUsize::MAX).unwrap(),
             Requirements::default()
         );
         chunks(
@@ -1127,7 +1125,7 @@ fn independent_booth_chunks_and_empty_runs() {
         );
     }
     assert!(matches!(
-        MsmPlan::<Pallas>::new(usize::MAX, ArithmeticOptions::DEFAULT, NonZeroUsize::MAX),
+        MsmPlan::<Pallas>::new_with(usize::MAX, ArithmeticOptions::DEFAULT, NonZeroUsize::MAX),
         Err(CurveError::SizeOverflow)
     ));
 }
@@ -1167,7 +1165,7 @@ fn kernel_selection_validates_widths_and_replaces_all_preferences() {
             streaming.with_kernel(Kernel::Auto).unwrap(),
             ArithmeticOptions::DEFAULT
         );
-        let empty = MsmPlan::<Pallas>::new(0, streaming, NonZeroUsize::MIN).unwrap();
+        let empty = MsmPlan::<Pallas>::new_with(0, streaming, NonZeroUsize::MIN).unwrap();
         let mut identity = Identity::new();
         let mut slots = [const { TaskStorage::EMPTY }; 1];
         let run = MsmRun::new(
@@ -1209,17 +1207,17 @@ fn small_kernel_dispatch<C: PastaCurve>() {
         Kernel::StreamingBooth { width: Some(4) },
     ] {
         let options = ArithmeticOptions::DEFAULT.with_kernel(kernel).unwrap();
-        let original = MsmPlan::<C>::new(3, options, NonZeroUsize::new(7).unwrap()).unwrap();
+        let original = MsmPlan::<C>::new_with(3, options, NonZeroUsize::new(7).unwrap()).unwrap();
         let plan = original.with_grain(NonZeroUsize::MIN).unwrap();
-        assert_eq!(plan.windows(), original.windows());
+        assert_eq!(plan.output_slots(), original.output_slots());
         assert!(
             counts(plan.temporary())
                 .iter()
                 .zip(counts(original.temporary()))
                 .all(|(a, b)| *a <= b)
         );
-        let mut digits = vec![0; prepared.cache_len(options).unwrap()];
-        let cached = prepared.cache(options, &mut digits).unwrap();
+        let mut digits = vec![0; prepared.cache_len_with(options).unwrap()];
+        let cached = prepared.cache_with(options, &mut digits).unwrap();
         let arena = Arena::new(plan);
         let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
         let mut identity = Identity::new();
@@ -1283,13 +1281,13 @@ fn small_kernel_dispatch<C: PastaCurve>() {
                 3 * if kernel == Kernel::Auto {
                     1
                 } else {
-                    plan.windows()
+                    plan.output_slots()
                 }
             );
             assert_eq!(
                 collapses,
                 if matches!(kernel, Kernel::StreamingBooth { .. }) {
-                    plan.windows()
+                    plan.output_slots()
                 } else {
                     0
                 }
@@ -1300,7 +1298,7 @@ fn small_kernel_dispatch<C: PastaCurve>() {
             let mut jobs = [JobStorage::EMPTY];
             let mut workers = [WorkerStorage::EMPTY];
             let batch =
-                BatchPlan::new(&inputs, BatchOptions::new(options), &mut jobs, &mut workers)
+                BatchPlan::new_with(&inputs, BatchOptions::new(options), &mut jobs, &mut workers)
                     .unwrap();
             let r = batch.requirements();
             if matches!(kernel, Kernel::Booth { .. } | Kernel::StreamingBooth { .. }) {

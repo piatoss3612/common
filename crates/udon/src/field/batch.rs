@@ -144,15 +144,13 @@ pub(crate) fn invert_nonzero<M: PrimeModulus>(
     values[..2].copy_from_slice(&inverses.0);
 }
 
-/// Invalid input or scratch lengths for batch inversion.
+/// Rejected input for batch inversion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BatchInversionError {
-    /// The scratch slice is shorter than the combined input.
-    ScratchTooSmall {
-        /// Required number of field elements.
-        required: usize,
-        /// Supplied number of field elements.
-        provided: usize,
+    /// A record denominator was zero; no visitor has run.
+    ZeroDenominator {
+        /// Position of the zero denominator in the record slice.
+        index: usize,
     },
     /// The combined input length cannot be represented by `usize`.
     SizeOverflow,
@@ -161,12 +159,7 @@ pub enum BatchInversionError {
 impl fmt::Display for BatchInversionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::ScratchTooSmall { required, provided } => {
-                write!(
-                    f,
-                    "batch inversion needs {required} scratch fields, got {provided}"
-                )
-            }
+            Self::ZeroDenominator { index } => write!(f, "zero denominator at record {index}"),
             Self::SizeOverflow => f.write_str("batch inversion input length overflow"),
         }
     }
@@ -176,15 +169,11 @@ impl core::error::Error for BatchInversionError {}
 
 /// Replaces each nonzero value by its inverse, preserving zeros.
 ///
-/// Uses one inversion if any input is nonzero, and none otherwise. The caller
-/// supplies at least `values.len()` scratch fields; their initial contents do
+/// Uses one inversion per nonzero batch. With at least `values.len()` scratch
+/// fields the entire input is one batch; smaller buffers bound the batch size,
+/// and empty scratch inverts values individually. Initial scratch contents do
 /// not matter and the unused tail is untouched. No allocation is performed.
 /// Arithmetic is variable-time, including the locations of zeros.
-///
-/// # Errors
-///
-/// Returns [`BatchInversionError::ScratchTooSmall`] before changing either
-/// slice if scratch is too short.
 ///
 /// ```
 /// use zakura_udon::field::{Fp, batch_invert};
@@ -200,14 +189,15 @@ pub fn batch_invert<M: PrimeModulus>(
     batch_invert_groups(&mut [values], scratch)
 }
 
-/// Inverts nonzero values across disjoint slices with a single inversion.
+/// Inverts nonzero values across disjoint slices with shared inversions.
 ///
 /// This is [`batch_invert`] over the concatenation of `groups`, without
-/// flattening or copying their contents. Empty groups are allowed. Scratch
-/// needs one field per input element, including zeros. Its initial contents
-/// do not matter; any unused tail is untouched. Empty or all-zero inputs
-/// perform no inversion. No allocation is performed. Arithmetic is
-/// variable-time, including the locations of zeros.
+/// flattening or copying their contents. Empty groups are allowed. With one
+/// scratch field per input element, all groups share one inversion. Smaller
+/// scratch bounds each batch within a group; empty scratch uses individual
+/// inversions. Initial scratch contents do not matter and any unused tail is
+/// untouched. Empty or all-zero inputs perform no inversion. No allocation is
+/// performed. Arithmetic is variable-time, including the locations of zeros.
 ///
 /// Each group's [`AsMut::as_mut`] must expose the same slice throughout the
 /// call. Arrays, mutable slices, and vectors satisfy this requirement. A custom
@@ -216,18 +206,25 @@ pub fn batch_invert<M: PrimeModulus>(
 /// # Errors
 ///
 /// Returns [`BatchInversionError::SizeOverflow`] if the combined length
-/// overflows, or [`BatchInversionError::ScratchTooSmall`] if scratch is too
-/// short. All lengths are checked before changing inputs or scratch.
+/// overflows. All lengths are checked before changing inputs or scratch.
 pub fn batch_invert_groups<M: PrimeModulus>(
     groups: &mut [impl AsMut<[PastaField<M>]>],
     scratch: &mut [PastaField<M>],
 ) -> Result<(), BatchInversionError> {
     let required = combined_len(groups.iter_mut().map(|group| group.as_mut().len()))?;
     if scratch.len() < required {
-        return Err(BatchInversionError::ScratchTooSmall {
-            required,
-            provided: scratch.len(),
-        });
+        for group in groups {
+            if scratch.is_empty() {
+                for value in group.as_mut() {
+                    *value = value.invert().unwrap_or(PastaField::ZERO);
+                }
+            } else {
+                for chunk in group.as_mut().chunks_mut(scratch.len()) {
+                    batch_invert(chunk, scratch)?;
+                }
+            }
+        }
+        return Ok(());
     }
     let scratch = &mut scratch[..required];
     // Parity follows the concatenated input, including zeros and empty groups.
@@ -255,6 +252,77 @@ pub fn batch_invert_groups<M: PrimeModulus>(
     {
         if !value.is_zero() {
             *value = inverses.pop(index, value, prefix);
+        }
+    }
+    Ok(())
+}
+
+/// Inverts denominators read from immutable records and visits their inverses.
+///
+/// `denominator` must return the same reduced field value for a record on every
+/// call. It may be evaluated more than once; stability and reducedness are not
+/// checked. Violations remain memory-safe but can cause wrong results or panics.
+/// Every denominator is checked for zero before the first visitor call;
+/// a zero returns [`BatchInversionError::ZeroDenominator`]
+/// without changing scratch or invoking `visit`. Empty input does nothing.
+///
+/// With one scratch field per record, the operation shares one field inversion.
+/// Smaller scratch bounds batches, and empty scratch uses individual inversions.
+/// No allocation or record copying occurs. Initial scratch contents do not matter;
+/// surplus entries are untouched. Arithmetic is variable-time.
+///
+/// `visit` receives the original index, record, and inverse. Visit order is
+/// unspecified. A visitor error stops immediately; earlier visitor effects and
+/// scratch writes remain. The same partial-progress rule applies to a panic.
+/// `E` converts validation failures and can also represent visitor failures.
+///
+/// ```
+/// use zakura_udon::field::{BatchInversionError, Fp, try_batch_invert_by};
+///
+/// let records = [(Fp::from_u64(6), Fp::from_u64(2)),
+///                (Fp::from_u64(20), Fp::from_u64(5))];
+/// let mut quotients = [Fp::ZERO; 2];
+/// try_batch_invert_by(&records, |record| record.1, &mut [Fp::ZERO; 2],
+///     |index, record, inverse| {
+///         quotients[index] = record.0.mul(&inverse);
+///         Ok::<_, BatchInversionError>(())
+///     }).unwrap();
+/// assert_eq!(quotients, [Fp::from_u64(3), Fp::from_u64(4)]);
+/// ```
+pub fn try_batch_invert_by<R, M: PrimeModulus, E: From<BatchInversionError>>(
+    records: &[R],
+    denominator: impl Fn(&R) -> PastaField<M>,
+    scratch: &mut [PastaField<M>],
+    mut visit: impl FnMut(usize, &R, PastaField<M>) -> Result<(), E>,
+) -> Result<(), E> {
+    for (index, record) in records.iter().enumerate() {
+        if denominator(record).is_zero() {
+            return Err(BatchInversionError::ZeroDenominator { index }.into());
+        }
+    }
+    if scratch.is_empty() {
+        for (index, record) in records.iter().enumerate() {
+            visit(
+                index,
+                record,
+                denominator(record)
+                    .invert()
+                    .expect("stable nonzero denominator"),
+            )?;
+        }
+        return Ok(());
+    }
+    for (chunk, records) in records.chunks(scratch.len()).enumerate() {
+        let mut products = NonzeroInversionLanes::new();
+        for (index, (record, prefix)) in records.iter().zip(scratch.iter_mut()).enumerate() {
+            if let Some(product) = products.push(index, &denominator(record)) {
+                *prefix = product;
+            }
+        }
+        let mut inverses = products.invert().expect("nonempty nonzero batch");
+        for (index, record) in records.iter().enumerate().rev() {
+            let inverse = inverses.pop(index, &denominator(record), &scratch[index]);
+            visit(chunk * scratch.len() + index, record, inverse)?;
         }
     }
     Ok(())

@@ -12,7 +12,7 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
         let mut entries = vec![E::from_affine(&AffinePoint::GENERATOR); required.table_entries];
         let mut projective = vec![ProjectivePoint::GENERATOR; h + 2];
         let mut field = vec![PastaField::from_u64(77); h + 2];
-        let table = FixedBaseTable::prepare(
+        let table = FixedBaseTable::prepare_with(
             description,
             &base,
             &mut entries,
@@ -202,7 +202,7 @@ fn rejections<C: PastaCurve>() {
     ] {
         let old = (entries.clone(), projective.clone(), field.clone());
         assert_eq!(
-            FixedBaseTable::prepare(
+            FixedBaseTable::prepare_with(
                 description,
                 &base,
                 &mut entries[..entry_len],
@@ -235,7 +235,7 @@ fn rejections<C: PastaCurve>() {
             CurveError::InvalidBase
         );
     }
-    FixedBaseTable::prepare(
+    FixedBaseTable::prepare_with(
         description,
         &base,
         &mut entries,
@@ -284,7 +284,7 @@ fn rejections<C: PastaCurve>() {
         }
     }
     // Reusing all buffers starts from their prior, arbitrary scratch contents.
-    FixedBaseTable::prepare(
+    FixedBaseTable::prepare_with(
         description,
         &base,
         &mut entries,

@@ -7,7 +7,7 @@ fn nz(value: usize) -> NonZeroUsize {
     NonZeroUsize::new(value).unwrap()
 }
 
-const OPTIONS: ExecutionOptions = ExecutionOptions {
+const OPTIONS: Strategy = Strategy {
     tile_len: 4,
     columns_per_task: 2,
     max_tasks: 5,
@@ -32,7 +32,7 @@ fn check_coefficients<M: PrimeModulus>(
 
 fn expansions<M: PrimeModulus>() {
     for log in [0, 2, 5] {
-        let base = Plan::without_tables(Domain::<M>::new(log).unwrap().subgroup());
+        let base = Transform::new(Domain::<M>::new(log).unwrap().subgroup());
         let coefficients = inputs(base.domain().size());
         let evaluations = direct(&coefficients, base.domain());
         for extra in [0, 1, 3] {
@@ -61,10 +61,10 @@ fn expansions<M: PrimeModulus>() {
                     expansion.validate_scales().unwrap();
                     let mut contiguous = vec![PastaField::ZERO; domain.size()];
                     expansion
-                        .evaluations(
+                        .evaluations_with(
                             &evaluations,
                             &mut contiguous,
-                            ExpansionOptions::serial(),
+                            ExpansionStrategy::serial(),
                             &SerialExecutor,
                             &mut [],
                         )
@@ -95,7 +95,7 @@ fn expansions<M: PrimeModulus>() {
                                 scale: InverseScale::Unscaled,
                             },
                         ] {
-                            let operation = ExpansionPlan::new(
+                            let operation = ExpansionPlan::with_strategy(
                                 expansion,
                                 storage,
                                 order,
@@ -111,15 +111,17 @@ fn expansions<M: PrimeModulus>() {
                             };
                             let operation = operation.unwrap();
                             let mut output = vec![PastaField::ONE; domain.size()];
-                            let mut scratch =
-                                vec![PastaField::ONE; operation.scratch_fields(nz(5)).unwrap() + 1];
+                            let mut scratch = vec![
+                                PastaField::ONE;
+                                operation.scratch_fields_with(nz(5)).unwrap() + 1
+                            ];
                             let mut working = vec![PastaField::ONE; operation.coefficient_fields()];
                             let mut disposable = evaluations.clone();
                             let retained =
                                 if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
                                     Some(
                                         operation
-                                            .execute_disposable(
+                                            .execute_disposable_with(
                                                 &mut disposable,
                                                 &mut output,
                                                 None,
@@ -136,7 +138,7 @@ fn expansions<M: PrimeModulus>() {
                                         &evaluations
                                     };
                                     operation
-                                        .execute(
+                                        .execute_with(
                                             input,
                                             &mut output,
                                             &mut working,
@@ -168,7 +170,7 @@ fn expansions<M: PrimeModulus>() {
                             if storage == ExpansionStorage::Coefficients {
                                 let mut product = output.clone();
                                 operation
-                                    .execute(
+                                    .execute_with(
                                         &coefficients,
                                         &mut product,
                                         &mut [],
@@ -183,10 +185,10 @@ fn expansions<M: PrimeModulus>() {
                                 }
                             }
                             if order == ExpansionOrder::BitReversed {
-                                Plan::without_tables(domain)
-                                    .inverse_bit_reversed(
+                                Transform::new(domain)
+                                    .inverse_bit_reversed_with(
                                         &mut output,
-                                        ExecutionOptions::serial(),
+                                        Strategy::serial(),
                                         &SerialExecutor,
                                         &mut [],
                                     )
@@ -208,12 +210,12 @@ fn expansions<M: PrimeModulus>() {
                             let mut scratch = vec![
                                 PastaField::ONE;
                                 residue
-                                    .scratch_requirements(options)
+                                    .scratch_requirements_with(options)
                                     .unwrap()
                                     .field_elements
                             ];
                             residue
-                                .coefficients(
+                                .coefficients_with(
                                     &coefficients,
                                     &mut output,
                                     options,
@@ -267,16 +269,14 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
             for with_tables in [false, true] {
                 let base = if with_tables {
                     // Exercise reconstruction from the opposite table direction.
-                    Plan::new(
-                        Tables {
-                            inverse: Some(&prepared.inverse),
-                            ..Tables::default()
-                        }
-                        .bind(subgroup)
-                        .unwrap(),
-                    )
+                    Tables {
+                        inverse: Some(&prepared.inverse),
+                        ..Tables::default()
+                    }
+                    .bind(subgroup)
+                    .unwrap()
                 } else {
-                    Plan::without_tables(subgroup)
+                    Transform::new(subgroup)
                 };
                 for normalization in [
                     None,
@@ -300,7 +300,7 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                     } else {
                         expansion
                     };
-                    let operation = ExpansionPlan::new(
+                    let operation = ExpansionPlan::with_strategy(
                         expansion,
                         ExpansionStorage::Coefficients,
                         ExpansionOrder::BitReversed,
@@ -318,9 +318,9 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                     }
                     let mut output = vec![PastaField::ONE; domain.size()];
                     let mut scratch =
-                        vec![PastaField::ONE; operation.scratch_fields(nz(5)).unwrap() + 1];
+                        vec![PastaField::ONE; operation.scratch_fields_with(nz(5)).unwrap() + 1];
                     operation
-                        .execute(
+                        .execute_with(
                             &coefficients[..len],
                             &mut output,
                             &mut [],
@@ -336,7 +336,7 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                         assert_eq!(view.get(row), Some(expected));
                     }
                     operation
-                        .execute(
+                        .execute_with(
                             &coefficients[..len],
                             &mut output,
                             &mut [],
@@ -362,7 +362,7 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
                         operation
                             .with_coefficient_scale(retained.normalization_factor())
                             .unwrap()
-                            .execute(
+                            .execute_with(
                                 retained.as_slice(),
                                 &mut product,
                                 &mut [],
@@ -390,7 +390,7 @@ fn short_bit_reversed_products_match_reference_at_pruning_boundary() {
 
 #[test]
 fn short_bit_reversed_residues_restore_fields_on_panic() {
-    let base = Plan::without_tables(Domain::<PallasBase>::new(8).unwrap().subgroup());
+    let base = Transform::new(Domain::<PallasBase>::new(8).unwrap().subgroup());
     let domain = Domain::new(11).unwrap().coset(Fp::zeta()).unwrap();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let residue = expansion.residue(5, ElementOrder::BitReversed).unwrap();
@@ -401,14 +401,14 @@ fn short_bit_reversed_residues_restore_fields_on_panic() {
     let mut scratch = vec![
         Fp::ONE;
         residue
-            .scratch_requirements(options)
+            .scratch_requirements_with(options)
             .unwrap()
             .field_elements
             + 1
     ];
     let joins = CountJoins::default();
     residue
-        .coefficients(&input, &mut output, options, &joins, &mut scratch)
+        .coefficients_with(&input, &mut output, options, &joins, &mut scratch)
         .unwrap();
     let view =
         EvaluationView::bind(&output, residue.domain(), EvaluationLayout::BitReversed).unwrap();
@@ -424,7 +424,7 @@ fn short_bit_reversed_residues_restore_fields_on_panic() {
         };
         assert!(
             catch_unwind(AssertUnwindSafe(|| {
-                residue.coefficients(&input, &mut output, options, &executor, &mut scratch)
+                residue.coefficients_with(&input, &mut output, options, &executor, &mut scratch)
             }))
             .is_err()
         );
@@ -436,7 +436,7 @@ fn short_bit_reversed_residues_restore_fields_on_panic() {
 
 #[test]
 fn expansion_metadata_storage_errors_and_panics() {
-    let base = Plan::without_tables(Domain::<PallasBase>::new(5).unwrap().subgroup());
+    let base = Transform::new(Domain::<PallasBase>::new(5).unwrap().subgroup());
     let domain = Domain::new(7).unwrap().coset(Fp::from_u64(7)).unwrap();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let coefficients = inputs(base.domain().size());
@@ -458,7 +458,7 @@ fn expansion_metadata_storage_errors_and_panics() {
                 scale: InverseScale::Unscaled,
             },
         ] {
-            let operation = ExpansionPlan::new(
+            let operation = ExpansionPlan::with_strategy(
                 expansion,
                 storage,
                 order,
@@ -469,7 +469,7 @@ fn expansion_metadata_storage_errors_and_panics() {
             )
             .unwrap();
             let mut output = vec![Fp::ONE; domain.size()];
-            let mut scratch = vec![Fp::ONE; operation.scratch_fields(nz(5)).unwrap()];
+            let mut scratch = vec![Fp::ONE; operation.scratch_fields_with(nz(5)).unwrap()];
             let mut workspace = vec![Fp::ONE; operation.coefficient_fields()];
             let mut disposable = evaluations.clone();
             let execute = |input: &mut [Fp],
@@ -479,7 +479,7 @@ fn expansion_metadata_storage_errors_and_panics() {
                            executor: &CountJoins| {
                 if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
                     operation
-                        .execute_disposable(input, output, None, scratch, nz(5), executor)
+                        .execute_disposable_with(input, output, None, scratch, nz(5), executor)
                         .map(|_| ())
                 } else {
                     let input = if storage == ExpansionStorage::Coefficients {
@@ -488,7 +488,7 @@ fn expansion_metadata_storage_errors_and_panics() {
                         &evaluations
                     };
                     operation
-                        .execute(input, output, workspace, None, scratch, nz(5), executor)
+                        .execute_with(input, output, workspace, None, scratch, nz(5), executor)
                         .map(|_| ())
                 }
             };
@@ -511,7 +511,7 @@ fn expansion_metadata_storage_errors_and_panics() {
                     catch_unwind(AssertUnwindSafe(|| {
                         if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
                             operation
-                                .execute_disposable(
+                                .execute_disposable_with(
                                     &mut disposable,
                                     &mut output,
                                     None,
@@ -527,7 +527,7 @@ fn expansion_metadata_storage_errors_and_panics() {
                                 &evaluations
                             };
                             operation
-                                .execute(
+                                .execute_with(
                                     input,
                                     &mut output,
                                     &mut workspace,
@@ -642,8 +642,8 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
     let original = inputs(domain.size());
     for consume in [false, true] {
         let transforms = [domain, domain, other].map(|domain| {
-            FftPlan::new(
-                Plan::without_tables(domain),
+            FftPlan::with_strategy(
+                Transform::new(domain),
                 TransformRequest::new(Direction::Inverse),
                 nz(8),
                 Codelet::Radix2,
@@ -652,7 +652,7 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
             .with_columns(nz(3), nz(2))
             .unwrap()
         });
-        let plan = InterpolationPlan::new(transforms, consume).unwrap();
+        let plan = InterpolationPlan::with_transforms(transforms, consume).unwrap();
         let mut values: [_; 3] = core::array::from_fn(|_| original.clone());
         let mut scratch: [_; 3] =
             core::array::from_fn(|i| vec![Fp::ONE; plan.snapshot_fields(i).unwrap() + 1]);
@@ -660,7 +660,7 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
         let short = plan.snapshot_fields(2).unwrap() - 1;
         let [a, b, c] = &mut scratch;
         assert!(matches!(
-            plan.execute(
+            plan.execute_with(
                 values.each_mut().map(Vec::as_mut_slice),
                 [a, b, &mut c[..short]],
                 nz(5),
@@ -671,7 +671,7 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
         assert!(values.iter().all(|v| *v == original));
         assert!(scratch.iter().flatten().all(|v| *v == Fp::ONE));
         assert_eq!(count.take(), 0);
-        plan.execute(
+        plan.execute_with(
             values.each_mut().map(Vec::as_mut_slice),
             scratch.each_mut().map(Vec::as_mut_slice),
             nz(5),
@@ -688,7 +688,7 @@ fn interpolation_modes_validate_before_mutation_and_restore_fields_on_panic() {
             };
             assert!(
                 catch_unwind(AssertUnwindSafe(|| {
-                    plan.execute(
+                    plan.execute_with(
                         values.each_mut().map(Vec::as_mut_slice),
                         scratch.each_mut().map(Vec::as_mut_slice),
                         nz(5),
@@ -752,8 +752,8 @@ fn interpolation<M: PrimeModulus>() {
                     }
                 });
                 let transforms = core::array::from_fn(|i| {
-                    FftPlan::new(
-                        Plan::without_tables(if i == 0 {
+                    FftPlan::with_strategy(
+                        Transform::new(if i == 0 {
                             output_domain
                         } else {
                             domains[i - 1]
@@ -771,11 +771,11 @@ fn interpolation<M: PrimeModulus>() {
                     )
                     .unwrap()
                 });
-                let plan = InterpolationPlan::<_, 5>::new(transforms, consume).unwrap();
+                let plan = InterpolationPlan::<_, 5>::with_transforms(transforms, consume).unwrap();
                 let mut scratch: [_; 5] = core::array::from_fn(|i| {
                     vec![PastaField::ONE; plan.snapshot_fields(i).unwrap() + 1]
                 });
-                plan.execute(
+                plan.execute_with(
                     values.each_mut().map(Vec::as_mut_slice),
                     scratch.each_mut().map(Vec::as_mut_slice),
                     nz(tasks),
@@ -804,7 +804,7 @@ fn equal_size_parallel_and_destructive_interpolation_match_polynomial_sums() {
 #[test]
 fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
     fn check<M: PrimeModulus>() {
-        let base = Plan::without_tables(Domain::<M>::new(5).unwrap().subgroup());
+        let base = Transform::new(Domain::<M>::new(5).unwrap().subgroup());
         let input = inputs(base.domain().size());
         for normalization in [
             ExpansionScaleNormalization::Coefficients,
@@ -819,7 +819,7 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                 .with_scales(scales)
                 .unwrap();
             for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
-                let operation = ExpansionPlan::new(
+                let operation = ExpansionPlan::with_strategy(
                     expansion,
                     ExpansionStorage::ReuseOutput,
                     order,
@@ -829,12 +829,12 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                     Codelet::Radix2,
                 )
                 .unwrap();
-                let count = operation.scratch_fields(nz(5)).unwrap();
+                let count = operation.scratch_fields_with(nz(5)).unwrap();
                 let mut scratch = vec![PastaField::ONE; count + 1];
                 let mut output = vec![PastaField::ONE; input.len()];
                 let joins = CountJoins::default();
                 assert!(matches!(
-                    operation.execute(
+                    operation.execute_with(
                         &input[..input.len() - 1],
                         &mut output,
                         &mut [],
@@ -849,7 +849,7 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                     })
                 ));
                 assert!(matches!(
-                    operation.execute(
+                    operation.execute_with(
                         &input,
                         &mut output[..input.len() - 1],
                         &mut [],
@@ -865,7 +865,7 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                 ));
                 if count > 0 {
                     assert!(matches!(
-                        operation.execute(
+                        operation.execute_with(
                             &input,
                             &mut output,
                             &mut [],
@@ -878,7 +878,7 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                     ));
                 }
                 assert!(matches!(
-                    operation.execute(
+                    operation.execute_with(
                         &input,
                         &mut output,
                         &mut [],
@@ -894,7 +894,7 @@ fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
                 ));
                 assert!(output.iter().all(|v| *v == PastaField::ONE));
                 operation
-                    .execute(
+                    .execute_with(
                         &input,
                         &mut output,
                         &mut [],

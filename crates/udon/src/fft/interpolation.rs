@@ -1,7 +1,7 @@
 use super::transform::Run;
 use super::{
-    ElementOrder, ExecutionOptions, Executor, FftError, PastaField, Plan, PrimeModulus,
-    ScratchRequirements, check_length,
+    ElementOrder, Executor, FftError, PastaField, PrimeModulus, ScratchRequirements, Strategy,
+    Transform, check_length,
 };
 
 /// Meaning of an interpolation class's current working storage.
@@ -19,7 +19,7 @@ pub enum ClassState {
 }
 
 pub(super) struct Class<'a, M: PrimeModulus> {
-    pub(super) plan: Plan<'a, M>,
+    pub(super) plan: Transform<'a, M>,
     pub(super) values: &'a mut [PastaField<M>],
     pub(super) order: ElementOrder,
     pub(super) state: ClassState,
@@ -38,7 +38,7 @@ impl<M: PrimeModulus> core::fmt::Debug for Class<'_, M> {
 
 impl<'a, M: PrimeModulus> Class<'a, M> {
     pub fn new(
-        plan: Plan<'a, M>,
+        plan: Transform<'a, M>,
         values: &'a mut [PastaField<M>],
         order: ElementOrder,
     ) -> Result<Self, FftError> {
@@ -60,7 +60,7 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
 }
 
 const fn include_lift(
-    options: ExecutionOptions,
+    options: Strategy,
     required: ScratchRequirements,
     output_size: usize,
     lift_size: usize,
@@ -78,12 +78,12 @@ const fn include_lift(
 pub const fn interpolation_scratch<M: PrimeModulus>(
     output: &Class<'_, M>,
     lifts: &[Class<'_, M>],
-    options: ExecutionOptions,
+    options: Strategy,
 ) -> Result<ScratchRequirements, FftError> {
     if let Err(error) = output.check_evaluations() {
         return Err(error);
     }
-    let mut required = match output.plan.scratch_requirements(options) {
+    let mut required = match output.plan.scratch_requirements_with(options) {
         Ok(required) => required,
         Err(error) => return Err(error),
     };
@@ -109,7 +109,7 @@ pub const fn interpolation_scratch<M: PrimeModulus>(
 pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
     output: &mut Class<'_, M>,
     lifts: &mut [Class<'_, M>],
-    options: ExecutionOptions,
+    options: Strategy,
     executor: &E,
     scratch: &mut [PastaField<M>],
 ) -> Result<(), FftError> {
@@ -119,7 +119,7 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
         if lift.order == ElementOrder::Natural {
             lift.plan.permute(lift.values);
         }
-        let required = lift.plan.scratch_requirements(options)?.field_elements;
+        let required = lift.plan.scratch_requirements_with(options)?.field_elements;
         lift.plan.run(
             lift.values,
             options,
@@ -134,7 +134,10 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
     if output.order == ElementOrder::Natural {
         output.plan.permute(output.values);
     }
-    let required = output.plan.scratch_requirements(options)?.field_elements;
+    let required = output
+        .plan
+        .scratch_requirements_with(options)?
+        .field_elements;
     output.plan.run(
         output.values,
         options,

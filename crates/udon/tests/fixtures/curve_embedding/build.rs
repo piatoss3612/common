@@ -21,7 +21,6 @@ fn generate<C: PastaCurve>(name: &str, damage: &str) {
     let mut projective = [ProjectivePoint::IDENTITY; record::REQUIREMENTS.projective_scratch];
     let mut field = [PastaField::ZERO; record::REQUIREMENTS.field_scratch];
     FixedBaseTable::prepare(
-        record::DESCRIPTION,
         &record.base,
         &mut record.entries,
         &mut projective,
@@ -29,7 +28,6 @@ fn generate<C: PastaCurve>(name: &str, damage: &str) {
     )
     .unwrap();
     FixedBaseTable::prepare(
-        record::DESCRIPTION,
         &record.base,
         &mut record.cached,
         &mut projective,

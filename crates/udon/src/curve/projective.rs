@@ -2,7 +2,7 @@
 
 use core::{fmt, marker::PhantomData};
 
-use super::{AffinePoint, PastaCurve, Point, ProjectivePoint};
+use super::{AffinePoint, IncompleteDoubleAndAdd, PastaCurve, Point, ProjectivePoint};
 use crate::field::PastaField;
 
 impl<C: PastaCurve> fmt::Debug for ProjectivePoint<C> {
@@ -149,6 +149,88 @@ impl<C: PastaCurve> ProjectivePoint<C> {
             z,
             marker: PhantomData,
         }
+    }
+
+    /// Computes `A + (A + B)` and both addition slopes without inversion.
+    ///
+    /// Here `A = self` and `B = rhs`.
+    ///
+    /// Returns `None` if `A` is identity, or if either addition has equal
+    /// affine x-coordinates. These are incomplete additions: equal points
+    /// are rejected as well as inverse pairs. A successful result is
+    /// nonidentity.
+    ///
+    /// The result's [`slope_numerators`](IncompleteDoubleAndAdd::slope_numerators)
+    /// share the output point's Jacobian `z` as denominator. One inverse of `z`
+    /// suffices to recover both slopes and the point's affine coordinates.
+    ///
+    /// ```
+    /// use zakura_udon::{curve::PallasAffine, field::Fq};
+    ///
+    /// let base = PallasAffine::GENERATOR;
+    /// let a = base.to_projective().double();
+    /// let step = a.incomplete_double_and_add(&base).unwrap();
+    /// assert_eq!(step.point, base.mul_projective(&Fq::from_u64(5)));
+    /// assert!(base.to_projective().incomplete_double_and_add(&base).is_none());
+    ///
+    /// let inverse = step.point.coordinates().2.invert().unwrap();
+    /// let slopes = step.slope_numerators.map(|numerator| numerator.mul(&inverse));
+    /// let affine_a = a.to_point();
+    /// let (ax, ay) = affine_a.coordinates().unwrap();
+    /// let intermediate = a.add_mixed(&base).to_point();
+    /// for (other, slope) in [base.to_point(), intermediate].iter().zip(slopes) {
+    ///     let (x, y) = other.coordinates().unwrap();
+    ///     assert_eq!(slope.mul(&x.sub(ax)).reduce(), y.sub(ay).reduce());
+    /// }
+    /// ```
+    pub fn incomplete_double_and_add(
+        &self,
+        rhs: &AffinePoint<C>,
+    ) -> Option<IncompleteDoubleAndAdd<C>> {
+        let z_squared = self.z.square();
+        let z_cubed = z_squared.mul(&self.z);
+        let h = rhs.x.mul_sub(&z_squared, &self.x);
+        let r = rhs.y.mul_sub(&z_cubed, &self.y);
+        let h_squared = h.square();
+        let h_cubed = h_squared.mul(&h);
+        let x_h_squared = self.x.mul(&h_squared);
+        // R = A + B has x numerator x_r and Jacobian denominator z*h.
+        let x_r = r.square().sub(&h_cubed).sub(&x_h_squared.double());
+        let d = x_h_squared.sub(&x_r);
+        // In affine coordinates, A.x - R.x = d / (self.z*h)^2. The product
+        // self.z*h*d therefore vanishes exactly for identity A or equal
+        // x-coordinates in either addition.
+        let z = self.z.mul(&h).mul(&d);
+        if z.is_zero() {
+            return None;
+        }
+        let d_squared = d.square();
+        let d_cubed = d_squared.mul(&d);
+        let y_h_cubed = self.y.mul(&h_cubed);
+        let r_d = r.mul(&d);
+        // R's y numerator is r*d - self.y*h^3, so dividing A.y - R.y by
+        // A.x - R.x gives (2*self.y*h^3 - r*d) / (self.z*h*d). The first
+        // slope r/(self.z*h) uses r*d over that same output z.
+        let lambda_2_numerator = y_h_cubed.double().sub(&r_d);
+        let x_h_squared_d_squared = x_h_squared.mul(&d_squared);
+        let x = lambda_2_numerator
+            .square()
+            .sub(&x_h_squared_d_squared.double())
+            .add(&d_cubed);
+        let y = lambda_2_numerator.mul_sub_product(
+            &x_h_squared_d_squared.sub(&x),
+            &y_h_cubed,
+            &d_cubed,
+        );
+        Some(IncompleteDoubleAndAdd {
+            point: Self {
+                x,
+                y,
+                z,
+                marker: PhantomData,
+            },
+            slope_numerators: [r_d, lambda_2_numerator],
+        })
     }
 
     /// Returns `self + rhs`, handling identity, equal points, and inverse pairs

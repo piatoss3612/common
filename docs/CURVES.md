@@ -68,6 +68,13 @@ assert_eq!(result, base.mul_projective(&Fq::from_u64(8)));
 assert!(result.sub(&result).is_identity());
 ```
 
+[`ProjectivePoint::incomplete_double_and_add`](../crates/udon/src/curve/projective.rs)
+fuses `A + B` and `A + (A + B)` for projective `A` and affine `B`. It returns
+the resulting point and both slope numerators without inversion. Callers can
+use [`try_batch_invert_by`](../crates/udon/src/field/batch.rs) on the returned
+points' `z` coordinates to recover slopes and affine coordinates together.
+The method's docs define the rejected inputs and show slope recovery.
+
 Ordinary scalar multiplication needs no caller preparation or scratch and uses
 bounded internal stack storage. The current implementation uses an inversion-free
 binary ladder for scalars below `2^64`. For larger scalars and nonidentity bases,

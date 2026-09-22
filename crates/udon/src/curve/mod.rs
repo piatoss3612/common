@@ -113,6 +113,23 @@ pub struct ProjectivePoint<C: PastaCurve> {
     marker: PhantomData<C>,
 }
 
+/// The point and slopes returned by [`ProjectivePoint::incomplete_double_and_add`].
+///
+/// `A` is the projective input and `B` is the nonidentity affine input.
+#[derive(Clone, Copy, Debug)]
+pub struct IncompleteDoubleAndAdd<C: PastaCurve> {
+    /// The nonidentity result `A + (A + B)`.
+    pub point: ProjectivePoint<C>,
+    /// Numerators of the slopes for `A + B`, then `A + (A + B)`, in that order.
+    ///
+    /// With `R = A + B`, the slopes are `(B.y - A.y) / (B.x - A.x)` and
+    /// `(R.y - A.y) / (R.x - A.x)`, using affine coordinates.
+    /// Both use the returned point's nonzero Jacobian `z` coordinate as their
+    /// denominator, available through [`ProjectivePoint::coordinates`]. Retain
+    /// that denominator if replacing `point` before recovering the slopes.
+    pub slope_numerators: [PastaField<C::Base>; 2],
+}
+
 /// A nonidentity affine Pallas point over [`crate::field::Fp`].
 pub type PallasAffine = AffinePoint<Pallas>;
 /// An affine Pallas point, including identity.

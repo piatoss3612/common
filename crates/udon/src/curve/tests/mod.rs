@@ -10,6 +10,7 @@ mod eisenstein;
 mod eisenstein_batch;
 mod fixed_base;
 mod glv;
+mod incomplete;
 pub(crate) mod reference;
 
 fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {

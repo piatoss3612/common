@@ -6,6 +6,10 @@ use super::*;
 /// Use [`Self::execute`] for preserved input, [`Self::execute_disposable`] to
 /// reuse an evaluation buffer for coefficients, or [`ExpansionRun`] for
 /// incremental scheduling. Output layouts follow [`ExpansionOrder`].
+///
+/// Query [`Self::coefficient_fields`], [`Self::scratch_fields`], and
+/// [`Self::snapshot_fields`] before binding buffers for synchronous or
+/// incremental execution.
 #[derive(Clone, Copy, Debug)]
 pub struct ExpansionPlan<'t, M: PrimeModulus> {
     pub(super) expansion: Expansion<'t, M>,
@@ -13,11 +17,14 @@ pub struct ExpansionPlan<'t, M: PrimeModulus> {
     pub(super) order: ExpansionOrder,
     pub(super) support: InputSupport,
     pub(super) input_order: ElementOrder,
-    tile: NonZeroUsize,
-    codelet: Codelet,
+    forward: FftPlan<'t, M>,
+    in_place: Option<FftPlan<'t, M>>,
+    inverse: Option<FftPlan<'t, M>>,
     coefficient_scale: PastaField<M>,
+    coefficient_fields: usize,
+    snapshot_fields: usize,
+    pub(super) scratch_fields: usize,
     pub(super) budget: crate::exec::TaskBudget,
-    execution: Option<(super::super::StorageLayout, crate::exec::ExecutionOptions)>,
     memory_limit: Option<usize>,
 }
 
@@ -45,7 +52,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         layout: super::super::StorageLayout,
         options: crate::exec::ExecutionOptions,
     ) -> Result<Self, FftError> {
-        let mut result = Self::with_strategy(
+        let shape = Self::with_strategy(
             expansion,
             storage,
             order,
@@ -54,10 +61,10 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
             NonZeroUsize::MIN,
             Codelet::Radix2,
         )?;
-        let coefficient_bytes = result.coefficient_fields() * core::mem::size_of::<PastaField<M>>();
+        let coefficient_bytes = shape.coefficient_fields() * core::mem::size_of::<PastaField<M>>();
         let mut budget = options.task_budget();
         loop {
-            let (jobs, inner) = budget.partition(result.residues()).unwrap();
+            let (jobs, inner) = budget.partition(expansion.layout.residues()).unwrap();
             let mut inner_options = options.with_task_budget(inner);
             if let Some(limit) = options.memory_limit() {
                 let remaining =
@@ -69,39 +76,22 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
                         })?;
                 inner_options = inner_options.with_memory_limit(remaining / jobs);
             }
-            result.execution = Some((layout, inner_options));
-            let validation = result
-                .try_transform(0, storage == ExpansionStorage::ReuseOutput)
-                .and_then(|transform| {
-                    if storage != ExpansionStorage::Coefficients {
-                        result.try_inverse()?;
-                    }
-                    Ok(transform)
+            let validation =
+                Self::resolve(expansion, storage, order, support, input_order, |request| {
+                    FftPlan::new(expansion.base, request, layout, inner_options)
                 });
             match validation {
-                Ok(transform) => {
-                    result.tile = NonZeroUsize::new(transform.tile()).unwrap();
-                    break;
+                Ok(mut result) => {
+                    result.budget = budget;
+                    result.scratch_fields = result.snapshot_fields * jobs;
+                    result.memory_limit = options.memory_limit();
+                    return Ok(result);
                 }
                 Err(FftError::MemoryLimit { .. }) if budget.get() > 1 => {
                     budget = crate::exec::TaskBudget::new(budget.get().div_ceil(2)).unwrap();
                 }
                 Err(error) => return Err(error),
             }
-        }
-        result.budget = budget;
-        result.memory_limit = options.memory_limit();
-        Ok(result)
-    }
-
-    fn resolve(
-        &self,
-        transform: Transform<'t, M>,
-        request: TransformRequest,
-    ) -> Result<FftPlan<'t, M>, FftError> {
-        match self.execution {
-            Some((layout, options)) => FftPlan::new(transform, request, layout, options),
-            None => FftPlan::with_strategy(transform, request, self.tile, self.codelet),
         }
     }
 
@@ -121,27 +111,95 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         tile: NonZeroUsize,
         codelet: Codelet,
     ) -> Result<Self, FftError> {
+        Self::resolve(expansion, storage, order, support, input_order, |request| {
+            FftPlan::with_strategy(expansion.base, request, tile, codelet)
+        })
+    }
+
+    fn resolve(
+        expansion: Expansion<'t, M>,
+        storage: ExpansionStorage,
+        order: ExpansionOrder,
+        support: InputSupport,
+        input_order: ElementOrder,
+        mut resolve: impl FnMut(TransformRequest) -> Result<FftPlan<'t, M>, FftError>,
+    ) -> Result<Self, FftError> {
         if storage != ExpansionStorage::Coefficients && support != InputSupport::Full {
             return Err(FftError::InvalidExecution);
         }
-        let result = Self {
+        // Geometry depends on storage and orders, but not on a residue's shift
+        // or scaling table. Retaining templates and workspace counts avoids
+        // replanning during resource queries and residue execution, without
+        // storing parameters for every residue. Bind each residue's shift and
+        // scales when it is executed.
+        let request = TransformRequest {
+            input_storage: InputStorage::Preserve,
+            support,
+            input_order: if storage == ExpansionStorage::Coefficients {
+                input_order
+            } else {
+                ElementOrder::Natural
+            },
+            output_order: if order == ExpansionOrder::Residues {
+                ElementOrder::Natural
+            } else {
+                ElementOrder::BitReversed
+            },
+            ..TransformRequest::new(Direction::Forward)
+        };
+        let forward = resolve(request)?;
+        let in_place = if storage == ExpansionStorage::ReuseOutput {
+            Some(resolve(TransformRequest {
+                input_storage: InputStorage::InPlace,
+                ..request
+            })?)
+        } else {
+            None
+        };
+        let inverse = if storage == ExpansionStorage::Coefficients {
+            None
+        } else {
+            Some(resolve(TransformRequest {
+                input_storage: if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
+                    InputStorage::InPlace
+                } else {
+                    InputStorage::Preserve
+                },
+                input_order,
+                inverse_scale: match storage {
+                    ExpansionStorage::CoefficientWorkspace { scale }
+                    | ExpansionStorage::DisposableInput { scale } => scale,
+                    _ => InverseScale::Normalized,
+                },
+                ..TransformRequest::new(Direction::Inverse)
+            })?)
+        };
+        let coefficient_fields = if matches!(storage, ExpansionStorage::CoefficientWorkspace { .. })
+        {
+            expansion.base.domain().size()
+        } else {
+            0
+        };
+        let snapshot_fields = forward
+            .retained_fields()
+            .max(in_place.as_ref().map_or(0, FftPlan::retained_fields))
+            .max(inverse.as_ref().map_or(0, FftPlan::retained_fields));
+        Ok(Self {
             expansion,
             storage,
             order,
             support,
             input_order,
-            tile,
-            codelet,
+            forward,
+            in_place,
+            inverse,
             coefficient_scale: PastaField::ONE,
-            execution: None,
+            coefficient_fields,
+            snapshot_fields,
+            scratch_fields: snapshot_fields,
             memory_limit: None,
             budget: crate::exec::TaskBudget::SERIAL,
-        };
-        result.try_transform(0, false)?;
-        if storage != ExpansionStorage::Coefficients {
-            result.try_inverse()?;
-        }
-        Ok(result)
+        })
     }
 
     /// Multiplies preserved coefficients by a common normalization factor.
@@ -161,27 +219,23 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
     }
 
     /// Number of independently completed output residue blocks.
-    pub fn residues(&self) -> usize {
+    pub const fn residues(&self) -> usize {
         self.expansion.layout.residues()
     }
 
     /// Fields in each residue and in a retained coefficient bank.
-    pub fn base_size(&self) -> usize {
+    pub const fn base_size(&self) -> usize {
         self.expansion.base.domain().size()
     }
 
-    /// Writable fragment size within every base transform.
-    pub fn tile(&self) -> usize {
-        self.tile.get().min(self.base_size())
+    /// Writable fragment size selected for forward residue transforms.
+    pub const fn tile(&self) -> usize {
+        self.forward.tile
     }
 
     /// Additional coefficient fields, excluding reused input or output banks.
-    pub fn coefficient_fields(&self) -> usize {
-        if matches!(self.storage, ExpansionStorage::CoefficientWorkspace { .. }) {
-            self.base_size()
-        } else {
-            0
-        }
+    pub const fn coefficient_fields(&self) -> usize {
+        self.coefficient_fields
     }
 
     /// Snapshot field count per retained transform slot.
@@ -189,16 +243,8 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
     /// The inverse and successive residues reuse that bank. Charge all
     /// provisioned slots and metadata, even while idle; coefficients remain live
     /// through consumers.
-    pub fn snapshot_fields(&self) -> usize {
-        let residue = self
-            .transform(0, self.storage == ExpansionStorage::ReuseOutput)
-            .retained_fields();
-        let inverse = if self.storage == ExpansionStorage::Coefficients {
-            0
-        } else {
-            self.inverse().retained_fields()
-        };
-        residue.max(inverse)
+    pub const fn snapshot_fields(&self) -> usize {
+        self.snapshot_fields
     }
 
     fn coefficients(&self) -> ExpansionBank {
@@ -212,43 +258,22 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
     }
 
     pub(super) fn inverse(&self) -> FftPlan<'t, M> {
-        self.try_inverse().expect("validated inverse geometry")
+        self.inverse.expect("evaluation input requires an inverse")
     }
 
     pub(super) fn transform(&self, block: usize, in_place: bool) -> FftPlan<'t, M> {
-        self.try_transform(block, in_place)
-            .expect("validated residue geometry")
-    }
-
-    fn try_inverse(&self) -> Result<FftPlan<'t, M>, FftError> {
-        let scale = match self.storage {
-            ExpansionStorage::CoefficientWorkspace { scale }
-            | ExpansionStorage::DisposableInput { scale } => scale,
-            _ => InverseScale::Normalized,
-        };
-        self.resolve(
-            self.expansion.base,
-            TransformRequest {
-                input_storage: if !matches!(self.storage, ExpansionStorage::DisposableInput { .. })
-                {
-                    crate::fft::InputStorage::Preserve
-                } else {
-                    crate::fft::InputStorage::InPlace
-                },
-                input_order: self.input_order,
-                inverse_scale: scale,
-                ..TransformRequest::new(Direction::Inverse)
-            },
-        )
-    }
-
-    fn try_transform(&self, block: usize, in_place: bool) -> Result<FftPlan<'t, M>, FftError> {
         let residue = if self.order == ExpansionOrder::BitReversed {
             reverse(block, self.residues().ilog2())
         } else {
             block
         };
-        let base = self.expansion.residue_base(residue);
+        let mut transform = if in_place {
+            self.in_place
+                .expect("output reuse requires an in-place template")
+        } else {
+            self.forward
+        };
+        transform.plan = self.expansion.residue_base(residue);
         let normalized = !matches!(
             self.storage,
             ExpansionStorage::CoefficientWorkspace {
@@ -262,30 +287,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         } else {
             self.expansion.base.domain().domain().size_inverse()
         };
-        Ok(self
-            .resolve(
-                base,
-                TransformRequest {
-                    input_storage: if !in_place {
-                        crate::fft::InputStorage::Preserve
-                    } else {
-                        crate::fft::InputStorage::InPlace
-                    },
-                    support: self.support,
-                    input_order: if self.storage == ExpansionStorage::Coefficients {
-                        self.input_order
-                    } else {
-                        ElementOrder::Natural
-                    },
-                    output_order: if self.order == ExpansionOrder::Residues {
-                        ElementOrder::Natural
-                    } else {
-                        ElementOrder::BitReversed
-                    },
-                    ..TransformRequest::new(Direction::Forward)
-                },
-            )?
-            .with_residue_scales(self.expansion, residue, extra))
+        transform.with_residue_scales(self.expansion, residue, extra)
     }
 }
 
@@ -373,7 +375,7 @@ impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS>
         if plan.memory_limit.is_some_and(|limit| bytes > limit) {
             return Err(TaskError::Storage);
         }
-        let dummy = plan.transform(0, false);
+        let dummy = plan.forward;
         let mut metadata = identities.iter_mut().zip(storage);
         let runs = core::array::from_fn(|_| {
             let (id, slots) = metadata.next().unwrap();

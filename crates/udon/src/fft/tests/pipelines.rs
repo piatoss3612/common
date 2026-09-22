@@ -250,6 +250,173 @@ fn expansion_storage_normalization_streaming_and_direct_bridge() {
     expansions::<PallasScalar>();
 }
 
+#[test]
+fn residue_domains_retain_inverse_shifts_and_extended_rows() {
+    fn check<M: PrimeModulus>() {
+        for log in [0, 1, 5] {
+            let base = Transform::new(Domain::<M>::new(log).unwrap().subgroup());
+            for extra in [0, 1, 4] {
+                for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
+                    let extended = Domain::new(log + extra).unwrap().coset(shift).unwrap();
+                    let expansion = Expansion::new(base, extended, None).unwrap();
+                    for residue in 0..expansion.layout().residues() {
+                        let domain = expansion
+                            .residue(residue, ElementOrder::Natural)
+                            .unwrap()
+                            .domain();
+                        assert_eq!(
+                            domain.inverse_shift().reduce(),
+                            domain.shift().invert().unwrap().reduce()
+                        );
+                        for row in 0..base.domain().size() {
+                            let extended_row = residue + expansion.layout().residues() * row;
+                            let expected =
+                                shift.mul(&extended.domain().root().pow_u64(extended_row as u64));
+                            let actual = domain
+                                .shift()
+                                .mul(&domain.domain().root().pow_u64(row as u64));
+                            assert_eq!(actual.reduce(), expected.reduce());
+                            assert_eq!(
+                                domain.inverse_scale(row).reduce(),
+                                base.domain()
+                                    .domain()
+                                    .size_inverse()
+                                    .mul(&domain.shift().pow_u64(row as u64).invert().unwrap())
+                                    .reduce()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
+#[test]
+fn resolved_expansion_counts_cover_all_storage_modes_under_memory_limits() {
+    // Calling these queries from a const function checks that workspace sizing
+    // remains available during constant evaluation.
+    const fn counts<M: PrimeModulus>(plan: &ExpansionPlan<'_, M>) -> (usize, usize, usize) {
+        (
+            plan.coefficient_fields(),
+            plan.snapshot_fields(),
+            plan.scratch_fields(),
+        )
+    }
+
+    fn check<M: PrimeModulus>() {
+        let base = Transform::new(Domain::<M>::new(5).unwrap().subgroup());
+        let domain = Domain::new(8)
+            .unwrap()
+            .coset(PastaField::from_u64(7))
+            .unwrap();
+        let expansion = Expansion::new(base, domain, None).unwrap();
+        let coefficients = inputs(base.domain().size());
+        let expected = direct(&coefficients, domain);
+        let evaluations = direct(&coefficients, base.domain());
+        let mut accepted = 0;
+        let mut rejected = 0;
+        for storage in [
+            ExpansionStorage::Coefficients,
+            ExpansionStorage::ReuseOutput,
+            ExpansionStorage::CoefficientWorkspace {
+                scale: InverseScale::Normalized,
+            },
+            ExpansionStorage::CoefficientWorkspace {
+                scale: InverseScale::Unscaled,
+            },
+            ExpansionStorage::DisposableInput {
+                scale: InverseScale::Normalized,
+            },
+            ExpansionStorage::DisposableInput {
+                scale: InverseScale::Unscaled,
+            },
+        ] {
+            for order in [ExpansionOrder::Residues, ExpansionOrder::BitReversed] {
+                for input_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                    for limit in [0, 32 * 32, 32 * 512] {
+                        let plan = ExpansionPlan::new(
+                            expansion,
+                            storage,
+                            order,
+                            InputSupport::Full,
+                            input_order,
+                            StorageLayout::Fragments {
+                                length: nz(4),
+                                whole_bank: false,
+                            },
+                            crate::exec::ExecutionOptions::default()
+                                .with_task_budget(crate::exec::TaskBudget::new(5).unwrap())
+                                .with_memory_limit(limit),
+                        );
+                        let plan = match plan {
+                            Ok(plan) => plan,
+                            Err(FftError::MemoryLimit { .. }) => {
+                                rejected += 1;
+                                continue;
+                            }
+                            Err(error) => panic!("unexpected planning error: {error:?}"),
+                        };
+                        accepted += 1;
+                        let (workspace, snapshot, scratch) = counts(&plan);
+                        assert!(
+                            (workspace + scratch) * core::mem::size_of::<PastaField<M>>() <= limit
+                        );
+                        assert!(snapshot <= scratch);
+                        let mut input = if storage == ExpansionStorage::Coefficients {
+                            coefficients.clone()
+                        } else {
+                            evaluations.clone()
+                        };
+                        if input_order == ElementOrder::BitReversed {
+                            let natural = input.clone();
+                            for (index, value) in input.iter_mut().enumerate() {
+                                *value = natural[reverse(index, base.domain().size().ilog2())];
+                            }
+                        }
+                        let mut output = vec![PastaField::ONE; domain.size()];
+                        let mut workspace = vec![PastaField::ONE; workspace];
+                        let mut scratch = vec![PastaField::ONE; scratch];
+                        if matches!(storage, ExpansionStorage::DisposableInput { .. }) {
+                            plan.execute_disposable(
+                                &mut input,
+                                &mut output,
+                                None,
+                                &mut scratch,
+                                &SerialExecutor,
+                            );
+                        } else {
+                            plan.execute(
+                                &input,
+                                &mut output,
+                                &mut workspace,
+                                None,
+                                &mut scratch,
+                                &SerialExecutor,
+                            );
+                        }
+                        let layout = if order == ExpansionOrder::Residues {
+                            EvaluationLayout::Residues(expansion.layout())
+                        } else {
+                            EvaluationLayout::BitReversed
+                        };
+                        let view = EvaluationView::bind(&output, domain, layout);
+                        for (row, value) in expected.iter().enumerate() {
+                            assert_eq!(view.get(row).unwrap().reduce(), value.reduce());
+                        }
+                        assert_eq!(counts(&plan), (workspace.len(), snapshot, scratch.len()));
+                    }
+                }
+            }
+        }
+        assert!(accepted > 0 && rejected > 0);
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
 fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
     for log in [0, 4, 8, 11] {
         let subgroup = Domain::<M>::new(log).unwrap().subgroup();

@@ -153,21 +153,20 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
     /// residue number, `r` is the expansion's residue count, and `0 <= k < n`
     /// for base size `n`.
     pub fn domain(self) -> CosetDomain<M> {
-        self.expansion
-            .base
-            .domain()
-            .domain()
-            .coset(
-                self.expansion.extended.shift().mul(
-                    &self
-                        .expansion
-                        .extended
-                        .domain()
-                        .root()
-                        .pow_u64(self.residue as u64),
-                ),
-            )
-            .unwrap()
+        let extended = self.expansion.extended;
+        let exponent = self.residue as u64;
+        // Both factors are nonzero, and their inverses are already known.
+        // For residue s, (shift * root^s)^-1 = inverse_shift * inverse_root^s,
+        // so the trusted constructor needs no additional field inversion.
+        CosetDomain::with_inverse(
+            self.expansion.base.domain().domain(),
+            extended
+                .shift()
+                .mul(&extended.domain().root().pow_u64(exponent)),
+            extended
+                .inverse_shift()
+                .mul(&extended.domain().inverse_root().pow_u64(exponent)),
+        )
     }
     /// Scratch for this residue's output order.
     ///

@@ -307,7 +307,8 @@ coefficients still need the full product.
 input support, ordering, and resource constraints. `coefficient_fields()` reports
 separate coefficient workspace; `scratch_fields()` reports synchronous transform
 scratch. The workspace ceiling covers both. The plan divides its total task
-allowance across concurrent residues and their transforms.
+allowance across concurrent residues and their transforms. Query these counts
+before allocating the execution buffers.
 
 | Storage policy | Input | Additional coefficient fields | Scheduling dependency |
 | --- | --- | --- | --- |

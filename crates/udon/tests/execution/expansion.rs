@@ -108,6 +108,7 @@ fn check<M: PrimeModulus>() {
                         .unwrap();
                         let mut sizes = vec![size; 2 + residues + SLOTS + residues];
                         sizes[0] = count;
+                        sizes[2 + residues..2 + residues + SLOTS].fill(plan.snapshot_fields());
                         let banks = Banks::new(&sizes, 8, 2 + residues..2 + residues + SLOTS);
                         banks.write(0, &input[..count]);
                         let factor: Vec<_> = (0..size)

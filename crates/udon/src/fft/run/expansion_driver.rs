@@ -9,8 +9,8 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
     /// The inverse and residues reuse scratch; coefficient storage from
     /// [`Self::coefficient_fields`] is separate. The task budget is divided across
     /// residues and within each transform.
-    pub fn scratch_fields(&self) -> usize {
-        self.scratch_fields_with(NonZeroUsize::new(self.budget.get()).unwrap())
+    pub const fn scratch_fields(&self) -> usize {
+        self.scratch_fields
     }
 
     pub(crate) fn scratch_fields_with(&self, max_tasks: NonZeroUsize) -> usize {

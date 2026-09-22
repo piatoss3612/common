@@ -171,6 +171,34 @@ pub(super) fn representatives<C: PastaCurve>(base: &ProjectivePoint<C>) -> [Proj
     ]
 }
 
+pub(super) fn representatives_affine<C: PastaCurve>(
+    base: &AffinePoint<C>,
+) -> [ProjectivePoint<C>; 8] {
+    // Use the same coefficient identities as representatives, keeping phi(base)
+    // affine. Commuting sums and negating the projective operand in differences
+    // makes six of the seven additions mixed; intermediates need no inversion.
+    let phi = base.endomorphism();
+    let difference = base.to_projective().add_mixed(&phi.neg());
+    let b = difference.sub(&difference.endomorphism());
+    let b_phi = b.endomorphism();
+    let minus_three = b_phi.endomorphism();
+    let three_a = minus_three.add_mixed(&phi);
+    let three_b = minus_three.neg().add_mixed(&phi);
+    let four_a = b_phi.neg().add_mixed(&phi);
+    let four_b = b_phi.add_mixed(&phi);
+    let nineteen = four_b.add_mixed(&phi);
+    [
+        base.to_projective(),
+        difference,
+        four_a.endomorphism(),
+        three_b.endomorphism().neg(),
+        minus_three.neg(),
+        three_a.neg(),
+        four_b.endomorphism().endomorphism(),
+        nineteen.endomorphism().endomorphism(),
+    ]
+}
+
 /// Eight borrowed representatives for repeated multiplication of one base.
 ///
 /// Write `[a] P` for multiplication of point `P` by a signed integer `a`.
@@ -244,7 +272,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
     ) -> Self {
         assert_scratch("projective", 8, projective_scratch.len());
         assert_scratch("field", 8, field_scratch.len());
-        projective_scratch[..8].copy_from_slice(&representatives(&base.to_projective()));
+        projective_scratch[..8].copy_from_slice(&representatives_affine(base));
         normalize(&projective_scratch[..8], &mut field_scratch[..8], entries);
         Self {
             base: *base,
@@ -330,21 +358,20 @@ pub(super) fn multiply<C: PastaCurve, E: CurveTableEntry<C>>(
     result
 }
 
-/// Multiplies a base using a temporary compact table.
+/// Multiplies using the supplied representatives as a temporary compact table.
 ///
-/// `base` must be nonidentity, and `scalar` must be below `C::Scalar`'s modulus.
+/// `points` must represent a nonidentity base in `REPRESENTATIVES` order, and
+/// `scalar` must be below `C::Scalar`'s modulus.
 pub(super) fn multiply_once<C: PastaCurve>(
-    base: &ProjectivePoint<C>,
+    points: &[ProjectivePoint<C>; 8],
     scalar: CanonicalUint,
 ) -> ProjectivePoint<C> {
-    // Keep the input's projective scaling until batch normalization, sharing
-    // one inversion across all eight representatives and avoiding a separate
-    // base inversion. Cached coordinates make the joint ladder's rotations
-    // require only copies and additions.
-    let points = representatives(base);
+    // Both input representations share one inversion across all eight entries.
+    // Cached coordinates make the joint ladder's rotations require only copies
+    // and additions.
     let mut entries = [PreparedAffinePoint::from_affine(&AffinePoint::GENERATOR); 8];
     let mut field = [PastaField::ZERO; 8];
-    normalize(&points, &mut field, &mut entries);
+    normalize(points, &mut field, &mut entries);
     multiply(
         &entries,
         EisensteinScalar::<C>::from_canonical(scalar).digits(),

@@ -31,12 +31,12 @@ fn group_laws<C: PastaCurve>() {
     assert_eq!(Point::<C>::from_xy(affine.x, affine.y), Some(generator));
     assert_eq!(Point::<C>::from_xy(PastaField::ONE, PastaField::ONE), None);
     assert_eq!(generator.neg().neg(), generator);
-    assert_eq!(generator.add(&identity), generator);
-    assert_eq!(identity.add(&generator), generator);
-    assert_eq!(generator.sub(&generator), identity);
-    assert_eq!(generator.add(&generator.neg()), identity);
+    assert_eq!(generator.add(&identity), projective);
+    assert_eq!(identity.add(&generator), projective);
+    assert_eq!(generator.sub(&generator), ProjectivePoint::IDENTITY);
+    assert_eq!(generator.add(&generator.neg()), ProjectivePoint::IDENTITY);
     assert_eq!(generator.add(&generator), generator.double());
-    assert_eq!(identity.double(), identity);
+    assert_eq!(identity.double(), ProjectivePoint::IDENTITY);
     assert_eq!(identity.neg(), identity);
     assert_eq!(projective.add(&projective), projective.double());
     assert_eq!(projective.add_mixed(&affine), projective.double());
@@ -64,7 +64,7 @@ fn group_laws<C: PastaCurve>() {
         );
         assert_eq!(scaled.add(&projective), projective.add(&scaled));
         assert_eq!(scaled.add(&scaled.neg()), ProjectivePoint::IDENTITY);
-        point = point.add(&generator);
+        point = point.add(&generator).to_point();
         multiple = multiple.add(&reference, &p);
     }
     assert_ne!(projective, projective.double());
@@ -107,13 +107,23 @@ fn group_laws<C: PastaCurve>() {
             .to_point()
             .as_affine()
             .unwrap();
-        let q = *p.to_point().add(&generator).as_affine().unwrap();
+        let q = *p.to_point().add(&generator).to_point().as_affine().unwrap();
         let a = scale(&p, scales[2 * i]);
         let same = scale(&p, scales[2 * i + 1]);
         let b = scale(&q, scales[2 * i + 1]);
         let modulus = modulus::<C::Base>();
         let rp = Reference::from_point(&p.to_point());
         let rq = Reference::from_point(&q.to_point());
+        let pp = p.to_point();
+        let qp = q.to_point();
+        rp.add(&rq, &modulus).assert_point(&pp.add(&qp).to_point());
+        rp.add(&Reference::from_point(&qp.neg()), &modulus)
+            .assert_point(&pp.sub(&qp).to_point());
+        rp.add(&rp, &modulus).assert_point(&pp.double().to_point());
+        assert_eq!(pp.add(&pp), pp.double());
+        assert!(pp.add(&pp.neg()).is_identity());
+        assert_eq!(pp.add(&identity), p.to_projective());
+        assert_eq!(identity.add(&pp), p.to_projective());
         rp.add(&rq, &modulus).assert_point(&a.add(&b).to_point());
         rp.add(&rq, &modulus)
             .assert_point(&a.add_mixed(&q).to_point());

@@ -4,7 +4,11 @@ use crate::test_support::modulus;
 fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
     let p = modulus::<C::Base>();
     // Use a nongenerator base as well as generator coverage in other tests.
-    let base = *Point::<C>::GENERATOR.double().as_affine().unwrap();
+    let base = *Point::<C>::GENERATOR
+        .double()
+        .to_point()
+        .as_affine()
+        .unwrap();
     for window_bits in 2..=8 {
         let description = FixedBaseDescription { window_bits };
         let required = description.requirements().unwrap();

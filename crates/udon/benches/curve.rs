@@ -142,11 +142,56 @@ fn curve<C: PastaCurve>(criterion: &mut Criterion, name: &str) {
     let mut group = criterion.benchmark_group(format!("{name}/point"));
     let left = lhs_affine.to_point();
     let right = affine.to_point();
-    bench(&mut group, "add", &(left, right), |(lhs, rhs)| lhs.add(rhs));
-    bench(&mut group, "sub", &(left, right), |(lhs, rhs)| lhs.sub(rhs));
-    bench(&mut group, "double", &left, |point| point.double());
+    bench(
+        &mut group,
+        "add_normalized",
+        &(left, right),
+        |(lhs, rhs)| lhs.add(rhs).to_point(),
+    );
+    bench(
+        &mut group,
+        "sub_normalized",
+        &(left, right),
+        |(lhs, rhs)| lhs.sub(rhs).to_point(),
+    );
+    bench(&mut group, "double_normalized", &left, |point| {
+        point.double().to_point()
+    });
+    bench(
+        &mut group,
+        "add_projective",
+        &(left, right),
+        |(lhs, rhs)| lhs.add(rhs),
+    );
+    bench(
+        &mut group,
+        "sub_projective",
+        &(left, right),
+        |(lhs, rhs)| lhs.sub(rhs),
+    );
+    bench(&mut group, "double_projective", &left, |point| {
+        point.double()
+    });
     bench(&mut group, "neg", &left, |point| point.neg());
     bench(&mut group, "affine_neg", &affine, |point| point.neg());
+    let inputs = values::<C::Scalar>().map(|scalar| generator.mul_projective(&scalar).to_point());
+    let expected = inputs.map(|point| point.add(&right).to_point());
+    let mut projective = [ProjectivePoint::IDENTITY; CORPUS_SIZE];
+    let mut scratch = [PastaField::ZERO; CORPUS_SIZE];
+    let mut output = expected;
+    // The result of the whole batch is affine. Allocation and input preparation
+    // stay outside timing so the measurement includes only arithmetic.
+    group.throughput(Throughput::Elements(CORPUS_SIZE as u64));
+    group.bench_function("add_corpus_normalized", |b| {
+        b.iter(|| {
+            for (point, result) in black_box(&inputs).iter().zip(&mut projective) {
+                *result = point.add(black_box(&right));
+            }
+            batch_normalize(&projective, &mut output, &mut scratch);
+            black_box(&output);
+        })
+    });
+    assert_eq!(output, expected);
     group.finish();
 
     coordinates_and_encoding(criterion, name, &affine);

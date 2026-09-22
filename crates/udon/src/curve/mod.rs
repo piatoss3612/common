@@ -24,7 +24,7 @@
 //! ```
 //! use zakura_udon::{curve::PallasPoint, field::Fq};
 //! let generator = PallasPoint::GENERATOR;
-//! assert_eq!(generator.mul_projective(&Fq::from_u64(2)).to_point(),
+//! assert_eq!(generator.mul_projective(&Fq::from_u64(2)),
 //!            generator.double());
 //! assert!(generator.add(&generator.neg()).is_identity());
 //! assert_eq!(PallasPoint::from_bytes(generator.to_bytes()), Some(generator));
@@ -89,8 +89,9 @@ pub struct AffinePoint<C: PastaCurve> {
 /// [`AffinePoint`]'s invariants. This type does not implement [`bento::Pod`];
 /// store nonidentity [`AffinePoint`] values or use [`Self::to_bytes`].
 ///
-/// Operations that return affine results invert a field element when needed;
-/// use [`ProjectivePoint`] to accumulate additions without these inversions.
+/// Addition, subtraction, and doubling return [`ProjectivePoint`] without
+/// inversion. Keep intermediate results projective, then use [`batch_normalize`]
+/// for several affine outputs or [`ProjectivePoint::to_point`] for one.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct Point<C: PastaCurve>(Option<AffinePoint<C>>);
 

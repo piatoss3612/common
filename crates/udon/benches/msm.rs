@@ -86,7 +86,7 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C>>(
 ) {
     let mut group = c.benchmark_group(format!("{curve}/{layout}"));
     let prepared = EisensteinScalar::new(scalar);
-    for n in [1, 8, 32, 64, 128, 512] {
+    for n in [1, 7, 8, 32, 64, 128, 512] {
         let r = EisensteinTableBatch::<C, E>::requirements(n).unwrap();
         let mut entries = vec![E::from_affine(&bases[0]); r.table_entries];
         let mut projective = vec![ProjectivePoint::IDENTITY; r.projective_scratch];

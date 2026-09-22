@@ -256,7 +256,10 @@ impl<C: PastaCurve> ProjectivePoint<C> {
         if scalar.highest_set_bit().is_some_and(|high| high < 64) {
             super::scalar::multiply_canonical(scalar, |point| point.add(self))
         } else {
-            super::eisenstein::multiply_once(self, scalar)
+            // Preserve the input's projective scaling until the representatives
+            // share an inversion; normalizing the base would add an inversion.
+            let points = super::eisenstein::representatives(self);
+            super::eisenstein::multiply_once(&points, scalar)
         }
     }
 }

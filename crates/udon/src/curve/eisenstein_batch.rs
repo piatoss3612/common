@@ -317,7 +317,7 @@ pub(super) fn prepare_inner<
         );
     } else if n < TABLE_AFFINE_MIN {
         for (base, points) in bases.iter().zip(projective.chunks_exact_mut(8)) {
-            points.copy_from_slice(&eisenstein::representatives(&base.affine().to_projective()));
+            points.copy_from_slice(&eisenstein::representatives_affine(&base.affine()));
         }
         eisenstein::normalize(projective, field, entries);
     } else {

@@ -5,12 +5,29 @@ use num_bigint::BigUint;
 
 fn compact<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
     let generator = AffinePoint::<C>::GENERATOR;
-    for base in [
+    let mut bases = Vec::from([
         generator,
         generator.neg(),
         generator.endomorphism(),
-        *generator.to_point().double().as_affine().unwrap(),
-    ] {
+        *generator
+            .to_point()
+            .double()
+            .to_point()
+            .as_affine()
+            .unwrap(),
+    ]);
+    bases.extend(
+        field_samples::<C::Scalar>()
+            .filter(|scalar| !scalar.is_zero())
+            .take(8)
+            .map(|scalar| {
+                *crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(&generator))
+                    .to_point()
+                    .as_affine()
+                    .unwrap()
+            }),
+    );
+    for base in bases {
         let mut entries = [E::from_affine(&generator); 8];
         let mut projective = [ProjectivePoint::GENERATOR; 10];
         let mut field = [PastaField::ONE; 10];
@@ -31,8 +48,14 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
         let p = modulus::<C::Base>();
         let reference = Reference::from_point(&base.to_point());
         let phi = Reference::from_point(&base.endomorphism().to_point());
+        let scaled_representatives =
+            crate::curve::eisenstein::representatives(&scaled(&base.to_point(), 11));
         // Independent affine formulas establish representative ordering.
-        for (&(a, b), entry) in REPRESENTATIVES.iter().zip(table.as_array()) {
+        for ((&(a, b), entry), projective) in REPRESENTATIVES
+            .iter()
+            .zip(table.as_array())
+            .zip(scaled_representatives)
+        {
             let first = reference.mul(&BigUint::from(a as u8), &p);
             let mut second = phi.mul(&BigUint::from(b.unsigned_abs()), &p);
             if b < 0
@@ -40,9 +63,9 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
             {
                 *y = &p - &*y;
             }
-            first
-                .add(&second, &p)
-                .assert_point(&entry.affine().to_point());
+            let expected = first.add(&second, &p);
+            expected.assert_point(&entry.affine().to_point());
+            expected.assert_point(&projective.to_point());
         }
         for scalar in scalar_corpus::<C>() {
             let expected = crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(&base));

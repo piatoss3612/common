@@ -171,7 +171,13 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
         for window in entries[..requirements.table_entries - 1].chunks_exact_mut(h) {
             projective_scratch[0] = window_base;
             for i in 1..h {
-                projective_scratch[i] = projective_scratch[i - 1].add(&window_base);
+                // Index i holds (i + 1) times the base. Every even multiple
+                // has its half at i / 2, so it needs only a doubling.
+                projective_scratch[i] = if i % 2 == 1 {
+                    projective_scratch[i / 2].double()
+                } else {
+                    projective_scratch[i - 1].add(&window_base)
+                };
             }
             batch::normalize(projective_scratch, field_scratch, |index, point| {
                 // A nonzero base in a prime-order group stays nonzero for these

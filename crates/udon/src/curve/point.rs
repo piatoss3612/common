@@ -75,23 +75,26 @@ impl<C: PastaCurve> Point<C> {
         Self(self.0.map(|point| point.neg()))
     }
 
-    /// Returns `self + rhs`, normalizing the result to affine coordinates.
-    pub fn add(&self, rhs: &Self) -> Self {
+    /// Returns `self + rhs` in projective coordinates, without inversion.
+    ///
+    /// Use [`super::batch_normalize`] to share an inversion across several
+    /// results, or [`ProjectivePoint::to_point`] to normalize a single result.
+    pub fn add(&self, rhs: &Self) -> ProjectivePoint<C> {
         match (self.as_affine(), rhs.as_affine()) {
-            (None, _) => *rhs,
-            (_, None) => *self,
-            (Some(lhs), Some(rhs)) => lhs.to_projective().add_mixed(rhs).to_point(),
+            (None, _) => rhs.to_projective(),
+            (_, None) => self.to_projective(),
+            (Some(lhs), Some(rhs)) => lhs.to_projective().add_mixed(rhs),
         }
     }
 
-    /// Returns `self - rhs`, normalizing the result to affine coordinates.
-    pub fn sub(&self, rhs: &Self) -> Self {
+    /// Returns `self - rhs` in projective coordinates, without inversion.
+    pub fn sub(&self, rhs: &Self) -> ProjectivePoint<C> {
         self.add(&rhs.neg())
     }
 
-    /// Returns `2 * self`, normalizing the result to affine coordinates.
-    pub fn double(&self) -> Self {
-        self.to_projective().double().to_point()
+    /// Returns `2 * self` in projective coordinates, without inversion.
+    pub fn double(&self) -> ProjectivePoint<C> {
+        self.to_projective().double()
     }
 
     /// Multiplies by a scalar using variable-time doubling and mixed addition.

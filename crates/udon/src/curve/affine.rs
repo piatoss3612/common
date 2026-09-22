@@ -110,7 +110,8 @@ impl<C: PastaCurve> AffinePoint<C> {
         if scalar.highest_set_bit().is_none_or(|high| high < 64) {
             super::scalar::multiply_canonical(scalar, |point| point.add_mixed(self))
         } else {
-            super::eisenstein::multiply_once(&self.to_projective(), scalar)
+            let points = super::eisenstein::representatives_affine(self);
+            super::eisenstein::multiply_once(&points, scalar)
         }
     }
 

@@ -211,7 +211,7 @@ fn endomorphisms<C: PastaCurve>() {
         Point::IDENTITY,
         generator.to_point(),
         generator.neg().to_point(),
-        generator.to_point().double(),
+        generator.to_point().double().to_point(),
     ] {
         assert_eq!(point.endomorphism().endomorphism().endomorphism(), point);
         let scaled = scaled(&point, 19);

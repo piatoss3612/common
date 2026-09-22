@@ -31,6 +31,9 @@ normalizing. `Point::as_affine()` returns `None` for identity. Coordinates are
 private and can be borrowed through `coordinates()`. Affine coordinates use
 `PastaField<_, Reduced>`; projective coordinates use loose field elements.
 
+`Point::add`, `sub`, and `double` return `ProjectivePoint` without inversion.
+The caller decides when affine coordinates are needed and normalizes explicitly.
+
 `AffinePoint::from_xy(x, y)` takes reduced field elements and checks the curve
 equation. Reduction is guaranteed by the coordinate types. It rejects `(0, 0)`
 and other off-curve coordinates.
@@ -62,7 +65,7 @@ use udon::{curve::PallasAffine, field::Fq};
 let base = PallasAffine::GENERATOR;
 let result = base.mul_projective(&Fq::from_u64(7)).add_mixed(&base);
 assert_eq!(result, base.mul_projective(&Fq::from_u64(8)));
-assert!(result.to_point().sub(&result.to_point()).is_identity());
+assert!(result.sub(&result).is_identity());
 ```
 
 Ordinary scalar multiplication needs no caller preparation or scratch and uses
@@ -119,6 +122,20 @@ one output point per input point. One field scratch element per input permits a
 single shared inversion; smaller scratch works in chunks, including individual
 inversion with empty scratch. The function
 docs include an executable example and the complete buffer contract.
+
+For example, collect additions and doublings before requesting affine outputs:
+
+```rust
+use udon::{curve::{batch_normalize, PallasPoint}, field::Fp};
+
+let base = PallasPoint::GENERATOR;
+let projective = [base.add(&base), base.double(), base.sub(&base)];
+let mut affine = [PallasPoint::IDENTITY; 3];
+let mut scratch = [Fp::ZERO; 3];
+batch_normalize(&projective, &mut affine, &mut scratch);
+assert_eq!(affine[0], affine[1]);
+assert!(affine[2].is_identity());
+```
 
 ## Fixed-base multiplication
 

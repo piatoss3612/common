@@ -1,4 +1,5 @@
 use super::*;
+use crate::field::inversion::count_inversions;
 use crate::field::{BatchInversionError, batch_invert, batch_invert_groups, try_batch_invert_by};
 use crate::test_support::field_samples;
 
@@ -133,34 +134,46 @@ fn group_boundaries<M: PrimeModulus>() {
                 .map(|value| value.invert().unwrap_or(PastaField::ZERO))
                 .collect();
             for split in 0..=len {
-                let mut values = original.clone();
-                let tail = scratch[len..].to_vec();
-                let (left, right) = values.split_at_mut(split);
-                batch_invert_groups(
-                    &mut [&mut [][..], left, &mut [], right, &mut []],
-                    &mut scratch,
-                );
-                assert_eq!(
-                    (values)
-                        .iter()
-                        .map(|value| value.reduce())
-                        .collect::<Vec<_>>(),
-                    (expected)
-                        .iter()
-                        .map(|value| value.reduce())
-                        .collect::<Vec<_>>(),
-                    "length {len}, zeros {zeros}, split {split}"
-                );
-                assert_eq!(
-                    scratch[len..]
-                        .iter()
-                        .map(|value| value.reduce())
-                        .collect::<Vec<_>>(),
-                    (tail)
-                        .iter()
-                        .map(|value| value.reduce())
-                        .collect::<Vec<_>>()
-                );
+                for capacity in 0..=scratch.len() {
+                    let mut values = original.clone();
+                    let unused = len.min(capacity);
+                    let tail = scratch[unused..].to_vec();
+                    let (left, right) = values.split_at_mut(split);
+                    let inversions = count_inversions(|| {
+                        batch_invert_groups(
+                            &mut [&mut [][..], left, &mut [], right, &mut []],
+                            &mut scratch[..capacity],
+                        );
+                    });
+                    let expected_inversions = original
+                        .chunks(capacity.max(1))
+                        .filter(|batch| batch.iter().any(|value| !value.is_zero()))
+                        .count();
+                    assert_eq!(
+                        inversions, expected_inversions,
+                        "length {len}, zeros {zeros}, split {split}, capacity {capacity}"
+                    );
+                    assert_eq!(
+                        (values)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>(),
+                        (expected)
+                            .iter()
+                            .map(|value| value.reduce())
+                            .collect::<Vec<_>>(),
+                        "length {len}, zeros {zeros}, split {split}, capacity {capacity}"
+                    );
+                    assert_eq!(
+                        scratch[unused..]
+                            .iter()
+                            .map(PastaField::montgomery_limbs)
+                            .collect::<Vec<_>>(),
+                        tail.iter()
+                            .map(PastaField::montgomery_limbs)
+                            .collect::<Vec<_>>()
+                    );
+                }
             }
         }
     }
@@ -170,6 +183,35 @@ fn group_boundaries<M: PrimeModulus>() {
 fn group_boundaries_preserve_zero_positions() {
     group_boundaries::<PallasBase>();
     group_boundaries::<PallasScalar>();
+}
+
+fn singleton_groups<M: PrimeModulus>() {
+    let original: Vec<_> = field_samples::<M>()
+        .filter(|value| !value.is_zero())
+        .take(1000)
+        .map(|value| [value])
+        .collect();
+    let mut groups = original.clone();
+    let mut scratch = [PastaField::from_u64(19); 64];
+    let inversions = count_inversions(|| batch_invert_groups(&mut groups, &mut scratch));
+    assert_eq!(inversions, 16);
+    for (value, inverse) in original.iter().zip(&groups) {
+        assert_eq!(value[0].mul(&inverse[0]).reduce(), PastaField::ONE);
+    }
+
+    // The final partial batch must leave the previous batch's scratch tail.
+    let mut full_batches = original[..960].to_vec();
+    let mut full_scratch = [PastaField::from_u64(19); 64];
+    batch_invert_groups(&mut full_batches, &mut full_scratch);
+    for (actual, expected) in scratch[40..].iter().zip(&full_scratch[40..]) {
+        assert_eq!(actual.montgomery_limbs(), expected.montgomery_limbs());
+    }
+}
+
+#[test]
+fn singleton_groups_share_bounded_inversions() {
+    singleton_groups::<PallasBase>();
+    singleton_groups::<PallasScalar>();
 }
 
 fn inversion_endpoints<M: PrimeModulus>() {

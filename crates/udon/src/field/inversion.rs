@@ -15,6 +15,20 @@ use crate::field::safegcd::{
 #[path = "tests/inversion.rs"]
 mod tests;
 
+#[cfg(test)]
+std::thread_local! {
+    static INVERSION_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn count_inversions(f: impl FnOnce()) -> usize {
+    INVERSION_COUNT.with(|count| {
+        let before = count.get();
+        f();
+        count.get() - before
+    })
+}
+
 impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Returns the multiplicative inverse, or `None` for zero.
     ///
@@ -23,6 +37,8 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
         if self.is_zero() {
             None
         } else {
+            #[cfg(test)]
+            INVERSION_COUNT.with(|count| count.set(count.get() + 1));
             Some(self.invert_safegcd())
         }
     }

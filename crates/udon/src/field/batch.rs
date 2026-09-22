@@ -188,10 +188,11 @@ pub fn batch_invert<M: PrimeModulus>(values: &mut [PastaField<M>], scratch: &mut
 /// This is [`batch_invert`] over the concatenation of `groups`, without
 /// flattening or copying their contents. Empty groups are allowed. With one
 /// scratch field per input element, all groups share one inversion. Smaller
-/// scratch bounds each batch within a group; empty scratch uses individual
-/// inversions. Initial scratch contents do not matter and any unused tail is
-/// untouched. Empty or all-zero inputs perform no inversion. No allocation is
-/// performed. Arithmetic is variable-time, including the locations of zeros.
+/// scratch bounds batches across group boundaries, with one inversion per
+/// batch containing a nonzero value; empty scratch uses individual inversions.
+/// Initial scratch contents do not matter and any unused tail is untouched.
+/// Empty or all-zero inputs perform no inversion. No allocation is performed.
+/// Arithmetic is variable-time, including the locations of zeros.
 ///
 /// Each group's [`AsMut::as_mut`] must expose the same slice throughout the
 /// call. Arrays, mutable slices, and vectors satisfy this requirement. A custom
@@ -200,47 +201,58 @@ pub fn batch_invert_groups<M: PrimeModulus>(
     groups: &mut [impl AsMut<[PastaField<M>]>],
     scratch: &mut [PastaField<M>],
 ) {
-    let required = combined_len(groups.iter_mut().map(|group| group.as_mut().len()));
-    let Some(required) = required.filter(|&required| required <= scratch.len()) else {
+    if scratch.is_empty() {
         for group in groups {
-            if scratch.is_empty() {
-                for value in group.as_mut() {
-                    *value = value.invert().unwrap_or(PastaField::ZERO);
-                }
-            } else {
-                for chunk in group.as_mut().chunks_mut(scratch.len()) {
-                    batch_invert(chunk, scratch);
-                }
+            for value in group.as_mut() {
+                *value = value.invert().unwrap_or(PastaField::ZERO);
             }
         }
         return;
-    };
-    let scratch = &mut scratch[..required];
-    // Parity follows the concatenated input, including zeros and empty groups.
-    let mut products = NonzeroInversionLanes::new();
-    for (index, (value, prefix)) in groups
-        .iter_mut()
-        .flat_map(|group| group.as_mut().iter_mut())
-        .zip(scratch.iter_mut())
-        .enumerate()
-    {
-        if !value.is_zero()
-            && let Some(product) = products.push(index, value)
-        {
-            *prefix = product;
-        }
     }
-    let Some(mut inverses) = products.invert() else {
-        return;
-    };
-    for (value, (index, prefix)) in groups
-        .iter_mut()
-        .flat_map(|group| group.as_mut().iter_mut())
-        .rev()
-        .zip(scratch.iter().enumerate().rev())
-    {
-        if !value.is_zero() {
-            *value = inverses.pop(index, value, prefix);
+
+    // Cursors identify (group, element) positions without summing group lengths.
+    let mut end = (0, 0);
+    while end.0 < groups.len() {
+        let start = end;
+        let mut used = 0;
+        let mut products = NonzeroInversionLanes::new();
+        while end.0 < groups.len() && used < scratch.len() {
+            let group = groups[end.0].as_mut();
+            let count = (group.len() - end.1).min(scratch.len() - used);
+            // Parity follows positions within the batch, including zeros.
+            for (index, value) in group[end.1..end.1 + count].iter().enumerate() {
+                let index = used + index;
+                if !value.is_zero()
+                    && let Some(product) = products.push(index, value)
+                {
+                    scratch[index] = product;
+                }
+            }
+            used += count;
+            end.1 += count;
+            if end.1 == group.len() {
+                end = (end.0 + 1, 0);
+            }
+        }
+        let Some(mut inverses) = products.invert() else {
+            continue;
+        };
+
+        // Replay only this batch in reverse; `end` remains the next batch's start.
+        let mut cursor = end;
+        while cursor != start {
+            if cursor.1 == 0 {
+                cursor.0 -= 1;
+                cursor.1 = groups[cursor.0].as_mut().len();
+            }
+            let begin = if cursor.0 == start.0 { start.1 } else { 0 };
+            for value in groups[cursor.0].as_mut()[begin..cursor.1].iter_mut().rev() {
+                used -= 1;
+                if !value.is_zero() {
+                    *value = inverses.pop(used, value, &scratch[used]);
+                }
+            }
+            cursor.1 = begin;
         }
     }
 }
@@ -313,19 +325,4 @@ pub fn try_batch_invert_by<R, M: PrimeModulus, E: From<BatchInversionError>>(
         }
     }
     Ok(())
-}
-
-fn combined_len(lengths: impl IntoIterator<Item = usize>) -> Option<usize> {
-    lengths.into_iter().try_fold(0usize, usize::checked_add)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn combined_length_overflow() {
-        assert_eq!(combined_len([usize::MAX, 1]), None);
-        assert_eq!(combined_len([0, usize::MAX, 0]), Some(usize::MAX));
-    }
 }

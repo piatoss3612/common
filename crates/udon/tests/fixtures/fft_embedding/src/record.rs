@@ -57,7 +57,7 @@ impl Header {
     fn new<M: PrimeModulus>() -> Self {
         Self {
             modulus: M::MODULUS,
-            shift: PastaField::<M>::zeta().montgomery_limbs(),
+            shift: PastaField::<M>::ZETA.montgomery_limbs(),
             version: 1,
             montgomery_bits: 256,
             base_size: SIZE as u64,

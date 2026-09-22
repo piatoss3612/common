@@ -129,7 +129,7 @@ fn small_transforms<M: PrimeModulus>() {
     assert_debug::<Class<'_, M>>();
 
     const OPTIONS: [Strategy; 3] = [
-        Strategy::serial(),
+        Strategy::SERIAL,
         Strategy {
             tile_len: 1,
             columns_per_task: 3,
@@ -168,8 +168,8 @@ fn small_transforms<M: PrimeModulus>() {
         let coefficients = inputs(subgroup.size());
         for shift in [
             PastaField::ONE,
-            PastaField::zeta(),
-            PastaField::zeta_inverse(),
+            PastaField::ZETA,
+            PastaField::ZETA_INVERSE,
             PastaField::from_u64(7),
         ] {
             let domain = subgroup.coset(shift).unwrap();
@@ -333,7 +333,7 @@ fn source_sizes<M: PrimeModulus>() {
     for log in 11..=14 {
         let domain = Domain::<M>::new(log)
             .unwrap()
-            .coset(PastaField::zeta())
+            .coset(PastaField::ZETA)
             .unwrap();
         let prepared = Prepared::new(domain);
         let plan = prepared.tables().bind(domain).unwrap();
@@ -430,7 +430,7 @@ fn expansions<M: PrimeModulus>() {
         let coefficients = inputs(base_domain.size());
         let evaluations = direct(&coefficients, base_domain.subgroup());
         for extra in [0, 1, 2, 3] {
-            for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
+            for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
                 let domain = Domain::new(log + extra).unwrap().coset(shift).unwrap();
                 let expansion = Expansion::new(base, domain, None).unwrap();
                 let mut scales = vec![PastaField::ZERO; expansion.scale_count()];
@@ -440,10 +440,10 @@ fn expansions<M: PrimeModulus>() {
                     expansion.validate_scales().unwrap();
                     let expected = direct(&coefficients, domain);
                     for options in [
-                        ExpansionStrategy::serial(),
+                        ExpansionStrategy::SERIAL,
                         ExpansionStrategy {
                             max_residue_tasks: 3,
-                            ..ExpansionStrategy::serial()
+                            ..ExpansionStrategy::SERIAL
                         },
                         ExpansionStrategy {
                             max_residue_tasks: 1,
@@ -558,7 +558,7 @@ fn large_expansion<M: PrimeModulus>() {
     for extra in [1, 3] {
         let domain = Domain::new(11 + extra)
             .unwrap()
-            .coset(PastaField::zeta())
+            .coset(PastaField::ZETA)
             .unwrap();
         let expansion = Expansion::new(base, domain, None).unwrap();
         let expected = reference_coset(&coefficients, domain);
@@ -741,7 +741,7 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
         // without reserving scratch for tiled transforms.
         let options = ExpansionStrategy {
             max_residue_tasks: 3,
-            ..ExpansionStrategy::serial()
+            ..ExpansionStrategy::SERIAL
         };
         assert_eq!(
             expansion
@@ -765,7 +765,7 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
     let evaluations = direct(&coefficients, subgroup);
     let saved = evaluations.clone();
     for extra in [0, 1, 3] {
-        for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
+        for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
             let extended = Domain::new(6 + extra).unwrap().coset(shift).unwrap();
             let expected = reference_coset(&coefficients, extended);
             let mut scales = vec![PastaField::ZERO; extended.size()];
@@ -783,7 +783,7 @@ fn prepared_evaluation_expansions<M: PrimeModulus>() {
                 let expansion =
                     Expansion::new(tables.bind(subgroup).unwrap(), extended, Some(scales)).unwrap();
                 for transform in [
-                    Strategy::serial(),
+                    Strategy::SERIAL,
                     Strategy {
                         tile_len: 8,
                         columns_per_task: 3,
@@ -843,7 +843,7 @@ fn constant_prefixes<M: PrimeModulus>() {
     let executor = CountJoins::default();
     let constant = [PastaField::from_u64(19)];
     for extra in [0, 1, 3] {
-        for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
+        for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
             let domain = Domain::new(6 + extra).unwrap().coset(shift).unwrap();
             let plan = Transform::new(domain);
             let expansion = Expansion::new(base, domain, None).unwrap();
@@ -1096,7 +1096,7 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
 fn classed<M: PrimeModulus>(log: u32) {
     let domain = Domain::<M>::new(log)
         .unwrap()
-        .coset(PastaField::zeta())
+        .coset(PastaField::ZETA)
         .unwrap();
     let smaller = Domain::<M>::new(log - 1)
         .unwrap()
@@ -1259,8 +1259,8 @@ fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
 #[test]
 fn size_queries_validate_without_constructing_domains() {
     const _: () = {
-        let serial = Strategy::serial();
-        let expansion = ExpansionStrategy::serial();
+        let serial = Strategy::SERIAL;
+        let expansion = ExpansionStrategy::SERIAL;
         let tables = match TableRequirements::for_size(1) {
             Ok(required) => required,
             Err(_) => panic!("singleton rejected"),
@@ -1365,15 +1365,15 @@ fn size_queries_validate_without_constructing_domains() {
         let size = 1usize << log;
         let expected = Domain::<PallasBase>::for_size(size).map(|_| ());
         assert_eq!(TableRequirements::for_size(size).map(|_| ()), expected);
-        assert_eq!(Strategy::serial().requirements(size).map(|_| ()), expected);
+        assert_eq!(Strategy::SERIAL.requirements(size).map(|_| ()), expected);
         assert_eq!(
-            ExpansionStrategy::serial()
+            ExpansionStrategy::SERIAL
                 .coefficient_requirements(size, size)
                 .map(|_| ()),
             expected
         );
         assert_eq!(
-            ExpansionStrategy::serial()
+            ExpansionStrategy::SERIAL
                 .evaluation_requirements(1, size)
                 .map(|_| ()),
             expected
@@ -1477,7 +1477,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
             .forward_into_with(
                 &input,
                 &mut output,
-                Strategy::serial(),
+                Strategy::SERIAL,
                 &SerialExecutor,
                 &mut [],
             )
@@ -1487,7 +1487,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
             .inverse_into_with(
                 &input,
                 &mut output,
-                Strategy::serial(),
+                Strategy::SERIAL,
                 &SerialExecutor,
                 &mut [],
             )
@@ -1515,7 +1515,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
             assert!(matches!(
                 plan.inverse_bit_reversed_with(
                     &mut output,
-                    Strategy::serial(),
+                    Strategy::SERIAL,
                     &SerialExecutor,
                     &mut []
                 ),
@@ -1596,7 +1596,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         plan.forward_prefix_with(
             &[Fp::ONE; 65],
             &mut output,
-            Strategy::serial(),
+            Strategy::SERIAL,
             &SerialExecutor,
             &mut []
         ),
@@ -1615,7 +1615,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
                 &vec![Fp::ONE; len],
                 factor,
                 &mut expanded,
-                ExpansionStrategy::serial(),
+                ExpansionStrategy::SERIAL,
                 &SerialExecutor,
                 &mut [],
             )
@@ -1809,8 +1809,8 @@ fn inverse_panics_leave_normalized_outputs_and_scratch_canonical() {
         let input = inputs(subgroup.size());
         for shift in [
             PastaField::ONE,
-            PastaField::zeta(),
-            PastaField::zeta_inverse(),
+            PastaField::ZETA,
+            PastaField::ZETA_INVERSE,
             PastaField::from_u64(7),
         ] {
             let domain = subgroup.coset(shift).unwrap();
@@ -1925,9 +1925,7 @@ fn generic_reference_supports_a_foreign_field() {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct F17(u32);
     impl reference::Twiddle for F17 {
-        fn one() -> Self {
-            Self(1)
-        }
+        const ONE: Self = Self(1);
         fn multiply(&self, rhs: &Self) -> Self {
             Self(self.0 * rhs.0 % 17)
         }

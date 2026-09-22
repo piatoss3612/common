@@ -18,7 +18,7 @@ fn check_parameters<M: PrimeModulus>(zeta_power: u32) {
     assert!(odd_cofactor.bit(0));
     assert_eq!(integer(&M::SQRT_EXPONENT), (&odd_cofactor - 1u8) >> 1usize);
     let inverse_two = (&p + 1u8) >> 1usize;
-    assert_value(PastaField::<M>::two_inverse(), &inverse_two);
+    assert_value(PastaField::<M>::TWO_INVERSE, &inverse_two);
     for exponent in (0..=33).chain([40, 256, u32::MAX]) {
         assert_value(
             PastaField::<M>::power_of_two_inverse(exponent),
@@ -54,20 +54,14 @@ fn check_parameters<M: PrimeModulus>(zeta_power: u32) {
         assert_eq!(PastaField::<M>::root_of_unity(log_size), None);
         assert_eq!(PastaField::<M>::root_of_unity_inverse(log_size), None);
     }
-    assert_value(
-        PastaField::<M>::delta(),
-        &five.modpow(&(&one << 32usize), &p),
-    );
+    assert_value(PastaField::<M>::DELTA, &five.modpow(&(&one << 32usize), &p));
     let zeta = five
         .modpow(&((&p - 1u8) / 3u8), &p)
         .modpow(&BigUint::from(zeta_power), &p);
     assert_ne!(zeta, one);
     assert_eq!(zeta.modpow(&BigUint::from(3u8), &p), one);
-    assert_value(PastaField::<M>::zeta(), &zeta);
-    assert_value(
-        PastaField::<M>::zeta_inverse(),
-        &zeta.modpow(&(&p - 2u8), &p),
-    );
+    assert_value(PastaField::<M>::ZETA, &zeta);
+    assert_value(PastaField::<M>::ZETA_INVERSE, &zeta.modpow(&(&p - 2u8), &p));
 }
 
 #[test]

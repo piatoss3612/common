@@ -26,7 +26,7 @@ pub struct CurveTableRequirements {
 ///
 /// Stores `(x, zeta * x, y)` in [`PastaField`]'s Montgomery representation:
 /// 96 bytes with alignment 8, where `zeta` is the coordinate field's
-/// [`PastaField::zeta`] value. All coordinates must be reduced, `(x, y)` must
+/// [`PastaField::ZETA`] value. All coordinates must be reduced, `(x, y)` must
 /// satisfy the curve equation, and the cached coordinate must equal `zeta * x`.
 /// [`bento::Pod`] checks memory layout only and requires little endian.
 /// Invalid stored values remain memory-safe but arithmetic can panic or give
@@ -63,7 +63,7 @@ impl<C: PastaCurve> PreparedAffinePoint<C> {
     pub fn from_affine(point: &AffinePoint<C>) -> Self {
         Self {
             x: point.x,
-            endomorphism_x: point.x.mul(&PastaField::zeta()),
+            endomorphism_x: point.x.mul(&PastaField::ZETA),
             y: point.y,
             marker: PhantomData,
         }
@@ -155,7 +155,7 @@ impl<C: PastaCurve> CurveTableEntry<C> for AffinePoint<C> {
             0 => *self,
             1 => self.endomorphism(),
             2 => Self {
-                x: self.x.mul(&PastaField::zeta_inverse()),
+                x: self.x.mul(&PastaField::ZETA_INVERSE),
                 ..*self
             },
             _ => unreachable!("a cube root has three rotations"),
@@ -188,7 +188,7 @@ impl<C: PastaCurve> CurveTableEntry<C> for PreparedAffinePoint<C> {
         }
     }
     fn valid_cache(&self) -> bool {
-        self.endomorphism_x.is_reduced() && self.endomorphism_x == self.x.mul(&PastaField::zeta())
+        self.endomorphism_x.is_reduced() && self.endomorphism_x == self.x.mul(&PastaField::ZETA)
     }
 }
 

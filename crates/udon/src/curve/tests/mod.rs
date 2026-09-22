@@ -1,5 +1,6 @@
 use super::*;
 use crate::field::CanonicalUint;
+use crate::field::PrimeModulus;
 use crate::test_support::field_samples;
 use std::{vec, vec::Vec};
 

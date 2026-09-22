@@ -28,7 +28,7 @@ fn imports<M: PrimeModulus>() {
     let plan = twiddles.bind(other).unwrap();
     let coefficients = inputs(other.size());
     let mut output = coefficients.clone();
-    plan.forward_with(&mut output, Strategy::serial(), &SerialExecutor, &mut [])
+    plan.forward_with(&mut output, Strategy::SERIAL, &SerialExecutor, &mut [])
         .unwrap();
     assert_eq!(output, direct(&coefficients, other));
 
@@ -425,7 +425,7 @@ fn reused_cosets<M: PrimeModulus>() {
             }
             .bind(original)
             .unwrap();
-            for shift in [PastaField::from_u64(7), PastaField::ONE, PastaField::zeta()] {
+            for shift in [PastaField::from_u64(7), PastaField::ONE, PastaField::ZETA] {
                 let domain = subgroup.coset(shift).unwrap();
                 let rebound = bound.for_coset(domain).unwrap();
                 let tables = rebound.tables;
@@ -448,11 +448,11 @@ fn reused_cosets<M: PrimeModulus>() {
                 let coefficients = inputs(domain.size());
                 let mut output = coefficients.clone();
                 rebound
-                    .forward_with(&mut output, Strategy::serial(), &SerialExecutor, &mut [])
+                    .forward_with(&mut output, Strategy::SERIAL, &SerialExecutor, &mut [])
                     .unwrap();
                 assert_eq!(output, direct(&coefficients, domain));
                 rebound
-                    .inverse_with(&mut output, Strategy::serial(), &SerialExecutor, &mut [])
+                    .inverse_with(&mut output, Strategy::SERIAL, &SerialExecutor, &mut [])
                     .unwrap();
                 assert_eq!(output, coefficients);
             }

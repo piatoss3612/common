@@ -40,6 +40,17 @@ implementation call inside `const { ... }`. Do not export arithmetic functions
 or contexts through the facade: Udon must use this support only at compile time.
 POD storage APIs retain their existing const methods.
 
+Use associated constants for fixed values tied to a type, such as field
+parameters and execution presets. Perform construction and representation checks
+in constant initializers so they do not depend on optimizer constant folding.
+A `const fn` is also callable at runtime; declaring it `const` does not force
+compile-time evaluation of those calls. Keep functions for input-dependent
+operations and constructors for mutable working state.
+
+Use named statics for large shared tables and expose borrowed references through
+constants or lookup methods. An array-valued associated constant does not
+guarantee shared storage.
+
 Procedural macros and build scripts execute on the host. Generated code and
 embedded representations must satisfy the target's layout and platform
 requirements. Keep host parsing and generation dependencies out of target

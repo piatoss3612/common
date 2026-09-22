@@ -23,7 +23,7 @@ use crate::exec::ExecutionOptions;
 /// size storage without constructing domains or an expansion.
 /// A zero residue task count or invalid transform settings
 /// return [`FftError::InvalidExecution`], even for singleton domains.
-/// The default is [`Self::serial`].
+/// The default is [`Self::SERIAL`].
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ExpansionStrategy {
@@ -35,13 +35,11 @@ pub(crate) struct ExpansionStrategy {
 
 #[cfg(test)]
 impl ExpansionStrategy {
-    /// Executes whole residue transforms sequentially, with no scratch or joins.
-    pub const fn serial() -> Self {
-        Self {
-            max_residue_tasks: 1,
-            transform: Strategy::serial(),
-        }
-    }
+    /// A sequential schedule with whole-transform tiles and no scratch or joins.
+    pub const SERIAL: Self = Self {
+        max_residue_tasks: 1,
+        transform: Strategy::SERIAL,
+    };
 
     /// Scratch for coefficient expansion or a short product, given domain sizes.
     ///
@@ -114,7 +112,7 @@ impl ExpansionStrategy {
 #[cfg(test)]
 impl Default for ExpansionStrategy {
     fn default() -> Self {
-        Self::serial()
+        Self::SERIAL
     }
 }
 
@@ -647,11 +645,11 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             if self.normalization == ExpansionScaleNormalization::Coefficients {
                 (Run::inverse(&[]), PastaField::ONE)
             } else {
-                (Run::inverse_unscaled(), PastaField::ONE)
+                (Run::INVERSE_UNSCALED, PastaField::ONE)
             }
         } else {
             (
-                Run::inverse_unscaled(),
+                Run::INVERSE_UNSCALED,
                 self.base.domain().domain().size_inverse(),
             )
         }

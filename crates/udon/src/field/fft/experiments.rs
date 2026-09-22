@@ -23,7 +23,7 @@ fn correct<M: PrimeModulus, const MASKED: bool>(
         butterfly(left, product, None);
         return;
     }
-    let modulus = double_modulus::<M>();
+    let modulus = PastaField::<M>::DOUBLE_MODULUS;
     let (sum, carry) = super::super::word::add_limbs(&left.limbs, &product.limbs);
     let (reduced, borrow) = subtract_limbs(&sum, &modulus);
     let mask = 0u64.wrapping_sub(carry | (borrow ^ 1));
@@ -60,7 +60,7 @@ fn pair<M: PrimeModulus, const MASKED: bool, const INTERLEAVED: bool>(
 
 fn check<M: PrimeModulus>() {
     let minus_one = subtract_limbs(&M::MODULUS, &[1, 0, 0, 0]).0;
-    let max = subtract_limbs(&double_modulus::<M>(), &[1, 0, 0, 0]).0;
+    let max = subtract_limbs(&PastaField::<M>::DOUBLE_MODULUS, &[1, 0, 0, 0]).0;
     let values = [[0; 4], [1, 0, 0, 0], minus_one, M::MODULUS, max];
     for left in values {
         for right in values {
@@ -129,7 +129,7 @@ fn measure<M: PrimeModulus>(field: &str) {
             })
         })
         .collect();
-    let boundary = subtract_limbs(&double_modulus::<M>(), &[1, 0, 0, 0]).0;
+    let boundary = subtract_limbs(&PastaField::<M>::DOUBLE_MODULUS, &[1, 0, 0, 0]).0;
     for (distribution, input) in [
         ("zero", std::vec![[PastaField::ZERO; 4]; 1024]),
         ("loose_random", random),

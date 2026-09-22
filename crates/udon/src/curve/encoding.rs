@@ -50,7 +50,7 @@ impl<C: PastaCurve> Point<C> {
         let odd = bytes[31] >> 7 != 0;
         bytes[31] &= 0x7f;
         let x = PastaField::from_bytes(bytes)?;
-        let mut y = curve_rhs(&x).sqrt()?;
+        let mut y = curve_rhs::<C>(&x).sqrt()?;
         // Zero is the only root whose negation does not change parity.
         if y.is_zero() && odd {
             return None;
@@ -60,7 +60,7 @@ impl<C: PastaCurve> Point<C> {
         }
         // Canonical decoding and the square root already establish reduced,
         // on-curve coordinates; the public coordinate constructor rechecks both.
-        debug_assert_eq!(y.square(), curve_rhs(&x));
+        debug_assert_eq!(y.square(), curve_rhs::<C>(&x));
         Some(
             AffinePoint {
                 x,

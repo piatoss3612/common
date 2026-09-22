@@ -36,7 +36,7 @@ fn expansions<M: PrimeModulus>() {
         let coefficients = inputs(base.domain().size());
         let evaluations = direct(&coefficients, base.domain());
         for extra in [0, 1, 3] {
-            for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
+            for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
                 let domain = Domain::new(log + extra).unwrap().coset(shift).unwrap();
                 let expansion = Expansion::new(base, domain, None).unwrap();
                 let expected = direct(&coefficients, domain);
@@ -64,7 +64,7 @@ fn expansions<M: PrimeModulus>() {
                         .evaluations_with(
                             &evaluations,
                             &mut contiguous,
-                            ExpansionStrategy::serial(),
+                            ExpansionStrategy::SERIAL,
                             &SerialExecutor,
                             &mut [],
                         )
@@ -188,7 +188,7 @@ fn expansions<M: PrimeModulus>() {
                                 Transform::new(domain)
                                     .inverse_bit_reversed_with(
                                         &mut output,
-                                        Strategy::serial(),
+                                        Strategy::SERIAL,
                                         &SerialExecutor,
                                         &mut [],
                                     )
@@ -255,7 +255,7 @@ fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
         let subgroup = Domain::<M>::new(log).unwrap().subgroup();
         let domain = Domain::new(log + 3)
             .unwrap()
-            .coset(PastaField::zeta())
+            .coset(PastaField::ZETA)
             .unwrap();
         let prepared = Prepared::new(subgroup);
         let mut coefficients = inputs(subgroup.size());
@@ -391,7 +391,7 @@ fn short_bit_reversed_products_match_reference_at_pruning_boundary() {
 #[test]
 fn short_bit_reversed_residues_restore_fields_on_panic() {
     let base = Transform::new(Domain::<PallasBase>::new(8).unwrap().subgroup());
-    let domain = Domain::new(11).unwrap().coset(Fp::zeta()).unwrap();
+    let domain = Domain::new(11).unwrap().coset(Fp::ZETA).unwrap();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let residue = expansion.residue(5, ElementOrder::BitReversed).unwrap();
     let input = inputs(10);

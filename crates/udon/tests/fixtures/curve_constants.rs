@@ -44,7 +44,7 @@ fn main() {
     assert_eq!(
         PALLAS.endomorphism(),
         PALLAS
-            .mul_projective(&Fq::zeta())
+            .mul_projective(&Fq::ZETA)
             .to_point()
             .as_affine()
             .copied()
@@ -53,7 +53,7 @@ fn main() {
     assert_eq!(
         VESTA.endomorphism(),
         VESTA
-            .mul_projective(&Fp::zeta())
+            .mul_projective(&Fp::ZETA)
             .to_point()
             .as_affine()
             .copied()

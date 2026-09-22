@@ -8,7 +8,7 @@ use super::{FftError, check_domain_size, check_field_count, min};
 /// Invalid settings produce [`FftError::InvalidExecution`] when requirements
 /// are queried or execution begins. The default uses 1,024-element tiles,
 /// 64 columns per task, and one task. Increasing [`Self::max_tasks`] permits
-/// concurrency when the transform exceeds one tile. Use [`Self::serial`] for a
+/// concurrency when the transform exceeds one tile. Use [`Self::SERIAL`] for a
 /// single whole-transform tile with no scratch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Strategy {
@@ -27,7 +27,7 @@ impl Strategy {
         available: usize,
     ) -> Self {
         if options.task_budget().get() == 1 || size <= 1024 {
-            return Self::serial();
+            return Self::SERIAL;
         }
         // Keep enough local work to amortize task dispatch while allowing at
         // least two tiles at the first parallel size.
@@ -38,7 +38,7 @@ impl Strategy {
                 columns_per_task,
                 max_tasks,
             },
-            None => Self::serial(),
+            None => Self::SERIAL,
         }
     }
 
@@ -72,13 +72,11 @@ impl Strategy {
     /// Increasing only [`Self::max_tasks`] retains the whole-transform tile.
     /// Start from [`Self::default`] or also set [`Self::tile_len`] to enable
     /// tiled execution.
-    pub const fn serial() -> Self {
-        Self {
-            tile_len: 1usize << (usize::BITS - 1),
-            columns_per_task: 1,
-            max_tasks: 1,
-        }
-    }
+    pub const SERIAL: Self = Self {
+        tile_len: 1usize << (usize::BITS - 1),
+        columns_per_task: 1,
+        max_tasks: 1,
+    };
 
     pub(super) const fn validate(self) -> Result<(), FftError> {
         if !self.tile_len.is_power_of_two() || self.columns_per_task == 0 || self.max_tasks == 0 {

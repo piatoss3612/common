@@ -268,7 +268,7 @@ fn decomposition<C: PastaCurve>(
         assert!(a.unsigned_abs() < 1_u128 << 127);
         assert!(b.unsigned_abs() < 1_u128 << 127);
         assert_eq!(
-            signed_scalar(a).add(&PastaField::zeta().mul(&signed_scalar(b))),
+            signed_scalar(a).add(&PastaField::ZETA.mul(&signed_scalar(b))),
             *scalar
         );
         if a != 0 && b != 0 {
@@ -503,10 +503,10 @@ fn multiplication<C: PastaCurve>(
         ),
         ("dense", dense),
         ("minus_one", PastaField::ONE.neg()),
-        ("lambda", PastaField::zeta()),
-        ("minus_lambda", PastaField::zeta().neg()),
-        ("one_plus_lambda", PastaField::ONE.add(&PastaField::zeta())),
-        ("one_minus_lambda", PastaField::ONE.sub(&PastaField::zeta())),
+        ("lambda", PastaField::ZETA),
+        ("minus_lambda", PastaField::ZETA.neg()),
+        ("one_plus_lambda", PastaField::ONE.add(&PastaField::ZETA)),
+        ("one_minus_lambda", PastaField::ONE.sub(&PastaField::ZETA)),
     ];
     let corpus = values::<C::Scalar>();
     decomposition::<C>(criterion, name, &scalars, &corpus);

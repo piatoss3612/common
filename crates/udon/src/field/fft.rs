@@ -78,7 +78,9 @@ pub(crate) fn divide_by_power_of_two<M: PrimeModulus>(
     log_size: u32,
 ) -> PastaField<M> {
     debug_assert!(log_size <= 32);
-    debug_assert!(super::word::compare_limbs(&value.limbs, &double_modulus::<M>()).is_lt());
+    debug_assert!(
+        super::word::compare_limbs(&value.limbs, &PastaField::<M>::DOUBLE_MODULUS).is_lt()
+    );
     if log_size == 0 {
         return normalize(value);
     }
@@ -108,19 +110,24 @@ pub(crate) fn scale<M: PrimeModulus>(
     value: PastaField<M>,
     factor: &PastaField<M>,
 ) -> PastaField<M> {
-    debug_assert!(super::word::compare_limbs(&value.limbs, &double_modulus::<M>()).is_lt());
+    debug_assert!(
+        super::word::compare_limbs(&value.limbs, &PastaField::<M>::DOUBLE_MODULUS).is_lt()
+    );
     debug_assert!(super::word::compare_limbs(&factor.limbs, &M::MODULUS).is_lt());
     PastaField::from_montgomery(reduce_once::<M>(multiply::<M>(&value.limbs, &factor.limbs)))
 }
 
-#[inline(always)]
-fn double_modulus<M: PrimeModulus>() -> [u64; 4] {
-    [
+impl<M: PrimeModulus> PastaField<M> {
+    /// The integer `2p` in little-endian limbs, bounding loose FFT residues.
+    ///
+    /// Here `p` is [`PrimeModulus::MODULUS`]; the bound is exclusive.
+    // Both Pasta moduli are below 2^255, so doubling fits in four limbs.
+    const DOUBLE_MODULUS: [u64; 4] = [
         M::MODULUS[0] << 1,
         (M::MODULUS[1] << 1) | (M::MODULUS[0] >> 63),
         (M::MODULUS[2] << 1) | (M::MODULUS[1] >> 63),
         (M::MODULUS[3] << 1) | (M::MODULUS[2] >> 63),
-    ]
+    ];
 }
 
 // Coarsely integrated operand scanning (CIOS) combines limb multiplication
@@ -165,7 +172,7 @@ pub(crate) fn butterfly<M: PrimeModulus>(
         Some(twiddle) => multiply::<M>(&right.limbs, &twiddle.limbs),
         None => right.limbs,
     };
-    let modulus = double_modulus::<M>();
+    let modulus = PastaField::<M>::DOUBLE_MODULUS;
     debug_assert!(super::word::compare_limbs(&left.limbs, &modulus).is_lt());
     debug_assert!(super::word::compare_limbs(&product, &modulus).is_lt());
     let mut sum = [0; 4];

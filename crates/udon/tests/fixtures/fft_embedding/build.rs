@@ -23,7 +23,7 @@ fn main() {
             let domain = Domain::for_size(record::SIZE).unwrap().subgroup();
             let extended = Domain::for_size(record::EXTENDED_SIZE)
                 .unwrap()
-                .coset(<$field>::zeta())
+                .coset(<$field>::ZETA)
                 .unwrap();
             let mut record = <$record>::empty();
             record.destinations().prepare(domain).unwrap();

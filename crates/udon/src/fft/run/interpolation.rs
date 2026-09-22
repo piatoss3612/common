@@ -273,7 +273,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                 .expect("validated class")
             });
             let (output, lifts) = classes.split_first_mut().unwrap();
-            let options = super::super::Strategy::serial();
+            let options = super::super::Strategy::SERIAL;
             return if self.consume {
                 super::super::interpolate_sum(output, lifts, options, executor, &mut [])
             } else {

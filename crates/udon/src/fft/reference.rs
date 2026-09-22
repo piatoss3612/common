@@ -20,13 +20,14 @@ use crate::{
 /// The scalar domain containing a transform's roots of unity.
 ///
 /// For correct transforms, these operations must agree with multiplication in
-/// a commutative ring: `one` is its identity, `multiply` is associative and
-/// commutative, and `square(x)` equals `multiply(x, x)`. A field is sufficient.
+/// a commutative ring: [`Self::ONE`] is its multiplicative identity, and
+/// [`Self::multiply`] is associative and commutative. [`Self::square`] must
+/// agree with multiplying a value by itself. A field is sufficient.
 /// The transform's root requirements are documented on [`transform`]. These
 /// algebraic laws are not checked and are not memory-safety requirements.
 pub trait Twiddle: Copy {
     /// The multiplicative identity.
-    fn one() -> Self;
+    const ONE: Self;
     /// Multiplies two scalars.
     fn multiply(&self, rhs: &Self) -> Self;
     /// Squares a scalar.
@@ -38,7 +39,7 @@ pub trait Twiddle: Copy {
 /// For correct transforms, values must form an additive commutative group with
 /// the scalar action of [`Twiddle`]'s ring. Scaling must distribute over value
 /// and scalar addition, compose according to scalar multiplication, and leave
-/// the value unchanged for scalar one. Cloning must preserve the value.
+/// the value unchanged for [`Twiddle::ONE`]. Cloning must preserve the value.
 /// Violating these unchecked laws can produce incorrect transform results.
 pub trait Butterfly<T: Twiddle>: Clone {
     /// Scales this value.
@@ -50,9 +51,7 @@ pub trait Butterfly<T: Twiddle>: Clone {
 }
 
 impl<M: PrimeModulus> Twiddle for PastaField<M> {
-    fn one() -> Self {
-        Self::ONE
-    }
+    const ONE: Self = Self::ONE;
     fn multiply(&self, rhs: &Self) -> Self {
         self.mul(rhs)
     }
@@ -119,7 +118,7 @@ pub fn transform<T: Twiddle, V: Butterfly<T>>(values: &mut [V], root: &T) {
         }
         for chunk in values.chunks_exact_mut(block) {
             let (left, right) = chunk.split_at_mut(block / 2);
-            let mut twiddle = T::one();
+            let mut twiddle = T::ONE;
             for (left, right) in left.iter_mut().zip(right) {
                 let product = right.scaled(&twiddle);
                 let original = left.clone();

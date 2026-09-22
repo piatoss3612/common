@@ -10,14 +10,23 @@ mod facade {
 
 use facade::*;
 
-const fn half<M: PrimeModulus>() -> PastaField<M> {
-    PastaField::<M>::two_inverse()
+// Generic constant initializers must work through the consumer's facade,
+// without access to the sealed implementation parameters.
+const fn parameters<M: PrimeModulus>() -> [PastaField<M>; 4] {
+    [
+        PastaField::<M>::TWO_INVERSE,
+        PastaField::<M>::DELTA,
+        PastaField::<M>::ZETA,
+        PastaField::<M>::ZETA_INVERSE,
+    ]
 }
 
-const FP_HALF: Fp = half::<PallasBase>();
-const FQ_HALF: Fq = half::<PallasScalar>();
+const FP_PARAMETERS: [Fp; 4] = parameters::<PallasBase>();
+const FQ_PARAMETERS: [Fq; 4] = parameters::<PallasScalar>();
 
-fn field<M: PrimeModulus>() {
+fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4]) {
+    assert_eq!(half.double(), PastaField::<M>::ONE);
+    assert_eq!(delta, PastaField::<M>::from_u64(5).pow_u64(1 << 32));
     let two = PastaField::<M>::from_u64(2);
     let four = two.square();
     assert_eq!(four.sqrt().unwrap().square(), four);
@@ -29,10 +38,7 @@ fn field<M: PrimeModulus>() {
             .mul(&PastaField::<M>::root_of_unity_inverse(4).unwrap()),
         PastaField::<M>::ONE,
     );
-    assert_eq!(
-        PastaField::<M>::zeta().mul(&PastaField::<M>::zeta_inverse()),
-        PastaField::<M>::ONE,
-    );
+    assert_eq!(zeta.mul(&zeta_inverse), PastaField::<M>::ONE);
 
     #[cfg(feature = "roots")]
     let _ = M::ROOTS;
@@ -118,7 +124,7 @@ fn curve<C: PastaCurve>() {
     #[cfg(feature = "fft-codelet")]
     let _ = arithmetic::fft::Codelet::Radix2;
     #[cfg(feature = "fft-strategy")]
-    let _ = arithmetic::fft::Strategy::serial();
+    let _ = arithmetic::fft::Strategy::SERIAL;
     #[cfg(feature = "cache-options")]
     let _ = prepared.cache_len(options);
 }
@@ -139,10 +145,8 @@ impl PastaCurve for Foreign {
 }
 
 fn main() {
-    assert_eq!(FP_HALF.double(), Fp::ONE);
-    assert_eq!(FQ_HALF.double(), Fq::ONE);
-    field::<PallasBase>();
-    field::<PallasScalar>();
+    field::<PallasBase>(FP_PARAMETERS);
+    field::<PallasScalar>(FQ_PARAMETERS);
     curve::<Pallas>();
     curve::<Vesta>();
 }

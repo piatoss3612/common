@@ -458,7 +458,7 @@ fn digit_scalar<C: PastaCurve>(code: u8) -> PastaField<C::Scalar> {
         let f = PastaField::from_u64(u64::from(x.unsigned_abs()));
         if x < 0 { f.neg() } else { f }
     };
-    let d = signed(a).add(&signed(b).mul(&PastaField::zeta()));
+    let d = signed(a).add(&signed(b).mul(&PastaField::ZETA));
     if value & 1 == 1 { d.neg() } else { d }
 }
 

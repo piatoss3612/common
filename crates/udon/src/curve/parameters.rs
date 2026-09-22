@@ -110,7 +110,7 @@ impl<C: PastaCurve> GlvParameters<C> {
         let a = m255::from_u256!(&C::Scalar::MODULUS, &Self::A);
         let lambda_b = m255::mul!(
             &C::Scalar::MODULUS,
-            &crate::field::PastaField::<C::Scalar>::zeta().montgomery_limbs(),
+            &crate::field::PastaField::<C::Scalar>::ZETA.montgomery_limbs(),
             &m255::from_u256!(&C::Scalar::MODULUS, &Self::B),
         );
         let second = m255::add!(
@@ -118,7 +118,7 @@ impl<C: PastaCurve> GlvParameters<C> {
             &m255::from_u256!(&C::Scalar::MODULUS, &Self::B),
             &m255::mul!(
                 &C::Scalar::MODULUS,
-                &crate::field::PastaField::<C::Scalar>::zeta().montgomery_limbs(),
+                &crate::field::PastaField::<C::Scalar>::ZETA.montgomery_limbs(),
                 &m255::from_u256!(&C::Scalar::MODULUS, &Self::D_LIMBS),
             ),
         );

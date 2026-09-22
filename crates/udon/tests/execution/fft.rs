@@ -36,7 +36,7 @@ fn reference_transform<M: PrimeModulus>(
     if request.input_order == ElementOrder::BitReversed {
         permute(output);
     }
-    let options = zakura_udon::fft::Strategy::serial();
+    let options = zakura_udon::fft::Strategy::SERIAL;
     match request.direction {
         Direction::Forward => plan
             .forward_with(output, options, &SerialExecutor, &mut [])

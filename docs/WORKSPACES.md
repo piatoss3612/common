@@ -79,7 +79,9 @@ the maximum of their requirement queries. Simultaneous workspaces need disjoint
 mutable storage.
 
 The example expands a base domain of `N = 2048` rows to `8N` rows with the
-order-three coset shift `PastaField::zeta()`. Its storage choices are:
+order-three coset shift
+[`PastaField::ZETA`](../crates/udon/src/field/parameters.rs). Its storage choices
+are:
 
 | Buffer | Fields | Lifetime and copies |
 | --- | --- | --- |

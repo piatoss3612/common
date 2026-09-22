@@ -16,6 +16,10 @@ impl<C: PastaCurve> fmt::Debug for AffinePoint<C> {
 }
 
 impl<C: PastaCurve> AffinePoint<C> {
+    /// The curve coefficient `B = 5` in `y² = x³ + B`, in the coordinate field.
+    pub(super) const B: PastaField<C::Base> =
+        PastaField::from_montgomery_limbs(m255::from_u64!(&C::Base::MODULUS, 5));
+
     /// The generator `(-1, 2)`.
     pub const GENERATOR: Self = Self {
         x: PastaField::from_montgomery_limbs(m255::from_u256!(
@@ -32,7 +36,7 @@ impl<C: PastaCurve> AffinePoint<C> {
     /// also rejects unreduced residues read through POD storage, before doing
     /// field arithmetic.
     pub fn from_xy(x: PastaField<C::Base>, y: PastaField<C::Base>) -> Option<Self> {
-        if !x.is_reduced() || !y.is_reduced() || y.square() != curve_rhs(&x) {
+        if !x.is_reduced() || !y.is_reduced() || y.square() != curve_rhs::<C>(&x) {
             return None;
         }
         Some(Self {
@@ -49,12 +53,12 @@ impl<C: PastaCurve> AffinePoint<C> {
 
     /// Applies the order-three endomorphism `(x, y) -> (zeta * x, y)`.
     ///
-    /// Here `zeta` is the coordinate field's [`PastaField::zeta`] value.
+    /// Here `zeta` is the coordinate field's [`PastaField::ZETA`] value.
     /// This map equals multiplication by the scalar field's
-    /// [`PastaField::zeta`] value.
+    /// [`PastaField::ZETA`] value.
     pub fn endomorphism(&self) -> Self {
         Self {
-            x: self.x.mul(&PastaField::zeta()),
+            x: self.x.mul(&PastaField::ZETA),
             ..*self
         }
     }
@@ -131,7 +135,7 @@ impl<C: PastaCurve> AffinePoint<C> {
                     &m255::mul!(&C::Base::MODULUS, &[X0, X1, X2, X3], &[X0, X1, X2, X3]),
                     &[X0, X1, X2, X3],
                 ),
-                &m255::from_u64!(&C::Base::MODULUS, 5),
+                &Self::B.montgomery_limbs(),
             );
             let mut index = 0;
             while index < 4 {

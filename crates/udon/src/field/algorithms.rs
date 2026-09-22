@@ -9,13 +9,13 @@
 pub(super) trait Field: Copy + Eq {
     /// The additive identity.
     #[cfg(any(test, not(feature = "sqrt-table-large")))]
-    fn zero() -> Self;
+    const ZERO: Self;
     /// The multiplicative identity.
-    fn one() -> Self;
+    const ONE: Self;
     /// Whether this is the additive identity.
     #[cfg(any(test, not(feature = "sqrt-table-large")))]
     fn is_zero(&self) -> bool {
-        *self == Self::zero()
+        *self == Self::ZERO
     }
     /// The field product.
     fn mul(&self, rhs: &Self) -> Self;
@@ -30,7 +30,7 @@ pub(super) trait Field: Copy + Eq {
 /// The multiplication schedule depends on the exponent.
 pub(super) fn pow_u64<F: Field>(value: &F, exponent: u64) -> F {
     if exponent == 0 {
-        return F::one();
+        return F::ONE;
     }
 
     // The leading one initializes the accumulator. This avoids the extra
@@ -67,16 +67,16 @@ pub(super) fn tonelli_shanks_with_roots<F: Field>(
         "two_adicity must be within 1..=64"
     );
     if value.is_zero() {
-        return Some(F::zero());
+        return Some(F::ZERO);
     }
     let mut x = w.mul(value);
     let mut t = x.mul(&w);
     let mut m = two_adicity;
 
-    while t != F::one() {
+    while t != F::ONE {
         let mut i = 1u32;
         let mut t_squared = t.square();
-        while i < m && t_squared != F::one() {
+        while i < m && t_squared != F::ONE {
             t_squared = t_squared.square();
             i += 1;
         }
@@ -104,17 +104,17 @@ pub(super) fn tonelli_shanks<F: Field>(value: &F, w: F, root: F, two_adicity: u3
         "two_adicity must be within 1..=64"
     );
     if value.is_zero() {
-        return Some(F::zero());
+        return Some(F::ZERO);
     }
     let mut x = w.mul(value);
     let mut t = x.mul(&w);
     let mut c = root;
     let mut m = two_adicity;
 
-    while t != F::one() {
+    while t != F::ONE {
         let mut i = 1u32;
         let mut t_squared = t.square();
-        while i < m && t_squared != F::one() {
+        while i < m && t_squared != F::ONE {
             t_squared = t_squared.square();
             i += 1;
         }
@@ -141,12 +141,8 @@ mod tests {
     struct SmallField<const P: u64>(u64);
 
     impl<const P: u64> Field for SmallField<P> {
-        fn zero() -> Self {
-            Self(0)
-        }
-        fn one() -> Self {
-            Self(1)
-        }
+        const ZERO: Self = Self(0);
+        const ONE: Self = Self(1);
         fn mul(&self, rhs: &Self) -> Self {
             Self(self.0 * rhs.0 % P)
         }
@@ -155,7 +151,7 @@ mod tests {
     fn check_field<const P: u64>(root: u64, two_adicity: u32) {
         for value in 0..P {
             let base = SmallField::<P>(value);
-            let mut expected = SmallField::one();
+            let mut expected = SmallField::ONE;
             for exponent in 0..200 {
                 assert_eq!(pow_u64(&base, exponent), expected);
                 expected = expected.mul(&base);

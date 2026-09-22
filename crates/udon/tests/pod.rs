@@ -173,7 +173,7 @@ fn cached_point_arrays_borrow_bytes_and_validate_mathematical_invariants() {
         assert_eq!(cached.to_affine(), base);
         let (x, y) = base.coordinates();
         let mut expected = Vec::from(bytes_of(x));
-        expected.extend_from_slice(bytes_of(&x.mul(&PastaField::zeta())));
+        expected.extend_from_slice(bytes_of(&x.mul(&PastaField::ZETA)));
         expected.extend_from_slice(bytes_of(y));
         assert_eq!(bytes_of(&cached), expected);
         assert!(bytes_of_slice::<PreparedAffinePoint<C>>(&[]).is_empty());

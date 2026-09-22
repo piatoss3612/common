@@ -641,7 +641,7 @@ fn interpolation<M: PrimeModulus>(
 fn field_benchmarks<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runners: &[Runner]) {
     for (name, shift) in [
         ("subgroup", PastaField::ONE),
-        ("zeta", PastaField::zeta()),
+        ("zeta", PastaField::ZETA),
         ("generic_7", PastaField::from_u64(7)),
     ] {
         transforms::<M>(criterion, field, name, shift, runners);

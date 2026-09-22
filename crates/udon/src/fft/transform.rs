@@ -73,7 +73,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         let mut run = if normalized {
             Run::inverse(&[])
         } else if inverse {
-            Run::inverse_unscaled()
+            Run::INVERSE_UNSCALED
         } else {
             Run::forward(2)
         };
@@ -661,15 +661,14 @@ impl<'a, 'b, M: PrimeModulus> Run<'a, 'b, M> {
             factor: None,
         }
     }
-    pub(super) fn inverse_unscaled() -> Self {
-        Self {
-            inverse: true,
-            normalized: false,
-            first: 2,
-            lifts: &[],
-            factor: None,
-        }
-    }
+    /// An inverse run that leaves domain-size and coset scaling to the caller.
+    pub(super) const INVERSE_UNSCALED: Self = Self {
+        inverse: true,
+        normalized: false,
+        first: 2,
+        lifts: &[],
+        factor: None,
+    };
     #[cfg(test)]
     pub(super) fn forward_product(first: usize, factor: &'a [PastaField<M>]) -> Self {
         Self {

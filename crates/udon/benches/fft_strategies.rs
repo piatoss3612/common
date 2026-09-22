@@ -97,7 +97,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
     for size in [2048, 16384, 1 << 20] {
         for (shift_name, shift) in [
             ("subgroup", PastaField::ONE),
-            ("zeta", PastaField::zeta()),
+            ("zeta", PastaField::ZETA),
             ("generic_7", PastaField::from_u64(7)),
         ] {
             let domain = Domain::<M>::for_size(size).unwrap().coset(shift).unwrap();
@@ -396,7 +396,7 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
 
 fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &Runner) {
     let domain = Domain::<M>::new(11).unwrap().subgroup();
-    let extended = Domain::new(14).unwrap().coset(PastaField::zeta()).unwrap();
+    let extended = Domain::new(14).unwrap().coset(PastaField::ZETA).unwrap();
     let mut twiddles = vec![PastaField::ZERO; domain.size() / 2];
     let tables = TablesMut {
         forward: Some(&mut twiddles),

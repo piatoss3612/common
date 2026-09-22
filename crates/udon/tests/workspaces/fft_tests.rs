@@ -48,7 +48,7 @@ fn pipeline<M: PrimeModulus>() {
         OwnedTables::<M>::new(
             Domain::for_size(N << i)
                 .unwrap()
-                .coset(PastaField::zeta())
+                .coset(PastaField::ZETA)
                 .unwrap(),
         )
     });

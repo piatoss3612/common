@@ -32,7 +32,7 @@
 
 use core::{fmt, marker::PhantomData};
 
-use crate::field::{PastaField, PrimeModulus};
+use crate::field::PastaField;
 
 mod affine;
 mod batch;
@@ -131,8 +131,8 @@ pub type VestaProjective = ProjectivePoint<Vesta>;
 /// Returns `x³ + 5`, the right-hand side of both Pasta curve equations.
 ///
 /// `x` must satisfy [`PastaField`]'s reduced-residue invariant.
-fn curve_rhs<M: PrimeModulus>(x: &PastaField<M>) -> PastaField<M> {
-    x.square().mul(x).add(&PastaField::from_u64(5))
+fn curve_rhs<C: PastaCurve>(x: &PastaField<C::Base>) -> PastaField<C::Base> {
+    x.square().mul(x).add(&AffinePoint::<C>::B)
 }
 
 /// A rejected curve operation or multiplication table description.

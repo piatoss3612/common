@@ -56,9 +56,7 @@ fn msm<C: PastaCurve>() {
     for count in [4095, 4096, 4097, 32767, 32768, 32769] {
         let bases = vec![AffinePoint::<C>::GENERATOR; count];
         let scalars: Vec<_> = (0..count)
-            .map(|i| {
-                PastaField::<C::Scalar>::from_u64(i as u64 + 1).mul(&PastaField::two_inverse())
-            })
+            .map(|i| PastaField::<C::Scalar>::from_u64(i as u64 + 1).mul(&PastaField::TWO_INVERSE))
             .collect();
         let sum = scalars
             .iter()
@@ -99,7 +97,7 @@ fn msm<C: PastaCurve>() {
         }
     }
     let bases = vec![AffinePoint::<C>::GENERATOR; 4096];
-    let scalars = vec![PastaField::<C::Scalar>::two_inverse(); bases.len()];
+    let scalars = vec![PastaField::<C::Scalar>::TWO_INVERSE; bases.len()];
     let input = Input::new(Bases::Affine(&bases), &scalars).unwrap();
     let options = ExecutionOptions::default().with_task_budget(TaskBudget::new(4).unwrap());
     let bounded = options.with_memory_limit(64 * 1024);
@@ -165,7 +163,7 @@ fn scalar_caches_follow_resolved_plans_and_capacities() {
 
 fn cached_plan_slots<C: PastaCurve>() {
     let bases = [AffinePoint::<C>::GENERATOR; 16];
-    let scalars = [PastaField::<C::Scalar>::two_inverse(); 16];
+    let scalars = [PastaField::<C::Scalar>::TWO_INVERSE; 16];
     let mut records = [ScalarStorage::<C>::ZERO; 16];
     let prepared =
         PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor)
@@ -322,7 +320,7 @@ fn transform_selection_obeys_constraints_and_mathematical_layouts() {
 
 fn fixed_base<C: PastaCurve>() {
     let base = AffinePoint::<C>::GENERATOR;
-    let scalar = PastaField::<C::Scalar>::two_inverse();
+    let scalar = PastaField::<C::Scalar>::TWO_INVERSE;
     for (capacity, scratch) in [(129, 2), (2049, 2), (2048, 128), (2049, 128)] {
         let mut entries = vec![base.neg(); capacity + 1];
         let mut projective = vec![base.to_projective(); scratch + 1];

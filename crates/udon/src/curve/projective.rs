@@ -109,11 +109,11 @@ impl<C: PastaCurve> ProjectivePoint<C> {
 
     /// Applies [`AffinePoint::endomorphism`] in projective coordinates.
     ///
-    /// Multiplies `x` by the coordinate field's [`PastaField::zeta`] value,
+    /// Multiplies `x` by the coordinate field's [`PastaField::ZETA`] value,
     /// leaving `y` and `z` unchanged. Preserves identity and projective scaling.
     pub fn endomorphism(&self) -> Self {
         Self {
-            x: self.x.mul(&PastaField::zeta()),
+            x: self.x.mul(&PastaField::ZETA),
             ..*self
         }
     }

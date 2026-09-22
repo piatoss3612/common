@@ -360,7 +360,7 @@ fn fft_operations<M: PrimeModulus>(values: &mut [PastaField<M>; FFT_SIZE]) -> Re
     };
     let mut scratch = [PastaField::ZERO; SCRATCH];
     plan.forward(values, OPTIONS, &SerialExecutor, &mut scratch)?;
-    let extended = Domain::for_size(EXTENDED_FFT_SIZE)?.coset(PastaField::zeta())?;
+    let extended = Domain::for_size(EXTENDED_FFT_SIZE)?.coset(PastaField::ZETA)?;
     let expansion = Expansion::new(plan, extended, None)?;
     let mut evaluations = [PastaField::ZERO; EXTENDED_FFT_SIZE];
     const EXPANSION_OPTIONS: ExpansionOptions = ExpansionOptions {

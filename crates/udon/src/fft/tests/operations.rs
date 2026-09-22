@@ -44,7 +44,7 @@ fn inverse_direct<M: PrimeModulus>(
 
 fn operations<M: PrimeModulus>() {
     for log in 0..=6 {
-        for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
+        for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
             let domain = Domain::<M>::new(log).unwrap().coset(shift).unwrap();
             let plan = Transform::new(domain);
             let input = inputs(domain.size());
@@ -354,8 +354,8 @@ fn bound_plan_tables<M: PrimeModulus>() {
     for log in [0, 1, 2, 3, 8] {
         for shift in [
             PastaField::ONE,
-            PastaField::zeta(),
-            PastaField::zeta_inverse(),
+            PastaField::ZETA,
+            PastaField::ZETA_INVERSE,
             PastaField::from_u64(7),
         ] {
             let domain = Domain::<M>::new(log).unwrap().coset(shift).unwrap();
@@ -529,7 +529,7 @@ fn parallel_panics_restore_all_field_buffers() {
 #[test]
 fn finish_tables_preserve_prefix_and_codelet_results() {
     for log in [3, 7] {
-        for shift in [Fp::ONE, Fp::zeta(), Fp::zeta_inverse(), Fp::from_u64(7)] {
+        for shift in [Fp::ONE, Fp::ZETA, Fp::ZETA_INVERSE, Fp::from_u64(7)] {
             let domain = Domain::new(log).unwrap().coset(shift).unwrap();
             let prepared = Prepared::new(domain);
             let plan = prepared.tables().bind(domain).unwrap();

@@ -76,10 +76,10 @@ the current algorithm and its measured costs.
 
 All three point representations provide
 [`endomorphism()`](../crates/udon/src/curve/affine.rs): it maps `(x, y)` to
-`(zeta * x, y)` using the coordinate field's cube root of unity and preserves
-identity. On projective points it multiplies `X` by `zeta`, leaving `Y` and `Z`
-unchanged. This equals multiplication by the scalar field's `zeta()`, denoted
-`lambda` below.
+`(zeta * x, y)` using the coordinate field's
+[`ZETA`](../crates/udon/src/field/parameters.rs) constant and preserves identity.
+On projective points it multiplies `X` by `zeta`, leaving `Y` and `Z` unchanged.
+This equals multiplication by the scalar field's `ZETA`, denoted `lambda` below.
 
 GLV decomposition writes one scalar as two smaller signed integers using this
 endomorphism. [`glv_decompose::<C>(&scalar)`](../crates/udon/src/curve/glv.rs)

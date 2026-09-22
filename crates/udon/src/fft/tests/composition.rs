@@ -8,7 +8,7 @@ fn nz(value: usize) -> NonZeroUsize {
 
 fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary: &[PastaField<M>]) {
     for size in [ordinary.len(), ordinary.len() * 4] {
-        for shift in [PastaField::ONE, PastaField::zeta(), PastaField::from_u64(7)] {
+        for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
             let domain = Domain::<M>::for_size(size).unwrap().coset(shift).unwrap();
             let plan = Transform::new(domain);
             let expected = direct(ordinary, domain);
@@ -16,7 +16,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
             plan.forward_prefix_with(
                 view,
                 &mut output,
-                Strategy::serial(),
+                Strategy::SERIAL,
                 &SerialExecutor,
                 &mut [],
             )
@@ -26,7 +26,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                 plan.forward_into_with(
                     view,
                     &mut output,
-                    Strategy::serial(),
+                    Strategy::SERIAL,
                     &SerialExecutor,
                     &mut [],
                 )
@@ -118,7 +118,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                     .coefficients_with(
                         view,
                         &mut output,
-                        ExpansionStrategy::serial(),
+                        ExpansionStrategy::SERIAL,
                         &SerialExecutor,
                         &mut [],
                     )
@@ -133,7 +133,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                         view,
                         expansion.view(&factor_values).unwrap(),
                         &mut output,
-                        ExpansionStrategy::serial(),
+                        ExpansionStrategy::SERIAL,
                         &SerialExecutor,
                         &mut [],
                     )
@@ -197,7 +197,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                             .coefficients_with(
                                 view,
                                 &mut output,
-                                Strategy::serial(),
+                                Strategy::SERIAL,
                                 &SerialExecutor,
                                 &mut [],
                             )
@@ -275,7 +275,7 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
         plan.forward_into_with(
             CoefficientView::normalized(&coefficients[..1]),
             &mut output,
-            Strategy::serial(),
+            Strategy::SERIAL,
             &joins,
             &mut scratch,
         ),
@@ -289,7 +289,7 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
             view,
             factor,
             &mut output,
-            ExpansionStrategy::serial(),
+            ExpansionStrategy::SERIAL,
             &joins,
             &mut scratch
         ),
@@ -300,7 +300,7 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
         small.forward_prefix_with(
             view,
             &mut output[..4],
-            Strategy::serial(),
+            Strategy::SERIAL,
             &joins,
             &mut scratch
         ),
@@ -311,7 +311,7 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
         small.coefficients_with(
             view,
             &mut output,
-            ExpansionStrategy::serial(),
+            ExpansionStrategy::SERIAL,
             &joins,
             &mut scratch
         ),
@@ -324,7 +324,7 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
     plan.forward_prefix_with(
         CoefficientView::normalized(&[]),
         &mut output,
-        Strategy::serial(),
+        Strategy::SERIAL,
         &joins,
         &mut scratch,
     )

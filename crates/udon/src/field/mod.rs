@@ -281,17 +281,11 @@ impl<M: PrimeModulus> PastaField<M> {
     }
 }
 
-// Inline the wrappers so generic exponentiation uses the specialized kernels.
+// Inline arithmetic wrappers so generic exponentiation uses the specialized kernels.
 impl<M: PrimeModulus> crate::field::algorithms::Field for PastaField<M> {
     #[cfg(any(test, not(feature = "sqrt-table-large")))]
-    #[inline(always)]
-    fn zero() -> Self {
-        Self::ZERO
-    }
-    #[inline(always)]
-    fn one() -> Self {
-        Self::ONE
-    }
+    const ZERO: Self = Self::ZERO;
+    const ONE: Self = Self::ONE;
     #[cfg(any(test, not(feature = "sqrt-table-large")))]
     #[inline(always)]
     fn is_zero(&self) -> bool {

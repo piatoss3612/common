@@ -54,7 +54,7 @@ fn decomposition<C: PastaCurve>() {
     let a = BigUint::from(lattice.a);
     let b = BigUint::from(lattice.b);
     let d = BigUint::from(lattice.d);
-    let lambda = BigUint::from_bytes_le(&PastaField::<C::Scalar>::zeta().to_bytes());
+    let lambda = BigUint::from_bytes_le(&PastaField::<C::Scalar>::ZETA.to_bytes());
     assert_eq!(&a * &d + &b * &b, n);
     assert_eq!((&lambda * &b) % &n, a);
     assert_eq!((&b + &lambda * &d) % &n, BigUint::from(0_u32));
@@ -194,7 +194,7 @@ fn pasta_lattice_bounds_allow_only_second_half_width_two_carries() {
 
 fn endomorphisms<C: PastaCurve>() {
     let p = modulus::<C::Base>();
-    let lambda = BigUint::from_bytes_le(&PastaField::<C::Scalar>::zeta().to_bytes());
+    let lambda = BigUint::from_bytes_le(&PastaField::<C::Scalar>::ZETA.to_bytes());
     let generator = AffinePoint::<C>::GENERATOR;
     let cached = PreparedAffinePoint::from_affine(&generator);
     let mut rotated = generator;

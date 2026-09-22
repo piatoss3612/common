@@ -77,7 +77,8 @@ mod sealed {
 /// Selects one of the two Pasta primes.
 ///
 /// Only [`PallasBase`] and [`PallasScalar`] implement this sealed trait.
-/// Field-valued parameters are available through [`PastaField`] methods.
+/// Field-valued parameters are available through [`PastaField`] constants and
+/// lookup methods.
 ///
 /// ```compile_fail
 /// #[derive(Clone, Copy, Eq, PartialEq)]
@@ -247,39 +248,34 @@ pasta_field_parameters! {
 const INVERSE_POWER_TABLE_LEN: usize = TWO_ADICITY as usize + 1;
 
 impl<M: PrimeModulus> PastaField<M> {
-    /// Returns the inverse of two.
-    pub const fn two_inverse() -> Self {
-        Self::from_montgomery(M::TWO_INVERSE)
-    }
+    /// The inverse of two.
+    pub const TWO_INVERSE: Self = Self::from_montgomery(M::TWO_INVERSE);
 
     /// Returns `2^-log_size` for any `u32` exponent, including zero.
     pub fn power_of_two_inverse(log_size: u32) -> Self {
         if let Some(entry) = M::POWER_OF_TWO_INVERSES.get(log_size as usize) {
             return Self::from_montgomery(*entry);
         }
-        // TODO: Establish whether callers need exponents above TWO_ADICITY
-        // before considering a table of 2^(-2^j) for this fallback. Supported
-        // transform sizes already use the compile-time table above.
-        Self::two_inverse().pow_u64(u64::from(log_size))
+        // The table covers supported transform sizes. Exponentiation handles
+        // the rest of the u32 input range without extending that table.
+        Self::TWO_INVERSE.pow_u64(u64::from(log_size))
     }
 
-    /// Returns `5^(2^32)`, a generator of the subgroup of odd order.
-    pub const fn delta() -> Self {
-        Self::from_montgomery(M::DELTA)
-    }
+    /// `5^(2^32)`, a generator of the odd-order multiplicative subgroup.
+    ///
+    /// This subgroup has order `(p - 1) / 2^32`, where `p` is the field's
+    /// [`PrimeModulus::MODULUS`].
+    pub const DELTA: Self = Self::from_montgomery(M::DELTA);
 
-    /// Returns the selected primitive cube root of unity.
+    /// The selected primitive cube root of unity.
     ///
     /// For [`PallasBase`] this is `5^(2 * (p - 1) / 3)`; for
-    /// [`PallasScalar`] it is `5^((p - 1) / 3)`.
-    pub const fn zeta() -> Self {
-        Self::from_montgomery(M::ZETA)
-    }
+    /// [`PallasScalar`] it is `5^((p - 1) / 3)`. In each case, `p` is that
+    /// field's [`PrimeModulus::MODULUS`] and exponentiation is in the field.
+    pub const ZETA: Self = Self::from_montgomery(M::ZETA);
 
-    /// Returns the inverse of [`Self::zeta`], the other primitive cube root.
-    pub const fn zeta_inverse() -> Self {
-        Self::from_montgomery(M::ZETA_INVERSE)
-    }
+    /// The inverse of [`Self::ZETA`], the other primitive cube root.
+    pub const ZETA_INVERSE: Self = Self::from_montgomery(M::ZETA_INVERSE);
 }
 
 // Multiplicative interpretation of an addition chain, kept distinct from the

@@ -48,7 +48,7 @@ fn exercise_field<M: PrimeModulus>(
     let domain = Domain::for_size(record::SIZE).unwrap().subgroup();
     let extended = Domain::for_size(record::EXTENDED_SIZE)
         .unwrap()
-        .coset(PastaField::zeta())
+        .coset(PastaField::ZETA)
         .unwrap();
     header
         .validate(extended)

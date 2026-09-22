@@ -11,8 +11,9 @@ use crate::field::{NonzeroInversionLanes, PastaField};
 /// contents do not matter, and its unused tail is untouched. A mismatched output length
 /// panics before either buffer is changed.
 ///
-/// Each batch containing nonidentity points uses one inversion; empty or
-/// all-identity batches use none.
+/// Each batch containing points whose `z` is neither zero nor one uses one
+/// inversion. Identity and already-affine points are excluded from the product;
+/// batches containing only those points use no inversion.
 ///
 /// ```
 /// use zakura_udon::{
@@ -64,25 +65,30 @@ fn normalize_full<C: PastaCurve>(
     scratch: &mut [PastaField<C::Base>],
     mut write: impl FnMut(usize, Point<C>),
 ) {
-    // Skipping identities keeps both products invertible; their scratch slots
+    // Only nontrivial denominators enter the products. Skipped scratch slots
     // need no prefix because the reverse pass also skips them.
     let mut products = NonzeroInversionLanes::new();
     for (index, (point, prefix)) in points.iter().zip(scratch.iter_mut()).enumerate() {
         if !point.is_identity()
+            && !point.z.is_one()
             && let Some(product) = products.push(index, &point.z)
         {
             *prefix = product;
         }
     }
     let Some(mut inverses) = products.invert() else {
-        for index in 0..points.len() {
-            write(index, Point::IDENTITY);
+        for (index, point) in points.iter().enumerate() {
+            write(index, point.to_point());
         }
         return;
     };
     for (index, (point, prefix)) in points.iter().zip(scratch.iter()).enumerate().rev() {
         if point.is_identity() {
             write(index, Point::IDENTITY);
+            continue;
+        }
+        if point.z.is_one() {
+            write(index, point.to_point());
             continue;
         }
         let inverse = inverses.pop(index, &point.z, prefix);

@@ -1,4 +1,72 @@
 use super::*;
+use crate::field::count_inversions;
+
+fn normalization_inversions<C: PastaCurve>() {
+    let generator = Point::<C>::GENERATOR;
+    let negative = generator.neg();
+    let rotated = generator.endomorphism();
+    let zero = PastaField::<C::Base>::from_montgomery_limbs(C::Base::MODULUS);
+    let affine = negative.as_affine().unwrap();
+    let loose = ProjectivePoint {
+        x: affine.x.add(&zero),
+        y: affine.y.add(&zero),
+        z: PastaField::<C::Base>::ONE.add(&zero),
+        marker: PhantomData,
+    };
+    let identity = ProjectivePoint { z: zero, ..loose };
+    let cases = [
+        (ProjectivePoint::IDENTITY, Point::IDENTITY, false),
+        (generator.to_projective(), generator, false),
+        (identity, Point::IDENTITY, false),
+        (loose, negative, false),
+        (scaled(&generator, 2), generator, true),
+        (rotated.to_projective(), rotated, false),
+        (scaled(&negative, 3), negative, true),
+        (scaled(&rotated, 5), rotated, true),
+    ];
+    for (point, expected, needs_inverse) in cases {
+        let inversions = count_inversions(|| assert_eq!(point.to_point(), expected));
+        assert_eq!(inversions, usize::from(needs_inverse));
+    }
+
+    // Rotate and truncate to put skipped entries at both lane endpoints,
+    // between factors, and in batches without any nontrivial denominator.
+    for offset in 0..cases.len() {
+        for size in 0..=cases.len() {
+            let cases: Vec<_> = cases.iter().cycle().skip(offset).take(size).collect();
+            let points: Vec<_> = cases.iter().map(|case| case.0).collect();
+            let expected: Vec<_> = cases.iter().map(|case| case.1).collect();
+            for capacity in 0..=size + 1 {
+                let mut output = vec![generator; size];
+                let sentinel = PastaField::from_u64(987);
+                let mut scratch = vec![sentinel; capacity + 2];
+                let inversions = count_inversions(|| {
+                    batch_normalize(&points, &mut output, &mut scratch[..capacity]);
+                });
+                let expected_inversions = cases
+                    .chunks(capacity.max(1))
+                    .filter(|chunk| chunk.iter().any(|case| case.2))
+                    .count();
+                assert_eq!(
+                    inversions, expected_inversions,
+                    "offset={offset}, size={size}, capacity={capacity}"
+                );
+                assert_eq!(output, expected);
+                assert!(
+                    scratch[capacity.min(size)..]
+                        .iter()
+                        .all(|value| value.montgomery_limbs() == sentinel.montgomery_limbs())
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn normalization_inverts_only_nontrivial_denominators() {
+    normalization_inversions::<Pallas>();
+    normalization_inversions::<Vesta>();
+}
 
 fn batches<C: PastaCurve>() {
     let generator = Point::<C>::GENERATOR;

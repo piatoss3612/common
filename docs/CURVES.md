@@ -54,7 +54,8 @@ assert_eq!(BASE, PallasAffine::GENERATOR);
 ```
 
 `to_projective()` lifts an affine point without inversion; `to_point()`
-normalizes a projective point, using one inversion for a nonidentity result.
+normalizes a projective point, using one inversion only when `z` is neither
+zero nor one. Points with `z = 1` need only coordinate reduction.
 Projective equality compares group elements without inversion, even when their
 coordinates have different scales. Keep intermediate results projective and
 use `add_mixed` when the other operand is already affine:
@@ -124,11 +125,12 @@ generator and consumer workflow.
 
 Use [`batch_normalize`](../crates/udon/src/curve/batch.rs) when several
 projective results need affine coordinates. It shares one inversion across
-nonidentity points and preserves input order and identity positions. Provide
-one output point per input point. One field scratch element per input permits a
-single shared inversion; smaller scratch works in chunks, including individual
-inversion with empty scratch. The function
-docs include an executable example and the complete buffer contract.
+points whose `z` is neither zero nor one, preserving input order and identity
+positions. Batches containing only identity or already-affine points need no
+inversion. Provide one output point per input point. One field scratch element
+per input permits a single shared inversion; smaller scratch works in chunks,
+including individual normalization with empty scratch. The function docs include
+an executable example and the complete buffer contract.
 
 For example, collect additions and doublings before requesting affine outputs:
 

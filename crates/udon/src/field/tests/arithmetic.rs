@@ -28,6 +28,8 @@ fn check_arithmetic<M: PrimeModulus>() {
     );
     for (a, x) in &values {
         assert_eq!(a.is_zero(), x == &BigUint::from(0u8));
+        assert_eq!(a.is_one(), x == &BigUint::from(1u8));
+        assert_eq!(a.reduce().is_one(), x == &BigUint::from(1u8));
         assert_value(a.neg(), &(&p - x));
         assert_value(a.square(), &(x * x));
         assert_value(a.double(), &(x * 2u8));
@@ -53,6 +55,25 @@ fn check_arithmetic<M: PrimeModulus>() {
             assert_value(a.pow_u64(exponent), &x.modpow(&BigUint::from(exponent), &p));
         }
     }
+}
+
+#[test]
+fn one_recognizes_both_montgomery_representatives() {
+    fn check<M: PrimeModulus>() {
+        const { assert!(PastaField::<M>::ONE.is_one()) };
+        const { assert!(PastaField::<M, Reduced>::ONE.is_one()) };
+        let p = modulus::<M>();
+        let one = (BigUint::from(1u8) << 256usize) % &p;
+        for stored in [one.clone(), one + p] {
+            for candidate in [&stored - 1u8, stored.clone(), &stored + 1u8] {
+                let value = PastaField::<M>::from_montgomery_limbs(limbs(&candidate));
+                assert_eq!(value.is_one(), candidate == stored);
+                assert_eq!(value.reduce().is_one(), candidate == stored);
+            }
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
 }
 
 fn halving_stored_endpoints<M: PrimeModulus>() {

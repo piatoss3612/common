@@ -14,6 +14,66 @@ impl Executor for Pool {
     }
 }
 
+#[test]
+fn affine_ladder_results_normalize_without_inversion() {
+    fn check<C: PastaCurve>() {
+        let g = AffinePoint::<C>::GENERATOR;
+        let bases: Vec<_> = [g, g.neg(), g.endomorphism()]
+            .into_iter()
+            .cycle()
+            .take(64)
+            .collect();
+        let r = EisensteinTableBatch::<C>::requirements(bases.len()).unwrap();
+        let mut entries = vec![g; r.table_entries];
+        let mut projective = vec![ProjectivePoint::IDENTITY; r.projective_scratch];
+        let mut field = vec![
+            PastaField::ZERO;
+            EisensteinTableBatch::<C>::multiplication_scratch(bases.len()).unwrap()
+        ];
+        let tables = EisensteinTableBatch::prepare(
+            &bases,
+            &mut entries,
+            &mut projective,
+            &mut field,
+            TaskBudget::SERIAL,
+            &SerialExecutor,
+        );
+        let scalar = PastaField::from_u64(42);
+        let prepared = EisensteinScalar::new(&scalar);
+        assert!(prepared.batch_safe());
+        let mut output = vec![ProjectivePoint::IDENTITY; bases.len()];
+        tables.mul_prepared(
+            &prepared,
+            &mut output,
+            &mut field,
+            TaskBudget::SERIAL,
+            &SerialExecutor,
+        );
+        assert!(
+            output
+                .iter()
+                .all(|point| point.z.reduce() == PastaField::ONE)
+        );
+        let expected: Vec<_> = bases
+            .iter()
+            .map(|base| {
+                crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(base)).to_point()
+            })
+            .collect();
+        let inversions = crate::field::count_inversions(|| {
+            for (point, expected) in output.iter().zip(&expected) {
+                assert_eq!(point.to_point(), *expected);
+            }
+            let mut normalized = vec![Point::IDENTITY; bases.len()];
+            batch_normalize(&output, &mut normalized, &mut field);
+            assert_eq!(normalized, expected);
+        });
+        assert_eq!(inversions, 0);
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
 fn batches<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
     let g = AffinePoint::<C>::GENERATOR;
     let bases: Vec<_> = (1..=129)

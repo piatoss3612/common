@@ -137,6 +137,12 @@ fn curve<C: PastaCurve>(criterion: &mut Criterion, name: &str) {
         &ProjectivePoint::<C>::IDENTITY,
         |point| point.to_point(),
     );
+    bench(
+        &mut group,
+        "normalize/affine",
+        &lhs_affine.to_projective(),
+        |point| point.to_point(),
+    );
     group.finish();
 
     let mut group = criterion.benchmark_group(format!("{name}/point"));
@@ -458,19 +464,19 @@ fn batch_normalization<C: PastaCurve>(
             })
             .collect();
         group.throughput(Throughput::Elements(size as u64));
-        for shape in ["nonidentity", "mixed", "identity"] {
+        for shape in ["nonidentity", "mixed", "identity", "affine", "mixed_affine"] {
             if shape == "mixed" && size == 1 {
                 continue;
             }
             let points: Vec<_> = points
                 .iter()
                 .enumerate()
-                .map(|(index, point)| {
-                    if shape == "identity" || (shape == "mixed" && index % 3 == 1) {
+                .map(|(index, point)| match (shape, index % 3) {
+                    ("identity", _) | ("mixed", 1) | ("mixed_affine", 2) => {
                         ProjectivePoint::IDENTITY
-                    } else {
-                        *point
                     }
+                    ("affine", _) | ("mixed_affine", 1) => point.to_point().to_projective(),
+                    _ => *point,
                 })
                 .collect();
             let expected: Vec<_> = points.iter().map(ProjectivePoint::to_point).collect();

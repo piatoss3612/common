@@ -86,11 +86,19 @@ impl<C: PastaCurve> ProjectivePoint<C> {
         (&self.x, &self.y, &self.z)
     }
 
-    /// Recovers affine coordinates with one inversion for a nonidentity point.
+    /// Recovers affine coordinates, inverting only when `z` is neither zero nor one.
     ///
-    /// Identity maps to [`Point::IDENTITY`].
+    /// Identity maps to [`Point::IDENTITY`]; `z = 1` only reduces the coordinates.
     /// Use [`super::batch_normalize`] to share the inversion across a slice.
     pub fn to_point(&self) -> Point<C> {
+        if self.z.is_one() {
+            return AffinePoint {
+                x: self.x.reduce(),
+                y: self.y.reduce(),
+                marker: PhantomData,
+            }
+            .to_point();
+        }
         match self.z.invert() {
             Some(inverse) => self.normalize_with_inverse(&inverse).to_point(),
             None => Point::IDENTITY,

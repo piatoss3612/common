@@ -206,6 +206,20 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
                 && limbs[3] == M::MODULUS[3])
     }
 
+    /// Returns whether this value is one, recognizing both `R mod p` and
+    /// `(R mod p) + p` in the loose Montgomery representation.
+    #[inline]
+    pub const fn is_one(&self) -> bool {
+        let limbs = self.limbs;
+        let loose_one = const { word::add_limbs(&M::R, &M::MODULUS).0 };
+        (limbs[0] == M::R[0] && limbs[1] == M::R[1] && limbs[2] == M::R[2] && limbs[3] == M::R[3])
+            || (!S::REDUCED
+                && limbs[0] == loose_one[0]
+                && limbs[1] == loose_one[1]
+                && limbs[2] == loose_one[2]
+                && limbs[3] == loose_one[3])
+    }
+
     /// Returns `self + rhs`.
     #[inline]
     pub fn add<T: ReductionState>(&self, rhs: &PastaField<M, T>) -> PastaField<M> {
@@ -377,6 +391,6 @@ impl<M: PrimeModulus> algorithms::SqrtField for PastaField<M> {
     }
     #[inline(always)]
     fn is_one(&self) -> bool {
-        self.reduce() == PastaField::<M, Reduced>::ONE
+        self.is_one()
     }
 }

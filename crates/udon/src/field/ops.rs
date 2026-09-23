@@ -12,6 +12,11 @@
 
 use core::{iter::Sum, ops};
 
+use crate::{
+    exec::{ExecutionOptions, SerialExecutor},
+    fft::{Domain, Transform},
+};
+
 use super::parameters::TWO_ADICITY;
 use super::{
     CanonicalUint, DeferredField, FftField, Field, PastaField, PrimeModulus, ProductSum,
@@ -204,6 +209,28 @@ impl<M: PrimeModulus> FftField for PastaField<M> {
     const TWO_INVERSE: Self = Self::TWO_INVERSE;
     const DELTA: Self = Self::DELTA;
     const ZETA: Self = Self::ZETA;
+
+    fn fft(domain: Domain<Self>, values: &mut [Self]) {
+        Transform::new(domain.subgroup())
+            .forward(
+                values,
+                ExecutionOptions::default(),
+                &SerialExecutor,
+                &mut [],
+            )
+            .expect("a serial subgroup transform supports empty scratch");
+    }
+
+    fn ifft(domain: Domain<Self>, values: &mut [Self]) {
+        Transform::new(domain.subgroup())
+            .inverse(
+                values,
+                ExecutionOptions::default(),
+                &SerialExecutor,
+                &mut [],
+            )
+            .expect("a serial subgroup transform supports empty scratch");
+    }
 
     fn root_of_unity(log_size: u32) -> Option<Self> {
         PastaField::root_of_unity(log_size)

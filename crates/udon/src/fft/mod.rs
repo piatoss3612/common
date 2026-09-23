@@ -14,9 +14,9 @@
 //! a constant prefix; [`CosetDomain::interpolate_constant_prefix`] recovers their
 //! coefficients directly.
 //!
-//! [`Domain`] also runs the generic [`mod@reference`] transforms over any
-//! [`reference::Butterfly`] value and evaluates vanishing and Lagrange
-//! polynomials for consumers written against [`crate::field::FftField`].
+//! [`Domain`] dispatches field transforms through [`crate::field::FftField`]
+//! and evaluates vanishing and Lagrange polynomials. Other
+//! [`reference::Butterfly`] values default to the [`mod@reference`] transforms.
 //!
 //! Setup and execution never allocate. Tables may be prepared into mutable
 //! slices or borrowed from downstream Bento POD artifacts. Shared resource limits

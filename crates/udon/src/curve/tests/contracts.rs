@@ -1,6 +1,61 @@
 use super::*;
 use crate::field::count_inversions;
 
+fn trait_msm<C: PastaCurve>() {
+    let generator = Point::<C>::GENERATOR;
+    let points = [
+        Point::IDENTITY,
+        generator,
+        generator.neg(),
+        generator.to_projective().double().to_point(),
+        generator.endomorphism(),
+    ];
+    let weights = [
+        PastaField::<C::Scalar>::ZERO,
+        PastaField::ONE,
+        PastaField::<C::Scalar>::ONE.neg(),
+        PastaField::from_u64(2),
+        PastaField::ZETA,
+    ];
+    let corpus = scalar_corpus::<C>();
+    let modulus = crate::test_support::modulus::<C::Base>();
+    let reference = reference::Reference::generator(&modulus);
+    for size in [
+        0, 1, 2, 3, 7, 8, 9, 15, 16, 17, 63, 64, 65, 127, 128, 129, 191, 192, 255, 256, 257, 511,
+        512, 513, 1025, 8193,
+    ] {
+        let bases: Vec<_> = points.iter().copied().cycle().take(size).collect();
+        let scalars: Vec<_> = corpus.iter().copied().cycle().take(size).collect();
+        let exponent = scalars
+            .iter()
+            .zip(weights.iter().cycle())
+            .fold(PastaField::ZERO, |sum, (scalar, weight)| {
+                sum.add(&scalar.mul(weight))
+            });
+        let expected = reference.mul(
+            &num_bigint::BigUint::from_bytes_le(&exponent.to_bytes()),
+            &modulus,
+        );
+        let actual = <Point<C> as Affine>::msm(&scalars, &bases);
+        expected.assert_point(&actual.to_point());
+
+        assert!(<Point<C> as Affine>::msm(&vec![PastaField::ZERO; size], &bases).is_identity());
+        assert!(<Point<C> as Affine>::msm(&scalars, &vec![Point::IDENTITY; size]).is_identity());
+    }
+}
+
+#[test]
+fn trait_msm_supports_bounded_scratch_and_chunk_boundaries() {
+    trait_msm::<Pallas>();
+    trait_msm::<Vesta>();
+}
+
+#[test]
+#[should_panic(expected = "msm operands must have equal length")]
+fn trait_msm_rejects_mismatched_lengths() {
+    <Point<Pallas> as Affine>::msm(&[PastaField::ONE], &[]);
+}
+
 fn normalization_inversions<C: PastaCurve>() {
     let generator = Point::<C>::GENERATOR;
     let negative = generator.neg();

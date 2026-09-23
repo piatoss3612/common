@@ -158,8 +158,8 @@ pub trait Field:
     }
 }
 
-/// A [`Field`] with the constants a radix-2 evaluation domain and the Pasta
-/// endomorphism need.
+/// A [`Field`] with radix-2 transforms and the constants an evaluation domain
+/// and the Pasta endomorphism need.
 ///
 /// With `g` the [`MULTIPLICATIVE_GENERATOR`](Self::MULTIPLICATIVE_GENERATOR)
 /// and `s` the [`TWO_ADICITY`](Self::TWO_ADICITY) of `p - 1`:
@@ -192,6 +192,27 @@ pub trait FftField: Field {
     /// A primitive cube root of unity: the scalar by which the curve
     /// endomorphism `(x, y) -> (zeta * x, y)` multiplies.
     const ZETA: Self;
+
+    /// Replaces coefficients with evaluations at `domain`'s elements.
+    ///
+    /// Both sides use natural order. Implements
+    /// [`Domain::transform`](crate::fft::Domain::transform) without allocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics before mutation if `values.len()` differs from the domain size.
+    fn fft(domain: crate::fft::Domain<Self>, values: &mut [Self]);
+
+    /// Replaces evaluations at `domain`'s elements with normalized coefficients.
+    ///
+    /// Both sides use natural order. Implements
+    /// [`Domain::inverse_transform`](crate::fft::Domain::inverse_transform)
+    /// without allocation, including division by the domain size.
+    ///
+    /// # Panics
+    ///
+    /// Panics before mutation if `values.len()` differs from the domain size.
+    fn ifft(domain: crate::fft::Domain<Self>, values: &mut [Self]);
 
     /// Returns a primitive root of unity of order `2^log_size`, or `None`
     /// when `log_size` exceeds the two-adicity.

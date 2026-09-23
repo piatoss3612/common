@@ -237,16 +237,11 @@ impl<C: PastaCurve> Affine for Point<C> {
             &mut indices,
         );
         let input = Input::new(Bases::Points(bases), scalars);
-        match input.execute(ExecutionOptions::default(), &SerialExecutor, scratch) {
-            Ok(sum) => sum,
-            // No planned layout fits this shape; the reference sum is exact.
-            Err(_) => scalars
-                .iter()
-                .zip(bases)
-                .fold(ProjectivePoint::IDENTITY, |sum, (scalar, base)| {
-                    sum.add(&base.mul_projective(scalar))
-                }),
-        }
+        // The capacities admit a one-term joint layout and width-four
+        // projective buckets. The planner can shrink any nonempty input to fit.
+        input
+            .execute(ExecutionOptions::default(), &SerialExecutor, scratch)
+            .expect("MSM stack scratch supports a bounded plan")
     }
 
     fn batch_to_affine(points: &[ProjectivePoint<C>], out: &mut [Self]) {

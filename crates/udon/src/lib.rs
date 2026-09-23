@@ -21,10 +21,10 @@
 //! and [`fft::execution`] expose incremental arithmetic with exclusively leased scratch.
 //! [`field::Field`], [`field::FftField`], and [`curve::Affine`] describe the
 //! fields and curves to generic code, with operator forms forwarding to the
-//! inherent arithmetic. [`fft::Domain`] runs the generic reference transforms
-//! and evaluates vanishing and Lagrange polynomials, [`poly`] provides
-//! polynomial utilities over the field traits, and [`poseidon`] carries
-//! the Pasta Poseidon parameters. [`cycle`] binds the fields, curves,
+//! inherent arithmetic. [`fft::Domain`] dispatches field transforms through
+//! [`field::FftField`] and evaluates vanishing and Lagrange polynomials.
+//! [`poly`] provides polynomial utilities over the field traits, and [`poseidon`]
+//! carries the Pasta Poseidon parameters. [`cycle`] binds the fields, curves,
 //! generators, and Poseidon instances of a curve cycle to one marker type.
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct

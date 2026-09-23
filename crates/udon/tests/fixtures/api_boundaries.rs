@@ -349,6 +349,17 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
     }
     generic_batch(two);
 
+    // Match consumers that hold only the field trait and a domain descriptor.
+    fn generic_transform<F: FftField>(value: F) {
+        let domain = arithmetic::fft::Domain::<F>::new(2).unwrap();
+        let mut values = [value; 4];
+        domain.transform::<F>(&mut values);
+        assert_eq!(values, [value * F::from(4), F::ZERO, F::ZERO, F::ZERO]);
+        domain.inverse_transform::<F>(&mut values);
+        assert_eq!(values, [value; 4]);
+    }
+    generic_transform(two);
+
     #[cfg(feature = "loose-order")]
     let _ = core::cmp::Ord::cmp(&two, &four);
     #[cfg(feature = "loose-sqrt")]

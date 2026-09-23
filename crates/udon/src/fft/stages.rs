@@ -9,7 +9,7 @@ use super::{
     TwiddleStorage, TwiddleTable, bit_reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-use crate::field::butterfly::{
+use crate::field::pasta::butterfly::{
     butterfly, butterfly_dif, butterfly_pair, divide_by_power_of_two, scale,
 };
 

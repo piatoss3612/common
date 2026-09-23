@@ -24,7 +24,7 @@ fn dispatch<'a, 't, 'b, M: PrimeModulus, E: Executor>(
     leases: impl Iterator<Item = Lease<'b, M>>,
     executor: &E,
 ) {
-    crate::exec::run::dispatch!(
+    crate::exec::execution::dispatch!(
         run,
         requests,
         leases,

@@ -1,4 +1,6 @@
 use super::{FftPlan, FftRun, WorkKind};
+use super::{test_buffers::Arena, test_pipeline::Banks};
+use crate::exec::execution::test_pool as run_pool;
 use crate::exec::{
     SerialExecutor,
     run::{Identity, TaskStorage},
@@ -8,7 +10,6 @@ use crate::fft::{
     Transform, TransformRequest,
 };
 use crate::field::{PallasBase, PallasScalar, PastaField, PrimeModulus};
-use crate::test_support::{fft_pipeline::Banks, fft_run::Arena, run_pool};
 use std::num::NonZeroUsize;
 use std::{vec, vec::Vec};
 
@@ -230,8 +231,10 @@ fn prefix_regions_match_independent_powers() {
                                 };
                                 kernel.initialize_prefix(&mut output, &source.as_slice());
                                 for (offset, value) in output.iter().enumerate() {
-                                    let degree =
-                                        super::bit_reverse((start + offset) / repeat, width.ilog2());
+                                    let degree = super::bit_reverse(
+                                        (start + offset) / repeat,
+                                        width.ilog2(),
+                                    );
                                     let expected = source
                                         .get(degree)
                                         .copied()
@@ -256,7 +259,7 @@ fn prefix_regions_match_independent_powers() {
 }
 
 fn fused_scales<M: PrimeModulus>() {
-    use crate::{exec::run::ReadView, fft::execution::Buffers};
+    use crate::{exec::execution::ReadView, fft::execution::Buffers};
 
     struct Source<'a, M: PrimeModulus>(&'a [PastaField<M>], bool);
     impl<M: PrimeModulus> ReadView<PastaField<M>> for Source<'_, M> {
@@ -556,7 +559,7 @@ fn sparse_initialization_and_partial_panels_share_forward_twiddles() {
 #[test]
 fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
     use crate::{
-        exec::run::ReadView,
+        exec::execution::ReadView,
         fft::execution::{Bank, Buffers},
         field::Fp,
     };
@@ -677,7 +680,7 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
 #[test]
 fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
     use crate::{
-        exec::run::{Outcome, ReadView, TaskError},
+        exec::execution::{Outcome, ReadView, TaskError},
         fft::execution::{Buffers, Resources},
         field::Fp,
     };
@@ -892,7 +895,7 @@ fn batch_planning_orders_panels_and_validation() {
 #[test]
 fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
     use crate::{
-        exec::run::{Outcome, TaskError},
+        exec::execution::{Outcome, TaskError},
         fft::execution::Buffers,
         field::Fp,
     };

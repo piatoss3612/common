@@ -54,7 +54,7 @@ systems parameterized over the curve cycle. The
 [`poly` module](crates/udon/src/poly/mod.rs) provides polynomial utilities over
 those traits, and the [`poseidon` module](crates/udon/src/poseidon/mod.rs)
 carries the Pasta Poseidon parameters. The
-[`cycle` module](crates/udon/src/cycle.rs) binds the fields, curves, borrowed
+[`cycle` module](crates/udon/src/cycle/mod.rs) binds the fields, curves, borrowed
 generators, and Poseidon instances of the Pasta cycle to one `Cycle` marker for
 proof systems generic over a curve cycle.
 Fields implement `bento::Pod`, so downstream build scripts can generate them
@@ -66,20 +66,21 @@ for latency, build-time, and storage tradeoffs.
 
 The [`fft` module](crates/udon/src/fft/mod.rs) provides power-of-two transforms,
 cosets, residue expansion, and fused class interpolation for both fields. Its
-`Domain` also runs the generic reference transforms over any butterfly value and
-evaluates vanishing and Lagrange polynomials for consumers of the field traits.
+`Domain` dispatches generic transforms through each value's butterfly
+implementation and evaluates vanishing and Lagrange polynomials for consumers
+of the field traits. Pasta fields use the optimized field transforms.
 Callers own all tables, buffers, scratch, and parallel execution; Udon's FFT
 setup and execution do not allocate or require a feature flag. See the
 [FFT guide](docs/FFT.md) for layouts, scratch requirements, and downstream table
 generation with Bento POD, and the [crate docs](crates/udon/src/lib.rs) for
 feature definitions.
 
-The [`curve` module](crates/udon/src/curve/mod.rs) provides Pallas and Vesta
+The [`curve` module](crates/udon/src/curve/pasta/mod.rs) provides Pallas and Vesta
 points, canonical encodings, GLV/Eisenstein scalar multiplication, batch
 normalization, and borrowed compact and expanded fixed-base tables. Operator
 forms and the `Affine` and `Projective` traits expose both curves to generic
 code. Scalar preparation can be reused across compact tables. The
-[`msm` module](crates/udon/src/curve/msm/mod.rs) sums dense or indexed inputs
+[`msm` module](crates/udon/src/msm/mod.rs) sums dense or indexed inputs
 with caller-owned scratch and execution.
 Nonidentity `AffinePoint` and cached `PreparedAffinePoint` entries implement
 `bento::Pod` for direct storage. All curve operations are variable-time and

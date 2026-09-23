@@ -32,7 +32,7 @@ counts. Obtain the printed capacity and admission decision from the current
 run instead of reusing byte totals for another plan or driver.
 
 Application-controlled mixed incremental execution is covered by the
-[execution tests](../crates/udon/src/exec/run/tests.rs), including
+[execution tests](../crates/udon/src/exec/execution/tests/mixed.rs), including
 independent arithmetic checks and admission. The current mixed benchmark does
 not time that driver.
 

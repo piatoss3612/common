@@ -281,3 +281,72 @@ fn bit_reverse_matches_known_values_and_is_an_involution() {
         }
     }
 }
+
+#[test]
+fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
+    for (size, count) in [(0, 1), (3, 1), (8, 0), (8, 3), (8, 16)] {
+        assert_eq!(
+            ResidueLayout::new(size, count),
+            Err(FftError::InvalidLayout)
+        );
+    }
+    for residues in [1, 2, 4, 8] {
+        let layout = ResidueLayout::new(32, residues).unwrap();
+        let input = inputs::<PallasBase>(32);
+        let mut stored = [Fp::ZERO; 32];
+        let mut natural = [Fp::ZERO; 32];
+        layout.copy_from_natural(&input, &mut stored);
+        layout.copy_to_natural(&stored, &mut natural);
+        assert_eq!(reduced(&input), reduced(&natural));
+        let view = EvaluationView::bind(
+            &stored,
+            Domain::for_size(32).unwrap().subgroup(),
+            EvaluationLayout::Residues(layout),
+        );
+        for (row, expected) in input.iter().enumerate() {
+            assert_eq!(
+                (view.get(row)).map(|value| value.reduce()),
+                (Some(expected)).map(|value| value.reduce())
+            );
+            assert_eq!(layout.natural_row(layout.index(row).unwrap()), Some(row));
+            assert_eq!(
+                (view.get_extended_row(row * 4, Domain::for_size(128).unwrap().subgroup()))
+                    .map(|value| value.reduce()),
+                (Some(expected)).map(|value| value.reduce())
+            );
+            assert_eq!(
+                (view.get_extended_row(row * 4 + 1, Domain::for_size(128).unwrap().subgroup()))
+                    .map(|value| value.reduce()),
+                None
+            );
+        }
+        assert_eq!((view.get(32)).map(|value| value.reduce()), None);
+        assert!(
+            view.get_extended_row(0, Domain::for_size(128).unwrap().coset())
+                .is_none()
+        );
+        assert_eq!(
+            (view.get_extended_row(0, Domain::for_size(16).unwrap().subgroup()))
+                .map(|value| value.reduce()),
+            None
+        );
+        for (input_len, output_len) in [(31, 32), (33, 32), (32, 31), (32, 33)] {
+            let source = vec![<Fp>::ONE; input_len];
+            let mut destination = vec![<Fp>::ZERO; output_len];
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    layout.copy_from_natural(&source, &mut destination);
+                }))
+                .is_err()
+            );
+            assert_eq!(destination, vec![<Fp>::ZERO; output_len]);
+            assert!(
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    layout.copy_to_natural(&source, &mut destination);
+                }))
+                .is_err()
+            );
+            assert_eq!(destination, vec![<Fp>::ZERO; output_len]);
+        }
+    }
+}

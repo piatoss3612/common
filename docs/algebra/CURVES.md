@@ -114,7 +114,7 @@ the group identity.
 
 ### `batch_normalize`
 
-[`batch_normalize`](../../crates/udon/src/curve/batch.rs) converts a row of
+[`batch_normalize`](../../crates/udon/src/curve/pasta/batch.rs) converts a row of
 projective points to identity-capable affine `Point`s in the same order.
 Use it at a shared boundary after independent scalar products, a group
 FFT, or a sequence of MSM outputs. Identity entries remain identity.
@@ -137,11 +137,11 @@ at either addition; it does not substitute tangent formulas. Use
 complete `double` followed by `add_mixed` when only the group result is
 needed for all inputs, or explicitly handle the exceptional equations
 if the slopes are part of the desired result. See the
-[operation](../../crates/udon/src/curve/projective.rs).
+[operation](../../crates/udon/src/curve/pasta/projective.rs).
 
 ### `glv_decompose`
 
-[`glv_decompose`](../../crates/udon/src/curve/glv.rs) expresses a scalar as
+[`glv_decompose`](../../crates/udon/src/curve/pasta/glv.rs) expresses a scalar as
 `k=k_1+lambda*k_2` modulo the group order, with signed `i128` components
 of magnitude below `2^127`. It follows that
 `[k]P=[k_1]P+[k_2]phi(P)`. Use the decomposition when composing an
@@ -173,7 +173,7 @@ coefficient vector for weighted sums.
 
 ### `EisensteinTable`
 
-A compact [`EisensteinTable`](../../crates/udon/src/curve/eisenstein.rs)
+A compact [`EisensteinTable`](../../crates/udon/src/curve/pasta/eisenstein.rs)
 retains eight representatives of `aP+b*phi(P)` for one nonidentity
 base. Endomorphism rotations and signs provide the digit points used
 to reconstruct `[k]P`. Use `prepare` for a base that will recur, then
@@ -189,7 +189,7 @@ windows. Both compute the same `[k]P` and support zero scalars.
 
 ### `EisensteinTableBatch`
 
-[`EisensteinTableBatch`](../../crates/udon/src/curve/eisenstein_batch.rs)
+[`EisensteinTableBatch`](../../crates/udon/src/curve/pasta/eisenstein_batch.rs)
 retains compact tables for bases `P_i`. Its `mul(k)` or
 `mul_prepared(prepared_k)` writes the **vector** `([k]P_i)_i`.
 Use it for scaling a basis or producing individual products needed by
@@ -206,7 +206,7 @@ scratch. The batch shares the scalar preparation, not a sum result.
 
 ### `FixedBaseDescription` and `FixedBaseTable`
 
-An expanded [`FixedBaseTable`](../../crates/udon/src/curve/fixed_base.rs)
+An expanded [`FixedBaseTable`](../../crates/udon/src/curve/pasta/fixed_base.rs)
 retains shifted scalar-window multiples of one nonidentity base.
 `FixedBaseDescription { window_bits }` fixes that geometry, and
 `requirements` sizes its preparation. Use `prepare_with` when that

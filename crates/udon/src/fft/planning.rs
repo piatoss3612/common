@@ -1,3 +1,5 @@
+//! Internal transform scheduling and scratch geometry.
+
 use super::{FftError, check_domain_size, check_field_count, min};
 
 /// Scheduling and scratch bounds for a transform.

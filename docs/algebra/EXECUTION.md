@@ -1,8 +1,8 @@
 # Composing and scheduling arithmetic
 
 [Algebra reference](../ALGEBRA.md). The
-[`exec`](../../crates/udon/src/exec.rs),
-[`curve::msm::run`](../../crates/udon/src/curve/msm/run.rs), and
+[`exec`](../../crates/udon/src/exec/mod.rs),
+[`msm::execution`](../../crates/udon/src/msm/execution/mod.rs), and
 [`fft::execution`](../../crates/udon/src/fft/execution/mod.rs) APIs preserve the arithmetic
 described in the other chapters while changing how its pieces become
 available. Choose a synchronous call when its result is the next useful
@@ -104,7 +104,7 @@ base mapping across changing rows.
 
 ### `Identity`, `TaskStorage`, and `TaskKey`
 
-The shared [`exec::run`](../../crates/udon/src/exec/run/mod.rs)
+The shared [`exec::execution`](../../crates/udon/src/exec/execution/mod.rs)
 protocol distinguishes a task's invocation and dependency epoch from
 its arithmetic index. Supply a separate `Identity::new()` for each
 simultaneously bound frontier and initialize its bounded metadata with

@@ -76,6 +76,62 @@ review how their safety-critical names resolve in consumers. Do not rely on
 host layout, trusted generators, or intended callers to satisfy requirements
 that a public safe API permits arbitrary callers to bypass.
 
+## Udon module boundaries
+
+Udon owns runtime arithmetic and the contracts needed to execute it. Bento
+supplies constant derivation and POD tools; it does not own Pasta's runtime
+representations or arithmetic kernels. Artifact schemas, generator derivation,
+allocating workspaces, and worker runtimes belong to their downstream owners.
+
+| Source module | Responsibility |
+| --- | --- |
+| `field/` | Generic field traits, batch inversion, canonical access, and product helpers |
+| `field/pasta/` | Pasta representations, parameters, and optimized field implementations |
+| `curve/` | Generic affine/projective contracts and explicit exports of Pasta arithmetic |
+| `curve/pasta/` | Pasta point representations, coordinate kernels, and fixed-base tables |
+| `fft/` | Domains, full transforms, layouts, tables, and transform plans |
+| `msm/` | Multiscalar multiplication, scalar preparation, scheduling, and task plans |
+| `exec/` | Shared executor contracts, operation budgets, and scoped work helpers |
+| `exec/execution/` | Common incremental task, completion, and frontier protocol |
+| `cycle/` | Cycle contracts, borrowed generator containers, and concrete Pasta bindings |
+| `poseidon/` | Poseidon contracts and the fixed Pasta parameter sets |
+| `poly/` | Polynomial operations through field traits |
+| `polynomial/` | Native Pasta polynomial evaluation, interpolation, division, and folding |
+
+The `field` and `curve` modules explicitly re-export their concrete types;
+callers use paths such as `field::Fp` and `curve::Pallas`.
+Their private Pasta modules keep representation-specific code separate from
+generic contracts. Field butterfly kernels live in `field/pasta/butterfly/`;
+they are the small arithmetic steps used by `fft/`, not a second transform API.
+Likewise, `curve/pasta/buckets.rs` owns the coordinate formulas used by MSM
+bucket reduction, keeping raw affine coordinates private to the curve implementation.
+
+FFT and MSM are sibling modules for bulk arithmetic over fields and curves.
+`curve::msm` also re-exports `msm` for existing callers.
+Both depend on `exec`, which supplies shared contracts
+without owning threads or allocating a pool. Within FFT, `planning` resolves
+geometry and scratch, `request` describes the requested operation, and
+`normalization` applies inverse scaling. The `fft/execution` and `msm/execution`
+modules own their plans and task kernels; `exec/execution` owns the common protocol.
+All three modules also export `run` as a compatibility name for `execution`.
+
+These are source modules within one library crate. Runtime arithmetic kernels
+stay in Udon; Bento supplies compile-time derivation and code generation.
+The Pasta field implementation also owns its stored-representation descriptor
+and shared field test helpers. `STORED_FORM` and `stored_form!` remain exported
+at the crate root for artifact producers and consumers.
+
+Keep arithmetic, encoding, cycle, and resource-limit assertions beside their
+implementation, including checks written entirely through public methods.
+Generic helper tests belong under `field/tests`; Pasta representation and
+kernel tests belong under `field/pasta`, beside the code they exercise.
+Use separate consumers for macro resolution, independent trait implementations,
+caller-owned adapters, and generated artifacts. Group them by field, curve, FFT,
+MSM, or shared execution. Put each domain's storage tests and consumer fixtures in
+that domain, alongside its other tests. Shared test machinery belongs in the
+test harness rather than another suite. See the
+[testing guide](TESTING.md#udon-test-layout) for the test entry points.
+
 ## Procedural macros
 
 The [macro guide](MACROS.md) defines expansion and path conventions. Declarative

@@ -125,9 +125,8 @@ impl<C: PastaCurve> Row<C> {
             Self::Field(s) => s.clone(),
         }
     }
-    fn direct<'a>(&'a self, bases: &'a [Point<C>]) -> zakura_udon::curve::msm::Input<'a, C> {
-        let selection =
-            zakura_udon::curve::msm::Selection::new(zakura_udon::curve::msm::Bases::Points(bases));
+    fn direct<'a>(&'a self, bases: &'a [Point<C>]) -> zakura_udon::msm::Input<'a, C> {
+        let selection = zakura_udon::msm::Selection::new(zakura_udon::msm::Bases::Points(bases));
         match self {
             Self::Unsigned(s) => selection.with_unsigned(s),
             Self::Field(s) => selection.with_scalars(s),
@@ -138,7 +137,7 @@ impl<C: PastaCurve> Row<C> {
         basis: SuffixBasis<'a, C>,
         unsigned: &'a mut [u128],
         field: &'a mut [PastaField<C::Scalar>],
-    ) -> zakura_udon::curve::msm::Input<'a, C> {
+    ) -> zakura_udon::msm::Input<'a, C> {
         match self {
             Self::Unsigned(s) => basis.with_monotone_unsigned(s, unsigned).unwrap(),
             Self::Field(s) => basis.with_scalars(s, field),

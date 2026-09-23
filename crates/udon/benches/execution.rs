@@ -7,13 +7,11 @@ use std::{hint::black_box, time::Duration};
 
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use zakura_udon::{
-    curve::{
-        AffinePoint, Pallas, ProjectivePoint,
-        msm::{self, Bases, Input, Requirements, ScalarStorage, Scratch},
-    },
+    curve::{AffinePoint, Pallas, ProjectivePoint},
     exec::{ExecutionOptions, Executor, TaskBudget},
     fft::{Direction, Domain, StorageLayout, Transform, TransformRequest, execution::FftPlan},
     field::{CanonicalUint, Fp, Fq},
+    msm::{self, Bases, Input, Requirements, ScalarStorage, Scratch},
 };
 
 struct Pool;
@@ -308,7 +306,7 @@ fn isolated(c: &mut Criterion) {
             let input = Input::new(Bases::Affine(&bases), &scalars);
             let options =
                 ExecutionOptions::default().with_task_budget(TaskBudget::new(threads).unwrap());
-            let plan = msm::run::MsmPlan::new(terms, options).unwrap();
+            let plan = msm::execution::MsmPlan::new(terms, options).unwrap();
             let mut synchronous =
                 Buffers::new(core::iter::once(input.requirements(options).unwrap()));
             let mut bounded = Buffers::new(core::iter::once(plan.requirements()));

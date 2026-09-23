@@ -132,3 +132,6 @@ macro_rules! poseidon_permutation {
 
 poseidon_permutation!(PoseidonFp, Fp, PALLAS_BASE);
 poseidon_permutation!(PoseidonFq, Fq, PALLAS_SCALAR);
+
+#[cfg(test)]
+mod tests;

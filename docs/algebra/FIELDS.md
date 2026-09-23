@@ -30,7 +30,7 @@ Reduced equality is field equality. Reduced ordering compares the canonical
 integer representatives, so it is useful for sorting or deterministic choices,
 but inequalities are not preserved by modular addition. Reduction is also
 independent of polynomial normalization: reducing `n*a` does not divide by
-`n`. See the [representation contract](../../crates/udon/src/field/representation.rs).
+`n`. See the [representation contract](../../crates/udon/src/field/pasta/representation.rs).
 
 ### `ZERO`, `ONE`, `from_u64`, `from_i64`, `is_zero`, and `is_one`
 
@@ -73,7 +73,7 @@ when retaining already constructed elements.
 
 ### `CanonicalUint`
 
-[`CanonicalUint`](../../crates/udon/src/field/uint.rs) is an ordinary unsigned
+[`CanonicalUint`](../../crates/udon/src/field/pasta/uint.rs) is an ordinary unsigned
 256-bit integer, without a modulus. `from_limbs`/`limbs` and
 `from_le_bytes`/`to_le_bytes` preserve that integer. Use it when scalar bit
 bounds, digits, or integer encodings matter before field arithmetic;
@@ -102,7 +102,7 @@ them for mathematical constants whose source notation is an ordinary residue,
 rather than writing Montgomery limbs. The syntax is `0x` followed by exactly
 64 hexadecimal digits; out-of-range values are rejected.
 
-[`stored_form!` and `STORED_FORM`](../../crates/udon/src/stored_form.rs)
+[`stored_form!` and `STORED_FORM`](../../crates/udon/src/field/pasta/stored_form.rs)
 identify Udon's `mont-u64x4` storage convention for generated artifacts.
 They do not identify a modulus, curve, reduction state, table layout, or
 schema version. A field element's `bento::Pod` implementation preserves its
@@ -217,7 +217,7 @@ The zero cases have explicit conventions: zero numerator returns
 `(true, 0)`, including `0/0`; nonzero numerator with zero denominator
 returns `(false, 0)`. Thus a true flag alone does not establish that a
 quotient was defined, and the nonzero-over-zero case satisfies neither
-root equation. See the [root contracts](../../crates/udon/src/field/sqrt.rs).
+root equation. See the [root contracts](../../crates/udon/src/field/pasta/sqrt/mod.rs).
 
 ### `TWO_INVERSE` and `power_of_two_inverse`
 
@@ -244,7 +244,7 @@ rather than a radix-two root. `ZETA` is a primitive cube root and
 `ZETA_INVERSE` is its inverse: `ZETA^3=1` and `1+ZETA+ZETA^2=0`.
 The order-three shift supplies a coset disjoint from radix-two subgroups,
 and the paired base/scalar choices give the curve endomorphism relation.
-See [field parameters](../../crates/udon/src/field/parameters.rs).
+See [field parameters](../../crates/udon/src/field/pasta/parameters.rs).
 
 ## Denominators and structured rows
 
@@ -279,7 +279,7 @@ These functions reject a zero denominator before any visitor call, reporting
 `BatchInversionError::ZeroDenominator`; the scaled version does so even for
 zero scale. A visitor error can occur after earlier visitor effects. This
 strict behavior distinguishes them from zero-preserving in-place batching.
-See [batch inversion](../../crates/udon/src/field/batch.rs).
+See [batch inversion](../../crates/udon/src/field/pasta/batch.rs).
 
 ### `fraction_prefixes` and `fraction_prefixes_in_place`
 
@@ -295,12 +295,12 @@ suffix zero. In particular, factors cannot be canceled across a zero
 denominator, even if a symbolic rational expression would have a removable
 singularity. Use this API only when that convention matches the operation;
 use strict denominator validation otherwise.
-[`FractionPrefixError`](../../crates/udon/src/field/fractions.rs) reports shape
+[`FractionPrefixError`](../../crates/udon/src/field/pasta/fractions.rs) reports shape
 and workspace problems, not an undefined-denominator error.
 
 ### `ConstantPrefix`
 
-[`ConstantPrefix::new(length, constant, tail)`](../../crates/udon/src/field/constant_prefix.rs)
+[`ConstantPrefix::new(length, constant, tail)`](../../crates/udon/src/field/pasta/constant_prefix.rs)
 describes a row whose first `length-tail.len()` entries equal `constant`,
 followed by the tail's **actual values**. Its algebraic interpretation is
 `row = constant*ones + tail_corrections`, where each correction is

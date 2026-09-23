@@ -7,7 +7,7 @@
 //! schedules use this workspace's `bento` support.
 //! [`curve`] provides Pallas and Vesta points, canonical encodings,
 //! GLV scalar multiplication, batch normalization, and borrowed compact and
-//! expanded fixed-base tables. [`curve::msm`] sums dense or indexed inputs with
+//! expanded fixed-base tables. [`msm`] sums dense or indexed inputs with
 //! caller-owned scratch and execution.
 //! [`fft`] provides power-of-two transforms, cosets, residue expansion, and fused
 //! interpolation with caller-owned tables, buffers, scratch, and execution.
@@ -16,8 +16,8 @@
 //! or retained powers, divides by monic polynomials with retained remainders,
 //! constructs vanishing polynomials, and interpolates small distinct point sets.
 //! [`exec`] provides scoped fork/join, task budgets, and borrowed work helpers
-//! shared by arithmetic and downstream workloads. [`exec::run`] supplies bounded
-//! task claims and typed admission for application schedulers; [`curve::msm::run`]
+//! shared by arithmetic and downstream workloads. [`exec::execution`] supplies bounded
+//! task claims and typed admission for application schedulers; [`msm::execution`]
 //! and [`fft::execution`] expose incremental arithmetic with exclusively leased scratch.
 //! [`field::Field`], [`field::PrimeField`], [`field::FftField`], and
 //! [`curve::Affine`] describe the fields and curves to generic code, with
@@ -75,12 +75,12 @@ pub mod cycle;
 pub mod exec;
 pub mod fft;
 pub mod field;
+pub mod msm;
 pub mod poly;
 pub mod polynomial;
 pub mod poseidon;
-mod stored_form;
 
-pub use stored_form::STORED_FORM;
+pub use field::pasta::STORED_FORM;
 
 // Keep macro support anchored to Udon through dependency aliases and re-exports.
 // These expose only Bento's const-enforcing macros, never arithmetic functions.
@@ -93,10 +93,5 @@ pub use bento::const_arithmetic::{
 #[cfg(test)]
 extern crate std;
 
-#[cfg(test)]
-mod test_support;
-
-// The scheduler fixtures shared with `tests/execution/` name the crate by its
-// package name; this alias lets `test_support` mount those same files.
 #[cfg(test)]
 extern crate self as zakura_udon;

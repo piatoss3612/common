@@ -1,0 +1,177 @@
+//! Successful downstream calls through a renamed dependency and facade.
+
+mod facade {
+    pub use arithmetic::{
+        curve::{Affine, AffinePoint, Pallas, PastaCurve, Vesta, glv_decompose},
+        field::{
+            FftField, Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, Reduced,
+            batch_invert_groups, batch_invert_with_scratch,
+        },
+    };
+}
+
+use facade::*;
+
+// Generic constant initializers must work through the consumer's facade,
+// without access to the sealed implementation parameters.
+pub(super) const fn parameters<M: PrimeModulus>() -> [PastaField<M>; 4] {
+    [
+        PastaField::<M>::TWO_INVERSE,
+        PastaField::<M>::DELTA,
+        PastaField::<M>::ZETA,
+        PastaField::<M>::ZETA_INVERSE,
+    ]
+}
+
+const FP_PARAMETERS: [Fp; 4] = parameters::<PallasBase>();
+const FQ_PARAMETERS: [Fq; 4] = parameters::<PallasScalar>();
+
+fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4]) {
+    assert_eq!(half.double().reduce(), PastaField::<M, Reduced>::ONE);
+    assert_eq!(
+        delta.reduce(),
+        PastaField::<M>::from_u64(5).pow_u64(1 << 32).reduce()
+    );
+    let two = PastaField::<M>::from_u64(2);
+    let four = two.square();
+    assert_eq!(
+        four.reduce().sqrt().unwrap().square().reduce(),
+        four.reduce()
+    );
+    assert_eq!(
+        two.mul(&two.invert().unwrap()).reduce(),
+        PastaField::<M, Reduced>::ONE
+    );
+    assert_eq!(M::MODULUS[3], 1 << 62);
+    assert_eq!(
+        PastaField::<M>::root_of_unity(4)
+            .unwrap()
+            .mul(&PastaField::<M>::root_of_unity_inverse(4).unwrap())
+            .reduce(),
+        PastaField::<M, Reduced>::ONE,
+    );
+    assert_eq!(
+        zeta.mul(&zeta_inverse).reduce(),
+        PastaField::<M, Reduced>::ONE
+    );
+    let reduced: PastaField<M, Reduced> = two.reduce();
+    assert_eq!(
+        reduced.into_loose().montgomery_limbs(),
+        reduced.montgomery_limbs()
+    );
+    assert_eq!(reduced.mul(&two).reduce(), four.reduce());
+    assert!(reduced < four.reduce());
+
+    // Loose values compare as field elements, and the operator forms and
+    // field traits are reachable through the facade for both fields.
+    assert_eq!(two.double(), four);
+    assert_ne!(two, four);
+    assert_eq!(two + two, four);
+    assert_eq!(two * PastaField::from_u64(3), PastaField::from_u64(6));
+    fn generic<F: FftField>(value: F) -> F {
+        value.square() * F::root_of_unity(1).unwrap() + F::ONE
+    }
+    assert_eq!(
+        generic(two),
+        PastaField::<M>::ONE.neg() * four + PastaField::<M>::ONE
+    );
+
+    // Both entry points work with only a Field bound and bounded scratch.
+    fn generic_batch<F: arithmetic::field::Field>(value: F) {
+        let original = [F::ZERO, value, value.square()];
+        let mut values = original;
+        let mut scratch = [F::ZERO; 2];
+        batch_invert_with_scratch(&mut values, &mut scratch);
+        assert_eq!(values[0], F::ZERO);
+        assert_eq!(values[1] * original[1], F::ONE);
+        assert_eq!(values[2] * original[2], F::ONE);
+        let (left, right) = values.split_at_mut(1);
+        batch_invert_groups(&mut [left, right], &mut scratch[..1]);
+        assert_eq!(values, original);
+    }
+    generic_batch(two);
+
+    fn generic_product<F: arithmetic::field::Field>(value: F) {
+        let values = [value, F::from(3)];
+        assert_eq!(values.iter().product::<F>(), value * F::from(3));
+        assert_eq!(values.into_iter().product::<F>(), value * F::from(3));
+        assert_eq!(core::iter::empty::<F>().product::<F>(), F::ONE);
+        assert_eq!(core::iter::empty::<&F>().product::<F>(), F::ONE);
+    }
+    generic_product(two);
+
+    // Match consumers that hold only the field trait and a domain descriptor.
+    fn generic_transform<F: FftField>(value: F) {
+        let domain = arithmetic::fft::Domain::<F>::new(2).unwrap();
+        let mut values = [value; 4];
+        domain.transform::<F>(&mut values);
+        assert_eq!(values, [value * F::from(4), F::ZERO, F::ZERO, F::ZERO]);
+        domain.inverse_transform::<F>(&mut values);
+        assert_eq!(values, [value; 4]);
+    }
+    generic_transform(two);
+}
+
+fn curve<C: PastaCurve>() {
+    use arithmetic::{
+        exec::{ExecutionOptions, SerialExecutor, TaskBudget},
+        msm::{
+            PreparedScalars, ScalarStorage,
+            execution::{BatchPlan, MsmPlan},
+        },
+    };
+    let generator = AffinePoint::<C>::GENERATOR;
+    assert_eq!(
+        generator.mul_projective(&PastaField::<C::Scalar>::from_u64(2)),
+        generator.to_projective().double(),
+    );
+    assert_eq!(
+        glv_decompose::<C>(&PastaField::<C::Scalar>::ONE.neg()),
+        (-1, 0),
+    );
+    fn commit<A: Affine>(bases: &[A], scalars: &[A::Scalar]) -> A::Projective {
+        A::msm(scalars, bases)
+    }
+    assert_eq!(
+        commit(
+            &[generator.to_point()],
+            &[PastaField::<C::Scalar>::from_u64(2)]
+        ),
+        generator.to_projective().double(),
+    );
+
+    fn generic_group<P: arithmetic::curve::Projective>(point: P, affine: P::Affine) {
+        assert_eq!(point.add_mixed(&affine), point.double());
+        assert_eq!(point.add_mixed(&P::Affine::identity()), point);
+        assert_eq!(point.add_mixed(&affine.negate()), P::identity());
+        let points = [point, point];
+        assert_eq!(points.iter().sum::<P>(), point.double());
+        assert_eq!(points.into_iter().sum::<P>(), point.double());
+        assert_eq!(core::iter::empty::<P>().sum::<P>(), P::identity());
+        assert_eq!(core::iter::empty::<&P>().sum::<P>(), P::identity());
+    }
+    generic_group(generator.to_projective(), generator.to_point());
+
+    let options = ExecutionOptions::default()
+        .with_task_budget(TaskBudget::new(3).unwrap())
+        .with_memory_limit(8192);
+    // The compatibility path and the primary MSM path name the same plan.
+    let plan: arithmetic::msm::run::MsmPlan<C> = MsmPlan::<C>::new(1, options).unwrap();
+    assert_eq!(BatchPlan::<C>::storage_len(1, options).unwrap(), (1, 1));
+    let mut records = [ScalarStorage::<C>::ZERO];
+    let prepared = PreparedScalars::prepare(
+        &[PastaField::ONE],
+        &mut records,
+        TaskBudget::SERIAL,
+        &SerialExecutor,
+    );
+    let mut digits = vec![0; prepared.cache_len(&plan)];
+    assert_eq!(prepared.cache(&plan, &mut digits).len(), 1);
+}
+
+pub fn run() {
+    field::<PallasBase>(FP_PARAMETERS);
+    field::<PallasScalar>(FQ_PARAMETERS);
+    curve::<Pallas>();
+    curve::<Vesta>();
+}

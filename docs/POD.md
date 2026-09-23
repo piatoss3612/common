@@ -146,20 +146,20 @@ the feature preserves the stored field representation. See the [performance
 report](FIELD_PERFORMANCE.md#optional-larger-square-root-tables) for table
 tradeoffs.
 
-The [field embedding test](../crates/udon/tests/embedding.rs) runs a complete
+The [field embedding test](../crates/udon/tests/field/embedding.rs) runs a complete
 build script and consumer with both table configurations and checks that the
 generated artifacts are byte-identical across them. It embeds both fields in
 both states, including representatives between the modulus and twice the
 modulus, and checks exact preservation of their limbs:
 
 ```console
-cargo test --release --locked -p zakura-udon --test embedding -- --ignored
+cargo test --release --locked -p zakura-udon --test field embedding:: -- --ignored
 ```
 
 ## Storing affine points and fixed-base tables
 
-Udon's [`AffinePoint`](../crates/udon/src/curve/mod.rs) and
-[`PreparedAffinePoint`](../crates/udon/src/curve/table_entry.rs) implement `Pod`
+Udon's [`AffinePoint`](../crates/udon/src/curve/pasta/mod.rs) and
+[`PreparedAffinePoint`](../crates/udon/src/curve/pasta/table_entry.rs) implement `Pod`
 for both Pallas and Vesta. Their type docs define the coordinate layouts and
 mathematical invariants, including the cached endomorphism coordinate in
 `PreparedAffinePoint`. The 32-byte compressed protocol encoding is a different
@@ -179,8 +179,8 @@ slice or an enclosing record through Bento POD. Both accept `AffinePoint<C>`
 consumer and use the table's `const bind` method to attach the stored entries
 to their base and description. Binding checks shape and configuration and
 borrows the entries directly; it performs no point arithmetic or content scan. The
-[expanded](../crates/udon/src/curve/fixed_base.rs) and
-[compact](../crates/udon/src/curve/eisenstein.rs) API docs define entry order;
+[expanded](../crates/udon/src/curve/pasta/fixed_base.rs) and
+[compact](../crates/udon/src/curve/pasta/eisenstein.rs) API docs define entry order;
 the [curve guide](CURVES.md#fixed-base-multiplication) shows preparation and
 storage costs.
 
@@ -189,7 +189,7 @@ The owner must separately identify the curve, base, compact or expanded table
 kind, affine or cached entry representation, window width when present, and
 record schema.
 
-The [curve embedding fixture](../crates/udon/tests/fixtures/curve_embedding)
+The [curve embedding fixture](../crates/udon/tests/curve/fixtures/embedding)
 shares its record definition between generator and `no_std` consumer. It
 demonstrates both table kinds and entry types, writing them through Bento POD
 and multiplying directly from embedded storage. The
@@ -197,7 +197,7 @@ and multiplying directly from embedded storage. The
 and artifact layout checks. Run it with:
 
 ```console
-cargo test --release --locked -p zakura-udon --test curve_embedding -- --ignored
+cargo test --release --locked -p zakura-udon --test curve embedding:: -- --ignored
 ```
 
 ## Format ownership
@@ -232,5 +232,5 @@ files through the storage API when testing the artifact workflow. The
 [pod-contract]: ../crates/bento-core/src/pod/mod.rs
 [byte-views]: ../crates/bento-core/src/pod/storage.rs
 [embedding]: ../crates/bento-core/src/pod/macros.rs
-[field-storage]: ../crates/udon/src/field/mod.rs
-[stored-forms]: ../crates/udon/src/stored_form.rs
+[field-storage]: ../crates/udon/src/field/pasta/mod.rs
+[stored-forms]: ../crates/udon/src/field/pasta/stored_form.rs

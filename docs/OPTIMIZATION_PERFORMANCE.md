@@ -141,7 +141,7 @@ have its clone removed by the compiler.
 
 ### Explicit MSM cache preparation
 
-[`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs) accepts the
+[`PreparedScalars::cache`](../crates/udon/src/msm/prepared.rs) accepts the
 caller's executor and task budget for serial or parallel construction.
 The parallel writer partitions at packed-chunk boundaries; fewer than 1,024
 records remain serial. No global pool or runtime allocation is introduced.

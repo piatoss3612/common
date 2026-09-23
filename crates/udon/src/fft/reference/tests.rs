@@ -1,8 +1,8 @@
 use super::{Butterfly, Twiddle, inverse_transform, transform};
 use crate::curve::{Pallas, PastaCurve, ProjectivePoint, Vesta};
 use crate::fft::Domain;
+use crate::field::pasta::test_support::{field_samples, integer, modulus};
 use crate::field::{PastaField, PrimeModulus};
-use crate::test_support::{field_samples, integer, modulus};
 use num_bigint::BigUint;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},

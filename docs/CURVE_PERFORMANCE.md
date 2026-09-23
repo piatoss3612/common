@@ -35,8 +35,8 @@ cargo bench --locked -p zakura-udon --bench curve -- 'fixed_base(_cached)?/w(4|8
 ## Ordinary multiplication
 
 One-shot multiplication avoids caller-owned tables and preparation buffers.
-The [`AffinePoint::mul_projective`](../crates/udon/src/curve/affine.rs) and
-[`ProjectivePoint::mul`](../crates/udon/src/curve/projective.rs) contracts define
+The [`AffinePoint::mul_projective`](../crates/udon/src/curve/pasta/affine.rs) and
+[`ProjectivePoint::mul`](../crates/udon/src/curve/pasta/projective.rs) contracts define
 its arithmetic and storage costs. Actual stack usage depends on the compiler
 and target.
 
@@ -163,7 +163,7 @@ sparse, repeated-base, cancellation, and reused-scalar workloads. Fixture checks
 use scalar inner products over known generator multiples before timing.
 Length/index validation, allocation, and pool entry are outside timing;
 execution scratch checks, recoding, initialization, and arithmetic are included.
-See the [testing guide](TESTING.md#msm-and-compact-table-batch-benchmarks) for
+See the [benchmarking guide](BENCHMARKING.md#msm-and-compact-table-batch-benchmarks) for
 cache-pressure cases and preparation timing boundaries.
 
 Udon chooses kernels, recoding widths, and accumulation from input size, scalar
@@ -172,22 +172,22 @@ intended workspace ceiling and concurrency; a task allowance is not a worker cou
 
 ### Arithmetic and bucket reduction
 
-The [nonzero inversion helper](../crates/udon/src/field/batch.rs) uses two
+The [nonzero inversion helper](../crates/udon/src/field/pasta/batch.rs) uses two
 independent multiplication lanes. Seeding each lane directly and omitting its
 unused final update gives `3(n - 1)` field multiplications for `n >= 2`
 denominators, excluding the inversion. A singleton uses field inversion
-alone. The [endpoint experiment](TESTING.md#internal-msm-experiments) compares
+alone. The [endpoint experiment](BENCHMARKING.md#internal-msm-experiments) compares
 schedules on identical operands; a fixed work saving need not materially
 improve a large batch.
 
-[Projective addition](../crates/udon/src/curve/projective.rs) uses unscaled
+[Projective addition](../crates/udon/src/curve/pasta/projective.rs) uses unscaled
 differences and fused `mul_sub_product`; doubling uses half-scaled Jacobian
 coordinates. The local comments derive those formulas. Equal, inverse, and
 identity branches remain complete. Independent affine integer references and
 field-halving boundary checks establish their arithmetic behavior separately
 from timings.
 
-The [affine bucket reducer](../crates/udon/src/curve/reduce.rs) recovers
+The [affine bucket reducer](../crates/udon/src/curve/pasta/reduce.rs) recovers
 inverses while adding and compacting point pairs, sharing an inversion across
 one level. Its chord attempt falls back to complete reduction on a zero
 product before changing points or lengths. The fallback also preserves odd
@@ -209,7 +209,7 @@ and including point/length resets. At occupancy 17, Pallas/Vesta pairs were:
 | 8,192 | 550.489 / 578.325 | 536.986 / 533.446 | 507.259 / 520.251 |
 
 These ordinary pairs support fused recovery; they do not measure frequent
-exception fallback. The retained [native controls](TESTING.md#internal-msm-experiments)
+exception fallback. The retained [native controls](BENCHMARKING.md#internal-msm-experiments)
 compare production reduction with alternative schedules and expressions, and
 check results before timing.
 
@@ -233,7 +233,7 @@ Width eleven uses twelve windows instead of thirteen, with 1,024 buckets per
 workspace instead of 512. Twelve tasks divide evenly across four workers;
 fewer windows also reduce input passes. The sweep does not isolate those
 contributions or establish every size/budget crossover. Current
-[plan geometry](../crates/udon/src/curve/msm/recode.rs) selects width eleven for
+[plan geometry](../crates/udon/src/msm/recode.rs) selects width eleven for
 automatic Booth plans at grains of at least 4,096 with more than one task.
 Serial plans retain width ten at that boundary. Preparation and execution use
 the same resolved geometry; callers do not select a width.
@@ -258,7 +258,7 @@ retained preparation, and metadata outside one operation's ceiling.
 Retaining scalar records or digits moves preparation outside execution; it does
 not make their storage free. Compare one-shot, prepare-and-execute, and repeated
 execution lifecycles separately.
-[`IndexedCoalescingPlan`](../crates/udon/src/curve/msm/coalesce.rs) can reduce
+[`IndexedCoalescingPlan`](../crates/udon/src/msm/coalesce.rs) can reduce
 arithmetic for repeated indices while preserving the original base storage.
 Include sorting when measuring preparation, and scalar aggregation for every
 row. Neither reuse nor coalescing benefits every workload.

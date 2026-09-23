@@ -1,7 +1,7 @@
 # Weighted group sums
 
 [Algebra reference](../ALGEBRA.md). Names here belong to
-[`curve::msm`](../../crates/udon/src/curve/msm/mod.rs). An MSM computes one
+[`curve::msm`](../../crates/udon/src/msm/mod.rs). An MSM computes one
 point `Q=sum_i [a_i]G_i`, with coefficients in the selected curve's scalar
 field. Look first for structure in the coefficients, the base mapping,
 or a result already available from an earlier calculation.
@@ -63,7 +63,7 @@ The returned input's `selection()` can retain the chosen mapping after
 the original row is gone. Reuse that support only when later rows are
 known to vanish at the omitted positions. If support is already known,
 construct an indexed selection directly. See the
-[support conversion](../../crates/udon/src/curve/msm/nonzero.rs).
+[support conversion](../../crates/udon/src/msm/nonzero.rs).
 
 ### `Input`
 
@@ -82,7 +82,7 @@ better algebraic basis; the following APIs express those facts.
 
 ### `PreparedScalars` and `ScalarStorage`
 
-[`PreparedScalars`](../../crates/udon/src/curve/msm/prepared.rs) retains
+[`PreparedScalars`](../../crates/udon/src/msm/prepared.rs) retains
 classification and GLV decomposition for a whole coefficient vector,
 releasing the original row borrow. Use `prepare` for field scalars,
 or `unsigned`, `signed`, and `canonical` for the corresponding integer
@@ -101,7 +101,7 @@ multiplication, and `Selection` retains the bases while scalars vary.
 
 ### `SharedScalarInput`
 
-[`SharedScalarInput::new`](../../crates/udon/src/curve/msm/matrix.rs)
+[`SharedScalarInput::new`](../../crates/udon/src/msm/matrix.rs)
 binds a matrix of bases to one `PreparedScalars` vector. Output `j` is
 `Q_j=sum_i [a_i]G_(j*output_stride+i*term_stride)`. Use it for several
 linear maps sharing coefficients, such as commitments to the same
@@ -119,7 +119,7 @@ scalars or lengths. A shared scalar vector is the defining invariant.
 
 ### `CoalescingPlan` and `CoalescingKey`
 
-[`CoalescingPlan::prepare`](../../crates/udon/src/curve/msm/coalesce.rs)
+[`CoalescingPlan::prepare`](../../crates/udon/src/msm/coalesce.rs)
 groups identity-capable points by equality up to sign, using caller
 storage initialized with `CoalescingKey::EMPTY`. `with_scalars`
 then applies `[a]P+[b]P=[a+b]P` and
@@ -152,7 +152,7 @@ without carrying their corresponding indices.
 
 ### `BasisSum`
 
-[`BasisSum::prepare`](../../crates/udon/src/curve/msm/sum.rs) retains
+[`BasisSum::prepare`](../../crates/udon/src/msm/sum.rs) retains
 `S=sum_i G_i` for one ordered region. For coefficients equal to `c`
 except for differences `delta_j` at indices `i_j`, use
 `Q=[c]S+sum_j [delta_j]G_(i_j)`. `sum` exposes `S`, `original` the
@@ -180,7 +180,7 @@ being updated; no API infers an application's omitted or extra terms.
 
 ### `SuffixBasis`
 
-[`SuffixBasis::prepare`](../../crates/udon/src/curve/msm/suffix.rs)
+[`SuffixBasis::prepare`](../../crates/udon/src/msm/suffix.rs)
 retains `H_i=sum_(j>=i)G_j`. The identity
 `sum_i [a_i]G_i = [a_0]H_0 + sum_(i>0)[a_i-a_(i-1)]H_i`
 turns a piecewise constant row into its change points. Use

@@ -42,8 +42,7 @@ jobs:
         # Each consumer selects its own dependency feature matrix.
         run: >-
           cargo test --release --locked -p zakura-udon
-          --test embedding --test fft_embedding
-          --test curve_constants --test curve_embedding --test api_boundaries -- --ignored
+          --test api --test field --test curve --test fft -- --ignored
       - name: Check arithmetic and FFTs with debug assertions
         run: |
           cargo test --locked -p zakura-udon --lib
@@ -79,7 +78,7 @@ jobs:
       - name: Check public storage API
         run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod
       - name: Check field and affine point storage
-        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --test pod
+        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --test field --test curve pod::
 
   portability:
     name: Target portability contracts

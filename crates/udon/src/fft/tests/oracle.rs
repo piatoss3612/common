@@ -28,6 +28,18 @@ pub(super) fn direct<M: PrimeModulus>(
         .collect()
 }
 
+pub(super) fn check_forward<M: PrimeModulus>(
+    coefficients: &[PastaField<M>],
+    domain: CosetDomain<M>,
+    actual: &[PastaField<M>],
+) -> Result<(), &'static str> {
+    if actual == direct(coefficients, domain) {
+        Ok(())
+    } else {
+        Err("FFT differs from direct polynomial evaluation")
+    }
+}
+
 pub(super) fn reference_coset<M: PrimeModulus>(
     coefficients: &[PastaField<M>],
     domain: CosetDomain<M>,

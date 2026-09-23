@@ -13,8 +13,10 @@ use oracle::reference;
 mod arithmetic;
 mod contracts;
 mod preparation;
+mod properties;
 mod recoding;
 mod scheduling;
+mod transitions;
 
 mod constraints;
 

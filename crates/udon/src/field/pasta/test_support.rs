@@ -18,17 +18,62 @@ pub(super) fn field<M: PrimeModulus>(value: &BigUint) -> PastaField<M> {
     PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs(value))).unwrap()
 }
 
+pub(in crate::field) fn check_value<M: PrimeModulus, S: ReductionState>(
+    actual: PastaField<M, S>,
+    expected: &BigUint,
+) -> Result<(), &'static str> {
+    let p = modulus::<M>();
+    let expected = expected % &p;
+    let stored = integer(&actual.montgomery_limbs());
+    if stored >= integer(&PastaField::<M, S>::BOUND) {
+        return Err("stored value exceeds its reduction-state bound");
+    }
+    if &stored % &p != (&expected << 256usize) % &p {
+        return Err("Montgomery residue differs from the integer reference");
+    }
+    if integer(&actual.reduce().montgomery_limbs()) != &stored % &p {
+        return Err("reduction differs from the integer reference");
+    }
+    if BigUint::from_bytes_le(&actual.to_bytes()) != expected {
+        return Err("encoding differs from the integer reference");
+    }
+    Ok(())
+}
+
 pub(in crate::field) fn assert_value<M: PrimeModulus, S: ReductionState>(
     actual: PastaField<M, S>,
     expected: &BigUint,
 ) {
+    assert_eq!(
+        check_value(actual, expected),
+        Ok(()),
+        "{actual:?}, expected {expected}"
+    );
+}
+
+/// Loose Montgomery representatives, with extra weight at representation bounds.
+pub(crate) fn arbitrary_field<M: PrimeModulus>()
+-> impl proptest::strategy::Strategy<Value = PastaField<M>> {
+    use proptest::prelude::*;
+
     let p = modulus::<M>();
-    let expected = expected % &p;
-    let stored = integer(&actual.montgomery_limbs());
-    assert!(stored < integer(&PastaField::<M, S>::BOUND));
-    assert_eq!(&stored % &p, (&expected << 256usize) % &p);
-    assert_eq!(integer(&actual.reduce().montgomery_limbs()), &stored % &p);
-    assert_eq!(BigUint::from_bytes_le(&actual.to_bytes()), expected);
+    let boundaries = [
+        BigUint::from(0u8),
+        BigUint::from(1u8),
+        &p - 1u8,
+        p.clone(),
+        &p + 1u8,
+        &p * 2u8 - 1u8,
+    ]
+    .map(|stored| PastaField::from_montgomery_limbs(limbs(&stored)));
+    prop_oneof![
+        1 => proptest::sample::select(boundaries.to_vec()),
+        4 => any::<[u64; 4]>().prop_map(|mut stored| {
+            // Both Pasta moduli exceed 2^254, so these limbs are below 2p.
+            stored[3] &= (1 << 63) - 1;
+            PastaField::from_montgomery_limbs(stored)
+        }),
+    ]
 }
 
 pub(super) fn deterministic_bytes<const N: usize>(state: &mut u64) -> [u8; N] {

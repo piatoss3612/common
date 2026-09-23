@@ -139,7 +139,7 @@ fn scalar_boundaries<C: PastaCurve>() {
             limbs[bit / 64] |= 1 << (bit % 64);
         }
         let scalar = PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs)).unwrap();
-        for n in [1, 7, 8, 16, 31, 32, 47, 48, 49, 63, 127, 128, 129] {
+        for n in [1, 7, 8, 9, 16, 31, 32, 33, 47, 48, 49, 63, 127, 128, 129] {
             let scalars: Vec<_> = (0..n)
                 .map(|i| if i % 5 == 0 { PastaField::ZERO } else { scalar })
                 .collect();
@@ -335,10 +335,14 @@ fn affine_trait_msm<C: PastaCurve>() {
             let base = base.to_projective();
             expected = expected.add(&test_reference::multiply(scalar, |sum| sum.add(&base)));
         }
+        let (actual, calls) = super::super::test_support::count_kernels(|| {
+            <Point<C> as Affine>::msm(&scalars, &bases)
+        });
+        assert_eq!(actual, expected, "{size} terms");
         assert_eq!(
-            <Point<C> as Affine>::msm(&scalars, &bases),
-            expected,
-            "{size} terms"
+            calls.total() > 0,
+            size > 0,
+            "{size} terms must reach MSM kernels"
         );
     }
 }

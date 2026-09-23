@@ -216,6 +216,8 @@ fn execute<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
     task: Task,
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
+    #[cfg(test)]
+    super::test_support::record_kernel(task.geometry);
     match task.geometry {
         Geometry::Short(bits) => short(view, records, bits, work),
         Geometry::Joint => joint(view, records, digits, task.pass, work),
@@ -509,6 +511,8 @@ pub(super) fn stream_selected<C: PastaCurve>(
         task: Task,
         sums: &mut [ProjectivePoint<C>],
     ) {
+        #[cfg(test)]
+        super::test_support::record_kernel(task.geometry);
         recode::rows_view(
             digits,
             terms,

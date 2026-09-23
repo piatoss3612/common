@@ -14,6 +14,7 @@ mod contracts;
 mod domain;
 mod operations;
 mod pipelines;
+mod properties;
 
 mod oracle;
 mod support;

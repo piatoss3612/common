@@ -23,6 +23,27 @@ The default configuration has a separate Clippy gate because workspace lints
 enable all features. Slow consumers and timing experiments are ignored by the
 ordinary suites and have separate commands below.
 
+## CI enforcement
+
+The arithmetic matrix executes release workspace tests and debug Udon tests
+natively on x86-64 and ARM64, each with both square-root configurations. Lints,
+slow compiler and artifact consumers, benchmark smoke tests, Miri, and target
+portability have separate jobs. Cross-target compilation is additional coverage;
+it does not replace either native runner.
+
+The stable `ci-required` job runs even when a dependency fails or is skipped and
+succeeds only when every mandatory job succeeds. Repository rules must require
+this exact GitHub Actions check on `main`; defining the job alone does not block
+merges. Keep its `needs` list and explicit success conditions in sync when adding
+a mandatory job. A new check must be present on the branches being merged before
+enabling its repository rule.
+
+Filtered runs check their completed test summaries in the workflow: every
+selected target must report at least one passing test. A target with only ignored
+tests fails this check too. Bash's pipeline failure handling preserves Cargo's
+exit status while recording output. Job timeouts bound hung tests, and newer runs
+cancel superseded runs for the same PR or branch.
+
 ## Udon test layout
 
 Unit tests live with the implementation they exercise, including Poseidon
@@ -122,6 +143,40 @@ worker. Preserve independent checks of cached rotations, scalar reuse, fused
 and unnormalized FFTs, group-valued transforms, and supplied/batched chains
 when changing their public entry points.
 
+### Arithmetic properties and dispatch
+
+Field, FFT, and MSM properties live beside their existing arithmetic suites in
+`src/field/pasta/tests/properties.rs`, `src/fft/tests/properties.rs`, and
+`src/msm/tests/properties.rs`. They compare generated inputs against integer
+arithmetic, direct polynomial evaluation, and binary scalar ladders. Cases include
+redundant field representatives, full-width and short scalars, repeated and inverse
+bases, indexed inputs, optional FFT tables, and reused dirty scratch. The same
+comparison functions must reject deliberately corrupted results at a selected
+boundary while accepting the real result and neighboring cases.
+
+PRs run 32 generated cases per property in each native/feature configuration.
+Run a larger campaign locally by overriding `PROPTEST_CASES`:
+
+```console
+PROPTEST_CASES=1024 cargo test --release --locked -p zakura-udon --lib ::properties::
+PROPTEST_CASES=1024 cargo test --release --locked -p zakura-udon --lib --all-features ::properties::
+```
+
+Proptest shrinks failures and saves replay seeds in `properties.regressions`
+beside the owning source file. CI uploads these files on failure. Copy a failing
+seed file from the artifact to that same directory, reproduce and fix the failure,
+and commit the seed with the fix. For a whole generated run, `PROPTEST_RNG_SEED`
+selects a reproducible seed. These checks establish finite-case agreement, not a
+proof of arithmetic correctness.
+
+MSM transition tests exercise sizes immediately below, at, and above automatic
+window changes and the preparation chunk boundary, including cancellation and
+scratch reuse. Test-only counters check actual kernel execution. Generic MSM
+tests must reach MSM kernels; generic scalar FFTs must avoid the reference
+transform, and batch inversion must retain its expected inversion count. Result
+equality alone cannot detect a slower fallback. The counters and faulty results
+are compiled only for tests; runtime kernels stay in Udon.
+
 Miri checks storage separately from native nested-Cargo consumers:
 
 ```console
@@ -200,7 +255,7 @@ cargo test --release --locked -p zakura-udon \
   --test api --test field --test curve --test fft -- --ignored
 ```
 
-CI runs this command in a separate step. Each consumer selects its own dependency
+CI runs this command in a separate job. Each consumer selects its own dependency
 feature matrix, so it only needs to run once. Naming these integration targets
 also avoids selecting the ignored FFT and inversion timing experiments, which
 have their own commands. Target portability checks belong to Bento and run

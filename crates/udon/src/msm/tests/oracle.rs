@@ -2,6 +2,17 @@
 
 use super::*;
 
+pub(super) fn check<C: PastaCurve>(
+    input: &Input<'_, C>,
+    actual: ProjectivePoint<C>,
+) -> Result<(), &'static str> {
+    if actual == reference(input) {
+        Ok(())
+    } else {
+        Err("MSM differs from the binary-ladder reference")
+    }
+}
+
 pub(super) fn reference<C: PastaCurve>(input: &Input<'_, C>) -> ProjectivePoint<C> {
     let mut sum = ProjectivePoint::IDENTITY;
     let Scalars::Raw(scalars) = input.scalars else {

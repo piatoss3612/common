@@ -6,6 +6,50 @@ use super::{
 use crate::exec::{Executor, SerialExecutor};
 use std::{vec, vec::Vec};
 
+std::thread_local! {
+    static KERNEL_CALLS: core::cell::Cell<[usize; 15]> = const { core::cell::Cell::new([0; 15]) };
+}
+
+fn kernel_index(geometry: recode::Geometry) -> usize {
+    match geometry {
+        recode::Geometry::Short(_) => 0,
+        recode::Geometry::Joint => 1,
+        recode::Geometry::Booth(width) => usize::from(width) + 2,
+    }
+}
+
+pub(super) fn record_kernel(geometry: recode::Geometry) {
+    KERNEL_CALLS.with(|calls| {
+        let mut counts = calls.get();
+        counts[kernel_index(geometry)] += 1;
+        calls.set(counts);
+    });
+}
+
+#[derive(Debug)]
+pub(super) struct KernelCalls([usize; 15]);
+
+impl KernelCalls {
+    pub(super) fn total(&self) -> usize {
+        self.0.iter().sum()
+    }
+
+    pub(super) fn for_geometry(&self, geometry: recode::Geometry) -> usize {
+        self.0[kernel_index(geometry)]
+    }
+}
+
+/// Counts actual arithmetic tasks on this thread; use a serial executor.
+pub(super) fn count_kernels<T>(run: impl FnOnce() -> T) -> (T, KernelCalls) {
+    let before = KERNEL_CALLS.get();
+    let result = run();
+    let after = KERNEL_CALLS.get();
+    (
+        result,
+        KernelCalls(core::array::from_fn(|i| after[i] - before[i])),
+    )
+}
+
 pub(super) struct Buffers<C: PastaCurve> {
     pub(super) scalars: Vec<ScalarStorage<C>>,
     pub(super) digits: Vec<u8>,

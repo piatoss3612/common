@@ -9,6 +9,7 @@ mod constants;
 mod encoding;
 mod kernels;
 mod parameters;
+mod properties;
 mod uint;
 
 mod constant_prefix;

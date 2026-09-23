@@ -11,10 +11,12 @@ pub(super) use std::{vec, vec::Vec};
 mod arithmetic;
 mod batch;
 mod batch_inversion;
+mod constant_prefix;
 mod constants;
 mod encoding;
 mod kernels;
 mod parameters;
+mod sqrt_ratios;
 mod uint;
 
 pub(super) fn limbs<const N: usize>(value: &BigUint) -> [u64; N] {

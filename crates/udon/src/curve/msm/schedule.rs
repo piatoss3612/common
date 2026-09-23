@@ -122,7 +122,7 @@ impl WorkerStorage {
 #[derive(Clone, Copy)]
 pub(super) struct Options {
     pub(super) arithmetic: ArithmeticOptions,
-    task_budget: TaskBudget,
+    pub(super) task_budget: TaskBudget,
     memory_limit: Option<usize>,
     width: Option<u8>,
     accumulation: Accumulation,
@@ -285,7 +285,7 @@ pub(super) const fn conservative<C: PastaCurve>(
 // Shared deterministic memory search for const and runtime planning. Reduce
 // affine staging first, then concurrency, then retain projective buckets, and
 // finally shorten complete chunks (including records and digits).
-const fn smaller(mut options: Options, n: usize) -> Option<Options> {
+pub(super) const fn smaller(mut options: Options, n: usize) -> Option<Options> {
     let pass = match options.arithmetic.max_terms_per_pass {
         Some(p) => min(n, p.get()),
         None => n,

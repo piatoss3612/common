@@ -1,14 +1,20 @@
 //! Pasta field and curve arithmetic and allocation-free field FFTs.
 //!
 //! [`field::Fp`] and [`field::Fq`] provide field arithmetic, canonical encodings,
-//! inversion, square roots, and product sums without allocation. Constants and
-//! fixed exponentiation schedules use this workspace's `bento` support.
+//! inversion, square roots and ratios, and product sums without allocation.
+//! [`field::PastaField::sqrt_alt`] also returns a root of a fixed nonsquare
+//! multiple when the input is nonsquare. Constants and fixed exponentiation
+//! schedules use this workspace's `bento` support.
 //! [`curve`] provides Pallas and Vesta points, canonical encodings,
 //! GLV scalar multiplication, batch normalization, and borrowed compact and
 //! expanded fixed-base tables. [`curve::msm`] sums dense or indexed inputs with
 //! caller-owned scratch and execution.
 //! [`fft`] provides power-of-two transforms, cosets, residue expansion, and fused
 //! interpolation with caller-owned tables, buffers, scratch, and execution.
+//! [`polynomial`] combines borrowed coefficient slices with caller-supplied
+//! weights and implicit zero extension, evaluates polynomials with Horner's rule
+//! or retained powers, divides by monic polynomials with retained remainders,
+//! constructs vanishing polynomials, and interpolates small distinct point sets.
 //! [`exec`] provides scoped fork/join, task budgets, and borrowed work helpers
 //! shared by arithmetic and downstream workloads. [`exec::run`] supplies bounded
 //! task claims and typed admission for application schedulers; [`curve::msm::run`]
@@ -39,7 +45,7 @@
 //! Curves and FFTs are always available without feature flags. All current APIs
 //! work without an allocator.
 //!
-//! By default, [`field::PastaField::sqrt`] uses small tables of roots of unity.
+//! By default, square roots and ratios use small tables of roots of unity.
 //! Enabling `sqrt-table-large` selects a larger table algorithm that reduces
 //! work for many square inputs, at the cost of additional static storage.
 //! Performance depends on the input and target. Both configurations use
@@ -58,6 +64,7 @@ pub mod curve;
 pub mod exec;
 pub mod fft;
 pub mod field;
+pub mod polynomial;
 mod stored_form;
 
 pub use stored_form::STORED_FORM;

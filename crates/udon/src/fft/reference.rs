@@ -118,7 +118,14 @@ pub fn transform<T: Twiddle, V: Butterfly<T>>(values: &mut [V], root: &T) {
         }
         for chunk in values.chunks_exact_mut(block) {
             let (left, right) = chunk.split_at_mut(block / 2);
-            let mut twiddle = T::ONE;
+            // The first twiddle is one. The scalar action's identity law lets
+            // even an expensive value type bypass its scaling machinery here.
+            let (first_left, left) = left.split_first_mut().unwrap();
+            let (first_right, right) = right.split_first_mut().unwrap();
+            let original = first_left.clone();
+            *first_left = original.add(first_right);
+            *first_right = original.add(&first_right.negated());
+            let mut twiddle = step;
             for (left, right) in left.iter_mut().zip(right) {
                 let product = right.scaled(&twiddle);
                 let original = left.clone();

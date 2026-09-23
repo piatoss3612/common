@@ -211,10 +211,7 @@ fn cached_plans_allow_unused_parallel_slots() {
 
 fn fft<M: PrimeModulus>() {
     for size in [64, 2048, 4096] {
-        let domain = Domain::<M>::for_size(size)
-            .unwrap()
-            .coset(PastaField::from_u64(7))
-            .unwrap();
+        let domain = Domain::<M>::for_size(size).unwrap().coset();
         let transform = Transform::new(domain);
         for tasks in [1, 4] {
             for limit in [0, 64 * 32, size * 32] {

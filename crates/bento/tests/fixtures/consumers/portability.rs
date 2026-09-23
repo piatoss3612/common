@@ -343,10 +343,10 @@ fn fft_operations<M: PrimeModulus>(values: &mut [PastaField<M>; FFT_SIZE]) -> Re
     )?;
     assert!(forward.retained_fields() <= scratch.len());
     forward.execute(None, values, None, &mut scratch, &SerialExecutor);
-    let extended = Domain::for_size(EXTENDED_FFT_SIZE)?.coset(PastaField::ZETA)?;
+    let extended = Domain::for_size(EXTENDED_FFT_SIZE)?.coset();
     let expansion = Expansion::new(plan, extended, None)?;
     let mut evaluations = [PastaField::ZERO; EXTENDED_FFT_SIZE];
-    assert!(expansion.evaluation_scratch(OPTIONS)?.field_elements <= scratch.len());
+    assert!(expansion.evaluation_scratch(OPTIONS)? <= scratch.len());
     expansion.evaluations(
         values,
         &mut evaluations,

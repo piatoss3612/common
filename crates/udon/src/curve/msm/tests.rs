@@ -66,9 +66,9 @@ impl Executor for Pool {
 ///
 /// Jobs run sequentially: consecutive joins take a maximum; joined branches add.
 /// This checks the allowance without relying on OS scheduling or worker counts.
-struct JoinWidth(core::sync::atomic::AtomicUsize);
+pub(super) struct JoinWidth(pub(super) core::sync::atomic::AtomicUsize);
 impl JoinWidth {
-    fn measure<R>(&self, work: impl FnOnce() -> R) -> (R, usize) {
+    pub(super) fn measure<R>(&self, work: impl FnOnce() -> R) -> (R, usize) {
         use core::sync::atomic::{AtomicUsize, Ordering};
         struct Restore<'a>(&'a AtomicUsize, usize);
         impl Drop for Restore<'_> {

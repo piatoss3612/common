@@ -1,5 +1,5 @@
 use super::{reference::Reference, *};
-use crate::test_support::modulus;
+use crate::test_support::{integer, modulus};
 
 fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
     let p = modulus::<C::Base>();
@@ -56,6 +56,18 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
             reference_base.assert_point(&table.as_slice()[window_entries].affine().to_point());
         }
         let mut scalars = scalar_corpus::<C>();
+        // Scalar recoding must accept unreduced zero, one, and boundary limbs.
+        let scalar_modulus = modulus::<C::Scalar>();
+        let loose_one = (integer(&PastaField::<C::Scalar>::ONE.montgomery_limbs())
+            + &scalar_modulus)
+            .to_u64_digits();
+        let loose_max = ((&scalar_modulus << 1_usize) - 1_u32).to_u64_digits();
+        scalars.extend([
+            PastaField::from_montgomery_limbs(C::Scalar::MODULUS),
+            PastaField::from_montgomery_limbs(loose_one.try_into().unwrap()),
+            PastaField::from_montgomery_limbs(loose_max.try_into().unwrap()),
+            PastaField::from_montgomery_limbs([u64::MAX, u64::MAX, u64::MAX, (1 << 63) - 1]),
+        ]);
         // Sample full scalars around signed-window thresholds, including limb
         // boundaries. GLV changes their digits; direct recoder tests separately
         // exercise every half-width threshold and incoming-carry case.

@@ -12,7 +12,6 @@ pub struct OwnedTables<M: PrimeModulus> {
     forward: Vec<PastaField<M>>,
     inverse: Vec<PastaField<M>>,
     finish: Vec<PastaField<M>>,
-    scales: Vec<PastaField<M>>,
 }
 
 impl<M: PrimeModulus> OwnedTables<M> {
@@ -23,13 +22,11 @@ impl<M: PrimeModulus> OwnedTables<M> {
             forward: vec![PastaField::ZERO; r.twiddles],
             inverse: vec![PastaField::ZERO; r.twiddles],
             finish: vec![PastaField::ZERO; r.twiddles],
-            scales: vec![PastaField::ZERO; r.inverse_scales],
         };
         TablesMut {
             forward: Some(&mut result.forward),
             inverse: Some(&mut result.inverse),
             inverse_finish: Some(&mut result.finish),
-            inverse_scales: Some(&mut result.scales),
         }
         .prepare(domain);
         result
@@ -40,17 +37,13 @@ impl<M: PrimeModulus> OwnedTables<M> {
             forward: Some(&self.forward),
             inverse: Some(&self.inverse),
             inverse_finish: Some(&self.finish),
-            inverse_scales: Some(&self.scales),
         }
         // The owner prepared these entries and exposes no mutation.
         .bind(self.domain)
     }
 
     pub fn capacity_bytes(&self) -> usize {
-        (self.forward.capacity()
-            + self.inverse.capacity()
-            + self.finish.capacity()
-            + self.scales.capacity())
+        (self.forward.capacity() + self.inverse.capacity() + self.finish.capacity())
             * size_of::<PastaField<M>>()
     }
 }

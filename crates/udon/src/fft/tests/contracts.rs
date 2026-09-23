@@ -4,8 +4,13 @@ use core::num::NonZeroUsize;
 
 fn bindings<M: PrimeModulus>() {
     let subgroup = Domain::<M>::new(4).unwrap();
-    let domain = subgroup.coset(PastaField::from_u64(7)).unwrap();
-    let other = subgroup.coset(PastaField::from_u64(9)).unwrap();
+    let domain = subgroup.coset();
+    let other = subgroup.subgroup();
+    assert_eq!(subgroup, Domain::for_size(16).unwrap());
+    assert_ne!(subgroup, Domain::new(5).unwrap());
+    assert_eq!(domain, Domain::for_size(16).unwrap().coset());
+    assert_ne!(domain, other);
+    assert_ne!(domain, Domain::new(5).unwrap().coset());
     let prepared = Prepared::new(domain);
     let plan = prepared.tables().bind(domain);
     assert!(plan.domain().same_domain(domain));
@@ -20,10 +25,6 @@ fn bindings<M: PrimeModulus>() {
     assert_eq!(
         plan.tables.inverse_finish.unwrap().as_ptr(),
         prepared.finish.as_ptr()
-    );
-    assert_eq!(
-        plan.tables.inverse_scales.unwrap().as_ptr(),
-        prepared.scales.as_ptr()
     );
     // Ordinary twiddles have no shift, so sharing them across cosets is valid.
     let twiddles = Tables {
@@ -50,24 +51,6 @@ fn bindings<M: PrimeModulus>() {
     };
     assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| short.bind(domain))).is_err());
 
-    for first in [PastaField::ZERO, PastaField::ONE, PastaField::from_u64(3)] {
-        for step in [PastaField::ZERO, PastaField::ONE, domain.shift()] {
-            let mut values = [PastaField::ZERO; 17];
-            let generated = PowerTable::prepare(first, step, &mut values);
-            for (i, value) in generated.as_slice().iter().enumerate() {
-                assert_eq!(value.reduce(), first.mul(&step.pow_u64(i as u64)).reduce());
-            }
-            let bound = PowerTable::bind(first, step, generated.as_slice());
-            assert_eq!(bound.as_slice().as_ptr(), generated.as_slice().as_ptr());
-        }
-    }
-    // Both representatives of zero are valid fields, and neither is a coset shift.
-    for zero in [
-        PastaField::ZERO,
-        PastaField::from_montgomery_limbs(M::MODULUS),
-    ] {
-        assert!(matches!(subgroup.coset(zero), Err(FftError::ZeroShift)));
-    }
     for base_size in [1, 4, 16] {
         for normalization in [
             ExpansionScaleNormalization::Coefficients,
@@ -113,51 +96,82 @@ fn bindings_borrow_trusted_tables_and_check_shapes() {
     bindings::<PallasScalar>();
 }
 
+fn power_oracle<M: PrimeModulus>() {
+    let mut largest = M::TWICE_MODULUS;
+    largest[0] -= 1;
+    let samples = [
+        PastaField::ZERO,
+        PastaField::from_montgomery_limbs(M::MODULUS),
+        PastaField::from_montgomery_limbs(largest),
+        PastaField::ONE,
+        PastaField::<M>::ONE.neg(),
+        PastaField::from_u64(7),
+        field_samples::<M>().next().unwrap(),
+    ];
+    for first in samples {
+        for step in samples {
+            for len in (0..=35).chain([63, 64, 65, 255, 256, 257]) {
+                let sentinel = PastaField::from_u64(19);
+                let mut values = vec![sentinel; len + 2];
+                super::super::powers::fill_powers(first, step, &mut values[1..len + 1]);
+                for (i, value) in values[1..len + 1].iter().enumerate() {
+                    assert_eq!(value.reduce(), first.mul(&step.pow_u64(i as u64)).reduce());
+                }
+                assert_loose_bound(&values[1..len + 1]);
+                assert_eq!(values[0].montgomery_limbs(), sentinel.montgomery_limbs());
+                assert_eq!(
+                    values[len + 1].montgomery_limbs(),
+                    sentinel.montgomery_limbs()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn power_recurrences_match_independent_exponentiation() {
+    power_oracle::<PallasBase>();
+    power_oracle::<PallasScalar>();
+}
+
 fn twiddle_oracle<M: PrimeModulus>() {
     for log in 0..=9 {
         let domain = Domain::<M>::new(log).unwrap();
-        for inverse in [false, true] {
-            let root = if inverse {
-                domain.inverse_root()
-            } else {
-                domain.root()
+        let root = domain.root();
+        for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
+            let description = TwiddleDescription {
+                size: domain.size(),
+                storage,
             };
-            for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
-                let description = TwiddleDescription {
-                    size: domain.size(),
-                    inverse,
-                    storage,
-                };
-                // Independent entry exponentiation checks production recurrences
-                // and the packed stage offsets against the documented formula.
-                let exponents: Vec<_> = match storage {
-                    TwiddleStorage::Dense => (0..domain.size() / 2).collect(),
-                    TwiddleStorage::StagePacked => (1..=log)
-                        .flat_map(|stage| {
-                            let size = 1 << stage;
-                            (0..size / 2).map(move |i| i * domain.size() / size)
-                        })
-                        .collect(),
-                };
-                let expected: Vec<_> = exponents.iter().map(|&i| root.pow_u64(i as u64)).collect();
-                let mut values = vec![PastaField::ZERO; description.requirements().unwrap()];
-                assert_eq!(
-                    reduced(
-                        TwiddleTable::prepare(description, &mut values)
-                            .unwrap()
-                            .as_slice()
-                    ),
-                    reduced(&expected)
+            // Independent entry exponentiation checks production recurrences
+            // and the packed stage offsets against the documented formula.
+            let exponents: Vec<_> = match storage {
+                TwiddleStorage::Dense => (0..domain.size() / 2).collect(),
+                TwiddleStorage::StagePacked => (1..=log)
+                    .flat_map(|stage| {
+                        let size = 1 << stage;
+                        (0..size / 2).map(move |i| i * domain.size() / size)
+                    })
+                    .collect(),
+            };
+            let expected: Vec<_> = exponents.iter().map(|&i| root.pow_u64(i as u64)).collect();
+            let mut values = vec![PastaField::ZERO; description.requirements().unwrap()];
+            assert_eq!(
+                reduced(
+                    TwiddleTable::prepare(description, &mut values)
+                        .unwrap()
+                        .as_slice()
+                ),
+                reduced(&expected)
+            );
+            TwiddleTable::bind(description, &expected).unwrap();
+            if !values.is_empty() {
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = TwiddleTable::bind(description, &values[1..]);
+                    }))
+                    .is_err()
                 );
-                TwiddleTable::bind(description, &expected).unwrap();
-                if !values.is_empty() {
-                    assert!(
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            let _ = TwiddleTable::bind(description, &values[1..]);
-                        }))
-                        .is_err()
-                    );
-                }
             }
         }
     }
@@ -171,10 +185,7 @@ fn twiddle_recurrences_match_independent_exponentiation() {
 
 fn product_domain<M: PrimeModulus>() {
     let base = Transform::new(Domain::<M>::new(3).unwrap().subgroup());
-    let domain = Domain::new(5)
-        .unwrap()
-        .coset(PastaField::from_u64(7))
-        .unwrap();
+    let domain = Domain::new(5).unwrap().coset();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let coefficients = inputs(base.domain().size());
     let values = inputs(domain.size());
@@ -186,22 +197,13 @@ fn product_domain<M: PrimeModulus>() {
             max_tasks: 4,
         },
     };
-    let required = expansion
-        .coefficient_scratch_with(options)
-        .unwrap()
-        .field_elements;
+    let required = expansion.coefficient_scratch_with(options).unwrap();
     let mut scratch = vec![PastaField::ONE; required + 1];
     let mut output = vec![PastaField::ONE; domain.size()];
     let joins = CountJoins::default();
-    // A different coset and a rotation of the same point set both have the
-    // wrong ordered evaluation domain. Matching dimensions cannot establish it.
-    for other in [
-        domain.domain().coset(PastaField::from_u64(9)).unwrap(),
-        domain
-            .domain()
-            .coset(domain.shift().mul(&domain.domain().root()))
-            .unwrap(),
-    ] {
+    // Equal dimensions do not make subgroup and ZETA evaluation rows compatible.
+    {
+        let other = domain.domain().subgroup();
         let factor = EvaluationView::bind(
             &values,
             other,
@@ -281,20 +283,16 @@ fn short_products_require_the_same_ordered_coset_before_execution() {
 
 fn retained_with_base_tables<M: PrimeModulus>() {
     let domain = Domain::<M>::new(3).unwrap().subgroup();
-    let extended = Domain::new(5)
-        .unwrap()
-        .coset(PastaField::from_u64(7))
-        .unwrap();
+    let extended = Domain::new(5).unwrap().coset();
     let prepared = Prepared::new(domain);
     let coefficients = inputs(domain.size());
     let evaluations = direct(&coefficients, domain);
     let expected = direct(&coefficients, extended);
-    for mask in 0..16 {
+    for mask in 0..8 {
         let base = Tables {
             forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
             inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
             inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
-            inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
         }
         .bind(domain);
         let expansion = Expansion::new(base, extended, None).unwrap();
@@ -362,64 +360,4 @@ fn retained_with_base_tables<M: PrimeModulus>() {
 fn retained_coefficients_work_with_every_base_table_subset_and_outlive_output() {
     retained_with_base_tables::<PallasBase>();
     retained_with_base_tables::<PallasScalar>();
-}
-
-fn reused_cosets<M: PrimeModulus>() {
-    for log in [0, 4] {
-        let subgroup = Domain::<M>::new(log).unwrap();
-        let original = subgroup.coset(PastaField::from_u64(7)).unwrap();
-        let prepared = Prepared::new(original);
-        for mask in 0..16 {
-            let bound = Tables {
-                forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
-                inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
-                inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
-                inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
-            }
-            .bind(original);
-            for shift in [PastaField::from_u64(7), PastaField::ONE, PastaField::ZETA] {
-                let domain = subgroup.coset(shift).unwrap();
-                let rebound = bound.for_coset(domain);
-                let tables = rebound.tables;
-                assert_eq!(
-                    tables.forward.map(|s| s.as_ptr()),
-                    bound.tables.forward.map(|s| s.as_ptr())
-                );
-                assert_eq!(
-                    tables.inverse.map(|s| s.as_ptr()),
-                    bound.tables.inverse.map(|s| s.as_ptr())
-                );
-                assert_eq!(
-                    tables.inverse_finish.is_some(),
-                    mask & 4 != 0 && shift.reduce() == original.shift().reduce()
-                );
-                assert_eq!(
-                    tables.inverse_scales.is_some(),
-                    mask & 8 != 0 && shift.reduce() == original.shift().reduce()
-                );
-                let coefficients = inputs(domain.size());
-                let mut output = coefficients.clone();
-                rebound
-                    .forward_with(&mut output, Strategy::SERIAL, &SerialExecutor, &mut [])
-                    .unwrap();
-                assert_eq!(reduced(&output), reduced(&direct(&coefficients, domain)));
-                rebound
-                    .inverse_with(&mut output, Strategy::SERIAL, &SerialExecutor, &mut [])
-                    .unwrap();
-                assert_eq!(reduced(&output), reduced(&coefficients));
-            }
-            assert!(
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let _ = bound.for_coset(Domain::new(log + 1).unwrap().subgroup());
-                }))
-                .is_err()
-            );
-        }
-    }
-}
-
-#[test]
-fn tables_reuse_borrows_across_cosets_and_drop_shift_dependent_entries() {
-    reused_cosets::<PallasBase>();
-    reused_cosets::<PallasScalar>();
 }

@@ -267,13 +267,12 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         } else {
             block
         };
-        let mut transform = if in_place {
+        let transform = if in_place {
             self.in_place
                 .expect("output reuse requires an in-place template")
         } else {
             self.forward
         };
-        transform.plan = self.expansion.residue_base(residue);
         let normalized = !matches!(
             self.storage,
             ExpansionStorage::CoefficientWorkspace {

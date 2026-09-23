@@ -3,7 +3,7 @@
 //! Every butterfly preserves the loose field bound, including intermediate
 //! values visible when an executor unwinds.
 
-use super::finish::{Factors, InverseFinish};
+use super::finish::Factors;
 use super::{
     Codelet, ElementOrder, Executor, InverseScale, PastaField, PrimeModulus, Transform,
     TwiddleDescription, TwiddleStorage, TwiddleTable, reverse,
@@ -57,7 +57,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
                     stride: if packed { 1 } else { description.size / block },
                     offset: if packed { block / 2 - 1 } else { 0 },
                     half: block / 2,
-                    conjugate: description.inverse != self.inverse,
+                    conjugate: table.inverse != self.inverse,
                 }
             });
             let root: PastaField<M> = if self.inverse {
@@ -94,17 +94,21 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
             block *= 2;
         }
         if self.inverse && self.scale == InverseScale::Normalized {
-            let factors = Factors::untwist(self.plan.domain);
-            let row_step = self.plan.domain.inverse_shift().pow_u64(tile as u64);
-            for (column, lane) in values.chunks_exact_mut(rows).enumerate() {
-                let mut power = factors.at(first + column);
-                for value in lane {
-                    *value = divide_by_power_of_two(*value, self.plan.domain.domain().log_size());
-                    if power.reduce() != PastaField::<M>::ONE.reduce() {
-                        *value = value.mul(&power);
+            if !self.plan.domain.is_subgroup() {
+                let factors = Factors::normalized(self.plan.domain);
+                for (column, lane) in values.chunks_exact_mut(rows).enumerate() {
+                    for (row, value) in lane.iter_mut().enumerate() {
+                        *value = factors.apply_normalized(
+                            *value,
+                            row * tile + first + column,
+                            self.plan.domain.domain().log_size(),
+                        );
                     }
-                    power = power.mul(&row_step);
                 }
+                return;
+            }
+            for value in values {
+                *value = divide_by_power_of_two(*value, self.plan.domain.domain().log_size());
             }
         }
     }
@@ -216,17 +220,16 @@ pub(super) fn twiddle_table<'a, M: PrimeModulus>(
     let (values, direction) = direct
         .map(|values| (values, inverse))
         .or_else(|| opposite.map(|values| (values, !inverse)))?;
-    Some(
-        TwiddleTable::bind(
-            TwiddleDescription {
-                size: plan.domain.size(),
-                inverse: direction,
-                storage: TwiddleStorage::Dense,
-            },
-            values,
-        )
-        .unwrap(),
-    )
+    // Transform binding has checked the slice lengths. The public twiddle binder
+    // describes forward roots, so retain the ordinary table's orientation here.
+    Some(TwiddleTable {
+        description: TwiddleDescription {
+            size: plan.domain.size(),
+            storage: TwiddleStorage::Dense,
+        },
+        values,
+        inverse: direction,
+    })
 }
 
 // Specialize the provider family at each stage, rather than dispatching among
@@ -285,7 +288,7 @@ macro_rules! dispatch_powers {
         if let Some(table) = $kernel.table($block) {
             let description = table.description();
             let dense = DensePowers { values: table.as_slice(), stride: description.size / $block,
-                offset: 0, half: $block / 2, conjugate: description.inverse != $kernel.inverse() };
+                offset: 0, half: $block / 2, conjugate: table.inverse != $kernel.inverse() };
             match description.storage {
                 TwiddleStorage::Dense => $kernel.$method($($argument,)+ dense),
                 TwiddleStorage::StagePacked => $kernel.$method($($argument,)+ DensePowers { stride: 1, offset: $block / 2 - 1, ..dense }),
@@ -404,23 +407,10 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
     ) {
         if MODE == 2
             && block == values.len()
-            && matches!(
-                InverseFinish::select(self.plan.domain, self.plan.tables.inverse_finish.is_some()),
-                InverseFinish::ScaledInputs
-            )
+            && !self.plan.domain.is_subgroup()
+            && self.plan.tables.inverse_finish.is_some()
         {
-            if self.plan.tables.inverse_finish.is_some() {
-                self.finish_stage(
-                    values,
-                    tasks,
-                    executor,
-                    Recurrence {
-                        step: PastaField::ONE,
-                    },
-                );
-            } else {
-                dispatch_powers!(self, block, finish_stage, values, tasks, executor);
-            }
+            self.finish_stage(values, tasks, executor);
         } else {
             dispatch_powers!(self, block, stage_with, values, block, tasks, executor);
         }
@@ -473,9 +463,8 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
                                 Self::DIF,
                             );
                             if self.inverse() && offset + 1 < len {
-                                low_scale = factors.next(chunk * block + index + 1, low_scale);
-                                high_scale =
-                                    factors.next(chunk * block + index + 1 + block / 2, high_scale);
+                                low_scale = factors.at(chunk * block + index + 1);
+                                high_scale = factors.at(chunk * block + index + 1 + block / 2);
                             }
                         }
                         if offset + 1 < len {
@@ -487,20 +476,11 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         );
     }
 
-    fn finish_stage<E: Executor, P: Powers<M>>(
-        &self,
-        values: &mut [PastaField<M>],
-        tasks: usize,
-        executor: &E,
-        powers: P,
-    ) {
+    fn finish_stage<E: Executor>(&self, values: &mut [PastaField<M>], tasks: usize, executor: &E) {
         let half = values.len() / 2;
-        let factors = Factors::normalized(self.plan);
-        let upper = match factors {
-            Factors::Table { upper, .. } => upper,
-            _ => Factors::untwist(self.plan.domain).at(half),
-        };
-        let combined = self.plan.tables.inverse_finish;
+        let factors = Factors::normalized(self.plan.domain);
+        let upper = Factors::untwist(self.plan.domain).at(half);
+        let combined = self.plan.tables.inverse_finish.unwrap();
         let (left, right) = values.split_at_mut(half);
         paired(
             left,
@@ -510,24 +490,10 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
             executor,
             &|start, left, right| {
                 let mut low_scale = factors.at(start);
-                let mut twiddle = if combined.is_none() {
-                    powers.at(start)
-                } else {
-                    PastaField::ONE
-                };
                 let len = left.len();
                 for (offset, (left, right)) in left.iter_mut().zip(right).enumerate() {
                     let index = start + offset;
-                    let high_scale = combined.map_or_else(
-                        || {
-                            if index == 0 {
-                                low_scale
-                            } else {
-                                twiddle.mul(&low_scale)
-                            }
-                        },
-                        |table| table[index],
-                    );
+                    let high_scale = combined[index];
                     // The low factor includes the inverse size and shift; the
                     // high factor also includes the inverse twiddle. Scaling
                     // inputs here replaces normalization of the outputs.
@@ -539,10 +505,7 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
                         *right = right.mul(&upper);
                     }
                     if offset + 1 < len {
-                        low_scale = factors.next(index + 1, low_scale);
-                        if combined.is_none() {
-                            twiddle = powers.next(index + 1, twiddle);
-                        }
+                        low_scale = factors.at(index + 1);
                     }
                 }
             },
@@ -585,15 +548,7 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         if !self.inverse() && self.factor.is_none() {
             return;
         }
-        let scaled = MODE == 2
-            && self.plan.tables.inverse_scales.is_some()
-            && matches!(
-                InverseFinish::select(self.plan.domain, false),
-                InverseFinish::ScaledInputs
-            );
-        let factors = if scaled {
-            Factors::normalized(self.plan)
-        } else if self.inverse() {
+        let factors = if self.inverse() {
             Factors::untwist(self.plan.domain)
         } else {
             Factors::Identity
@@ -601,13 +556,9 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         let mut factor = factors.at(start);
         let len = values.len();
         for (offset, value) in values.iter_mut().enumerate() {
-            *value = if scaled {
-                scale(*value, &factor)
-            } else {
-                self.finish(*value, start + offset, factor, bit_reversed)
-            };
+            *value = self.finish(*value, start + offset, factor, bit_reversed);
             if self.inverse() && offset + 1 < len {
-                factor = factors.next(start + offset + 1, factor);
+                factor = factors.at(start + offset + 1);
             }
         }
     }

@@ -6,7 +6,7 @@
 use core::marker::PhantomData;
 
 use super::montgomery::{montgomery_reduce_unreduced, reduce_once, reduce_twice_modulus};
-use super::word::{adc, mac, multiply_wide, sbb};
+use super::word::{adc, mac, multiply_wide, sbb, square_wide};
 use super::{PastaField, PrimeModulus, ReductionState};
 
 #[cfg(test)]
@@ -16,6 +16,7 @@ mod tests;
 /// A sum of field products with deferred Montgomery reduction.
 ///
 /// Use [`add_product`](Self::add_product) for products,
+/// [`add_square`](Self::add_square) for squares,
 /// [`add_term`](Self::add_term) for individual values, and
 /// [`merge`](Self::merge) to combine partial sums. [`finish`](Self::finish)
 /// returns the accumulated field value; an empty sum returns zero.
@@ -53,6 +54,19 @@ impl<M: PrimeModulus> ProductSum<M> {
         rhs: &PastaField<M, impl ReductionState>,
     ) {
         self.add_product_inner::<false>(lhs, rhs);
+    }
+
+    /// Adds `value * value` to the sum without reducing the square.
+    #[inline(always)]
+    pub fn add_square(&mut self, value: &PastaField<M, impl ReductionState>) {
+        let square = square_wide(&value.limbs);
+        let mut carry = 0;
+        for (limb, term) in self.wide.iter_mut().zip(square) {
+            (*limb, carry) = adc(*limb, term, carry);
+        }
+        let (carry, carry_overflow) = adc(self.carry, 0, carry);
+        self.carry = carry;
+        self.fold_overflow(carry_overflow);
     }
 
     // Bounded callers start from zero and feed at most one physical slice.

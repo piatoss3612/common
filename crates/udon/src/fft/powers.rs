@@ -2,10 +2,12 @@ use super::{
     FftError, PastaField, PrimeModulus, assert_length, check_domain_size, check_field_count,
 };
 
+pub(super) use crate::field::fill_powers;
+
 /// Retained representation of subgroup powers, independent of value ordering.
 ///
-/// Let `n` be [`TwiddleDescription::size`] and `w` its canonical root, inverted
-/// when [`TwiddleDescription::inverse`] is true. Size one needs no entries.
+/// Let `n` be [`TwiddleDescription::size`] and `w` its canonical root.
+/// Size one needs no entries.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TwiddleStorage {
     /// Powers `w^i` for `0 <= i < n/2`.
@@ -25,8 +27,6 @@ pub enum TwiddleStorage {
 pub struct TwiddleDescription {
     /// Order of the canonical root used to generate the table.
     pub size: usize,
-    /// Whether generation uses the inverse canonical root.
-    pub inverse: bool,
     /// Arrangement of retained powers.
     pub storage: TwiddleStorage,
 }
@@ -55,16 +55,11 @@ impl TwiddleDescription {
     fn stages<M: PrimeModulus>(self) -> impl Iterator<Item = (usize, PastaField<M>)> {
         let last = self.size.ilog2();
         let first = match self.storage {
-            TwiddleStorage::Dense => last,
+            TwiddleStorage::Dense => last.max(1),
             TwiddleStorage::StagePacked => 1,
         };
         (first..=last).map(move |log| {
-            let root = if self.inverse {
-                PastaField::root_of_unity_inverse(log)
-            } else {
-                PastaField::root_of_unity(log)
-            }
-            .unwrap();
+            let root = PastaField::root_of_unity(log).unwrap();
             ((1usize << log) / 2, root)
         })
     }
@@ -74,13 +69,16 @@ impl TwiddleDescription {
 ///
 /// A smaller table serves local stages of a larger transform; larger stages
 /// generate their powers as needed. A larger table serves smaller transforms
-/// using the nested canonical roots. Either table direction can serve forward
-/// and inverse transforms. Preparation constructs the formulas in
-/// [`TwiddleStorage`]; [`Self::bind`] borrows trusted stored entries.
+/// using the nested canonical roots. Each table serves both forward and inverse
+/// transforms. Preparation constructs the formulas in [`TwiddleStorage`];
+/// [`Self::bind`] borrows trusted stored entries.
 #[derive(Clone, Copy)]
 pub struct TwiddleTable<'a, M: PrimeModulus> {
-    description: TwiddleDescription,
-    values: &'a [PastaField<M>],
+    pub(super) description: TwiddleDescription,
+    pub(super) values: &'a [PastaField<M>],
+    // Keep the stored orientation so kernels can borrow ordinary inverse tables
+    // and conjugate on lookup without copying their entries.
+    pub(super) inverse: bool,
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for TwiddleTable<'_, M> {
@@ -93,7 +91,7 @@ impl<M: PrimeModulus> core::fmt::Debug for TwiddleTable<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
-    /// Borrows trusted entries for their subgroup, direction, and storage order.
+    /// Borrows trusted canonical-root entries for their subgroup and storage order.
     ///
     /// Entries must follow [`TwiddleStorage`]'s formulas. Configuration errors
     /// follow [`TwiddleDescription::requirements`]. Panics unless `values` has
@@ -110,14 +108,15 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
         Ok(Self {
             description,
             values,
+            inverse: false,
         })
     }
 
     /// Generates subgroup twiddles into exactly sized caller storage.
     ///
     /// Entries follow [`TwiddleStorage`]'s formulas. Storage, error, and panic
-    /// contracts follow [`Self::bind`]. All checks precede writes; initial destination values
-    /// are overwritten.
+    /// contracts follow [`Self::bind`]. All checks precede writes; initial
+    /// destination values are overwritten.
     pub fn prepare(
         description: TwiddleDescription,
         values: &'a mut [PastaField<M>],
@@ -126,16 +125,13 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
         let mut remaining = &mut *values;
         for (len, step) in description.stages::<M>() {
             let (stage, rest) = remaining.split_at_mut(len);
-            let mut power = PastaField::ONE;
-            for value in stage {
-                *value = power;
-                power = power.mul(&step);
-            }
+            fill_powers(PastaField::ONE, step, stage);
             remaining = rest;
         }
         Ok(Self {
             description,
             values,
+            inverse: false,
         })
     }
 
@@ -144,80 +140,6 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
         self.description
     }
     /// Retained entries in the described order.
-    pub const fn as_slice(self) -> &'a [PastaField<M>] {
-        self.values
-    }
-}
-
-/// A declared power sequence with an explicit starting value and step.
-///
-/// Entry `i` represents `first * step^i`, with no implicit FFT normalization.
-/// Empty sequences and zero starting values or steps are accepted. For example,
-/// forward coefficient scales have `first = 1` and the coset shift as `step`.
-/// Preparation constructs matching entries; [`Self::bind`] borrows trusted storage.
-#[derive(Clone, Copy)]
-pub struct PowerTable<'a, M: PrimeModulus> {
-    first: PastaField<M>,
-    step: PastaField<M>,
-    values: &'a [PastaField<M>],
-}
-
-impl<M: PrimeModulus> core::fmt::Debug for PowerTable<'_, M> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("PowerTable")
-            .field("first", &self.first)
-            .field("step", &self.step)
-            .field("values", &self.values)
-            .finish()
-    }
-}
-
-impl<'a, M: PrimeModulus> PowerTable<'a, M> {
-    /// Borrows a trusted sequence with its starting value and step.
-    ///
-    /// Entry `i` must represent `first * step^i`. Any length, including zero,
-    /// is accepted. Binding performs no arithmetic and does not inspect entries.
-    pub const fn bind(
-        first: PastaField<M>,
-        step: PastaField<M>,
-        values: &'a [PastaField<M>],
-    ) -> Self {
-        Self {
-            first,
-            step,
-            values,
-        }
-    }
-
-    /// Writes `first * step^i` into caller storage and returns its handle.
-    ///
-    /// Here `i` is the entry index. Any storage length, including zero, is accepted.
-    pub fn prepare(
-        first: PastaField<M>,
-        step: PastaField<M>,
-        values: &'a mut [PastaField<M>],
-    ) -> Self {
-        let mut power = first;
-        for value in values.iter_mut() {
-            *value = power;
-            power = power.mul(&step);
-        }
-        Self {
-            first,
-            step,
-            values,
-        }
-    }
-
-    /// Starting value, including any deliberate scale.
-    pub const fn first(self) -> PastaField<M> {
-        self.first
-    }
-    /// Multiplicative step between entries.
-    pub const fn step(self) -> PastaField<M> {
-        self.step
-    }
-    /// Retained sequence entries.
     pub const fn as_slice(self) -> &'a [PastaField<M>] {
         self.values
     }

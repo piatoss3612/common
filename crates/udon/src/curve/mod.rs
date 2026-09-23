@@ -36,6 +36,7 @@ use crate::field::{PastaField, Reduced, ReductionState};
 
 mod affine;
 mod batch;
+mod effective;
 mod eisenstein;
 mod eisenstein_batch;
 mod encoding;
@@ -181,6 +182,13 @@ pub enum CurveError {
     },
     /// A requested buffer length cannot be represented by a Rust slice.
     SizeOverflow,
+    /// A strided MSM matrix addresses beyond its borrowed base storage.
+    MatrixTooSmall {
+        /// Number of bases needed to include the last addressed entry.
+        required: usize,
+        /// Number of available bases.
+        provided: usize,
+    },
     /// An indexed MSM refers past the end of its base slice.
     BaseIndexOutOfBounds {
         /// Position in the index slice.
@@ -214,6 +222,9 @@ impl fmt::Display for CurveError {
                 write!(f, "MSM needs {required} temporary bytes, limit is {limit}")
             }
             Self::SizeOverflow => f.write_str("curve buffer size overflows a slice length"),
+            Self::MatrixTooSmall { required, provided } => {
+                write!(f, "MSM matrix needs {required} bases, got {provided}")
+            }
             Self::BaseIndexOutOfBounds {
                 position,
                 index,

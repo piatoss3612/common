@@ -94,6 +94,44 @@ pub(super) fn tonelli_shanks_with_roots<F: SqrtField>(
     Some(x)
 }
 
+/// Corrects nonzero `x` with `x^2 = a * t` and `t` in the order-2^two_adicity
+/// subgroup. Roots and two-adicity obey [`tonelli_shanks_with_roots`]'s contract.
+/// Returns a root of `a`, or a root of `a * root(two_adicity)` with a false flag.
+#[cfg(any(test, not(feature = "sqrt-table-large")))]
+pub(super) fn tonelli_shanks_alt_with_roots<F: SqrtField>(
+    mut x: F,
+    mut t: F,
+    root: impl Fn(u32) -> F,
+    two_adicity: u32,
+) -> (bool, F) {
+    assert!((1..=64).contains(&two_adicity));
+    let mut is_square = true;
+    let mut m = two_adicity;
+    while !t.is_one() {
+        let mut i = 1;
+        let mut squared = t.square();
+        while i < m && !squared.is_one() {
+            squared = squared.square();
+            i += 1;
+        }
+        if i == m {
+            // Maximal order identifies a nonsquare. Multiplying both x and t
+            // by r changes the invariant to x^2 = (a * r) * t and makes t a
+            // square in the subgroup. This branch can occur only once.
+            debug_assert!(is_square && m == two_adicity);
+            let r = root(two_adicity);
+            x = x.mul(&r);
+            t = t.mul(&r);
+            is_square = false;
+        } else {
+            x = x.mul(&root(i + 1));
+            t = t.mul(&root(i));
+            m = i;
+        }
+    }
+    (is_square, x)
+}
+
 // Simple reference retains the independently evolving c ladder.
 #[cfg(test)]
 pub(super) fn tonelli_shanks<F: SqrtField>(
@@ -192,6 +230,24 @@ mod tests {
             assert_eq!(result.is_some(), has_root);
             if let Some(root) = result {
                 assert_eq!(root.square(), base);
+            }
+            if value != 0 {
+                let x = w.mul(&base);
+                let (is_square, alternate) = tonelli_shanks_alt_with_roots(
+                    x,
+                    x.mul(&w),
+                    |k| pow_u64(&SmallField(root), 1u64 << (two_adicity - k)),
+                    two_adicity,
+                );
+                assert_eq!(is_square, has_root);
+                assert_eq!(
+                    alternate.square(),
+                    if has_root {
+                        base
+                    } else {
+                        base.mul(&SmallField(root))
+                    }
+                );
             }
         }
     }

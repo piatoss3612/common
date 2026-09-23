@@ -44,8 +44,15 @@ fn inverse_direct<M: PrimeModulus>(
 
 fn operations<M: PrimeModulus>() {
     for log in 0..=6 {
-        for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
-            let domain = Domain::<M>::new(log).unwrap().coset(shift).unwrap();
+        for coset in [false, true] {
+            let domain = {
+                let subgroup = Domain::<M>::new(log).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
             let plan = Transform::new(domain);
             let input = inputs(domain.size());
             let forward = direct(&input, domain);
@@ -182,10 +189,7 @@ fn generated_codelet_schedule_interpreter_matches_direct_sums() {
 }
 
 fn prefixes_and_products<M: PrimeModulus>() {
-    let domain = Domain::<M>::new(5)
-        .unwrap()
-        .coset(PastaField::from_u64(7))
-        .unwrap();
+    let domain = Domain::<M>::new(5).unwrap().coset();
     let plan = Transform::new(domain);
     let values = inputs(domain.size());
     let factors = direct(&values, domain);
@@ -274,94 +278,72 @@ fn inverse_prefix_scale_and_terminal_products_match_direct_sums() {
     prefixes_and_products::<PallasScalar>();
 }
 
-fn power_tables<M: PrimeModulus, E: Executor>(executor: &E) {
-    let domain = Domain::<M>::new(6)
-        .unwrap()
-        .coset(PastaField::from_u64(7))
-        .unwrap();
+fn twiddle_tables<M: PrimeModulus, E: Executor>(executor: &E) {
+    let domain = Domain::<M>::new(6).unwrap().coset();
     let plan = Transform::new(domain);
     let input = inputs(domain.size());
     for size in [1, 8, 64, 256] {
-        for inverse in [false, true] {
-            for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
-                let description = TwiddleDescription {
-                    size,
-                    inverse,
-                    storage,
+        for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
+            let description = TwiddleDescription { size, storage };
+            let mut values = vec![PastaField::ZERO; description.requirements().unwrap()];
+            let table = TwiddleTable::prepare(description, &mut values).unwrap();
+            for direction in [Direction::Forward, Direction::Inverse] {
+                let operation = FftPlan::with_strategy(
+                    plan,
+                    TransformRequest::new(direction),
+                    nz(4),
+                    Codelet::Radix2,
+                )
+                .unwrap()
+                .with_contiguous_permutation()
+                .with_twiddles(table);
+                let mut output = input.clone();
+                let mut scratch = vec![PastaField::ZERO; operation.retained_fields()];
+                operation.execute_with(None, &mut output, None, &mut scratch, nz(3), executor);
+                let expected = if direction == Direction::Forward {
+                    direct(&input, domain)
+                } else {
+                    inverse_direct(&input, domain, true)
                 };
-                let mut values = vec![PastaField::ZERO; description.requirements().unwrap()];
-                let table = TwiddleTable::prepare(description, &mut values).unwrap();
-                for direction in [Direction::Forward, Direction::Inverse] {
-                    let operation = FftPlan::with_strategy(
-                        plan,
-                        TransformRequest::new(direction),
-                        nz(4),
-                        Codelet::Radix2,
-                    )
-                    .unwrap()
-                    .with_contiguous_permutation()
-                    .with_twiddles(table);
-                    let mut output = input.clone();
-                    let mut scratch = vec![PastaField::ZERO; operation.retained_fields()];
-                    operation.execute_with(None, &mut output, None, &mut scratch, nz(3), executor);
-                    let expected = if direction == Direction::Forward {
-                        direct(&input, domain)
-                    } else {
-                        inverse_direct(&input, domain, true)
-                    };
-                    assert_eq!(
-                        reduced(&output),
-                        reduced(&expected),
-                        "table={description:?}, direction={direction:?}"
-                    );
-                }
+                assert_eq!(
+                    reduced(&output),
+                    reduced(&expected),
+                    "table={description:?}, direction={direction:?}"
+                );
             }
         }
     }
-    let mut scales = vec![PastaField::ZERO; domain.size()];
-    let scales = PowerTable::prepare(PastaField::ONE, domain.shift(), &mut scales);
-    let operation = FftPlan::with_strategy(
-        plan,
-        TransformRequest::new(Direction::Forward),
-        nz(4),
-        Codelet::Radix2,
-    )
-    .unwrap()
-    .with_forward_scales(scales)
-    .with_contiguous_permutation();
-    let mut output = input.clone();
-    operation.execute_with(None, &mut output, None, &mut [], nz(3), &Threads);
-    assert_eq!(reduced(&output), reduced(&direct(&input, domain)));
 }
 
 #[test]
-fn twiddle_shapes_strides_directions_and_coset_powers_are_compatible() {
-    power_tables::<PallasBase, _>(&SerialExecutor);
-    power_tables::<PallasScalar, _>(&SerialExecutor);
-    power_tables::<PallasBase, _>(&Threads);
-    power_tables::<PallasScalar, _>(&Threads);
+fn twiddle_shapes_strides_and_directions_are_compatible() {
+    twiddle_tables::<PallasBase, _>(&SerialExecutor);
+    twiddle_tables::<PallasScalar, _>(&SerialExecutor);
+    twiddle_tables::<PallasBase, _>(&Threads);
+    twiddle_tables::<PallasScalar, _>(&Threads);
 }
 
 fn bound_plan_tables<M: PrimeModulus>() {
     for log in [0, 1, 2, 3, 8] {
-        for shift in [
-            PastaField::ONE,
-            PastaField::ZETA,
-            PastaField::ZETA_INVERSE,
-            PastaField::from_u64(7),
-        ] {
-            let domain = Domain::<M>::new(log).unwrap().coset(shift).unwrap();
+        for coset in [false, true] {
+            let domain = {
+                let subgroup = Domain::<M>::new(log).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
             let prepared = Prepared::new(domain);
             let input = inputs(domain.size());
             let forward = direct(&input, domain);
             let inverse = inverse_direct(&input, domain, true);
             let raw = inverse_direct(&input, domain, false);
-            for mask in 0..16 {
+            for mask in 0..8 {
                 let plan = Tables {
                     forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
                     inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
                     inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
-                    inverse_scales: (mask & 8 != 0).then_some(prepared.scales.as_slice()),
                 }
                 .bind(domain);
                 for (direction, inverse_scale, expected) in [
@@ -410,9 +392,120 @@ fn bound_plan_tables<M: PrimeModulus>() {
 }
 
 #[test]
-fn bound_plan_table_directions_and_inverse_scales_match_direct_sums() {
+fn bound_plan_table_directions_and_inverse_finishes_match_direct_sums() {
     bound_plan_tables::<PallasBase>();
     bound_plan_tables::<PallasScalar>();
+}
+
+fn periodic_inverse<M: PrimeModulus>() {
+    let mut largest = M::TWICE_MODULUS;
+    largest[0] -= 1;
+    let boundary = [
+        PastaField::from_montgomery_limbs(M::MODULUS),
+        PastaField::from_montgomery_limbs(largest),
+        PastaField::ZERO,
+        PastaField::<M>::ONE.neg(),
+    ];
+    for log in 0..=6 {
+        for coset in [false, true] {
+            let domain = {
+                let subgroup = Domain::<M>::new(log).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
+            let prepared = Prepared::new(domain);
+            let mut input = inputs(domain.size());
+            for (index, value) in input.iter_mut().enumerate() {
+                if index % 8 < boundary.len() {
+                    *value = boundary[index % 8];
+                }
+            }
+            for mask in [0, 2, 4, 6] {
+                let plan = Tables {
+                    inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
+                    inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
+                    ..Tables::default()
+                }
+                .bind(domain);
+                for inverse_scale in [InverseScale::Normalized, InverseScale::Unscaled] {
+                    let expected =
+                        inverse_direct(&input, domain, inverse_scale == InverseScale::Normalized);
+                    for input_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                        let original = ordered(&input, input_order);
+                        for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                            for input_storage in [InputStorage::InPlace, InputStorage::Preserve] {
+                                for (tile, codelet, columns) in [
+                                    (domain.size(), Codelet::Radix2, false),
+                                    (domain.size(), Codelet::Radix8, false),
+                                    (2, Codelet::Radix4, false),
+                                    (2, Codelet::Radix4, true),
+                                ] {
+                                    let request = TransformRequest {
+                                        input_order,
+                                        output_order,
+                                        input_storage,
+                                        inverse_scale,
+                                        ..TransformRequest::new(Direction::Inverse)
+                                    };
+                                    let mut operation =
+                                        FftPlan::with_strategy(plan, request, nz(tile), codelet)
+                                            .unwrap();
+                                    if columns {
+                                        operation = operation.with_columns(nz(3), nz(2)).unwrap();
+                                        if mask & 2 != 0 {
+                                            operation = operation.with_twiddles(
+                                                TwiddleTable::bind(
+                                                    TwiddleDescription {
+                                                        size: domain.size(),
+                                                        storage: TwiddleStorage::Dense,
+                                                    },
+                                                    &prepared.forward,
+                                                )
+                                                .unwrap(),
+                                            );
+                                        }
+                                    }
+                                    let mut output = original.clone();
+                                    let mut scratch =
+                                        vec![PastaField::ONE; operation.retained_fields() + 1];
+                                    operation.execute_with(
+                                        (input_storage == InputStorage::Preserve)
+                                            .then_some(original.as_slice()),
+                                        &mut output,
+                                        None,
+                                        &mut scratch,
+                                        nz(3),
+                                        &SerialExecutor,
+                                    );
+                                    assert_eq!(
+                                        reduced(&output),
+                                        reduced(&ordered(&expected, output_order)),
+                                        "log={log}, mask={mask}, tile={tile}, codelet={codelet:?}, columns={columns}, request={request:?}"
+                                    );
+                                    assert_loose_bound(&output);
+                                    assert_loose_bound(&scratch);
+                                    assert_eq!(
+                                        scratch.last().unwrap().reduce(),
+                                        PastaField::<M>::ONE.reduce()
+                                    );
+                                }
+                            }
+                        }
+                        assert_eq!(reduced(&original), reduced(&ordered(&input, input_order)));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn periodic_inverse_loose_boundaries_match_direct_sums() {
+    periodic_inverse::<PallasBase>();
+    periodic_inverse::<PallasScalar>();
 }
 
 #[test]
@@ -461,10 +554,7 @@ fn transform_configuration_and_scratch_are_checked_before_mutation() {
 
 #[test]
 fn parallel_panics_preserve_loose_field_bounds() {
-    let domain = Domain::<PallasScalar>::new(8)
-        .unwrap()
-        .coset(PastaField::from_u64(7))
-        .unwrap();
+    let domain = Domain::<PallasScalar>::new(8).unwrap().coset();
     let prepared = Prepared::new(domain);
     for tables in [Tables::default(), prepared.tables()] {
         let plan = tables.bind(domain);
@@ -525,17 +615,23 @@ fn parallel_panics_preserve_loose_field_bounds() {
 #[test]
 fn finish_tables_preserve_prefix_and_codelet_results() {
     for log in [3, 7] {
-        for shift in [Fp::ONE, Fp::ZETA, Fp::ZETA_INVERSE, Fp::from_u64(7)] {
-            let domain = Domain::new(log).unwrap().coset(shift).unwrap();
+        for coset in [false, true] {
+            let domain = {
+                let subgroup = Domain::new(log).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
             let prepared = Prepared::new(domain);
             let plan = prepared.tables().bind(domain);
             let dense = TwiddleTable::bind(
                 TwiddleDescription {
                     size: domain.size(),
-                    inverse: true,
                     storage: TwiddleStorage::Dense,
                 },
-                &prepared.inverse,
+                &prepared.forward,
             )
             .unwrap();
             for len in [0, 1, 2, 3, domain.size()] {

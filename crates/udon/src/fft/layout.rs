@@ -255,7 +255,7 @@ impl<'a, M: PrimeModulus> EvaluationView<'a, M> {
     pub fn get_extended_row(self, row: usize, domain: CosetDomain<M>) -> Option<&'a PastaField<M>> {
         if domain.size() < self.domain.size()
             || row >= domain.size()
-            || domain.shift().reduce() != self.domain.shift().reduce()
+            || domain.shift != self.domain.shift
         {
             return None;
         }

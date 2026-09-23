@@ -13,7 +13,6 @@ pub const SIZE: usize = 16;
 pub const EXTENDED_SIZE: usize = 64;
 pub const TWIDDLES: TwiddleDescription = TwiddleDescription {
     size: SIZE,
-    inverse: false,
     storage: TwiddleStorage::StagePacked,
 };
 const PACKED: usize = match TWIDDLES.requirements() {
@@ -33,7 +32,6 @@ macro_rules! record {
             pub forward: [$field; REQUIREMENTS.twiddles],
             pub inverse: [$field; REQUIREMENTS.twiddles],
             pub finish: [$field; REQUIREMENTS.twiddles],
-            pub scales: [$field; REQUIREMENTS.inverse_scales],
             pub residues: [$field; EXTENDED_SIZE],
             pub packed: [$field; PACKED],
         }
@@ -44,7 +42,6 @@ macro_rules! record {
                     forward: [<$field>::ZERO; REQUIREMENTS.twiddles],
                     inverse: [<$field>::ZERO; REQUIREMENTS.twiddles],
                     finish: [<$field>::ZERO; REQUIREMENTS.twiddles],
-                    scales: [<$field>::ZERO; REQUIREMENTS.inverse_scales],
                     residues: [<$field>::ZERO; EXTENDED_SIZE],
                     packed: [<$field>::ZERO; PACKED],
                 }
@@ -55,7 +52,6 @@ macro_rules! record {
                     forward: Some(&mut self.forward),
                     inverse: Some(&mut self.inverse),
                     inverse_finish: Some(&mut self.finish),
-                    inverse_scales: Some(&mut self.scales),
                 }
             }
 
@@ -64,7 +60,6 @@ macro_rules! record {
                     forward: Some(&self.forward),
                     inverse: Some(&self.inverse),
                     inverse_finish: Some(&self.finish),
-                    inverse_scales: Some(&self.scales),
                 }
             }
         }

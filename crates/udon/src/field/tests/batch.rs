@@ -1,6 +1,9 @@
 use super::*;
 use crate::field::inversion::count_inversions;
-use crate::field::{BatchInversionError, batch_invert, batch_invert_groups, try_batch_invert_by};
+use crate::field::{
+    BatchInversionError, batch_invert, batch_invert_groups, batch_invert_groups_scaled,
+    batch_invert_scaled, try_batch_invert_by, try_batch_invert_scaled_by,
+};
 use crate::test_support::field_samples;
 
 fn exercise<M: PrimeModulus>() {
@@ -348,4 +351,194 @@ fn record_inversion<M: PrimeModulus>() {
 fn records_preserve_indices_and_validate_before_visiting() {
     record_inversion::<PallasBase>();
     record_inversion::<PallasScalar>();
+}
+
+fn scaled_batches<M: PrimeModulus>() {
+    let p = modulus::<M>();
+    let corpus = samples::<M>(17);
+    let sentinel = PastaField::from_u64(91);
+    let loose_zero = PastaField::from_montgomery_limbs(M::MODULUS);
+    // Both scales and denominators include Montgomery limb boundaries, loose
+    // zero, ordinary integer boundaries, and deterministic full-width values.
+    for (scale, scale_integer) in samples::<M>(2) {
+        for zero_parity in [None, Some(0), Some(1), Some(2)] {
+            let samples: Vec<_> = corpus
+                .iter()
+                .enumerate()
+                .map(|(i, (value, integer))| {
+                    if zero_parity.is_some_and(|parity| parity == 2 || i % 2 == parity) {
+                        (loose_zero, BigUint::from(0u8))
+                    } else {
+                        (*value, integer.clone())
+                    }
+                })
+                .collect();
+            let expected: Vec<_> = samples
+                .iter()
+                .map(|(_, integer)| integer.modpow(&(&p - 2u8), &p) * &scale_integer % &p)
+                .collect();
+            for len in [0, 1, 2, 3, 7, 8, 31, 32, 33, samples.len()] {
+                for capacity in [0, 1, 2, 7, 31, 32, samples.len(), samples.len() + 3] {
+                    let original: Vec<_> = samples[..len].iter().map(|(value, _)| *value).collect();
+                    let mut scratch = vec![sentinel; capacity];
+                    let expected_inversions = original
+                        .chunks(capacity.max(1))
+                        .filter(|chunk| chunk.iter().any(|value| !value.is_zero()))
+                        .count();
+                    // Compare the slice and grouped facades, reusing dirty
+                    // scratch and crossing empty, odd, and singleton groups.
+                    for grouped in [false, true] {
+                        let mut values = original.clone();
+                        let inversions = count_inversions(|| {
+                            if grouped {
+                                let (first, rest) = values.split_at_mut(len.min(1));
+                                let (middle, last) = rest.split_at_mut(rest.len().min(3));
+                                batch_invert_groups_scaled(
+                                    &mut [&mut [][..], first, &mut [], middle, last, &mut []],
+                                    &scale,
+                                    &mut scratch,
+                                );
+                            } else {
+                                batch_invert_scaled(&mut values, &scale, &mut scratch);
+                            }
+                        });
+                        assert_eq!(inversions, expected_inversions);
+                        for (actual, expected) in values.iter().zip(&expected) {
+                            assert_value(*actual, expected);
+                        }
+                        assert!(scratch[len.min(capacity)..].iter().all(|value| {
+                            value.montgomery_limbs() == sentinel.montgomery_limbs()
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    batch_invert_groups_scaled::<M>(&mut [] as &mut [&mut [PastaField<M>]], &loose_zero, &mut []);
+}
+
+#[test]
+fn scaled_batches_match_integer_inverses() {
+    scaled_batches::<PallasBase>();
+    scaled_batches::<PallasScalar>();
+}
+
+fn scaled_records<M: PrimeModulus>() {
+    let p = modulus::<M>();
+    let corpus: Vec<_> = samples::<M>(17)
+        .into_iter()
+        .filter(|(_, integer)| *integer != BigUint::from(0u8))
+        .collect();
+    let records: Vec<_> = corpus
+        .iter()
+        .enumerate()
+        .map(|(index, (value, _))| (index * 17, *value))
+        .collect();
+    let sentinel = PastaField::from_u64(91);
+    for (scale, scale_integer) in samples::<M>(2) {
+        let expected: Vec<_> = corpus
+            .iter()
+            .map(|(_, integer)| integer.modpow(&(&p - 2u8), &p) * &scale_integer % &p)
+            .collect();
+        for len in [0, 1, 2, 3, 7, 8, 31, 32, 33, records.len()] {
+            for capacity in [0, 1, 2, 7, 32, records.len() + 3] {
+                let mut scratch = vec![sentinel; capacity];
+                let mut seen = vec![false; len];
+                let inversions = count_inversions(|| {
+                    try_batch_invert_scaled_by(
+                        &records[..len],
+                        |record| record.1,
+                        &scale,
+                        &mut scratch,
+                        |index, record, inverse| {
+                            assert_eq!(record.0, records[index].0);
+                            assert_eq!(
+                                record.1.montgomery_limbs(),
+                                records[index].1.montgomery_limbs()
+                            );
+                            assert_value(inverse, &expected[index]);
+                            assert!(!seen[index]);
+                            seen[index] = true;
+                            Ok::<_, VisitError>(())
+                        },
+                    )
+                    .unwrap();
+                });
+                assert_eq!(inversions, len.div_ceil(capacity.max(1)));
+                assert!(seen.iter().all(|visited| *visited));
+                assert!(
+                    scratch[len.min(capacity)..]
+                        .iter()
+                        .all(|value| { value.montgomery_limbs() == sentinel.montgomery_limbs() })
+                );
+            }
+        }
+
+        // A zero scale cannot suppress validation, including loose zeros in
+        // later batches. Rejection leaves all scratch and visitor state intact.
+        for zero in [0, 7, records.len() - 1] {
+            let mut invalid = records.clone();
+            invalid[zero].1 = PastaField::from_montgomery_limbs(M::MODULUS);
+            for capacity in [0, 2, 7, records.len() + 3] {
+                let mut scratch = vec![sentinel; capacity];
+                assert_eq!(
+                    try_batch_invert_scaled_by(
+                        &invalid,
+                        |record| record.1,
+                        &scale,
+                        &mut scratch,
+                        |_, _, _| -> Result<(), VisitError> { panic!("visited invalid batch") },
+                    ),
+                    Err(VisitError::Inversion(
+                        BatchInversionError::ZeroDenominator { index: zero }
+                    ))
+                );
+                assert!(
+                    scratch
+                        .iter()
+                        .all(|value| { value.montgomery_limbs() == sentinel.montgomery_limbs() })
+                );
+            }
+        }
+
+        for capacity in [0, 1, 2, 7, records.len() + 3] {
+            for stop_after in [0, 1, 3, 8, records.len() - 1] {
+                let mut seen = vec![false; records.len()];
+                let mut calls = 0;
+                let mut scratch = vec![sentinel; capacity];
+                assert_eq!(
+                    try_batch_invert_scaled_by(
+                        &records,
+                        |record| record.1,
+                        &scale,
+                        &mut scratch,
+                        |index, _, inverse| {
+                            assert_value(inverse, &expected[index]);
+                            assert!(!seen[index]);
+                            calls += 1;
+                            if calls == stop_after + 1 {
+                                return Err(VisitError::Stop);
+                            }
+                            seen[index] = true;
+                            Ok(())
+                        },
+                    ),
+                    Err(VisitError::Stop)
+                );
+                assert_eq!(calls, stop_after + 1);
+                assert_eq!(seen.iter().filter(|seen| **seen).count(), stop_after);
+                assert!(
+                    scratch[records.len().min(capacity)..]
+                        .iter()
+                        .all(|value| { value.montgomery_limbs() == sentinel.montgomery_limbs() })
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn scaled_records_validate_before_visiting_and_stop_on_error() {
+    scaled_records::<PallasBase>();
+    scaled_records::<PallasScalar>();
 }

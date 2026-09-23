@@ -59,12 +59,7 @@ fn reference_transform<M: PrimeModulus>(
 
 fn check<M: PrimeModulus>() {
     for size in [1, 8, 64, 1024] {
-        let plan = Transform::new(
-            Domain::<M>::for_size(size)
-                .unwrap()
-                .coset(PastaField::from_u64(7))
-                .unwrap(),
-        );
+        let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
         let original: Vec<_> = (0..size)
             .map(|i| PastaField::from_u64((i * i + 3) as u64))
             .collect();
@@ -182,10 +177,7 @@ fn fragmented_orders_prefixes_cosets_products_and_codelets_match_contiguous() {
 }
 
 fn fused_scales<M: PrimeModulus>() {
-    use zakura_udon::{
-        exec::run::ReadView,
-        fft::{PowerTable, run::Buffers},
-    };
+    use zakura_udon::{exec::run::ReadView, fft::run::Buffers};
 
     struct Source<'a, M: PrimeModulus>(&'a [PastaField<M>], bool);
     impl<M: PrimeModulus> ReadView<PastaField<M>> for Source<'_, M> {
@@ -201,73 +193,66 @@ fn fused_scales<M: PrimeModulus>() {
     }
 
     for size in [1, 64] {
-        let shift = PastaField::<M>::from_u64(7);
-        let plan = Transform::new(Domain::for_size(size).unwrap().coset(shift).unwrap());
+        let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
         let original: Vec<_> = (0..size)
             .map(|i| PastaField::from_u64((i * i + 3) as u64))
             .collect();
-        let mut scales = vec![PastaField::ZERO; size];
-        let scales = PowerTable::prepare(PastaField::ONE, shift, &mut scales);
         for extra in [PastaField::ONE, PastaField::from_u64(13)] {
             let scaled: Vec<_> = original.iter().map(|v| v.mul(&extra)).collect();
             let request = TransformRequest::new(Direction::Forward);
             let mut expected = vec![PastaField::ZERO; size];
             reference_transform(plan, request, &scaled, &mut expected);
-            for table in [false, true] {
-                let mut arithmetic = FftPlan::with_strategy(
-                    plan,
-                    zakura_udon::fft::TransformRequest {
-                        input_storage: zakura_udon::fft::InputStorage::Preserve,
-                        ..request
-                    },
-                    NonZeroUsize::new(size).unwrap(),
-                    Codelet::Radix2,
-                )
-                .unwrap()
-                .with_input_scale(extra);
-                if table {
-                    arithmetic = arithmetic.with_forward_scales(scales);
-                }
-                for contiguous in [false, true] {
-                    let mut id = Identity::new();
-                    let mut slots = [TaskStorage::EMPTY];
-                    let mut run = FftRun::new(arithmetic, false, &mut id, &mut slots);
-                    let mut ready = [None];
-                    assert_eq!(run.ready(&mut ready), 1);
-                    let mut values = vec![PastaField::ZERO; size];
-                    let source = Source(&original, contiguous);
-                    let mut task = run
-                        .try_claim(ready[0].take().unwrap(), || {
-                            Some(Buffers {
-                                values: &mut values,
-                                pair: &mut [],
-                                source: &source,
-                                factor: &[],
-                            })
+
+            let arithmetic = FftPlan::with_strategy(
+                plan,
+                zakura_udon::fft::TransformRequest {
+                    input_storage: zakura_udon::fft::InputStorage::Preserve,
+                    ..request
+                },
+                NonZeroUsize::new(size).unwrap(),
+                Codelet::Radix2,
+            )
+            .unwrap()
+            .with_input_scale(extra);
+            for contiguous in [false, true] {
+                let mut id = Identity::new();
+                let mut slots = [TaskStorage::EMPTY];
+                let mut run = FftRun::new(arithmetic, false, &mut id, &mut slots);
+                let mut ready = [None];
+                assert_eq!(run.ready(&mut ready), 1);
+                let mut values = vec![PastaField::ZERO; size];
+                let source = Source(&original, contiguous);
+                let mut task = run
+                    .try_claim(ready[0].take().unwrap(), || {
+                        Some(Buffers {
+                            values: &mut values,
+                            pair: &mut [],
+                            source: &source,
+                            factor: &[],
                         })
-                        .unwrap()
-                        .unwrap();
-                    task.execute().unwrap();
-                    assert_eq!(run.complete(task.finish()).unwrap().error, None);
-                    assert!(run.is_complete());
-                    assert_eq!(
-                        (values)
-                            .iter()
-                            .map(|value| value.reduce())
-                            .collect::<Vec<_>>(),
-                        (expected)
-                            .iter()
-                            .map(|value| value.reduce())
-                            .collect::<Vec<_>>()
-                    );
-                }
+                    })
+                    .unwrap()
+                    .unwrap();
+                task.execute().unwrap();
+                assert_eq!(run.complete(task.finish()).unwrap().error, None);
+                assert!(run.is_complete());
+                assert_eq!(
+                    (values)
+                        .iter()
+                        .map(|value| value.reduce())
+                        .collect::<Vec<_>>(),
+                    (expected)
+                        .iter()
+                        .map(|value| value.reduce())
+                        .collect::<Vec<_>>()
+                );
             }
         }
     }
 }
 
 #[test]
-fn fused_full_inputs_apply_coset_tables_and_input_scale_once() {
+fn fused_full_inputs_apply_coset_factors_and_input_scale_once() {
     fused_scales::<PallasBase>();
     fused_scales::<PallasScalar>();
 }
@@ -275,12 +260,7 @@ fn fused_full_inputs_apply_coset_tables_and_input_scale_once() {
 fn blocked<M: PrimeModulus>() {
     use super::fft_pipeline::Banks;
     for (size, tile) in [(64, 8), (1024, 32)] {
-        let plan = Transform::new(
-            Domain::<M>::for_size(size)
-                .unwrap()
-                .coset(PastaField::from_u64(7))
-                .unwrap(),
-        );
+        let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
         let original: Vec<_> = (0..size)
             .map(|i| PastaField::from_u64((i * i + 3) as u64))
             .collect();
@@ -421,75 +401,66 @@ fn sparse_tables<M: PrimeModulus>() {
     use zakura_udon::fft::{TwiddleDescription, TwiddleStorage, TwiddleTable};
     let nz = |n| NonZeroUsize::new(n).unwrap();
     let size = 64;
-    let plan = Transform::new(
-        Domain::<M>::for_size(size)
-            .unwrap()
-            .coset(PastaField::from_u64(7))
-            .unwrap(),
-    );
+    let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
     let original: Vec<_> = (0..size)
         .map(|i| PastaField::from_u64((i * i + 3) as u64))
         .collect();
     for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
         for table_size in [8, 64, 128] {
-            for inverse in [false, true] {
-                let description = TwiddleDescription {
-                    size: table_size,
-                    inverse,
-                    storage,
-                };
-                let mut entries = vec![PastaField::ZERO; description.requirements().unwrap()];
-                let table = TwiddleTable::prepare(description, &mut entries).unwrap();
-                for direction in [Direction::Forward, Direction::Inverse] {
-                    for scale in [InverseScale::Normalized, InverseScale::Unscaled] {
-                        if direction == Direction::Forward && scale == InverseScale::Unscaled {
-                            continue;
-                        }
-                        for prefix in [0, 1, 3, 21, 64] {
-                            let request = TransformRequest {
-                                support: InputSupport::Prefix(prefix),
-                                inverse_scale: scale,
-                                ..TransformRequest::new(direction)
-                            };
-                            let mut expected = vec![PastaField::ZERO; size];
-                            reference_transform(plan, request, &original[..prefix], &mut expected);
-                            for (tile, columns) in [(8, 3), (8, 9), (64, 3)] {
-                                let arithmetic = FftPlan::with_strategy(
-                                    plan,
-                                    zakura_udon::fft::TransformRequest {
-                                        input_storage: zakura_udon::fft::InputStorage::Preserve,
-                                        ..request
-                                    },
-                                    nz(tile),
-                                    Codelet::Radix4,
-                                )
-                                .unwrap()
-                                .with_columns(nz(columns), nz(3))
-                                .unwrap()
-                                .with_twiddles(table);
-                                let mut values = vec![PastaField::ZERO; size];
-                                let mut scratch =
-                                    vec![PastaField::ZERO; arithmetic.retained_fields()];
-                                arithmetic.execute_with(
-                                    Some(&original[..prefix]),
-                                    &mut values,
-                                    None,
-                                    &mut scratch,
-                                    nz(4),
-                                    &SerialExecutor,
-                                );
-                                assert_eq!(
-                                    (values)
-                                        .iter()
-                                        .map(|value| value.reduce())
-                                        .collect::<Vec<_>>(),
-                                    (expected)
-                                        .iter()
-                                        .map(|value| value.reduce())
-                                        .collect::<Vec<_>>(),
-                                    "{description:?}, {request:?}, tile={tile}, columns={columns}"
-                                );
-                            }
+            let description = TwiddleDescription {
+                size: table_size,
+                storage,
+            };
+            let mut entries = vec![PastaField::ZERO; description.requirements().unwrap()];
+            let table = TwiddleTable::prepare(description, &mut entries).unwrap();
+            for direction in [Direction::Forward, Direction::Inverse] {
+                for scale in [InverseScale::Normalized, InverseScale::Unscaled] {
+                    if direction == Direction::Forward && scale == InverseScale::Unscaled {
+                        continue;
+                    }
+                    for prefix in [0, 1, 3, 21, 64] {
+                        let request = TransformRequest {
+                            support: InputSupport::Prefix(prefix),
+                            inverse_scale: scale,
+                            ..TransformRequest::new(direction)
+                        };
+                        let mut expected = vec![PastaField::ZERO; size];
+                        reference_transform(plan, request, &original[..prefix], &mut expected);
+                        for (tile, columns) in [(8, 3), (8, 9), (64, 3)] {
+                            let arithmetic = FftPlan::with_strategy(
+                                plan,
+                                zakura_udon::fft::TransformRequest {
+                                    input_storage: zakura_udon::fft::InputStorage::Preserve,
+                                    ..request
+                                },
+                                nz(tile),
+                                Codelet::Radix4,
+                            )
+                            .unwrap()
+                            .with_columns(nz(columns), nz(3))
+                            .unwrap()
+                            .with_twiddles(table);
+                            let mut values = vec![PastaField::ZERO; size];
+                            let mut scratch = vec![PastaField::ZERO; arithmetic.retained_fields()];
+                            arithmetic.execute_with(
+                                Some(&original[..prefix]),
+                                &mut values,
+                                None,
+                                &mut scratch,
+                                nz(4),
+                                &SerialExecutor,
+                            );
+                            assert_eq!(
+                                (values)
+                                    .iter()
+                                    .map(|value| value.reduce())
+                                    .collect::<Vec<_>>(),
+                                (expected)
+                                    .iter()
+                                    .map(|value| value.reduce())
+                                    .collect::<Vec<_>>(),
+                                "{description:?}, {request:?}, tile={tile}, columns={columns}"
+                            );
                         }
                     }
                 }
@@ -499,7 +470,7 @@ fn sparse_tables<M: PrimeModulus>() {
 }
 
 #[test]
-fn sparse_initialization_and_partial_panels_use_either_twiddle_direction() {
+fn sparse_initialization_and_partial_panels_share_forward_twiddles() {
     sparse_tables::<PallasBase>();
     sparse_tables::<PallasScalar>();
 }
@@ -755,12 +726,7 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
 fn batch_planning_orders_panels_and_validation() {
     use zakura_udon::{fft::InputStorage, field::Fp};
     let nz = |n| NonZeroUsize::new(n).unwrap();
-    let base = Transform::new(
-        Domain::for_size(64)
-            .unwrap()
-            .coset(Fp::from_u64(7))
-            .unwrap(),
-    );
+    let base = Transform::new(Domain::for_size(64).unwrap().coset());
     for direction in [Direction::Forward, Direction::Inverse] {
         for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
             let request = TransformRequest {

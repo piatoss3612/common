@@ -1,4 +1,5 @@
 use super::{ElementOrder, InverseScale, PastaField, PrimeModulus, reverse};
+use super::{domain::Shift, finish::Factors};
 
 /// Mathematical transform direction.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,67 +99,85 @@ pub(crate) enum Codelet {
     Radix8,
 }
 
+/// Forward coefficient factors, including arbitrary shifts for expansion residues.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ForwardShift<M: PrimeModulus> {
+    Domain(Shift),
+    Residue {
+        shift: PastaField<M>,
+        inverse: PastaField<M>,
+    },
+}
+
+impl<M: PrimeModulus> ForwardShift<M> {
+    pub fn for_domain(domain: super::CosetDomain<M>) -> Self {
+        Self::Domain(domain.shift)
+    }
+
+    pub fn is_identity(self) -> bool {
+        matches!(self, Self::Domain(Shift::Subgroup))
+    }
+
+    pub fn shift(self) -> PastaField<M> {
+        match self {
+            Self::Domain(shift) => shift.value(),
+            Self::Residue { shift, .. } => shift,
+        }
+    }
+
+    pub fn cycle(self) -> Option<Factors<M>> {
+        match self {
+            Self::Domain(shift) => Some(Factors::forward(shift)),
+            Self::Residue { .. } => None,
+        }
+    }
+
+    pub fn at(self, degree: usize) -> PastaField<M> {
+        match self.cycle() {
+            Some(cycle) => cycle.at(degree),
+            None => self.shift().pow_u64(degree as u64),
+        }
+    }
+}
+
 // Computed starting powers make scaling independent across regions. Incrementing
 // a storage index clears its trailing one bits and sets the next zero bit. In
 // bit-reversed order, this changes the coefficient degree by an amount determined
 // by that trailing-one count. The ratios array stores the corresponding powers
 // of the coset shift, so each region can advance without repeated exponentiation.
-pub(super) struct CoefficientPowers<M: PrimeModulus> {
+pub(super) struct BitReversedPowers<M: PrimeModulus> {
     shift: PastaField<M>,
     ratios: [PastaField<M>; 32],
-    order: ElementOrder,
     log_size: u32,
 }
 
-impl<M: PrimeModulus> CoefficientPowers<M> {
-    pub(super) fn new(domain: super::CosetDomain<M>, order: ElementOrder) -> Self {
+impl<M: PrimeModulus> BitReversedPowers<M> {
+    pub(super) fn new(shift: PastaField<M>, mut inverse: PastaField<M>, log_size: u32) -> Self {
         let mut ratios = [PastaField::ONE; 32];
-        let log_size = domain.domain().log_size();
-        if order == ElementOrder::BitReversed
-            && domain.shift().reduce() != PastaField::<M>::ONE.reduce()
-        {
-            let mut reciprocal = [PastaField::ONE; 32];
-            let mut power = domain.shift();
-            let mut inverse = domain.inverse_shift();
-            for index in 0..log_size as usize {
-                ratios[index] = power;
-                reciprocal[index] = inverse;
-                power = power.square();
-                inverse = inverse.square();
-            }
-            ratios[..log_size as usize].reverse();
-            let mut prefix = PastaField::ONE;
-            for index in 0..log_size as usize {
-                ratios[index] = ratios[index].mul(&prefix);
-                prefix = prefix.mul(&reciprocal[log_size as usize - 1 - index]);
-            }
+        let mut reciprocal = [PastaField::ONE; 32];
+        let mut power = shift;
+        for index in 0..log_size as usize {
+            ratios[index] = power;
+            reciprocal[index] = inverse;
+            power = power.square();
+            inverse = inverse.square();
+        }
+        ratios[..log_size as usize].reverse();
+        let mut prefix = PastaField::ONE;
+        for index in 0..log_size as usize {
+            ratios[index] = ratios[index].mul(&prefix);
+            prefix = prefix.mul(&reciprocal[log_size as usize - 1 - index]);
         }
         Self {
-            shift: domain.shift(),
+            shift,
             ratios,
-            order,
             log_size,
         }
     }
     pub(super) fn at(&self, index: usize) -> PastaField<M> {
-        if self.shift.reduce() == PastaField::<M>::ONE.reduce() {
-            return PastaField::ONE;
-        }
-        let degree = if self.order == ElementOrder::Natural {
-            index
-        } else {
-            reverse(index, self.log_size)
-        };
-        self.shift.pow_u64(degree as u64)
+        self.shift.pow_u64(reverse(index, self.log_size) as u64)
     }
     pub(super) fn next(&self, index: usize, power: PastaField<M>) -> PastaField<M> {
-        if self.shift.reduce() == PastaField::<M>::ONE.reduce() {
-            return power;
-        }
-        power.mul(if self.order == ElementOrder::Natural {
-            &self.shift
-        } else {
-            &self.ratios[index.trailing_ones() as usize]
-        })
+        power.mul(&self.ratios[index.trailing_ones() as usize])
     }
 }

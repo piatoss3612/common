@@ -17,11 +17,13 @@ fn check<M: PrimeModulus>() {
     const SLOTS: usize = 3;
     for size in [8, 64] {
         let base = Transform::new(Domain::<M>::for_size(size).unwrap().subgroup());
-        for (residues, shift) in [1, 2, 8].into_iter().flat_map(|n| [(n, 1), (n, 7)]) {
-            let domain = Domain::for_size(size * residues)
-                .unwrap()
-                .coset(PastaField::from_u64(shift))
-                .unwrap();
+        for (residues, coset) in [1, 2, 8].into_iter().flat_map(|n| [(n, false), (n, true)]) {
+            let domain = Domain::for_size(size * residues).unwrap();
+            let domain = if coset {
+                domain.coset()
+            } else {
+                domain.subgroup()
+            };
             let expansion = Expansion::new(base, domain, None).unwrap();
             for storage in [
                 ExpansionStorage::Coefficients,
@@ -186,7 +188,7 @@ fn check<M: PrimeModulus>() {
                                     .iter()
                                     .map(|value| value.reduce())
                                     .collect::<Vec<_>>(),
-                                "contiguous size={size}, residues={residues}, shift={shift}, storage={storage:?}, order={order:?}, input={input_order:?}"
+                                "contiguous size={size}, residues={residues}, coset={coset}, storage={storage:?}, order={order:?}, input={input_order:?}"
                             );
                         }
                         let mut ids = core::array::from_fn(|_| Identity::new());

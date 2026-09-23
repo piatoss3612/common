@@ -18,10 +18,10 @@ canonical Pasta root for its size. Use `Domain::new(k)` for `2^k` elements or
 `Domain::for_size(n)` for an element count. The constructor documents supported
 orders and target address-space limits. Size one is supported.
 
-`domain.subgroup()` selects shift one. `domain.coset(shift)` accepts any nonzero
-loose field element, including shifts inside the subgroup. Both representations
-of zero are rejected. For size `n`, canonical
-`root`, and coefficients `c[i]`, natural evaluation row `j` is
+`domain.subgroup()` selects shift one; `domain.coset()` selects the field's
+order-three `ZETA` shift. These are the two supported transform domains.
+For size `n`, canonical `root`, and coefficients `c[i]`, natural evaluation
+row `j` is
 
 ```text
 sum(c[i] * (shift * root^j)^i, i = 0..n), for 0 <= j < n.
@@ -106,25 +106,23 @@ their storage and setup cost. Obtain destination lengths from
 the const query `TableRequirements::for_size(n)` and fill the chosen subset with
 `TablesMut::prepare`. The [module examples](../crates/udon/src/fft/mod.rs) show
 table arrays sized by Udon at compile time. The query accepts the
-same sizes as `Domain::for_size`, applies to both fields and all coset shifts,
+same sizes as `Domain::for_size`, applies to both fields and both domain shifts,
 and needs no domain construction. `TableRequirements::for_domain` is a
 convenience wrapper for an existing domain.
 
 `TablesMut::prepare` returns a `Transform` handle tied to the generating coset.
 For stored slices, `Tables::bind` asserts their lengths and returns the same
 handle. It is a const function and trusts the entries produced by preparation.
-Use `bound.for_coset(other_coset)` to reuse ordinary forward and inverse
-twiddles on another coset of the same subgroup. This takes constant work and
-retains the original borrows.
-Changing the shift drops inverse-finish and inverse-scaling tables, whose entries
-depend on that shift; the same domain retains every table. A different subgroup
-size is rejected.
+To share ordinary twiddles between a subgroup and its `ZETA` coset, bind the
+same `forward` and `inverse` slices in separate `Tables` descriptors. Omit
+`inverse_finish` or prepare it for each domain, since its entries depend on
+the shift.
 
-Every table family has one `bind` operation. Binding attaches trusted entries
-to their domain or sequence description and checks only dimensions and
-configuration. It performs no field reduction or mathematical content scan.
-The artifact's schema identifies the field and table conventions; Bento preserves
-the exact representations generated with those types.
+Table binding checks dimensions and configuration with constant work, trusting
+stored entries. This includes `Tables`, `TwiddleTable`, `ExpansionScales`, and
+[`ConstantPrefixExpansion`](../crates/udon/src/fft/constant_prefix.rs). Callers
+are responsible for pairing mathematically correct entries with their ordered
+domains. Bento preserves the stored representations.
 
 Transform plans additionally accept
 [`TwiddleTable`](../crates/udon/src/fft/powers.rs) through `with_twiddles`.
@@ -140,16 +138,10 @@ entries in either representation.
 
 All table domains use the nested canonical Pasta roots. A larger table serves
 a smaller transform through the canonical root stride. A smaller table serves
-local stages while larger stages regenerate their powers. Forward and inverse
-transforms can share either root orientation. A table describes subgroup powers
-independently of the transform's coset shift. Column panels can also use the
-explicit twiddle provider.
-
-`PowerTable` describes entry `i` as `first * step^i`, including deliberate scaling.
-Forward coefficient tables use `first = 1`, `step = shift`, and exactly the
-transform size. `PowerTable::prepare` and `bind` return handles directly;
-`with_forward_scales` checks their compatibility without rescanning contents.
-Seeds and entries use loose field representations.
+local stages while larger stages regenerate their powers. Each `TwiddleTable`
+stores powers of the canonical forward root and serves both transform
+directions, independently of the transform's coset shift. Column panels can
+also use the explicit twiddle provider.
 
 Callers can prepare table arrays at runtime and lend their slices, or prepare
 them in a downstream build script and embed them through [Bento POD](POD.md).
@@ -166,10 +158,10 @@ shows the complete build-to-runtime path for both fields:
    from the embedded record, and executes with stack-owned buffers.
 
 The owner chooses filenames, dimensions, and format versions. The fixture's
-shared schema fixes the field types, domain sizes, root orientation, scale
+shared schema fixes the field types, domain sizes, table representation, scale
 normalization, shift, and layout. Its consumer borrows the generated entries
-directly. These conventions belong to the artifact owner's schema; Udon supplies
-mathematical table handles without rechecking the stored values.
+directly. These conventions belong to the artifact owner's schema; the fixture's
+transform and expansion-scale bindings trust the generated values.
 Native build-time and runtime preparation produce identical borrowed handles;
 use build scripts for large artifacts and const evaluation for small schedules
 or storage requirements.
@@ -199,10 +191,8 @@ Scratch arrays filled with `Fp::ZERO` or `Fq::ZERO` suffice. Unused tails remain
 untouched. The [module contract](../crates/udon/src/fft/mod.rs) defines scratch
 reuse, validation boundaries, and recovery on unwind.
 
-Arbitrary nonzero coset shifts are supported, but coefficient scaling costs
-depend on the shift and strategy. The [benchmarks](TESTING.md#fft-benchmarks)
-include scaling when comparing subgroup transforms, the order-three shift
-`zeta`, and the generic shift 7.
+The [benchmarks](TESTING.md#fft-benchmarks) include coefficient scaling when
+comparing subgroup transforms and the order-three `ZETA` coset.
 
 FFTs use [`exec::Executor`](../crates/udon/src/exec.rs) for scoped joins. Its trait
 documentation defines completion, panic handling, and progress during nested
@@ -248,9 +238,9 @@ domain. Copy helpers convert between natural and residue order into distinct
 caller buffers. Ordinary slice ranges provide coefficient tiles.
 
 `Expansion::coefficients` accepts any prefix fitting the base domain. An optional
-table holds exactly `extended_size` residue scales; `prepare_scales` fills caller
-storage and returns an `ExpansionScales` handle with `Coefficients`
-normalization. Pass the handle to `Expansion::new` or `with_scales`.
+[`ExpansionScales`](../crates/udon/src/fft/expansion_scales.rs) table retains
+residue scales. Prepare it in caller storage with an explicit normalization,
+then pass the handle to `Expansion::new` or `with_scales`.
 
 Direct expansion accepts the same `ExecutionOptions` as transforms. Udon divides
 one task allowance across residues and their inner transforms and fits their
@@ -263,21 +253,13 @@ Use `Expansion::evaluations` when the input is already evaluated on the base
 subgroup. It preserves that input and needs no separate coefficient buffer;
 `expansion.evaluation_scratch(options)` reports its preferred temporary storage.
 The first output residue holds coefficients while the remaining residues read
-them. [`ExpansionScales`](../crates/udon/src/fft/expansion_scales.rs) records the
-scale convention and domain. `Expansion::new` accepts an optional handle, and
-`Expansion::with_scales` attaches one to an existing expansion:
-
-| Normalization | Entry `(s,i)` |
-| --- | --- |
-| `Coefficients` | `(g*w_N^s)^i` |
-| `UnscaledInverse` | `n^-1 * (g*w_N^s)^i` |
-
-Both need `N` fields. `ExpansionScales::prepare` writes either convention;
-`bind` checks the configuration and asserts the stored length without inspecting
-entries. Both coefficient and
-evaluation inputs can use either convention. Residue initialization accounts for
-the table's factor and the input's normalization; the table does not select the
-inverse's scale. See the
+them. Query `ExpansionScales::requirements` for table storage and choose
+`ExpansionScaleNormalization::Coefficients` for ordinary coefficient powers.
+Both coefficient and evaluation inputs also accept `UnscaledInverse` tables;
+the table does not select the inverse's scale. Residue initialization accounts
+for the table's factor and the input's normalization. Entry formulas and trusted
+binding requirements live with
+[`ExpansionScales`](../crates/udon/src/fft/expansion_scales.rs); see also the
 [`Expansion::with_scales` contract](../crates/udon/src/fft/expansion.rs).
 
 Scratch is reused between the inverse and residue phases; the query accounts
@@ -348,20 +330,57 @@ The optional factor slice passed to execution must use that same physical
 layout and coset; the caller establishes those semantics.
 
 For bounded-memory consumers, `Expansion::residue(s, order)` borrows a descriptor
-that evaluates a coefficient prefix into one reusable base-sized output. Its
-`domain` identifies the selected coset; `order` applies only inside that residue.
+that evaluates a coefficient prefix into one reusable base-sized output.
+Natural row `k` within residue `s` is extended-domain row `s + r*k`;
+`order` applies only inside that residue.
 The caller chooses which residues to retain for rotations or other dependencies.
 It can also fill separately owned residue buffers, scheduled through
 `exec::for_each_mut` with shared coefficients. Whole-expansion operations use
 contiguous output, so choose storage according to the consumer's access pattern.
 
+## Constant prefixes and explicit tails
+
+[`ConstantPrefix`](../crates/udon/src/field/constant_prefix.rs) represents
+natural-order evaluations with a repeated prefix and a short explicit tail of
+actual values. Use `CosetDomain::interpolate_constant_prefix` to recover
+coefficients directly, or
+[`ConstantPrefixExpansion`](../crates/udon/src/fft/constant_prefix.rs) to reuse
+Lagrange samples across extensions. The latter writes natural-order target
+evaluations; ordinary `Expansion` writes residue-major output.
+
+These methods take `O(output_size * (tail_len + 1))` work, where `output_size`
+is the output length and `tail_len` is the explicit tail length. For longer
+tails, compare `ConstantPrefix::write_values` followed by an ordinary inverse or
+expansion. `Expansion::evaluations` requires a subgroup base; for a coset base,
+inverse-transform first and expand the coefficients. The same descriptor can feed a
+[constant-region MSM](CURVES.md#multiscalar-multiplication).
+
+## Vanishing division into coefficient pieces
+
+[`VanishingDivision`](../crates/udon/src/fft/vanishing.rs) combines interpolation
+and division by `X^n - 1` when the numerator is evaluated on a shifted domain
+of size `N`. Each output piece holds `n` coefficients. Complete a forward
+transform on the size-`N` subgroup, then pass its output and physical order to
+`write_pieces`. The finish removes the evaluation shift and writes ascending
+coefficient pieces; it must receive a forward subgroup transform, even though
+the result is interpolated coefficients.
+
+This workflow accepts any nonzero shift `g` with `g^N != 1`, independently of
+the two shifts supported by `CosetDomain`. Division is modulo `X^N - g^N`;
+the caller establishes divisibility and degree bounds for an exact quotient,
+including when requesting only a prefix of its pieces. The type's executable
+example and method docs define the transform and scratch requirements for each
+step. Use `prepare_factors` when the consumer instead needs divided evaluations
+before interpolation.
+
 ## Fused class interpolation
 
 [`run::InterpolationPlan`](../crates/udon/src/fft/run/interpolation.rs) combines
 classes supplied as `(Transform, ElementOrder)` pairs. Entry zero is the output;
-other classes may be smaller and have different nonzero coset shifts. The caller
-supplies storage layout, whether lift buffers may be consumed, and one set of
-resource constraints. Udon resolves the inverse transforms and their scheduling.
+other classes may be smaller and independently use subgroup or `ZETA` shifts.
+The caller supplies storage layout, whether lift buffers may be consumed, and
+one set of resource constraints. Udon resolves the inverse transforms and
+their scheduling.
 
 `execute` accepts arrays of mutable class buffers and scratch slices.
 `snapshot_fields(class)` sizes each scratch slice.

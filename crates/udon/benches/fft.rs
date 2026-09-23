@@ -7,26 +7,38 @@ use std::hint::black_box;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use zakura_udon::{
+    curve::{Pallas, Vesta},
     exec::{ExecutionOptions, Executor, SerialExecutor, TaskBudget},
     fft::{
-        CoefficientView, CosetDomain, Direction, Domain, ElementOrder, Expansion, InputStorage,
-        InputSupport, StorageLayout, TableRequirements, Tables, TablesMut, TransformRequest,
-        reference, run::InterpolationPlan,
+        CoefficientView, CosetDomain, Direction, Domain, ElementOrder, Expansion,
+        ExpansionScaleNormalization, ExpansionScales, InputStorage, InputSupport, StorageLayout,
+        TableRequirements, Tables, TablesMut, TransformRequest, reference, run::InterpolationPlan,
     },
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
+
+#[path = "support/group_fft.rs"]
+mod group_fft;
+
+#[path = "support/lagrange.rs"]
+mod lagrange;
+
+#[path = "support/vanishing.rs"]
+mod vanishing;
+
+#[path = "support/constant_prefix.rs"]
+mod constant_prefix;
 
 struct Prepared<M: PrimeModulus> {
     mask: u8,
     forward: Vec<PastaField<M>>,
     inverse: Vec<PastaField<M>>,
     finish: Vec<PastaField<M>>,
-    scales: Vec<PastaField<M>>,
 }
 
 impl<M: PrimeModulus> Prepared<M> {
     fn new(domain: CosetDomain<M>) -> Self {
-        Self::selected(domain, 15)
+        Self::selected(domain, 7)
     }
 
     fn selected(domain: CosetDomain<M>, mask: u8) -> Self {
@@ -36,14 +48,6 @@ impl<M: PrimeModulus> Prepared<M> {
             forward: vec![PastaField::ZERO; if mask & 1 != 0 { sizes.twiddles } else { 0 }],
             inverse: vec![PastaField::ZERO; if mask & 2 != 0 { sizes.twiddles } else { 0 }],
             finish: vec![PastaField::ZERO; if mask & 4 != 0 { sizes.twiddles } else { 0 }],
-            scales: vec![
-                PastaField::ZERO;
-                if mask & 8 != 0 {
-                    sizes.inverse_scales
-                } else {
-                    0
-                }
-            ],
         };
         result.prepare(domain);
         result
@@ -54,13 +58,12 @@ impl<M: PrimeModulus> Prepared<M> {
             forward: (self.mask & 1 != 0).then_some(&mut self.forward),
             inverse: (self.mask & 2 != 0).then_some(&mut self.inverse),
             inverse_finish: (self.mask & 4 != 0).then_some(&mut self.finish),
-            inverse_scales: (self.mask & 8 != 0).then_some(&mut self.scales),
         }
         .prepare(domain);
     }
 
     fn bytes(&self) -> usize {
-        (self.forward.len() + self.inverse.len() + self.finish.len() + self.scales.len()) * 32
+        (self.forward.len() + self.inverse.len() + self.finish.len()) * 32
     }
 
     fn tables(&self) -> Tables<'_, M> {
@@ -68,7 +71,6 @@ impl<M: PrimeModulus> Prepared<M> {
             forward: (self.mask & 1 != 0).then_some(&self.forward),
             inverse: (self.mask & 2 != 0).then_some(&self.inverse),
             inverse_finish: (self.mask & 4 != 0).then_some(&self.finish),
-            inverse_scales: (self.mask & 8 != 0).then_some(&self.scales),
         }
     }
 }
@@ -150,18 +152,23 @@ fn transforms<M: PrimeModulus>(
     criterion: &mut Criterion,
     field: &str,
     shift_name: &str,
-    shift: PastaField<M>,
+    coset: bool,
     runners: &[Runner],
 ) {
     for log_size in [11, 14, 20] {
-        let domain = Domain::new(log_size).unwrap().coset(shift).unwrap();
+        let subgroup = Domain::new(log_size).unwrap();
+        let domain = if coset {
+            subgroup.coset()
+        } else {
+            subgroup.subgroup()
+        };
         let input = inputs::<M>(domain.size());
         for (direction, inverse, profiles) in [
             ("forward", false, &[("none", 0), ("twiddles", 1)][..]),
             (
                 "inverse",
                 true,
-                &[("none", 0), ("twiddles", 2), ("finish", 14)][..],
+                &[("none", 0), ("twiddles", 2), ("finish", 6)][..],
             ),
         ] {
             let mut group = criterion.benchmark_group(format!(
@@ -201,10 +208,7 @@ fn transforms<M: PrimeModulus>(
                     let options = ExecutionOptions::default()
                         .with_task_budget(TaskBudget::new(runner.tasks).unwrap());
                     let mut scratch =
-                        vec![
-                            PastaField::ZERO;
-                            plan.scratch_requirements(options).unwrap().field_elements
-                        ];
+                        vec![PastaField::ZERO; plan.scratch_requirements(options).unwrap()];
                     eprintln!(
                         "{field}/fft/{}/{shift_name}/{direction}/{profile}/{}: tables {} bytes; scratch {} bytes",
                         domain.size(),
@@ -349,7 +353,7 @@ fn expansions<M: PrimeModulus>(
     criterion: &mut Criterion,
     field: &str,
     shift_name: &str,
-    shift: PastaField<M>,
+    coset: bool,
     runners: &[Runner],
 ) {
     let base = Domain::new(11).unwrap().subgroup();
@@ -370,17 +374,40 @@ fn expansions<M: PrimeModulus>(
     )
     .unwrap();
     for log_size in [11, 12, 14] {
-        let extended = Domain::new(log_size).unwrap().coset(shift).unwrap();
+        let subgroup = Domain::new(log_size).unwrap();
+        let extended = if coset {
+            subgroup.coset()
+        } else {
+            subgroup.subgroup()
+        };
         let expansion = Expansion::new(plan, extended, None).unwrap();
-        let mut scales = vec![PastaField::ZERO; expansion.scale_count()];
+        let mut scales =
+            vec![
+                PastaField::ZERO;
+                ExpansionScales::<M>::requirements(plan.domain().size(), extended.size()).unwrap()
+            ];
         let mut setup = criterion.benchmark_group(format!("{field}/fft_setup/{shift_name}"));
         setup.bench_function(BenchmarkId::new("residue_scales", extended.size()), |b| {
             b.iter(|| {
-                black_box(expansion.prepare_scales(black_box(&mut scales)));
+                black_box(
+                    ExpansionScales::prepare(
+                        plan.domain().size(),
+                        extended,
+                        ExpansionScaleNormalization::Coefficients,
+                        black_box(&mut scales),
+                    )
+                    .unwrap(),
+                );
             });
         });
         setup.finish();
-        let scales = expansion.prepare_scales(&mut scales);
+        let scales = ExpansionScales::prepare(
+            plan.domain().size(),
+            extended,
+            ExpansionScaleNormalization::Coefficients,
+            &mut scales,
+        )
+        .unwrap();
         let dense_tables = Prepared::selected(extended, 1);
         let dense_plan = dense_tables.tables().bind(extended);
         let factor_values = inputs::<M>(extended.size());
@@ -505,7 +532,7 @@ fn expansions<M: PrimeModulus>(
                         expansion.coefficient_scratch(options)
                     }
                     .unwrap();
-                    let mut scratch = vec![PastaField::ZERO; required.field_elements];
+                    let mut scratch = vec![PastaField::ZERO; required];
                     let table_bytes = if from_evaluations {
                         tables.bytes()
                     } else {
@@ -573,19 +600,20 @@ fn interpolation<M: PrimeModulus>(
     criterion: &mut Criterion,
     field: &str,
     shift_name: &str,
-    shift: PastaField<M>,
+    coset: bool,
 ) {
-    let domains = [14, 13, 12].map(|log| Domain::new(log).unwrap().coset(shift).unwrap());
+    let domains = [14, 13, 12].map(|log| {
+        let domain = Domain::new(log).unwrap();
+        if coset {
+            domain.coset()
+        } else {
+            domain.subgroup()
+        }
+    });
     let tables = domains.map(Prepared::new);
     let plans = core::array::from_fn::<_, 3, _>(|i| tables[i].tables().bind(domains[i]));
     let input = domains.map(|domain| inputs::<M>(domain.size()));
-    let mut scratch = vec![
-        PastaField::ZERO;
-        plans[0]
-            .scratch_requirements(PARALLEL)
-            .unwrap()
-            .field_elements
-    ];
+    let mut scratch = vec![PastaField::ZERO; plans[0].scratch_requirements(PARALLEL).unwrap()];
     let mut group = criterion.benchmark_group(format!("{field}/class_interpolation/{shift_name}"));
     group.throughput(Throughput::Elements(domains[0].size() as u64));
     group.bench_function("fused", |b| {
@@ -632,18 +660,19 @@ fn interpolation<M: PrimeModulus>(
 }
 
 fn field_benchmarks<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runners: &[Runner]) {
-    for (name, shift) in [
-        ("subgroup", PastaField::ONE),
-        ("zeta", PastaField::ZETA),
-        ("generic_7", PastaField::from_u64(7)),
-    ] {
-        transforms::<M>(criterion, field, name, shift, runners);
-        expansions::<M>(criterion, field, name, shift, runners);
-        interpolation::<M>(criterion, field, name, shift);
+    lagrange::benchmarks::<M>(criterion, field);
+    vanishing::benchmarks::<M>(criterion, field);
+    constant_prefix::benchmarks::<M>(criterion, field);
+    for (name, coset) in [("subgroup", false), ("zeta", true)] {
+        transforms::<M>(criterion, field, name, coset, runners);
+        expansions::<M>(criterion, field, name, coset, runners);
+        interpolation::<M>(criterion, field, name, coset);
     }
 }
 
 fn benchmarks(criterion: &mut Criterion) {
+    group_fft::benchmarks::<Pallas>(criterion, "Pallas");
+    group_fft::benchmarks::<Vesta>(criterion, "Vesta");
     let runners: Vec<_> = [
         ("serial", 1, false),
         ("tiled_serial", 4, false),

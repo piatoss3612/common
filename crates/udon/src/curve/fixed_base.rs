@@ -6,6 +6,8 @@ use super::{
 };
 use crate::field::PastaField;
 
+mod sum;
+
 /// The layout of an expanded fixed-base multiplication table.
 ///
 /// [`Default`] selects width 4. For width `w` in `2..=8`, let
@@ -66,9 +68,10 @@ impl FixedBaseDescription {
 /// [`prepare_with`](Self::prepare_with) fills caller buffers for an explicit
 /// description; [`prepare`](Self::prepare) selects a description automatically.
 /// [`bind`](Self::bind) borrows trusted stored entries and checks their
-/// description and length. Multiplication is variable-time, performs no
-/// doublings, and uses no caller scratch or allocation. Preparation and
-/// multiplication provide no constant-time guarantee for secret inputs.
+/// description and length. [`mul`](Self::mul) performs no doublings and uses
+/// no caller scratch. [`sum`](Self::sum) jointly reduces products from several
+/// tables using caller-owned scratch. Preparation and multiplication perform
+/// no allocation and provide no constant-time guarantee for secret inputs.
 #[derive(Clone, Copy)]
 pub struct FixedBaseTable<'a, C: PastaCurve, E: CurveTableEntry<C> = AffinePoint<C>> {
     description: FixedBaseDescription,
@@ -283,11 +286,20 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
     /// Execution is variable-time and uses bounded stack storage without
     /// doubling, allocation, or caller scratch.
     pub fn mul(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
+        let mut result = ProjectivePoint::IDENTITY;
+        self.for_each_selected(scalar, |point| result = result.add_mixed(&point));
+        result
+    }
+
+    fn for_each_selected(
+        &self,
+        scalar: &PastaField<C::Scalar>,
+        mut emit: impl FnMut(AffinePoint<C>),
+    ) {
         let (a, b) = glv_decompose::<C>(scalar);
         let w = self.description.window_bits as usize;
         let h = 1 << (w - 1);
         let n = 128_usize.div_ceil(w);
-        let mut result = ProjectivePoint::IDENTITY;
         for (rotation, half) in [a, b].into_iter().enumerate() {
             let (digits, carry) = signed_window_digits(half.unsigned_abs(), w);
             for (window, &digit) in digits[..n].iter().enumerate() {
@@ -295,15 +307,14 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
                     let entry = self.entries[window * h + digit.unsigned_abs() as usize - 1]
                         .rotated(rotation);
                     let negative = (digit < 0) ^ (half < 0);
-                    result = result.add_mixed(&if negative { entry.neg() } else { entry });
+                    emit(if negative { entry.neg() } else { entry });
                 }
             }
             if carry {
                 let entry = self.entries[n * h].rotated(rotation);
-                result = result.add_mixed(&if half < 0 { entry.neg() } else { entry });
+                emit(if half < 0 { entry.neg() } else { entry });
             }
         }
-        result
     }
 }
 

@@ -16,7 +16,9 @@ use core::{num::NonZeroUsize, ops::Range};
 
 use super::{
     Codelet, Direction, Domain, ElementOrder, FftError, InputStorage, InputSupport, InverseScale,
-    PastaField, PrimeModulus, Transform, TransformRequest, TwiddleTable, reverse,
+    PastaField, PrimeModulus, Transform, TransformRequest, TwiddleTable,
+    operation::ForwardShift,
+    reverse,
     stages::{StageKernel, twiddle_table},
 };
 use crate::exec::{
@@ -54,7 +56,8 @@ pub struct FftPlan<'t, M: PrimeModulus> {
     codelet: Codelet,
     twiddles: Option<TwiddleTable<'t, M>>,
     input_scale: PastaField<M>,
-    forward_scales: Option<&'t [PastaField<M>]>,
+    shift: ForwardShift<M>,
+    residue_scales: Option<&'t [PastaField<M>]>,
     columns: Option<(usize, usize)>,
     contiguous_permutation: bool,
     scatter_input: bool,
@@ -173,7 +176,8 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
             codelet,
             twiddles: None,
             input_scale: PastaField::ONE,
-            forward_scales: None,
+            shift: ForwardShift::for_domain(plan.domain()),
+            residue_scales: None,
             columns: None,
             contiguous_permutation: false,
             scatter_input: false,
@@ -218,10 +222,11 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
         residue: usize,
         mut scale: PastaField<M>,
     ) -> Self {
-        self.forward_scales = expansion
+        self.shift = expansion.residue_shift(residue);
+        self.residue_scales = expansion
             .scales
             .map(|scales| &scales[residue * self.size()..(residue + 1) * self.size()]);
-        if self.forward_scales.is_some()
+        if self.residue_scales.is_some()
             && expansion.normalization == super::ExpansionScaleNormalization::UnscaledInverse
         {
             // The table already divides by the base size. Cancel that factor
@@ -229,22 +234,6 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
             scale = scale.mul(&PastaField::<M>::from_u64(self.size() as u64));
         }
         self.with_input_scale(scale)
-    }
-
-    /// Borrows constructed forward coset powers directly.
-    ///
-    /// The table must start at one, use this domain's shift, and contain exactly the
-    /// transform size. Panics for an inverse transform or an incompatible table.
-    pub fn with_forward_scales(mut self, table: super::PowerTable<'t, M>) -> Self {
-        assert!(
-            !self.inverse()
-                && table.first().reduce() == PastaField::<M>::ONE.reduce()
-                && table.step().reduce() == self.plan.domain().shift().reduce(),
-            "incompatible forward scale table"
-        );
-        super::assert_length("forward_scales", self.size(), table.as_slice().len());
-        self.forward_scales = Some(table.as_slice());
-        self
     }
 
     /// Selects bounded column panels after local transforms.
@@ -403,9 +392,9 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     fn twist(&self) -> bool {
         self.resume.is_none()
             && !self.inverse()
-            && (self.plan.domain().shift().reduce() != PastaField::<M>::ONE.reduce()
+            && (!self.shift.is_identity()
                 || self.input_scale.reduce() != PastaField::<M>::ONE.reduce()
-                || self.forward_scales.is_some())
+                || self.residue_scales.is_some())
     }
     fn twist_before_permute(&self) -> bool {
         !self.separate() && self.pre_reverse() && self.twist()
@@ -616,11 +605,11 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                         input,
                         values,
                         if plan.inverse() {
-                            PastaField::ONE
+                            ForwardShift::Domain(super::domain::Shift::Subgroup)
                         } else {
-                            plan.plan.domain().shift()
+                            plan.shift
                         },
-                        plan.forward_scales,
+                        plan.residue_scales,
                         plan.input_scale,
                     );
                 } else if plan.sparse() {
@@ -836,15 +825,16 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 }
             }
             WorkKind::Finish => {
-                let natural = plan.request.output_order == ElementOrder::Natural;
-                let table = plan.request.inverse_scale == InverseScale::Normalized
-                    && plan.plan.tables.inverse_scales.is_some();
-                let factors = if table {
-                    super::finish::Factors::normalized(plan.plan)
+                let inverse = plan.inverse() && !plan.column_normalized();
+                let normalized = plan.request.inverse_scale == InverseScale::Normalized;
+                let subgroup = plan.plan.domain().is_subgroup();
+                let factors = if !inverse || subgroup {
+                    super::finish::Factors::Identity
+                } else if normalized {
+                    super::finish::Factors::normalized(plan.plan.domain())
                 } else {
                     super::finish::Factors::untwist(plan.plan.domain())
                 };
-                let mut power = factors.at(self.start);
                 for (offset, value) in values.iter_mut().enumerate() {
                     let physical = self.start + offset;
                     let logical = if plan.request.output_order == ElementOrder::Natural {
@@ -852,19 +842,18 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     } else {
                         reverse(physical, plan.size().ilog2())
                     };
-                    if plan.inverse() && !plan.column_normalized() {
-                        let scale = if natural { power } else { factors.at(logical) };
-                        if !table && plan.request.inverse_scale == InverseScale::Normalized {
-                            *value = crate::field::fft::divide_by_power_of_two(
-                                *value,
-                                plan.size().ilog2(),
-                            );
-                        }
-                        if scale.reduce() != PastaField::<M>::ONE.reduce() {
-                            *value = value.mul(&scale);
-                        }
-                        if natural && offset + 1 < tile {
-                            power = factors.next(physical + 1, power);
+                    if inverse {
+                        if normalized {
+                            *value = if subgroup {
+                                crate::field::fft::divide_by_power_of_two(
+                                    *value,
+                                    plan.size().ilog2(),
+                                )
+                            } else {
+                                factors.apply_normalized(*value, logical, plan.size().ilog2())
+                            };
+                        } else if !subgroup && !logical.is_multiple_of(3) {
+                            *value = value.mul(&factors.at(logical));
                         }
                     }
                     if self.product {
@@ -916,10 +905,9 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
             let degree = reverse(index / repeat, width.ilog2());
             let mut value = source.get(degree).copied().unwrap_or(PastaField::ZERO);
             if degree < source.len() && plan.twist() {
-                let power = plan.forward_scales.map_or_else(
-                    || plan.plan.domain().shift().pow_u64(degree as u64),
-                    |scales| scales[degree],
-                );
+                let power = plan
+                    .residue_scales
+                    .map_or_else(|| plan.shift.at(degree), |scales| scales[degree]);
                 value = value.mul(&power).mul(&plan.input_scale);
             }
             let len = (repeat - index % repeat).min(values.len() - offset);
@@ -930,7 +918,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
 
     fn twist(&self, values: &mut [PastaField<M>], order: ElementOrder) {
         let plan = self.plan;
-        if let Some(scales) = plan.forward_scales {
+        if let Some(scales) = plan.residue_scales {
             for (offset, value) in values.iter_mut().enumerate() {
                 let index = if order == ElementOrder::Natural {
                     self.start + offset
@@ -942,27 +930,39 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     *value = value.mul(&plan.input_scale);
                 }
             }
-        } else if order == ElementOrder::Natural {
-            let shift = plan.plan.domain().shift();
-            let mut power = shift.pow_u64(self.start as u64).mul(&plan.input_scale);
-            let len = values.len();
-            for (index, value) in values.iter_mut().enumerate() {
-                *value = value.mul(&power);
-                if index + 1 < len {
-                    power = power.mul(&shift);
-                }
+        } else if let Some(cycle) = plan.shift.cycle() {
+            let cycle = cycle.scaled(plan.input_scale);
+            for (offset, value) in values.iter_mut().enumerate() {
+                let degree = if order == ElementOrder::Natural {
+                    self.start + offset
+                } else {
+                    reverse(self.start + offset, plan.size().ilog2())
+                };
+                *value = value.mul(&cycle.at(degree));
             }
         } else {
-            let powers = super::operation::CoefficientPowers::new(plan.plan.domain(), order);
-            let mut power = powers.at(self.start);
-            if plan.input_scale.reduce() != PastaField::<M>::ONE.reduce() {
-                power = power.mul(&plan.input_scale);
-            }
-            let len = values.len();
-            for (offset, value) in values.iter_mut().enumerate() {
-                *value = value.mul(&power);
-                if offset + 1 < len {
-                    power = powers.next(self.start + offset, power);
+            let ForwardShift::Residue { shift, inverse } = plan.shift else {
+                unreachable!()
+            };
+            if order == ElementOrder::Natural {
+                let mut power = shift.pow_u64(self.start as u64).mul(&plan.input_scale);
+                let len = values.len();
+                for (index, value) in values.iter_mut().enumerate() {
+                    *value = value.mul(&power);
+                    if index + 1 < len {
+                        power = power.mul(&shift);
+                    }
+                }
+            } else {
+                let powers =
+                    super::operation::BitReversedPowers::new(shift, inverse, plan.size().ilog2());
+                let mut power = powers.at(self.start).mul(&plan.input_scale);
+                let len = values.len();
+                for (offset, value) in values.iter_mut().enumerate() {
+                    *value = value.mul(&power);
+                    if offset + 1 < len {
+                        power = powers.next(self.start + offset, power);
+                    }
                 }
             }
         }

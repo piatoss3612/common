@@ -95,10 +95,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         if let Some(factor) = factor {
             super::super::assert_length("factor", self.size(), factor.len());
         }
-        super::super::ScratchRequirements {
-            field_elements: self.retained_fields(),
-        }
-        .check(scratch.len());
+        super::super::check_scratch(self.retained_fields(), scratch.len());
         if self.fragments() == 1 {
             let mut identity = Identity::new();
             let mut slot = [TaskStorage::EMPTY];
@@ -383,10 +380,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         let fields = self
             .batch_fields_with(count, max_tasks)
             .expect("scratch bounded by batch storage");
-        super::super::ScratchRequirements {
-            field_elements: fields,
-        }
-        .check(scratch.len());
+        super::super::check_scratch(fields, scratch.len());
         let (plan, jobs, inner) = self
             .batch_geometry(count, max_tasks)
             .expect("batch-compatible plan");

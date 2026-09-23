@@ -95,12 +95,13 @@ fn inputs<M: PrimeModulus>(size: usize) -> Vec<PastaField<M>> {
 
 fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &Runner) {
     for size in [2048, 16384, 1 << 20] {
-        for (shift_name, shift) in [
-            ("subgroup", PastaField::ONE),
-            ("zeta", PastaField::ZETA),
-            ("generic_7", PastaField::from_u64(7)),
-        ] {
-            let domain = Domain::<M>::for_size(size).unwrap().coset(shift).unwrap();
+        for (shift_name, coset) in [("subgroup", false), ("zeta", true)] {
+            let domain = Domain::<M>::for_size(size).unwrap();
+            let domain = if coset {
+                domain.coset()
+            } else {
+                domain.subgroup()
+            };
             let plan = Transform::new(domain);
             let input = inputs(size);
             let mut group = criterion.benchmark_group(format!(
@@ -162,7 +163,6 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
             ] {
                 let description = TwiddleDescription {
                     size: table_size,
-                    inverse: false,
                     storage,
                 };
                 let mut values = vec![PastaField::ZERO; description.requirements().unwrap()];
@@ -197,14 +197,6 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
                     );
                 }
             }
-            let mut powers = vec![PastaField::ZERO; size];
-            let scales = PowerTable::prepare(PastaField::ONE, shift, &mut powers);
-            bench(
-                "coefficient_scales",
-                runner
-                    .transform(plan, TransformRequest::new(Direction::Forward), true, None)
-                    .with_forward_scales(scales),
-            );
             group.finish();
         }
     }
@@ -212,10 +204,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
 
 fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &Runner) {
     let base = Transform::new(Domain::<M>::new(11).unwrap().subgroup());
-    let extended = Domain::new(14)
-        .unwrap()
-        .coset(PastaField::from_u64(7))
-        .unwrap();
+    let extended = Domain::new(14).unwrap().coset();
     let input = inputs(base.domain().size());
     let mut group = criterion.benchmark_group(format!(
         "{field}/expansion_strategies/tasks_{}",
@@ -378,7 +367,7 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
 
 fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &Runner) {
     let domain = Domain::<M>::new(11).unwrap().subgroup();
-    let extended = Domain::new(14).unwrap().coset(PastaField::ZETA).unwrap();
+    let extended = Domain::new(14).unwrap().coset();
     let mut twiddles = vec![PastaField::ZERO; domain.size() / 2];
     let tables = TablesMut {
         forward: Some(&mut twiddles),
@@ -447,7 +436,6 @@ fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
         let description = TwiddleDescription {
             size: 1 << 20,
-            inverse: false,
             storage,
         };
         let mut values = vec![PastaField::<M>::ZERO; description.requirements().unwrap()];
@@ -457,26 +445,19 @@ fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
             })
         });
     }
-    // Import validation is setup work; keep it outside execution measurements.
+    // Binding checks dimensions, not entries; time it separately from execution.
     for size in [1 << 14, 1 << 20] {
         for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
-            let description = TwiddleDescription {
-                size,
-                inverse: false,
-                storage,
-            };
+            let description = TwiddleDescription { size, storage };
             let mut values = vec![PastaField::<M>::ZERO; description.requirements().unwrap()];
             TwiddleTable::prepare(description, &mut values).unwrap();
-            group.bench_function(format!("checked_import/{storage:?}/{size}"), |b| {
+            group.bench_function(format!("bind/{storage:?}/{size}"), |b| {
                 b.iter(|| black_box(TwiddleTable::bind(description, black_box(&values)).unwrap()))
             });
         }
     }
     let base_size = 2048;
-    let extended = Domain::<M>::for_size(16384)
-        .unwrap()
-        .coset(PastaField::from_u64(7))
-        .unwrap();
+    let extended = Domain::<M>::for_size(16384).unwrap().coset();
     let mut scales = vec![PastaField::ZERO; extended.size()];
     for normalization in [
         ExpansionScaleNormalization::Coefficients,
@@ -499,19 +480,122 @@ fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
             },
         );
     }
-    group.bench_function(
-        format!("coefficient_powers/bytes_{}", scales.len() * 32),
-        |b| {
-            b.iter(|| {
-                black_box(PowerTable::prepare(
-                    PastaField::ONE,
-                    extended.shift(),
-                    black_box(&mut scales),
-                ));
-            })
-        },
-    );
     group.finish();
+}
+
+fn power_preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
+    let mut group = criterion.benchmark_group(format!("{field}/power_preparation"));
+    for size in [1, 2, 4, 8, 16, 32, 64, 256, 16384] {
+        for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
+            let description = TwiddleDescription { size, storage };
+            let mut values = vec![PastaField::<M>::ZERO; description.requirements().unwrap()];
+            group.throughput(Throughput::Elements(values.len() as u64));
+            group.bench_with_input(
+                BenchmarkId::new(format!("twiddles/{storage:?}"), size),
+                &size,
+                |b, _| {
+                    b.iter(|| {
+                        black_box(
+                            TwiddleTable::prepare(black_box(description), black_box(&mut values))
+                                .unwrap(),
+                        );
+                    })
+                },
+            );
+        }
+    }
+    group.finish();
+}
+
+fn periodic_inverse<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
+    for size in [256, 16384] {
+        let domain = Domain::<M>::for_size(size).unwrap().coset();
+        let input = inputs::<M>(size);
+        let mut expected = input.clone();
+        reference::inverse_transform(
+            &mut expected,
+            &domain.domain().inverse_root(),
+            &domain.domain().size_inverse(),
+        );
+        for (index, value) in expected.iter_mut().enumerate() {
+            *value = value.mul(&domain.inverse_shift().pow_u64(index as u64));
+        }
+        let mut inverse = vec![PastaField::ZERO; size / 2];
+        let mut finish = inverse.clone();
+        TablesMut {
+            inverse: Some(&mut inverse),
+            inverse_finish: Some(&mut finish),
+            ..TablesMut::default()
+        }
+        .prepare(domain);
+        let mut group = criterion.benchmark_group(format!("{field}/periodic_inverse/{size}"));
+        group.throughput(Throughput::Elements(size as u64));
+        for (profile, mask) in [("none", 0), ("twiddles", 2), ("finish", 6)] {
+            let plan = Tables {
+                inverse: (mask & 2 != 0).then_some(inverse.as_slice()),
+                inverse_finish: (mask & 4 != 0).then_some(finish.as_slice()),
+                ..Tables::default()
+            }
+            .bind(domain);
+            for (schedule, tile, output_order, memory_limit) in [
+                ("local", size, ElementOrder::Natural, None),
+                ("reversed", size, ElementOrder::BitReversed, None),
+                ("stages", 64, ElementOrder::Natural, Some(0)),
+                ("columns", 64, ElementOrder::Natural, None),
+            ] {
+                let options = ExecutionOptions::default();
+                let options =
+                    memory_limit.map_or(options, |limit| options.with_memory_limit(limit));
+                let operation = FftPlan::new(
+                    plan,
+                    TransformRequest {
+                        input_storage: InputStorage::Preserve,
+                        output_order,
+                        ..TransformRequest::new(Direction::Inverse)
+                    },
+                    StorageLayout::Fragments {
+                        length: core::num::NonZeroUsize::new(tile).unwrap(),
+                        whole_bank: true,
+                    },
+                    options,
+                )
+                .unwrap();
+                let mut output = vec![PastaField::ZERO; size];
+                let mut scratch = vec![PastaField::ZERO; operation.retained_fields()];
+                operation.execute(
+                    Some(&input),
+                    &mut output,
+                    None,
+                    &mut scratch,
+                    &SerialExecutor,
+                );
+                for (index, value) in output.iter().enumerate() {
+                    let degree = if output_order == ElementOrder::Natural {
+                        index
+                    } else {
+                        index.reverse_bits() >> (usize::BITS - size.ilog2())
+                    };
+                    assert_eq!(value.reduce(), expected[degree].reduce());
+                }
+                group.bench_function(
+                    BenchmarkId::new(format!("{profile}/{schedule}"), scratch.len() * 32),
+                    |b| {
+                        b.iter(|| {
+                            operation.execute(
+                                Some(black_box(&input)),
+                                black_box(&mut output),
+                                None,
+                                black_box(&mut scratch),
+                                &SerialExecutor,
+                            );
+                            black_box(&output);
+                        });
+                    },
+                );
+            }
+        }
+        group.finish();
+    }
 }
 
 fn subgroup_expansion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
@@ -553,6 +637,8 @@ fn subgroup_expansion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
 }
 
 fn benchmarks(criterion: &mut Criterion) {
+    periodic_inverse::<PallasBase>(criterion, "Fp");
+    periodic_inverse::<PallasScalar>(criterion, "Fq");
     subgroup_expansion::<PallasBase>(criterion, "Fp");
     subgroup_expansion::<PallasScalar>(criterion, "Fq");
     for tasks in [1, 4] {
@@ -574,6 +660,8 @@ fn benchmarks(criterion: &mut Criterion) {
     }
     preparation::<PallasBase>(criterion, "Fp");
     preparation::<PallasScalar>(criterion, "Fq");
+    power_preparation::<PallasBase>(criterion, "Fp");
+    power_preparation::<PallasScalar>(criterion, "Fq");
 }
 
 criterion_group! {

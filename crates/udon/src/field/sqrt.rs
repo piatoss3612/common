@@ -28,6 +28,12 @@ pub(super) const fn field_elements<M: PrimeModulus, const N: usize>(
 }
 
 impl<M: PrimeModulus> PastaField<M, Reduced> {
+    /// The fixed nonsquare used by [`Self::sqrt_alt`] and [`Self::sqrt_ratio`].
+    ///
+    /// This is [`Self::root_of_unity(32)`](Self::root_of_unity), namely
+    /// `5^((p - 1) / 2^32)` for the field modulus `p`.
+    pub const SQRT_NONSQUARE: Self = M::ROOTS[TWO_ADICITY as usize];
+
     /// Returns a square root, or `None` for a nonsquare.
     ///
     /// Zero returns `Some(Self::ZERO)`. Either root may be returned, and the
@@ -66,6 +72,96 @@ impl<M: PrimeModulus> PastaField<M, Reduced> {
             )
             .map(PastaField::reduce)
         }
+    }
+
+    /// Returns `(is_square, root)` for this value or a fixed nonsquare multiple.
+    ///
+    /// If `is_square` is true, `root^2 = self`. Otherwise,
+    /// `root^2 = self * Self::SQRT_NONSQUARE`. Zero returns `(true, Self::ZERO)`.
+    /// Either sign may be returned; the choice need not match [`Self::sqrt`]
+    /// and may differ between [table configurations](crate#features).
+    ///
+    /// Both cases share one exponentiation and require no allocation or runtime
+    /// table initialization. Branches and table accesses depend on the input;
+    /// there is no constant-time guarantee for secret inputs.
+    ///
+    /// ```
+    /// use zakura_udon::field::Fp;
+    ///
+    /// let value = <Fp>::from_u64(5).reduce();
+    /// let (is_square, root) = value.sqrt_alt();
+    /// assert!(!is_square);
+    /// assert_eq!(root.square().reduce(), value.mul(&Fp::SQRT_NONSQUARE).reduce());
+    /// ```
+    pub fn sqrt_alt(&self) -> (bool, Self) {
+        if self.is_zero() {
+            return (true, Self::ZERO);
+        }
+        let w = M::pow_sqrt_exponent(&self.into_loose());
+        let x = self.mul(&w);
+        finish::<M>(x, x.mul(&w))
+    }
+
+    /// Returns `(is_square, root)` for `self / denominator` without inversion.
+    ///
+    /// For a nonzero denominator, `is_square` is true exactly when the ratio is
+    /// a square (including zero). Then `root^2 * denominator = self`.
+    /// Otherwise, `root^2 * denominator = self * Self::SQRT_NONSQUARE`.
+    ///
+    /// A zero numerator returns `(true, Self::ZERO)`, including `0 / 0`.
+    /// A nonzero numerator with zero denominator returns `(false, Self::ZERO)`;
+    /// neither root equation applies in that case.
+    /// Either sign may be returned, independently of [`Self::sqrt`] and the
+    /// [table configuration](crate#features).
+    ///
+    /// This operation requires no allocation or runtime table initialization.
+    /// Branches and table accesses depend on the inputs; there is no
+    /// constant-time guarantee for secret inputs.
+    ///
+    /// ```
+    /// use zakura_udon::field::Fp;
+    ///
+    /// let numerator = <Fp>::from_u64(12).reduce();
+    /// let denominator = <Fp>::from_u64(3).reduce();
+    /// let (is_square, root) = numerator.sqrt_ratio(&denominator);
+    /// assert!(is_square);
+    /// assert_eq!(root.square().mul(&denominator).reduce(), numerator);
+    /// assert_eq!(numerator.sqrt_ratio(&Fp::ZERO), (false, Fp::ZERO));
+    /// ```
+    pub fn sqrt_ratio(&self, denominator: &Self) -> (bool, Self) {
+        if self.is_zero() {
+            return (true, Self::ZERO);
+        }
+        if denominator.is_zero() {
+            return (false, Self::ZERO);
+        }
+
+        // Write p - 1 = t * 2^32 and a = self / denominator. With product =
+        // self * denominator and w = product^((t - 1)/2), x = self * w and
+        // z = product * w^2 satisfy x^2 = a * z. Also z = product^t lies in
+        // the order-2^32 subgroup, so correcting it needs no inverse.
+        let product = self.mul(denominator);
+        let w = M::pow_sqrt_exponent(&product);
+        finish::<M>(self.mul(&w), product.mul(&w.square()))
+    }
+}
+
+// For nonzero a, x^2 = a * t and t lies in the order-2^32 subgroup.
+// Correct x to a root of a, or a * SQRT_NONSQUARE when a is nonsquare.
+fn finish<M: PrimeModulus>(x: PastaField<M>, t: PastaField<M>) -> (bool, PastaField<M, Reduced>) {
+    #[cfg(feature = "sqrt-table-large")]
+    {
+        M::sqrt_finish_large(x, t)
+    }
+    #[cfg(not(feature = "sqrt-table-large"))]
+    {
+        let (is_square, root) = super::algorithms::tonelli_shanks_alt_with_roots(
+            x,
+            t,
+            |k| M::ROOTS[k as usize].into_loose(),
+            TWO_ADICITY,
+        );
+        (is_square, root.reduce())
     }
 }
 

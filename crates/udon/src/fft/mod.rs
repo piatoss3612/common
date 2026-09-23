@@ -6,6 +6,13 @@
 //! evaluates a base polynomial on a larger coset without constructing a full
 //! zero-padded transform. [`run::InterpolationPlan`] combines interpolations from
 //! several domains into one coefficient vector.
+//! [`CosetDomain::evaluate_lagrange`] evaluates a requested natural-index basis
+//! range at a field point, with caller-owned output and inversion scratch.
+//! [`VanishingDivision`] finishes transformed numerator evaluations into
+//! coefficient pieces after division by a subgroup vanishing polynomial.
+//! [`ConstantPrefixExpansion`] reuses Lagrange samples to extend evaluations with
+//! a constant prefix; [`CosetDomain::interpolate_constant_prefix`] recovers their
+//! coefficients directly.
 //!
 //! Setup and execution never allocate. Tables may be prepared into mutable
 //! slices or borrowed from downstream Bento POD artifacts. Shared resource limits
@@ -31,11 +38,11 @@
 //! poisons the run and permits outstanding receipts to drain. Invalid input prefixes
 //! report the supported length range separately from unsupported domain sizes.
 //!
-//! Table binding, such as [`Tables::bind`], checks dimensions and trusts contents
-//! constructed by the caller. Binding and execution use stored entries directly,
-//! without validating or reducing them. Preparation returns the same immutable
-//! handles. Configuration checks table compatibility; the generic
-//! [`mod@reference`] transforms have their own contracts.
+//! Transform table binding, such as [`Tables::bind`], checks dimensions and trusts
+//! contents constructed by the caller. These binders and transform execution use
+//! stored entries directly, without validating or reducing them.
+//! Preparation returns immutable handles. Configuration checks table
+//! compatibility; the generic [`mod@reference`] transforms have their own contracts.
 //!
 //! Scratch consists of initialized field elements. Its initial values do not
 //! affect the result, and it may be reused after execution. Elements beyond the
@@ -79,7 +86,7 @@
 //!     Ok(required) => required,
 //!     Err(_) => panic!("unsupported table size"),
 //! };
-//! let domain = Domain::for_size(SIZE)?.coset(Fq::from_u64(7))?;
+//! let domain = Domain::for_size(SIZE)?.coset();
 //! let mut forward = [Fq::ZERO; TABLES.twiddles];
 //! let mut inverse = [Fq::ZERO; TABLES.twiddles];
 //! let transform = TablesMut {
@@ -110,7 +117,7 @@
 //!
 //! let options = ExecutionOptions::default();
 //! let base = Transform::new(Domain::new(2)?.subgroup());
-//! let extended = Domain::new(3)?.coset(Fp::from_u64(7))?;
+//! let extended = Domain::new(3)?.coset();
 //! let expansion = ExpansionPlan::new(
 //!     Expansion::new(base, extended, None)?,
 //!     ExpansionStorage::Coefficients, ExpansionOrder::BitReversed,
@@ -144,6 +151,7 @@ use crate::exec::Executor;
 use crate::exec::SerialExecutor;
 use crate::field::{PastaField, PrimeModulus};
 
+mod constant_prefix;
 mod domain;
 mod execution;
 mod expansion;
@@ -152,6 +160,7 @@ mod expansion_scales;
 mod finish;
 mod interpolation;
 mod interpolation_parallel;
+mod lagrange;
 mod layout;
 mod operation;
 mod powers;
@@ -160,10 +169,12 @@ pub mod run;
 mod stages;
 mod tables;
 mod transform;
+mod vanishing;
 
+pub use constant_prefix::ConstantPrefixExpansion;
 pub use domain::{CosetDomain, Domain};
-pub use execution::ScratchRequirements;
 pub(crate) use execution::Strategy;
+use execution::check_scratch;
 pub use expansion::Expansion;
 #[cfg(test)]
 use expansion::ExpansionStrategy;
@@ -172,14 +183,16 @@ pub use expansion_scales::{ExpansionScaleNormalization, ExpansionScales};
 pub use interpolation::ClassState;
 use interpolation::{Class, interpolate_classes, interpolation_scratch};
 use interpolation_parallel::interpolate_sum;
+pub use lagrange::{LagrangeCompletion, LagrangeError};
 pub use layout::{
     CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, InverseScale, ResidueLayout,
 };
 pub(crate) use operation::Codelet;
 pub use operation::{Direction, InputStorage, InputSupport, StorageLayout, TransformRequest};
-pub use powers::{PowerTable, TwiddleDescription, TwiddleStorage, TwiddleTable};
+pub use powers::{TwiddleDescription, TwiddleStorage, TwiddleTable};
 pub use tables::{TableRequirements, Tables, TablesMut};
 pub use transform::Transform;
+pub use vanishing::{VanishingDivision, VanishingFactors};
 
 /// An invalid FFT configuration or workspace limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -197,8 +210,6 @@ pub enum FftError {
     },
     /// An element count, index calculation, or byte size overflowed.
     SizeOverflow,
-    /// A coset shift is zero.
-    ZeroShift,
     /// An execution setting or combination of request options is invalid.
     InvalidExecution,
     /// Required arithmetic workspace exceeds the caller's byte ceiling.
@@ -225,7 +236,6 @@ impl core::fmt::Display for FftError {
                 "input prefix must contain {min}..={max} elements, received {actual}"
             ),
             Self::SizeOverflow => f.write_str("FFT storage or index size overflow"),
-            Self::ZeroShift => f.write_str("coset shift must be nonzero"),
             Self::MemoryLimit { required, limit } => write!(
                 f,
                 "FFT workspace requires {required} bytes, limit is {limit}"

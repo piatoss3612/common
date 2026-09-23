@@ -181,10 +181,7 @@ fn mixed(c: &mut Criterion) {
             );
             let fft_options =
                 ExecutionOptions::default().with_task_budget(TaskBudget::new(tasks).unwrap());
-            let fields = plans[3]
-                .scratch_requirements(fft_options)
-                .unwrap()
-                .field_elements;
+            let fields = plans[3].scratch_requirements(fft_options).unwrap();
             let mut fft_scratch = [vec![Fp::ZERO; fields], vec![Fp::ZERO; fields]];
             let mut values = [vec![Fp::ZERO; 16384], vec![Fp::ZERO; 2048]];
             let mut app = vec![0_u64; 8192];
@@ -345,14 +342,14 @@ fn isolated(c: &mut Criterion) {
         for size in [64, 2048, 16384] {
             let domain = Domain::for_size(size).unwrap();
             for coset in [false, true] {
-                let plan = Transform::new(
-                    domain
-                        .coset(if coset { Fp::from_u64(7) } else { Fp::ONE })
-                        .unwrap(),
-                );
+                let plan = Transform::new(if coset {
+                    domain.coset()
+                } else {
+                    domain.subgroup()
+                });
                 let options =
                     ExecutionOptions::default().with_task_budget(TaskBudget::new(threads).unwrap());
-                let fields = plan.scratch_requirements(options).unwrap().field_elements;
+                let fields = plan.scratch_requirements(options).unwrap();
                 let mut synchronous_scratch = vec![Fp::ZERO; fields];
                 for direction in [Direction::Forward, Direction::Inverse] {
                     let planned = FftPlan::new(

@@ -5,10 +5,11 @@
 
 use udon::{
     curve::{
-        AffinePoint, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve, Point,
-        ProjectivePoint, Vesta,
+        AffinePoint, EisensteinScalar, EisensteinTableBatch, FixedBaseTable, Pallas, PastaCurve,
+        Point, ProjectivePoint, Vesta,
         msm::{
-            Bases, Input, PreparedScalars, ScalarStorage, Scratch, Selection,
+            Bases, BasisSum, CoalescingKey, CoalescingPlan, IndexedCoalescingPlan, Input,
+            PreparedScalars, ScalarStorage, Scratch, Selection, SuffixBasis,
             run::{BatchPlan, JobStorage, WorkerStorage},
         },
     },
@@ -70,6 +71,19 @@ fn exercise_curve<C: PastaCurve>(record: &record::Record<C>, tables: record::Tab
         assert_eq!(compact.mul_prepared(&prepared).to_point(), actual);
         assert_eq!(compact_cached.mul_prepared(&prepared).to_point(), actual);
         assert_eq!(Point::<C>::from_bytes(actual.to_bytes()), Some(actual));
+        let scalars = [scalar, scalar.neg(), PastaField::from_u64(3)];
+        let mut affine = [AffinePoint::GENERATOR; 33];
+        let mut field = [PastaField::ZERO; 33];
+        let expected = record.base.mul_projective(&PastaField::from_u64(3));
+        assert_eq!(
+            FixedBaseTable::sum(&[table; 3], &scalars, &mut affine, &mut field),
+            expected
+        );
+        assert_eq!(
+            FixedBaseTable::sum(&[cached; 3], &scalars, &mut affine, &mut field),
+            expected
+        );
+        assert_eq!(FixedBaseTable::sum_scratch_len(&[table; 3]), Ok(192));
     }
     let batch = EisensteinTableBatch::bind(&record.compact);
     assert_eq!(batch.as_slice().as_ptr(), record.compact.as_ptr());
@@ -118,6 +132,93 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
         plan.execute(&mut output, &SerialExecutor, scratch.reborrow());
         assert_eq!(output[0], expected);
     }
+    let ordered = indices.map(|index| record.entries[index as usize].to_point());
+    let mut keys = [CoalescingKey::EMPTY; N];
+    let coalescing = CoalescingPlan::prepare(&ordered, &mut keys);
+    let mut points = [Point::IDENTITY; N];
+    let mut sums = [PastaField::ZERO; N];
+    let input = coalescing.with_scalars(&scalars, &mut points, &mut sums);
+    assert_eq!(
+        input
+            .execute(OPTIONS, &SerialExecutor, scratch.reborrow())
+            .unwrap(),
+        expected
+    );
+    let mut order = [0; N];
+    let mut merged = [0; N];
+    for bases in [
+        Bases::Affine(&record.entries),
+        Bases::Prepared(&record.cached),
+    ] {
+        let plan = IndexedCoalescingPlan::prepare(bases, &indices, &mut order).unwrap();
+        let input = plan.with_scalars(&scalars, &mut merged, &mut sums);
+        assert_eq!(
+            input
+                .execute(OPTIONS, &SerialExecutor, scratch.reborrow())
+                .unwrap(),
+            expected
+        );
+    }
+    let region = BasisSum::prepare(&ordered);
+    let constant = PastaField::<C::Scalar>::from_u64(7);
+    let tail = [PastaField::<C::Scalar>::from_u64(11); 17];
+    let row = udon::field::ConstantPrefix::new(N, &constant, &tail).unwrap();
+    let mut deltas = [PastaField::ZERO; 17];
+    let input = region.tail_corrections(row, &mut deltas);
+    let extra = ordered[0].mul_projective(&PastaField::from_u64(13));
+    let actual = region
+        .sum()
+        .mul_projective(&constant)
+        .add(
+            &input
+                .execute(OPTIONS, &SerialExecutor, scratch.reborrow())
+                .unwrap(),
+        )
+        .add(&extra);
+    let dense = ordered
+        .iter()
+        .enumerate()
+        .fold(ProjectivePoint::IDENTITY, |sum, (i, base)| {
+            sum.add(&base.mul_projective(&if i < N - tail.len() {
+                constant
+            } else {
+                tail[i - (N - tail.len())]
+            }))
+        })
+        .add(&extra);
+    assert_eq!(actual, dense);
+    let mut suffix = [Point::IDENTITY; N];
+    let basis = SuffixBasis::prepare(
+        &ordered,
+        &mut suffix,
+        &mut [ProjectivePoint::IDENTITY; 7],
+        &mut [PastaField::ZERO; 3],
+    );
+    let mut differences = [PastaField::ZERO; N];
+    let input = basis.with_scalars(&scalars, &mut differences);
+    assert_eq!(
+        input
+            .execute(OPTIONS, &SerialExecutor, scratch.reborrow())
+            .unwrap(),
+        expected
+    );
+    let row = core::array::from_fn::<_, N, _>(|i| (i / 11) as u128);
+    let expected = row
+        .iter()
+        .zip(&ordered)
+        .fold(ProjectivePoint::IDENTITY, |sum, (n, base)| {
+            sum.add(&base.mul_projective(&PastaField::from_u64(*n as u64)))
+        });
+    let mut differences = [0; N];
+    let input = basis
+        .with_monotone_unsigned(&row, &mut differences)
+        .unwrap();
+    assert_eq!(
+        input
+            .execute(OPTIONS, &SerialExecutor, scratch.reborrow())
+            .unwrap(),
+        expected
+    );
     // Embedded compact layouts must support retained preparation and selection
     // rebinding in a consumer without an allocator.
     let indices = [0; N];
@@ -126,7 +227,27 @@ fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {
         Bases::Compact(EisensteinTableBatch::bind(&record.compact)),
         Bases::CompactPrepared(EisensteinTableBatch::bind(&record.compact_cached)),
     ] {
+        let plan = IndexedCoalescingPlan::prepare(bases, &indices, &mut order).unwrap();
+        let input = plan.with_scalars(&scalars, &mut merged, &mut sums);
+        let sum = scalars.iter().fold(PastaField::ZERO, |sum, s| sum.add(s));
+        assert_eq!(
+            input
+                .execute(OPTIONS, &SerialExecutor, scratch.reborrow())
+                .unwrap(),
+            record.base.mul_projective(&sum)
+        );
         let selection = Selection::indexed(bases, &indices).unwrap();
+        let sparse = scalars.map(|s| if s.is_odd() { s } else { PastaField::ZERO });
+        let input = selection
+            .with_nonzero_scalars(&sparse, &mut merged, &mut sums)
+            .unwrap();
+        let total = sparse.iter().fold(PastaField::ZERO, |sum, s| sum.add(s));
+        assert_eq!(
+            input
+                .execute(OPTIONS, &SerialExecutor, scratch.reborrow())
+                .unwrap(),
+            record.base.mul_projective(&total)
+        );
         for row in [scalars, scalars.map(|s| s.neg())] {
             let prepared =
                 PreparedScalars::prepare(&row, &mut retained, TaskBudget::SERIAL, &SerialExecutor);

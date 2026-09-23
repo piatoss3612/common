@@ -4,9 +4,8 @@
 //! the call returns. [`TaskBudget`] divides a concurrency allowance between
 //! outer jobs and their nested work. [`for_each_mut`] schedules separate buffer
 //! owners or borrowed tiles; [`for_each_chunk_mut`] schedules contiguous chunks.
-//! [`for_each_task_mut`] exposes independent jobs without dividing their nested
-//! allowances. These helpers and [`SerialExecutor`] do not allocate. A caller's
-//! executor and jobs may use their own resources.
+//! These helpers and [`SerialExecutor`] do not allocate. A caller's executor
+//! and jobs may use their own resources.
 //!
 //! Jobs can return different types, including values borrowed from their inputs:
 //!
@@ -271,25 +270,12 @@ impl TaskBudget {
 /// On success, every item is visited exactly once, in unspecified order. Empty
 /// input invokes no callbacks.
 ///
-/// ```
-/// use zakura_udon::exec::{SerialExecutor, for_each_task_mut};
-///
-/// let mut first = [0; 2];
-/// let mut second = [0; 5];
-/// let mut buffers = [&mut first[..], &mut second[..]];
-/// for_each_task_mut(&mut buffers, &SerialExecutor, |index, buffer| {
-///     buffer.fill(index + 1);
-/// });
-/// assert_eq!(first, [1; 2]);
-/// assert_eq!(second, [2; 5]);
-/// ```
-///
 /// # Panics
 ///
 /// A callback panic may leave partial changes. All callbacks are still invoked,
 /// and all jobs finish or unwind before the panic propagates, following
 /// [`Executor::join`]. A second panic during unwinding may abort the process.
-pub fn for_each_task_mut<T, E, F>(values: &mut [T], executor: &E, work: F)
+pub(crate) fn for_each_task_mut<T, E, F>(values: &mut [T], executor: &E, work: F)
 where
     T: Send,
     E: Executor + ?Sized,
@@ -323,8 +309,6 @@ where
 /// Each index is the item's zero-based position in `values`, regardless of
 /// execution order. Scheduling, budget division, empty input, and panic behavior
 /// follow [`for_each_chunk_mut`] with one item per chunk.
-/// Use [`for_each_task_mut`] to expose every item as a separate job without
-/// dividing a combined task budget.
 pub fn for_each_mut<T, E, F>(values: &mut [T], budget: TaskBudget, executor: &E, work: F)
 where
     T: Send,

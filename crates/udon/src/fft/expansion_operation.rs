@@ -1,6 +1,6 @@
 use super::{
-    CoefficientView, CosetDomain, ElementOrder, Executor, Expansion, FftError, InverseScale,
-    PastaField, PrimeModulus, ScratchRequirements, assert_length,
+    CoefficientView, ElementOrder, Executor, Expansion, FftError, InverseScale, PastaField,
+    PrimeModulus, assert_length,
 };
 #[cfg(test)]
 use super::{Strategy, check_prefix, expansion::ResidueJobs};
@@ -64,6 +64,10 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 }
 
 /// A selected residue whose output needs only the base domain's storage.
+///
+/// For residue `s` and residue count `r`, natural output row `k` evaluates the
+/// extended domain's row `s + r*k`. The order selected by [`Expansion::residue`]
+/// describes its physical positions.
 #[derive(Clone, Copy)]
 pub struct Residue<'a, M: PrimeModulus> {
     expansion: Expansion<'a, M>,
@@ -82,20 +86,16 @@ impl<M: PrimeModulus> core::fmt::Debug for Residue<'_, M> {
 }
 
 impl<'a, M: PrimeModulus> Residue<'a, M> {
-    /// Scratch selected for this residue under the shared resource constraints.
+    /// Preferred scratch field count for this residue under the resource limits.
     ///
-    /// Resolves a full preserved coefficient input through
-    /// [`super::run::FftPlan::new`]. Direct execution adapts to smaller or empty
-    /// scratch without changing the output's size or order.
-    pub fn scratch_requirements(
-        self,
-        options: ExecutionOptions,
-    ) -> Result<ScratchRequirements, FftError> {
-        Ok(ScratchRequirements {
-            field_elements: self
-                .plan(super::InputSupport::Full, options)?
-                .retained_fields(),
-        })
+    /// Counts initialized field elements. Resolves a full preserved coefficient
+    /// input through [`super::run::FftPlan::new`], with its planning errors. Direct
+    /// execution adapts to smaller or empty scratch without changing the output's
+    /// size or order.
+    pub fn scratch_requirements(self, options: ExecutionOptions) -> Result<usize, FftError> {
+        Ok(self
+            .plan(super::InputSupport::Full, options)?
+            .retained_fields())
     }
 
     fn plan(
@@ -104,7 +104,7 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
         options: ExecutionOptions,
     ) -> Result<super::run::FftPlan<'a, M>, FftError> {
         super::run::FftPlan::new(
-            self.expansion.residue_base(self.residue),
+            self.expansion.base,
             super::TransformRequest {
                 input_storage: super::InputStorage::Preserve,
                 output_order: self.order,
@@ -147,28 +147,7 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
         Ok(())
     }
 
-    /// Base-sized coset containing the selected residue's extended rows.
-    ///
-    /// Its natural row `k` is extended row `s + r * k`, where `s` is the selected
-    /// residue number, `r` is the expansion's residue count, and `0 <= k < n`
-    /// for base size `n`.
-    pub fn domain(self) -> CosetDomain<M> {
-        let extended = self.expansion.extended;
-        let exponent = self.residue as u64;
-        // Both factors are nonzero, and their inverses are already known.
-        // For residue s, (shift * root^s)^-1 = inverse_shift * inverse_root^s,
-        // so the trusted constructor needs no additional field inversion.
-        CosetDomain::with_inverse(
-            self.expansion.base.domain().domain(),
-            extended
-                .shift()
-                .mul(&extended.domain().root().pow_u64(exponent)),
-            extended
-                .inverse_shift()
-                .mul(&extended.domain().inverse_root().pow_u64(exponent)),
-        )
-    }
-    /// Scratch for this residue's output order.
+    /// Required scratch field count for this residue's output order.
     ///
     /// Validates options through [`Strategy::requirements`] for the base
     /// size, with the same errors. Natural output uses that scratch count;
@@ -177,13 +156,13 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
     pub(crate) const fn scratch_requirements_with(
         self,
         options: Strategy,
-    ) -> Result<ScratchRequirements, FftError> {
+    ) -> Result<usize, FftError> {
         let required = match options.requirements(self.expansion.base.domain().size()) {
             Ok(r) => r,
             Err(e) => return Err(e),
         };
         Ok(if matches!(self.order, ElementOrder::BitReversed) {
-            ScratchRequirements { field_elements: 0 }
+            0
         } else {
             required
         })
@@ -195,11 +174,12 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
     /// or a [`CoefficientView`], with scaling and table usage as in
     /// [`Expansion::coefficients`]. Input is preserved. Output has exactly `n`
     /// fields and uses the order selected by [`Expansion::residue`].
-    /// Scratch must meet [`Self::scratch_requirements`], including for empty input.
+    /// Scratch must meet [`Self::scratch_requirements_with`], even for empty input.
     ///
-    /// Returns [`FftError::InvalidPrefix`] for an oversized input. Option errors follow
-    /// [`Self::scratch_requirements`]. Incorrect output or scratch lengths panic before
-    /// writes. The module's [working-storage rules](super) apply.
+    /// Returns [`FftError::InvalidPrefix`] for an oversized input. Option errors
+    /// follow [`Self::scratch_requirements_with`]. Incorrect output or scratch
+    /// lengths panic before writes. The module's [working-storage rules](super)
+    /// apply.
     #[cfg(test)]
     pub(crate) fn coefficients_with<'input, E: Executor>(
         self,
@@ -215,7 +195,7 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
         check_prefix(input.len(), 0, self.expansion.base.domain().size())?;
         assert_length("output", self.expansion.base.domain().size(), output.len());
         let required = self.scratch_requirements_with(options)?;
-        required.check(scratch.len());
+        super::check_scratch(required, scratch.len());
         ResidueJobs {
             expansion: self.expansion,
             coefficients: input,
@@ -230,12 +210,7 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
             options,
             executor,
         }
-        .residue(
-            output,
-            self.residue,
-            self.residue,
-            &mut scratch[..required.field_elements],
-        );
+        .residue(output, self.residue, self.residue, &mut scratch[..required]);
         Ok(())
     }
 }

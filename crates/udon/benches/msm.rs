@@ -1,6 +1,27 @@
 #[path = "support/msm.rs"]
 mod bench_msm;
 
+#[path = "support/same_scalar.rs"]
+mod same_scalar;
+
+#[path = "support/shared_scalars.rs"]
+mod shared_scalars;
+
+#[path = "support/suffix.rs"]
+mod suffix;
+
+#[path = "support/constant_regions.rs"]
+mod constant_regions;
+
+#[path = "support/expanded_sum.rs"]
+mod expanded_sum;
+
+#[path = "support/coalesce.rs"]
+mod coalesce;
+
+#[path = "support/nonzero.rs"]
+mod nonzero;
+
 use std::{
     hint::black_box,
     time::{Duration, Instant},
@@ -217,6 +238,13 @@ fn curve<C: PastaCurve>(c: &mut Criterion, curve: &str) {
     corpus(c, curve, &full, &affine);
     compact::<C, AffinePoint<C>>(c, curve, "eisenstein", &affine, &full[0]);
     compact::<C, PreparedAffinePoint<C>>(c, curve, "eisenstein_cached", &affine, &full[0]);
+    same_scalar::bench::<C>(c, curve, &affine, &full[0]);
+    shared_scalars::bench::<C>(c, curve, &affine, &full);
+    suffix::bench::<C>(c, curve);
+    constant_regions::bench::<C>(c, curve);
+    coalesce::bench::<C>(c, curve);
+    nonzero::bench::<C>(c, curve, &affine, &full);
+    expanded_sum::bench::<C>(c, curve, &affine[..128]);
 
     for (access, indexed) in [("dense", false), ("indexed", true)] {
         let mut group = c.benchmark_group(format!("{curve}/msm/{access}"));

@@ -6,7 +6,23 @@ use criterion::{
 };
 use zakura_udon::field::{
     CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum, Reduced,
+    batch_invert, batch_invert_scaled,
 };
+
+#[path = "support/division.rs"]
+mod division;
+#[path = "support/evaluation.rs"]
+mod evaluation;
+#[path = "support/folds.rs"]
+mod folds;
+#[path = "support/fractions.rs"]
+mod fractions;
+#[path = "support/interpolation.rs"]
+mod interpolation;
+#[path = "support/monic.rs"]
+mod monic;
+#[path = "support/roots.rs"]
+mod roots;
 
 const SEED_A: u64 = 0x243f_6a88_85a3_08d3;
 const SEED_B: u64 = 0x1319_8a2e_0370_7344;
@@ -276,6 +292,16 @@ fn product_sum<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
             BatchSize::SmallInput,
         );
     });
+    group.bench_function("add_square", |b| {
+        b.iter_batched_ref(
+            || accumulator(&lhs, &rhs),
+            |sum| {
+                sum.add_square(black_box(&lhs[0]));
+                black_box(sum);
+            },
+            BatchSize::SmallInput,
+        );
+    });
     group.bench_function("add_term", |b| {
         b.iter_batched_ref(
             || accumulator(&lhs, &rhs),
@@ -306,6 +332,45 @@ fn product_sum<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     group.finish();
 }
 
+fn quadratic_sums<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
+    let values = values::<M, 1024>(SEED_A);
+    let mut group = criterion.benchmark_group(format!("{field}/quadratic_sum"));
+    for length in [0, 1, 2, 4, 16, 64, 256, 1024] {
+        let input = &values[..length];
+        let expected = input
+            .iter()
+            .fold(PastaField::<M>::ZERO, |sum, value| sum.add(&value.square()));
+        let mut squares = ProductSum::new();
+        for value in input {
+            squares.add_square(value);
+        }
+        assert_eq!(squares.finish().reduce(), expected.reduce());
+        assert_eq!(
+            accumulator(input, input).finish().reduce(),
+            expected.reduce()
+        );
+        group.bench_function(BenchmarkId::new("add_square", length), |b| {
+            b.iter(|| {
+                let mut sum = ProductSum::new();
+                for value in black_box(input) {
+                    sum.add_square(value);
+                }
+                sum.finish()
+            });
+        });
+        group.bench_function(BenchmarkId::new("add_product", length), |b| {
+            b.iter(|| {
+                let mut sum = ProductSum::new();
+                for value in black_box(input) {
+                    sum.add_product(value, value);
+                }
+                sum.finish()
+            });
+        });
+    }
+    group.finish();
+}
+
 fn inner_products<M: PrimeModulus, const N: usize>(group: &mut BenchmarkGroup<'_, WallTime>) {
     let lhs = values::<M, N>(SEED_A);
     let rhs = values::<M, N>(SEED_B);
@@ -333,9 +398,11 @@ fn inner_products<M: PrimeModulus, const N: usize>(group: &mut BenchmarkGroup<'_
 
 fn field<M: PrimeModulus>(criterion: &mut Criterion, name: &str) {
     arithmetic::<M>(criterion, name);
+    roots::benchmarks::<M>(criterion, name);
     encoding::<M>(criterion, name);
     parameters::<M>(criterion, name);
     product_sum::<M>(criterion, name);
+    quadratic_sums::<M>(criterion, name);
     let mut group = criterion.benchmark_group(format!("{name}/inner_product"));
     inner_products::<M, 0>(&mut group);
     inner_products::<M, 1>(&mut group);
@@ -419,10 +486,24 @@ fn canonical_uint(criterion: &mut Criterion) {
 }
 
 fn benchmarks(criterion: &mut Criterion) {
+    interpolation::benchmarks::<PallasBase>(criterion, "Fp");
+    interpolation::benchmarks::<PallasScalar>(criterion, "Fq");
+    monic::benchmarks::<PallasBase>(criterion, "Fp");
+    monic::benchmarks::<PallasScalar>(criterion, "Fq");
+    division::benchmarks::<PallasBase>(criterion, "Fp");
+    division::benchmarks::<PallasScalar>(criterion, "Fq");
+    evaluation::benchmarks::<PallasBase>(criterion, "Fp");
+    evaluation::benchmarks::<PallasScalar>(criterion, "Fq");
     field::<PallasBase>(criterion, "Fp");
     field::<PallasScalar>(criterion, "Fq");
     batch_inversion::<PallasBase>(criterion, "Fp");
     batch_inversion::<PallasScalar>(criterion, "Fq");
+    scaled_batch_inversion::<PallasBase>(criterion, "Fp");
+    scaled_batch_inversion::<PallasScalar>(criterion, "Fq");
+    folds::benchmarks::<PallasBase>(criterion, "Fp");
+    folds::benchmarks::<PallasScalar>(criterion, "Fq");
+    fractions::benchmarks::<PallasBase>(criterion, "Fp");
+    fractions::benchmarks::<PallasScalar>(criterion, "Fq");
     canonical_uint(criterion);
 }
 
@@ -457,6 +538,72 @@ fn batch_inversion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
         }
     }
     group.finish();
+}
+
+fn scaled_batch_inversion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
+    let corpus = values::<M, 1024>(SEED_A);
+    let [scale] = values::<M, 1>(SEED_B);
+    for sparse in [false, true] {
+        for bounded in [false, true] {
+            let shape = if sparse { "one_lane" } else { "dense" };
+            let storage = if bounded { "bounded_32" } else { "full" };
+            let mut group =
+                criterion.benchmark_group(format!("{field}/batch_invert_scaled/{shape}/{storage}"));
+            for size in [0, 1, 2, 3, 8, 31, 32, 33, 64, 257, 1024] {
+                if bounded && size <= 32 {
+                    continue;
+                }
+                let input: Vec<_> = corpus[..size]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, value)| {
+                        if sparse && i % 2 == 1 {
+                            PastaField::ZERO
+                        } else {
+                            *value
+                        }
+                    })
+                    .collect();
+                let mut scratch = vec![PastaField::ZERO; if bounded { 32 } else { size }];
+                let mut check = input.clone();
+                batch_invert_scaled(&mut check, &scale, &mut scratch);
+                for (value, actual) in input.iter().zip(check) {
+                    let expected = value.invert().unwrap_or(PastaField::ZERO).mul(&scale);
+                    assert_eq!(actual.reduce(), expected.reduce());
+                }
+                group.bench_function(BenchmarkId::new("shared_seed", size), |b| {
+                    b.iter_batched_ref(
+                        || input.clone(),
+                        |values| {
+                            batch_invert_scaled(
+                                black_box(values),
+                                black_box(&scale),
+                                black_box(&mut scratch),
+                            );
+                            black_box(values);
+                        },
+                        BatchSize::SmallInput,
+                    )
+                });
+                group.bench_function(BenchmarkId::new("separate_pass", size), |b| {
+                    b.iter_batched_ref(
+                        || input.clone(),
+                        |values| {
+                            let values = black_box(values);
+                            let scale = black_box(&scale);
+                            batch_invert(values, black_box(&mut scratch));
+                            for value in values.iter_mut() {
+                                *value = value.mul(scale);
+                            }
+                            black_box(values);
+                        },
+                        BatchSize::SmallInput,
+                    )
+                });
+            }
+            group.finish();
+        }
+    }
 }
 
 criterion_group!(benches, benchmarks);

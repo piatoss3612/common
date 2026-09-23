@@ -35,17 +35,14 @@ fn exercise_field<M: PrimeModulus>(
     packed: &[PastaField<M>],
 ) {
     let domain = Domain::for_size(record::SIZE).unwrap().subgroup();
-    let extended = Domain::for_size(record::EXTENDED_SIZE)
-        .unwrap()
-        .coset(PastaField::ZETA)
-        .unwrap();
+    let extended = Domain::for_size(record::EXTENDED_SIZE).unwrap().coset();
     let plan = tables.bind(domain);
     let twiddles =
         TwiddleTable::bind(record::TWIDDLES, packed).expect("supported twiddle description");
     const OPTIONS: ExecutionOptions =
         ExecutionOptions::DEFAULT.with_task_budget(TaskBudget::new(2).unwrap());
     let mut scratch = [PastaField::ZERO; record::SIZE];
-    assert!(plan.scratch_requirements(OPTIONS).unwrap().field_elements <= scratch.len());
+    assert!(plan.scratch_requirements(OPTIONS).unwrap() <= scratch.len());
     let coefficients =
         core::array::from_fn::<_, { record::SIZE }, _>(|i| PastaField::from_u64(i as u64 + 1));
     let mut evaluations = [PastaField::ZERO; record::SIZE];
@@ -114,13 +111,7 @@ fn exercise_field<M: PrimeModulus>(
         .unwrap()
         .with_scales(scales);
     let mut output = [PastaField::ZERO; record::EXTENDED_SIZE];
-    assert!(
-        expansion
-            .evaluation_scratch(OPTIONS)
-            .unwrap()
-            .field_elements
-            <= scratch.len()
-    );
+    assert!(expansion.evaluation_scratch(OPTIONS).unwrap() <= scratch.len());
     expansion
         .evaluations(
             &evaluations,

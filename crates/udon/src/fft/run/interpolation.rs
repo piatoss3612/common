@@ -205,15 +205,15 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     ///     fft::{Domain, ElementOrder, StorageLayout, Transform, run::InterpolationPlan},
     /// };
     ///
-    /// let output_domain = Domain::new(1).unwrap()
-    ///     .coset(Fp::from_u64(7)).unwrap();
+    /// let output_domain = Domain::new(1).unwrap().coset();
     /// let lift_domain = Domain::new(0).unwrap().subgroup();
     /// let plan = InterpolationPlan::new([
     ///     (Transform::new(output_domain), ElementOrder::Natural),
     ///     (Transform::new(lift_domain), ElementOrder::Natural),
     /// ], false, StorageLayout::Contiguous, ExecutionOptions::default()).unwrap();
-    /// // 1 + x at 7 and -7, plus the constant polynomial 5.
-    /// let mut output = [Fp::from_u64(8), <Fp>::from_u64(6).neg()];
+    /// // 1 + x at ZETA and -ZETA, plus the constant polynomial 5.
+    /// let shift = output_domain.shift();
+    /// let mut output = [<Fp>::ONE.add(&shift), <Fp>::ONE.sub(&shift)];
     /// let mut lift = [Fp::from_u64(5)];
     /// plan.execute(
     ///     [&mut output, &mut lift], [&mut [], &mut []],
@@ -245,10 +245,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     ) {
         for i in 0..CLASSES {
             super::super::assert_length("class", self.transforms[i].size(), values[i].len());
-            super::super::ScratchRequirements {
-                field_elements: self.snapshot_fields(i).unwrap(),
-            }
-            .check(scratch[i].len());
+            super::super::check_scratch(self.snapshot_fields(i).unwrap(), scratch[i].len());
         }
         // Preserve terminal inverse/add fusion for the contiguous radix-2 path.
         // Other geometries use the same plan through independently scoped runs.

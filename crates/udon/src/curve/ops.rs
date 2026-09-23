@@ -11,7 +11,8 @@
 use core::{iter::Sum, ops};
 
 use super::{
-    Affine, AffinePoint, PastaCurve, Point, Projective, ProjectivePoint, batch_normalize,
+    Affine, AffinePoint, EndomorphismAffine, EndomorphismProjective, PastaCurve, Point, Projective,
+    ProjectivePoint, batch_normalize,
     msm::{Bases, Input, ScalarStorage, Scratch},
 };
 use crate::{
@@ -186,8 +187,7 @@ impl<C: PastaCurve> Affine for Point<C> {
     type Base = PastaField<C::Base>;
     type Scalar = PastaField<C::Scalar>;
     type Projective = ProjectivePoint<C>;
-
-    const B: PastaField<C::Base> = AffinePoint::<C>::B;
+    type Repr = [u8; 32];
 
     fn identity() -> Self {
         Self::IDENTITY
@@ -215,10 +215,6 @@ impl<C: PastaCurve> Affine for Point<C> {
 
     fn negate(&self) -> Self {
         Point::neg(self)
-    }
-
-    fn endomorphism(&self) -> Self {
-        Point::endomorphism(self)
     }
 
     fn to_bytes(&self) -> [u8; 32] {
@@ -296,12 +292,22 @@ impl<C: PastaCurve> Projective for ProjectivePoint<C> {
         }
     }
 
-    fn endomorphism(&self) -> Self {
-        ProjectivePoint::endomorphism(self)
-    }
-
     fn to_affine(&self) -> Point<C> {
         ProjectivePoint::to_point(self)
+    }
+}
+
+impl<C: PastaCurve> EndomorphismAffine for Point<C> {
+    const B: PastaField<C::Base> = AffinePoint::<C>::B;
+
+    fn endomorphism(&self) -> Self {
+        Point::endomorphism(self)
+    }
+}
+
+impl<C: PastaCurve> EndomorphismProjective for ProjectivePoint<C> {
+    fn endomorphism(&self) -> Self {
+        ProjectivePoint::endomorphism(self)
     }
 }
 

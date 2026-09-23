@@ -61,7 +61,7 @@ pub use fixed_base::{FixedBaseDescription, FixedBaseTable};
 pub use glv::glv_decompose;
 pub use parameters::{Pallas, PastaCurve, Vesta};
 pub use table_entry::{CurveTableEntry, CurveTableRequirements, PreparedAffinePoint};
-pub use traits::{Affine, Projective};
+pub use traits::{Affine, EndomorphismAffine, EndomorphismProjective, Projective};
 
 #[cfg(test)]
 mod tests;

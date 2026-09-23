@@ -39,8 +39,14 @@ to `ProjectivePoint`, unary `-` to every representation, and `*` by a loose
 scalar to every representation, returning a `ProjectivePoint`. The
 [`Affine`](../crates/udon/src/curve/traits.rs) and `Projective` traits expose
 `Point` and `ProjectivePoint` to code generic over a curve, with the base and
-scalar fields as associated `FftField` types. `Projective::add_mixed` adds an
-identity-capable affine point without inversion; nonidentity operands use
+scalar fields as associated `Field` and `PrimeField` types, respectively.
+Canonical point encodings use an associated `Repr` type, so their width can
+differ between curves. Neither basic trait requires FFTs, a particular curve
+equation, or an endomorphism. `EndomorphismAffine` and
+`EndomorphismProjective` expose the additional Pasta-compatible order-three
+endomorphism capability; `Cycle` explicitly requires it for both curves.
+`Projective::add_mixed` adds an identity-capable affine point without inversion;
+nonidentity operands use
 `ProjectivePoint::add_mixed`. Projective iterators support `sum()` over owned
 or borrowed points, with identity for an empty iterator. For the Pasta points,
 `Affine::msm` runs the planned kernel from the

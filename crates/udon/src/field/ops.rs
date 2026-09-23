@@ -22,8 +22,8 @@ use crate::{
 
 use super::parameters::TWO_ADICITY;
 use super::{
-    CanonicalUint, DeferredField, FftField, Field, PastaField, PrimeModulus, ProductSum,
-    ReductionState,
+    CanonicalUint, CubeRootField, DeferredField, FftField, Field, PastaField, PrimeField,
+    PrimeModulus, ProductSum, ReductionState,
 };
 
 macro_rules! forward_binary_operator {
@@ -153,16 +153,8 @@ impl<'a, M: PrimeModulus, T: ReductionState> Product<&'a PastaField<M, T>> for P
 impl<M: PrimeModulus> Field for PastaField<M> {
     const ZERO: Self = Self::ZERO;
     const ONE: Self = Self::ONE;
-    const MODULUS: [u64; 4] = M::MODULUS;
-    const NUM_BITS: u32 = 256 - M::MODULUS[3].leading_zeros();
-    const CAPACITY: u32 = 255 - M::MODULUS[3].leading_zeros();
-
     fn is_zero(&self) -> bool {
         PastaField::is_zero(self)
-    }
-
-    fn is_odd(&self) -> bool {
-        PastaField::is_odd(self)
     }
 
     fn square(&self) -> Self {
@@ -189,6 +181,28 @@ impl<M: PrimeModulus> Field for PastaField<M> {
         PastaField::pow_u64(self, exponent)
     }
 
+    fn from_u128(value: u128) -> Self {
+        PastaField::from_u128(value)
+    }
+
+    fn sum_of_product_pairs<'a>(pairs: impl IntoIterator<Item = (&'a Self, &'a Self)>) -> Self {
+        PastaField::sum_of_product_pairs(pairs)
+    }
+}
+
+impl<M: PrimeModulus> PrimeField for PastaField<M> {
+    type Repr = [u8; 32];
+    type Limbs = [u64; 4];
+    type Bits = [bool; 256];
+
+    const MODULUS: [u64; 4] = M::MODULUS;
+    const NUM_BITS: u32 = 256 - M::MODULUS[3].leading_zeros();
+    const CAPACITY: u32 = 255 - M::MODULUS[3].leading_zeros();
+
+    fn is_odd(&self) -> bool {
+        PastaField::is_odd(self)
+    }
+
     fn to_bytes(&self) -> [u8; 32] {
         PastaField::to_bytes(*self)
     }
@@ -201,16 +215,13 @@ impl<M: PrimeModulus> Field for PastaField<M> {
         PastaField::from_wide_bytes_reduced(bytes)
     }
 
-    fn from_u128(value: u128) -> Self {
-        PastaField::from_u128(value)
-    }
-
     fn from_limbs(limbs: [u64; 4]) -> Option<Self> {
         PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs))
     }
 
-    fn sum_of_product_pairs<'a>(pairs: impl IntoIterator<Item = (&'a Self, &'a Self)>) -> Self {
-        PastaField::sum_of_product_pairs(pairs)
+    fn to_le_bits(&self) -> Self::Bits {
+        let bytes = PastaField::to_bytes(*self);
+        core::array::from_fn(|index| (bytes[index / 8] >> (index % 8)) & 1 == 1)
     }
 }
 
@@ -227,7 +238,6 @@ impl<M: PrimeModulus> FftField for PastaField<M> {
     };
     const TWO_INVERSE: Self = Self::TWO_INVERSE;
     const DELTA: Self = Self::DELTA;
-    const ZETA: Self = Self::ZETA;
 
     fn fft(domain: Domain<Self>, values: &mut [Self]) {
         Transform::new(domain.subgroup())
@@ -274,4 +284,8 @@ impl<M: PrimeModulus> DeferredField for PastaField<M> {
     fn reduce(accumulator: ProductSum<M>) -> Self {
         accumulator.finish()
     }
+}
+
+impl<M: PrimeModulus> CubeRootField for PastaField<M> {
+    const ZETA: Self = Self::ZETA;
 }

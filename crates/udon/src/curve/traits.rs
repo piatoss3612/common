@@ -1,4 +1,4 @@
-//! Traits for code that is generic over a Pasta curve group.
+//! Traits for code that is generic over a prime-order curve group.
 //!
 //! [`Affine`] is the protocol-boundary representation: identity is admitted
 //! and the canonical compressed encoding is available. [`Projective`] is the
@@ -23,7 +23,7 @@ use core::{
     ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign},
 };
 
-use crate::field::FftField;
+use crate::field::{CubeRootField, Field, PrimeField};
 
 /// A curve point in affine coordinates, including identity, with the canonical
 /// compressed encoding.
@@ -44,16 +44,16 @@ pub trait Affine:
     + From<Self::Projective>
 {
     /// The field containing the coordinates.
-    type Base: FftField;
+    type Base: Field;
 
     /// The field of scalars, whose modulus is the group order.
-    type Scalar: FftField;
+    type Scalar: PrimeField;
+
+    /// The curve's fixed-size canonical compressed encoding, including identity.
+    type Repr: AsRef<[u8]> + AsMut<[u8]> + Copy + Debug + Eq + Send + Sync + 'static;
 
     /// The same curve in the coordinates the group law runs in.
     type Projective: Projective<Affine = Self, Base = Self::Base, Scalar = Self::Scalar>;
-
-    /// The constant term of the curve equation `y² = x³ + B`.
-    const B: Self::Base;
 
     /// Returns the group identity.
     fn identity() -> Self;
@@ -64,8 +64,11 @@ pub trait Affine:
     /// Returns whether this point is identity.
     fn is_identity(&self) -> bool;
 
-    /// Constructs the point with the given coordinates, or `None` if they are
-    /// not on the curve. `(0, 0)` denotes identity.
+    /// Constructs a group element with the given coordinates, or `None` if
+    /// they are invalid for this group. Implementations define whether a
+    /// coordinate pair also denotes identity; Pasta reserves `(0, 0)`.
+    /// For curves with a nontrivial cofactor, validation includes membership
+    /// in the prime-order subgroup.
     fn from_xy(x: Self::Base, y: Self::Base) -> Option<Self>;
 
     /// Returns the coordinates, or `None` for identity.
@@ -77,16 +80,12 @@ pub trait Affine:
     /// Returns the additive inverse.
     fn negate(&self) -> Self;
 
-    /// Applies the curve endomorphism `(x, y) -> (zeta * x, y)`, which equals
-    /// multiplication by the scalar field's cube root of unity.
-    fn endomorphism(&self) -> Self;
+    /// Encodes this group element, including identity, in canonical compressed bytes.
+    fn to_bytes(&self) -> Self::Repr;
 
-    /// Encodes this point in 32 canonical compressed bytes; identity encodes
-    /// as zeros.
-    fn to_bytes(&self) -> [u8; 32];
-
-    /// Decodes a canonical compressed encoding, rejecting every other input.
-    fn from_bytes(bytes: [u8; 32]) -> Option<Self>;
+    /// Decodes a canonical group encoding, rejecting every other input,
+    /// including points outside the prime-order subgroup.
+    fn from_bytes(bytes: Self::Repr) -> Option<Self>;
 
     /// Returns `sum(scalars[i] * bases[i])`.
     ///
@@ -162,10 +161,10 @@ pub trait Projective:
     + for<'a> Sum<&'a Self>
 {
     /// The field containing the coordinates.
-    type Base: FftField;
+    type Base: Field;
 
     /// The field of scalars, whose modulus is the group order.
-    type Scalar: FftField;
+    type Scalar: PrimeField;
 
     /// The same curve at the protocol boundary.
     type Affine: Affine<Projective = Self, Base = Self::Base, Scalar = Self::Scalar>;
@@ -189,9 +188,28 @@ pub trait Projective:
     /// [`ProjectivePoint::add_mixed`](super::ProjectivePoint::add_mixed).
     fn add_mixed(&self, rhs: &Self::Affine) -> Self;
 
-    /// Applies the curve endomorphism; see [`Affine::endomorphism`].
-    fn endomorphism(&self) -> Self;
-
     /// Normalizes this point to affine coordinates.
     fn to_affine(&self) -> Self::Affine;
+}
+
+/// An affine curve `y² = x³ + B` with a compatible order-three endomorphism.
+///
+/// The coordinate map `(x, y) -> (Base::ZETA * x, y)` must equal
+/// multiplication by `Scalar::ZETA`. Identity is preserved. This optional
+/// capability describes the Pasta curves; it is not required by [`Affine`].
+pub trait EndomorphismAffine:
+    Affine<Base: CubeRootField, Scalar: CubeRootField, Projective: EndomorphismProjective>
+{
+    /// The constant term of the curve equation `y² = x³ + B`.
+    const B: Self::Base;
+
+    /// Applies the coordinate map described by this trait.
+    fn endomorphism(&self) -> Self;
+}
+
+/// The projective form of an [`EndomorphismAffine`] curve.
+pub trait EndomorphismProjective: Projective<Base: CubeRootField, Scalar: CubeRootField> {
+    /// Applies the same group endomorphism as the affine representation,
+    /// without normalization.
+    fn endomorphism(&self) -> Self;
 }

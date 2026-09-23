@@ -11,8 +11,8 @@ collecting timing samples; CI runs all six suites plus both square-root table
 configurations for fields and curves:
 
 ```console
-cargo bench --locked -p zakura-udon --bench field --bench curve --bench fft --bench fft_strategies --bench msm --bench execution -- --test
-cargo bench --locked -p zakura-udon --features sqrt-table-large --bench field --bench curve -- --test
+cargo bench --locked -p zakura-udon --features traits --bench field --bench curve --bench fft --bench fft_strategies --bench msm --bench execution -- --test
+cargo bench --locked -p zakura-udon --features traits,sqrt-table-large --bench field --bench curve -- --test
 ```
 
 Inputs are deterministic, with fixture checks outside timing and optimization
@@ -26,6 +26,7 @@ are not side-channel guarantees.
 
 The [field suite](../crates/udon/benches/field.rs) covers arithmetic, encodings,
 reduction, inversion, roots, product sums, and integer helpers in both fields.
+It requires `traits` because it also measures the generic batch-inversion API.
 Corpora span all limbs and distinguish dependent and independent products,
 variable-time exponent shapes, and lengths around dispatch boundaries.
 `ProductSum` cases populate fresh accumulators outside timing; formatting reuses
@@ -40,8 +41,8 @@ borrow trusted powers or weights with constant work, as specified by the
 [interpolation](../crates/udon/src/polynomial/interpolation.rs) contracts.
 
 ```console
-cargo bench --locked -p zakura-udon --bench field
-cargo bench --locked -p zakura-udon --bench field -- Fp/inner_product
+cargo bench --locked -p zakura-udon --features traits --bench field
+cargo bench --locked -p zakura-udon --features traits --bench field -- Fp/inner_product
 ```
 
 The [field report](FIELD_PERFORMANCE.md) explains measured choices, including
@@ -129,7 +130,8 @@ the rationale and limits of these comparisons.
 ## FFT benchmarks
 
 The [FFT suite](../crates/udon/benches/fft.rs) covers subgroups and cosets in both
-fields, transforms, prefixes, expansion, and fused interpolation. `into` and
+fields, transforms, prefixes, expansion, and fused interpolation. It enables
+`traits` for its consumer batch-inversion comparisons. `into` and
 `copy_in_place` include initialization. Expansion comparisons give algorithms
 equivalent coefficient prefixes and factors. `native` retains each output
 layout; compare natural-order methods with `residues/natural` when the consumer
@@ -156,8 +158,8 @@ both outer jobs and inner transforms; scratch counts exclude input/output and
 executor storage. Callers supply the executor; Rayon is a development dependency.
 
 ```console
-cargo bench --locked -p zakura-udon --bench fft -- Fp/fft/16384
-cargo bench --locked -p zakura-udon --bench fft -- Fp/expansion/16384/zeta
+cargo bench --locked -p zakura-udon --features traits --bench fft -- Fp/fft/16384
+cargo bench --locked -p zakura-udon --features traits --bench fft -- Fp/expansion/16384/zeta
 cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/strategies/2048/zeta/tasks_1
 cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/expansion_prefixes/tasks_1
 cargo test --release --locked -p zakura-udon compare_fft_butterfly_candidates -- --ignored --nocapture

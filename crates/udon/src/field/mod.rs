@@ -19,25 +19,30 @@
 //! caller-owned scratch. [`ConstantPrefix`] borrows an explicit tail after a
 //! repeated value for materialization or structured FFT and MSM operations.
 //!
-//! Operators forward to the inherent methods. [`Field`] describes arithmetic,
-//! [`PrimeField`] adds canonical representations of field-specific widths,
-//! and [`FftField`], [`CubeRootField`], and [`DeferredField`] describe optional
-//! arithmetic capabilities to generic code. Both Pasta fields
-//! implement them through the same kernels.
+//! Operators forward to the inherent methods. The unstable `traits` feature
+//! adds `Field`, `PrimeField`, `FftField`, `CubeRootField`, and `DeferredField`,
+//! together with generic batch inversion, sampling, encoding, and dot-product
+//! helpers. The Pasta trait implementations use the same native kernels.
 
 // Generic contracts and helpers; concrete storage and kernels stay in Pasta.
+#[cfg(feature = "traits")]
 mod batch;
+#[cfg(feature = "traits")]
 mod encoding;
 pub(crate) mod pasta;
+#[cfg(feature = "traits")]
 mod products;
+#[cfg(feature = "traits")]
 mod traits;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "traits"))]
 mod tests;
 
-pub(crate) use batch::NonzeroInversionLanes;
+#[cfg(feature = "traits")]
 pub use batch::{batch_invert, batch_invert_groups, batch_invert_with_scratch};
+#[cfg(feature = "traits")]
 pub use encoding::{low_u64, random};
+pub(crate) use pasta::NonzeroInversionLanes;
 #[cfg(test)]
 pub(crate) use pasta::count_inversions;
 pub use pasta::{
@@ -45,7 +50,9 @@ pub use pasta::{
     PrimeModulus, ProductSum, Reduced, ReductionState, try_batch_invert_by,
 };
 pub(crate) use pasta::{invert_nonzero, word};
+#[cfg(feature = "traits")]
 pub use products::dot;
+#[cfg(feature = "traits")]
 pub use traits::{CubeRootField, DeferredField, FftField, Field, PrimeField};
 
 pub(crate) use pasta::fill_powers;

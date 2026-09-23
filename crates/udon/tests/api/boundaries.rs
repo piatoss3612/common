@@ -108,7 +108,7 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
         "arithmetic",
         &features,
     );
-    for configuration in ["", "sqrt-table-large"] {
+    for configuration in ["", "sqrt-table-large", "traits", "traits,sqrt-table-large"] {
         consumer.check("run", configuration, &[], None, &["src/main.rs"]);
         // Build one failing access at a time: an earlier rejection must not
         // conceal a later member that is still reachable.
@@ -136,18 +136,24 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
             ),
             (
                 "sqrt-large",
-                if configuration.is_empty() {
-                    "no function or associated item named `sqrt_large`"
-                } else {
+                if configuration
+                    .split(',')
+                    .any(|feature| feature == "sqrt-table-large")
+                {
                     "associated function `sqrt_large` is private"
+                } else {
+                    "no function or associated item named `sqrt_large`"
                 },
             ),
             (
                 "sqrt-finish-large",
-                if configuration.is_empty() {
-                    "no function or associated item named `sqrt_finish_large`"
-                } else {
+                if configuration
+                    .split(',')
+                    .any(|feature| feature == "sqrt-table-large")
+                {
                     "associated function `sqrt_finish_large` is private"
+                } else {
+                    "no function or associated item named `sqrt_finish_large`"
                 },
             ),
             ("foreign-modulus", "Sealed` is not satisfied"),

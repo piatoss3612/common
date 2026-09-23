@@ -6,7 +6,7 @@ pub(super) use super::{
 pub(super) use num_bigint::{BigInt, BigUint};
 pub(super) use std::{vec, vec::Vec};
 
-pub(super) fn limbs<const N: usize>(value: &BigUint) -> [u64; N] {
+pub(crate) fn limbs<const N: usize>(value: &BigUint) -> [u64; N] {
     let digits = value.to_u64_digits();
     assert!(digits.len() <= N);
     let mut result = [0; N];

@@ -89,7 +89,14 @@ fn direct_oracle_rejects_a_corrupted_transform() {
             let domain = Domain::<PastaField<M>>::new(log).unwrap();
             let coefficients = inputs(domain.size());
             let mut actual = coefficients.clone();
-            domain.transform(&mut actual);
+            Transform::new(domain.subgroup())
+                .forward(
+                    &mut actual,
+                    crate::exec::ExecutionOptions::default(),
+                    &SerialExecutor,
+                    &mut [],
+                )
+                .unwrap();
             let coset = domain.subgroup();
             assert_eq!(check_forward(&coefficients, coset, &actual), Ok(()));
             if log == 3 {

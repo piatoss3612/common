@@ -99,8 +99,9 @@ fn interpolation<M: PrimeModulus>() {
     let query = PastaField::<M>::from_u64(7);
     let mut basis = [PastaField::ZERO; 4];
     let basis_completion = domain.prepare_lagrange(&query, 0..4, &mut basis).unwrap();
-    arithmetic::field::batch_invert_groups(
+    arithmetic::field::batch_invert_groups_scaled(
         &mut [&mut weights[..], &mut basis[..]],
+        &PastaField::ONE,
         &mut [PastaField::ZERO; 7],
     );
     basis_completion.complete(&mut basis).unwrap();

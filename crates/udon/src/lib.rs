@@ -19,14 +19,9 @@
 //! shared by arithmetic and downstream workloads. [`exec::execution`] supplies bounded
 //! task claims and typed admission for application schedulers; [`msm::execution`]
 //! and [`fft::execution`] expose incremental arithmetic with exclusively leased scratch.
-//! [`field::Field`], [`field::PrimeField`], [`field::FftField`], and
-//! [`curve::Affine`] describe the fields and curves to generic code, with
-//! field-specific representation widths and operator forms forwarding to the
-//! inherent arithmetic. [`fft::Domain`] dispatches field transforms through
-//! [`field::FftField`] and evaluates vanishing and Lagrange polynomials.
-//! [`poly`] provides polynomial utilities over the field traits, and [`poseidon`]
-//! carries the Pasta Poseidon parameters. [`cycle`] binds the fields, curves,
-//! generators, and Poseidon instances of a curve cycle to one marker type.
+//! [`poseidon`] carries the fixed Pasta Poseidon parameters. The optional
+//! `traits` feature adds the unstable generic interfaces described below.
+//!
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
 //! embedded storage. Construction establishes their invariants; embedding
@@ -50,8 +45,16 @@
 //!
 //! # Features
 //!
-//! Curves and FFTs are always available without feature flags. All current APIs
-//! work without an allocator.
+//! Concrete field, curve, FFT, and MSM APIs are always available without
+//! feature flags or an allocator.
+//!
+//! `traits` enables unstable consumer interfaces at their domain paths:
+//! `field::Field` and its capability traits, `curve::Affine` and `Projective`,
+//! generic field and FFT helpers, `poly`, `cycle`, and the Poseidon trait views.
+//! Pasta implements these contracts through its native arithmetic. Native
+//! field, curve, FFT, and MSM kernels do not depend on the consumer traits.
+//! Consumers opt in explicitly; these interfaces may change without preserving
+//! compatibility. Standard Rust operator implementations are always available.
 //!
 //! By default, square roots and ratios use small tables of roots of unity.
 //! Enabling `sqrt-table-large` selects a larger table algorithm that reduces
@@ -71,11 +74,13 @@
 
 mod checks;
 pub mod curve;
+#[cfg(feature = "traits")]
 pub mod cycle;
 pub mod exec;
 pub mod fft;
 pub mod field;
 pub mod msm;
+#[cfg(feature = "traits")]
 pub mod poly;
 pub mod polynomial;
 pub mod poseidon;

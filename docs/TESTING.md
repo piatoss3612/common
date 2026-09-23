@@ -7,12 +7,12 @@ The [CI workflow](../.github/workflows/ci.yml) defines required gates and pins
 the additional toolchain and targets. The [README](../README.md#testing) lists
 formatting, lint, and documentation commands.
 
-Run the release suites with both square-root configurations, then the runtime
+Run the release suites with and without the consumer traits, then the runtime
 unit tests with debug assertions:
 
 ```console
 cargo test --release --locked --workspace --all-features
-cargo test --release --locked -p zakura-udon
+cargo test --release --locked -p zakura-udon --no-default-features
 cargo test --locked -p zakura-udon --lib
 cargo test --locked -p zakura-udon --lib --all-features
 ```
@@ -26,10 +26,12 @@ ordinary suites and have separate commands below.
 ## CI enforcement
 
 The arithmetic matrix executes release workspace tests and debug Udon tests
-natively on x86-64 and ARM64, each with both square-root configurations. Lints,
-slow compiler and artifact consumers, benchmark smoke tests, Miri, and target
-portability have separate jobs. Cross-target compilation is additional coverage;
-it does not replace either native runner.
+natively on x86-64 and ARM64, each with `traits` disabled and enabled and with
+both square-root configurations. Consumer-interface tests stay in their owning
+domains and run with `traits`; native kernel tests run in every configuration.
+Lints, slow compiler and artifact consumers, benchmark smoke tests, Miri, and
+target portability have separate jobs. Cross-target compilation is additional
+coverage; it does not replace either native runner.
 
 The stable `ci-required` job runs even when a dependency fails or is skipped and
 succeeds only when every mandatory job succeeds. Repository rules must require
@@ -63,7 +65,7 @@ they exercise. Paths below are relative to
 | `tests/fft/` | Caller-owned FFT execution, workspaces, and embedded tables | `--test fft` |
 | `tests/msm/` | Caller-owned MSM execution and workspaces | `--test msm` |
 | `tests/execution/` | Shared executor contracts and worker-pool selection | `--test execution` |
-| `tests/api/` | Compiler checks combining several public API domains | `--test api` |
+| `tests/api/` | Compiler checks of public API boundaries and explicit trait opt-in | `--test api` |
 | `tests/<domain>/fixtures/` | Programs compiled by their owning domain's tests | Through their owning tests, with `--ignored` |
 | `tests/harness/` | Reusable Cargo consumer machinery, executor adapter, and independent field models | Included by the suites that need them |
 

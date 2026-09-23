@@ -1,38 +1,15 @@
-//! Operator forms of the group law and the curve trait instances.
+//! Operator forms of the native group law.
 //!
 //! Every operator forwards to an inherent method, so nothing here adds an
 //! arithmetic path. Addition and subtraction apply to [`ProjectivePoint`],
 //! whose formulas are complete; scalar multiplication is available on all
 //! three representations and returns a projective point, as the inherent
-//! ladders do. The [`Affine`] and [`Projective`] instances for [`Point`] and
-//! [`ProjectivePoint`] delegate the same way, running the planned multiscalar
-//! multiplication and batch normalization over bounded stack scratch.
+//! ladders do.
 
 use core::{iter::Sum, ops};
 
-use super::{
-    Affine, AffinePoint, EndomorphismAffine, EndomorphismProjective, PastaCurve, Point, Projective,
-    ProjectivePoint, batch_normalize,
-};
-use crate::{
-    exec::{ExecutionOptions, SerialExecutor},
-    field::PastaField,
-    msm::{Bases, Input, ScalarStorage, Scratch},
-};
-
-/// Field elements of stack scratch shared by one inversion in
-/// [`Affine::batch_to_affine`].
-const NORMALIZATION_BATCH: usize = 64;
-
-// Stack scratch for [`Affine::msm`]. The planner streams any input length
-// through these capacities with a windowed bucket kernel; the small affine,
-// field, and index buffers admit its layouts for very short inputs.
-const MSM_SCALARS: usize = 64;
-const MSM_DIGITS: usize = 4096;
-const MSM_AFFINE: usize = 16;
-const MSM_PROJECTIVE: usize = 64;
-const MSM_FIELD: usize = 16;
-const MSM_INDICES: usize = 16;
+use super::{AffinePoint, PastaCurve, Point, ProjectivePoint};
+use crate::field::PastaField;
 
 macro_rules! forward_point_operator {
     ($trait:ident, $method:ident, $inherent:ident) => {
@@ -182,134 +159,6 @@ macro_rules! forward_scalar_multiplication {
 forward_scalar_multiplication!(AffinePoint, mul_projective);
 forward_scalar_multiplication!(Point, mul_projective);
 forward_scalar_multiplication!(ProjectivePoint, mul);
-
-impl<C: PastaCurve> Affine for Point<C> {
-    type Base = PastaField<C::Base>;
-    type Scalar = PastaField<C::Scalar>;
-    type Projective = ProjectivePoint<C>;
-    type Repr = [u8; 32];
-
-    fn identity() -> Self {
-        Self::IDENTITY
-    }
-
-    fn generator() -> Self {
-        Self::GENERATOR
-    }
-
-    fn is_identity(&self) -> bool {
-        Point::is_identity(self)
-    }
-
-    fn from_xy(x: PastaField<C::Base>, y: PastaField<C::Base>) -> Option<Self> {
-        Point::from_xy(x.reduce(), y.reduce())
-    }
-
-    fn coordinates(&self) -> Option<(PastaField<C::Base>, PastaField<C::Base>)> {
-        Point::coordinates(self).map(|(x, y)| (x.into_loose(), y.into_loose()))
-    }
-
-    fn to_projective(&self) -> ProjectivePoint<C> {
-        Point::to_projective(self)
-    }
-
-    fn negate(&self) -> Self {
-        Point::neg(self)
-    }
-
-    fn to_bytes(&self) -> [u8; 32] {
-        Point::to_bytes(self)
-    }
-
-    fn from_bytes(bytes: [u8; 32]) -> Option<Self> {
-        Point::from_bytes(bytes)
-    }
-
-    fn msm(scalars: &[PastaField<C::Scalar>], bases: &[Self]) -> ProjectivePoint<C> {
-        assert_eq!(
-            scalars.len(),
-            bases.len(),
-            "msm operands must have equal length"
-        );
-        if bases.is_empty() {
-            return ProjectivePoint::IDENTITY;
-        }
-        let mut scalar_storage = [ScalarStorage::<C>::ZERO; MSM_SCALARS];
-        let mut digits = [0u8; MSM_DIGITS];
-        let mut affine = [AffinePoint::<C>::GENERATOR; MSM_AFFINE];
-        let mut projective = [ProjectivePoint::<C>::IDENTITY; MSM_PROJECTIVE];
-        let mut field = [PastaField::<C::Base>::ZERO; MSM_FIELD];
-        let mut indices = [0usize; MSM_INDICES];
-        let scratch = Scratch::new(
-            &mut scalar_storage,
-            &mut digits,
-            &mut affine,
-            &mut projective,
-            &mut field,
-            &mut indices,
-        );
-        let input = Input::new(Bases::Points(bases), scalars);
-        // The capacities admit a one-term joint layout and width-four
-        // projective buckets. The planner can shrink any nonempty input to fit.
-        input
-            .execute(ExecutionOptions::default(), &SerialExecutor, scratch)
-            .expect("MSM stack scratch supports a bounded plan")
-    }
-
-    fn batch_to_affine(points: &[ProjectivePoint<C>], out: &mut [Self]) {
-        // Bounded stack scratch shares one inversion per batch of points
-        // without requiring caller storage; `batch_normalize` checks lengths.
-        let mut scratch = [PastaField::<C::Base>::ZERO; NORMALIZATION_BATCH];
-        batch_normalize(points, out, &mut scratch);
-    }
-}
-
-impl<C: PastaCurve> Projective for ProjectivePoint<C> {
-    type Base = PastaField<C::Base>;
-    type Scalar = PastaField<C::Scalar>;
-    type Affine = Point<C>;
-
-    fn identity() -> Self {
-        Self::IDENTITY
-    }
-
-    fn generator() -> Self {
-        Self::GENERATOR
-    }
-
-    fn is_identity(&self) -> bool {
-        ProjectivePoint::is_identity(self)
-    }
-
-    fn double(&self) -> Self {
-        ProjectivePoint::double(self)
-    }
-
-    fn add_mixed(&self, rhs: &Point<C>) -> Self {
-        match rhs.as_affine() {
-            Some(point) => ProjectivePoint::add_mixed(self, point),
-            None => *self,
-        }
-    }
-
-    fn to_affine(&self) -> Point<C> {
-        ProjectivePoint::to_point(self)
-    }
-}
-
-impl<C: PastaCurve> EndomorphismAffine for Point<C> {
-    const B: PastaField<C::Base> = AffinePoint::<C>::B;
-
-    fn endomorphism(&self) -> Self {
-        Point::endomorphism(self)
-    }
-}
-
-impl<C: PastaCurve> EndomorphismProjective for ProjectivePoint<C> {
-    fn endomorphism(&self) -> Self {
-        ProjectivePoint::endomorphism(self)
-    }
-}
 
 impl<C: PastaCurve> From<Point<C>> for ProjectivePoint<C> {
     /// Lifts the point without inversion; see [`ProjectivePoint::from_point`].

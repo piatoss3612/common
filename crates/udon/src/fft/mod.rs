@@ -14,9 +14,10 @@
 //! a constant prefix; [`CosetDomain::interpolate_constant_prefix`] recovers their
 //! coefficients directly.
 //!
-//! [`Domain`] dispatches field transforms through [`crate::field::FftField`]
-//! and evaluates vanishing and Lagrange polynomials. Other
-//! [`reference::Butterfly`] values default to the [`mod@reference`] transforms.
+//! With the unstable `traits` feature, [`Domain`] also dispatches generic field
+//! transforms through `field::FftField` and evaluates vanishing and Lagrange
+//! polynomials. The separate [`mod@reference`] API provides explicit transforms
+//! over fields, projective points, and other twiddle-scalable values.
 //!
 //! Setup and execution never allocate. Tables may be prepared into mutable
 //! slices or borrowed from downstream Bento POD artifacts. Shared resource limits
@@ -164,6 +165,8 @@ mod expansion;
 mod expansion_operation;
 mod expansion_scales;
 mod factors;
+#[cfg(feature = "traits")]
+mod generic;
 mod interpolation;
 mod lagrange;
 mod layout;

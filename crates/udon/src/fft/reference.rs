@@ -6,20 +6,18 @@
 //! Callers supply roots and inverse lengths. The optimized Pasta API is
 //! [`super::Transform`].
 //!
-//! Every [`Field`] is its own twiddle domain and butterfly value, so field
-//! elements transform over their own field. [`ProjectivePoint`] values
-//! transform over their curve's scalar field, supporting coefficient and
-//! Lagrange basis conversion in artifact generators. Group arithmetic is
-//! variable-time and needs no allocation; callers can batch-normalize outputs
-//! with [`crate::curve::batch_normalize`]. [`super::Domain`] dispatches through
-//! [`Butterfly::fft`] and [`Butterfly::ifft`]: field values use their
-//! [`FftField`] implementation, while other values default to these reference
-//! transforms. Direct calls to [`transform`] and [`inverse_transform`] always
-//! use the reference schedule.
+//! Pasta fields are their own twiddle domains and butterfly values.
+//! [`ProjectivePoint`] values transform over their curve's scalar field,
+//! supporting coefficient and Lagrange basis conversion in artifact generators.
+//! Callers can batch-normalize outputs with [`crate::curve::batch_normalize`].
+//! Other types can implement [`Twiddle`] and [`Butterfly`] to use these
+//! algorithms. This module does not depend on the optional consumer field
+//! traits. Calls to [`transform`] and [`inverse_transform`] always use the
+//! reference schedule.
 
 use crate::{
     curve::{PastaCurve, ProjectivePoint},
-    field::{FftField, Field, PastaField},
+    field::{PastaField, PrimeModulus},
 };
 
 #[cfg(test)]
@@ -44,8 +42,8 @@ pub(super) fn count_transforms(f: impl FnOnce()) -> usize {
 /// For correct transforms, these operations must agree with multiplication in
 /// a commutative ring: [`Self::ONE`] is its multiplicative identity, and
 /// [`Self::multiply`] is associative and commutative. [`Self::square`] must
-/// agree with multiplying a value by itself. A field is sufficient, and every
-/// [`Field`] implements this trait through its operators.
+/// agree with multiplying a value by itself. A field is sufficient. The Pasta
+/// fields implement this trait.
 /// The transform's root requirements are documented on [`transform`]. These
 /// algebraic laws are not checked and are not memory-safety requirements.
 pub trait Twiddle: Copy {
@@ -64,7 +62,6 @@ pub trait Twiddle: Copy {
 /// and scalar addition, compose according to scalar multiplication, and leave
 /// the value unchanged for [`Twiddle::ONE`]. Cloning must preserve the value.
 /// Violating these unchecked laws can produce incorrect transform results.
-/// Every [`Field`] is a butterfly value over itself.
 pub trait Butterfly<T: Twiddle>: Clone {
     /// Scales this value.
     fn scaled(&self, twiddle: &T) -> Self;
@@ -72,75 +69,31 @@ pub trait Butterfly<T: Twiddle>: Clone {
     fn add(&self, rhs: &Self) -> Self;
     /// Negates this value.
     fn negated(&self) -> Self;
-
-    /// Replaces coefficients with evaluations at `domain`'s elements.
-    ///
-    /// Both sides use natural order. The default uses [`transform`]; field
-    /// values dispatch to the required [`FftField::fft`] implementation.
-    ///
-    /// # Panics
-    ///
-    /// Panics before mutation if `values.len()` differs from the domain size.
-    fn fft(domain: super::Domain<T>, values: &mut [Self])
-    where
-        T: FftField,
-    {
-        assert_eq!(values.len(), domain.size(), "transform input length");
-        transform(values, &domain.root());
-    }
-
-    /// Replaces evaluations at `domain`'s elements with normalized coefficients.
-    ///
-    /// Both sides use natural order. The default uses [`inverse_transform`];
-    /// field values dispatch to the required [`FftField::ifft`] implementation.
-    ///
-    /// # Panics
-    ///
-    /// Panics before mutation if `values.len()` differs from the domain size.
-    fn ifft(domain: super::Domain<T>, values: &mut [Self])
-    where
-        T: FftField,
-    {
-        assert_eq!(values.len(), domain.size(), "transform input length");
-        inverse_transform(values, &domain.inverse_root(), &domain.size_inverse());
-    }
 }
 
-// The field's operators forward to its kernels, so these instances add no
-// arithmetic path.
-impl<F: Field> Twiddle for F {
-    const ONE: Self = <F as Field>::ONE;
+impl<M: PrimeModulus> Twiddle for PastaField<M> {
+    const ONE: Self = Self::ONE;
+
     fn multiply(&self, rhs: &Self) -> Self {
-        *self * rhs
+        self.mul(rhs)
     }
+
     fn square(&self) -> Self {
-        Field::square(self)
+        self.square()
     }
 }
 
-impl<F: Field> Butterfly<F> for F {
-    fn scaled(&self, twiddle: &F) -> Self {
-        *self * twiddle
+impl<M: PrimeModulus> Butterfly<Self> for PastaField<M> {
+    fn scaled(&self, twiddle: &Self) -> Self {
+        self.mul(twiddle)
     }
+
     fn add(&self, rhs: &Self) -> Self {
-        *self + rhs
+        self.add(rhs)
     }
+
     fn negated(&self) -> Self {
-        -*self
-    }
-
-    fn fft(domain: super::Domain<F>, values: &mut [Self])
-    where
-        F: FftField,
-    {
-        <F as FftField>::fft(domain, values);
-    }
-
-    fn ifft(domain: super::Domain<F>, values: &mut [Self])
-    where
-        F: FftField,
-    {
-        <F as FftField>::ifft(domain, values);
+        self.neg()
     }
 }
 

@@ -1,6 +1,7 @@
 use super::*;
+use crate::field::pasta::batch_invert_groups;
 use crate::field::pasta::test_support::{integer, modulus};
-use crate::field::{ReductionState, batch_invert_groups, count_inversions};
+use crate::field::{ReductionState, count_inversions};
 use num_bigint::BigUint;
 
 fn from_raw<M: PrimeModulus>(raw: &BigUint) -> PastaField<M> {

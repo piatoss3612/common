@@ -1,5 +1,6 @@
 use super::{Domain, ElementOrder, FftError, PastaField, PrimeModulus, assert_length, bit_reverse};
-use crate::field::{ReductionState, batch_invert};
+use crate::field::ReductionState;
+use crate::field::pasta::batch_invert;
 
 /// Division by `X^n - 1` on a shifted domain of size `N`, written as pieces.
 ///
@@ -225,8 +226,10 @@ impl<M: PrimeModulus> VanishingDivision<M> {
     ///
     /// Only the first [`Self::piece_count`] storage elements are written. The
     /// returned handle borrows them and binds their order to this plan. Inversion
-    /// scratch may have any length, including zero; larger buffers can reduce
-    /// the number of inversions. Its use follows [`batch_invert`].
+    /// scratch may have any length, including zero. One scratch field per factor
+    /// gives at most one inversion; smaller buffers split batches, and empty
+    /// scratch uses individual inversions. Initial contents are ignored, and
+    /// entries beyond the factor count are untouched.
     ///
     /// Panics before writes if storage is too short. No allocation is required.
     pub fn prepare_factors<'a>(

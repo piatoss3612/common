@@ -1,5 +1,4 @@
 use super::*;
-use crate::field::dot;
 use crate::field::pasta::test_support::*;
 
 struct Hint<I>(I, (usize, Option<usize>));
@@ -55,7 +54,6 @@ fn check_products<M: PrimeModulus>() {
         0, 1, 2, 3, 4, 7, 11, 12, 23, 31, 32, 33, 63, 64, 65, 66, 67, 68, 69, 257, 4096,
     ] {
         let mut expected = BigUint::from(0u8);
-        let mut strided_expected = BigUint::from(0u8);
         let mut mixed_expected = BigUint::from(0u8);
         let mut mixed = ProductSum::<M>::new();
         let mut partials = [const { ProductSum::<M>::new() }; 3];
@@ -67,9 +65,6 @@ fn check_products<M: PrimeModulus>() {
             lhs.push(*a);
             rhs.push(*b);
             expected += x * y;
-            if index % 2 == 0 {
-                strided_expected += x * y;
-            }
             for sum in [&mut mixed, &mut partials[index % 3]] {
                 match index % 4 {
                     0 => sum.add_term(a),
@@ -107,12 +102,6 @@ fn check_products<M: PrimeModulus>() {
             PastaField::<M>::sum_of_product_pairs(lhs.iter().step_by(3).zip(rhs.iter().step_by(3))),
             &stride_expected,
         );
-        assert_value(dot(&lhs, &rhs), &expected);
-        assert_value(dot(lhs.iter().rev(), rhs.iter().rev()), &expected);
-        assert_value(
-            dot(lhs.iter().step_by(2), rhs.iter().step_by(2)),
-            &strided_expected,
-        );
         assert_value(mixed.finish(), &mixed_expected);
         for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
             let mut merged = ProductSum::new();
@@ -130,10 +119,6 @@ fn check_products<M: PrimeModulus>() {
         let repeated = vec![maximal; length];
         assert_value(
             PastaField::<M>::sum_of_products_slice(&repeated, &repeated),
-            &(&maximal_integer * &maximal_integer * length),
-        );
-        assert_value(
-            dot(&repeated, &repeated),
             &(&maximal_integer * &maximal_integer * length),
         );
     }

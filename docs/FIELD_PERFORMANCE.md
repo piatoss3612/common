@@ -36,8 +36,11 @@ named `pasta-final-before` and `pasta-final`. To repeat a comparison, use the
 same harness with each implementation and distinct snapshot names:
 
 ```console
-cargo bench --locked -p zakura-udon --bench field -- 'corpus/|encoding/from_wide_bytes_reduced|inner_product/sum_of_products' --sample-size 30 --warm-up-time 0.1 --measurement-time 0.5 --save-baseline candidate
+cargo bench --locked -p zakura-udon --features traits --bench field -- 'corpus/|encoding/from_wide_bytes_reduced|inner_product/sum_of_products' --sample-size 30 --warm-up-time 0.1 --measurement-time 0.5 --save-baseline candidate
 ```
+
+The current field suite requires `traits` for its generic batch-inversion cases;
+the commands here include that feature when repeating these workloads.
 
 ## Runtime results
 
@@ -295,8 +298,8 @@ are repeated calls into one field's tables; applications with competing cache
 pressure, different inputs, or other architectures can have different results.
 
 ```console
-cargo bench --locked -p zakura-udon --bench field -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-small-final
-cargo bench --locked -p zakura-udon --bench field --features sqrt-table-large -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-large-final
+cargo bench --locked -p zakura-udon --features traits --bench field -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-small-final
+cargo bench --locked -p zakura-udon --bench field --features traits,sqrt-table-large -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-large-final
 ```
 
 ### Build cost and linked storage

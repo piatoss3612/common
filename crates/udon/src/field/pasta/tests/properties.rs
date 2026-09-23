@@ -1,7 +1,6 @@
 //! Randomized loose-representation checks against ordinary integer arithmetic.
 
 use super::*;
-use crate::field::Field;
 use proptest::{
     prelude::*,
     test_runner::{FileFailurePersistence, TestCaseResult},
@@ -31,7 +30,7 @@ fn arithmetic<M: PrimeModulus>(a: PastaField<M>, b: PastaField<M>) -> TestCaseRe
         );
     }
     // The square root may have either sign; check its integer square.
-    let root = a.square().sqrt().unwrap();
+    let root = a.square().reduce().sqrt().unwrap();
     let root_integer = integer(&root.montgomery_limbs()) * &inverse_r % &p;
     prop_assert_eq!(&root_integer * &root_integer % &p, &x * &x % &p);
     Ok(())

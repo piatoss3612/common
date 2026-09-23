@@ -12,8 +12,9 @@
 //! [`EisensteinScalar`] retains joint digits for compact tables, and
 //! [`EisensteinTableBatch`] prepares or multiplies several bases together.
 //! [`msm`] sums dense or indexed scalar/base terms with caller-owned scratch
-//! and execution. Operators forward to these methods, and [`Affine`] and
-//! [`Projective`] describe both curves to generic code.
+//! and execution. Operators forward to these methods. The unstable `traits`
+//! feature adds `Affine`, `Projective`, and their endomorphism capabilities
+//! as consumer interfaces implemented through the same native arithmetic.
 //!
 //! Affine coordinates use [`crate::field::Reduced`] field elements;
 //! projective coordinates and scalars may use loose residues. Constructors
@@ -33,6 +34,7 @@
 //! ```
 
 pub(crate) mod pasta;
+#[cfg(feature = "traits")]
 mod traits;
 
 pub use pasta::{
@@ -42,6 +44,7 @@ pub use pasta::{
     PreparedAffinePoint, ProjectivePoint, Vesta, VestaAffine, VestaPoint, VestaProjective,
     batch_normalize, glv_decompose,
 };
+#[cfg(feature = "traits")]
 pub use traits::{Affine, EndomorphismAffine, EndomorphismProjective, Projective};
 
 /// Multiscalar multiplication; also available at [`crate::msm`].

@@ -1,7 +1,6 @@
 use super::{CosetDomain, FftError, check_scratch};
-use crate::field::{
-    ConstantPrefix, PastaField, PrimeModulus, ReductionState, batch_invert, fill_powers,
-};
+use crate::field::pasta::batch_invert;
+use crate::field::{ConstantPrefix, PastaField, PrimeModulus, ReductionState, fill_powers};
 use crate::polynomial::evaluate;
 
 impl<M: PrimeModulus> CosetDomain<M> {
@@ -123,10 +122,10 @@ impl<'a, M: PrimeModulus> ConstantPrefixExpansion<'a, M> {
     ///
     /// Returns [`FftError::InvalidLayout`] if the base is larger than the target.
     /// Insufficient sample storage panics. Both checks precede writes to either
-    /// buffer. Initial contents are ignored. Scratch uses the bounded batching
-    /// contract of [`batch_invert`]; empty scratch is valid, and entries beyond
-    /// the target size are untouched. With full scratch at most one inversion is
-    /// needed. Work outside inversion is linear in the target size.
+    /// buffer. Initial contents are ignored. One scratch field per sample gives
+    /// at most one inversion; smaller buffers split batches, and empty scratch
+    /// uses individual inversions. Entries beyond the target size are untouched.
+    /// Work outside inversion is linear in the target size.
     pub fn prepare(
         base: CosetDomain<M>,
         extended: CosetDomain<M>,

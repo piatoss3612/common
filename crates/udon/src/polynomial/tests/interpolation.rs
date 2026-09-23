@@ -1,6 +1,7 @@
 use super::*;
+use crate::field::pasta::batch_invert_groups;
 use crate::field::pasta::test_support::{field_samples, integer, modulus};
-use crate::field::{PallasBase, PallasScalar, batch_invert_groups, count_inversions};
+use crate::field::{PallasBase, PallasScalar, count_inversions};
 use num_bigint::BigUint;
 use std::{vec, vec::Vec};
 

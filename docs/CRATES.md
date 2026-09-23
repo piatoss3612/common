@@ -90,23 +90,28 @@ allocating workspaces, and worker runtimes belong to their downstream owners.
 
 | Source module | Responsibility |
 | --- | --- |
-| `field/` | Generic field traits, batch inversion, canonical access, and product helpers |
+| `field/` | Public field exports and optional consumer traits and generic helpers |
 | `field/pasta/` | Pasta representations, parameters, and optimized field implementations |
-| `curve/` | Generic affine/projective contracts and explicit exports of Pasta arithmetic |
+| `curve/` | Public curve exports and optional consumer affine/projective contracts |
 | `curve/pasta/` | Pasta point representations, coordinate kernels, and fixed-base tables |
 | `fft/` | Domains, full transforms, layouts, tables, and transform plans |
 | `msm/` | Multiscalar multiplication, scalar preparation, scheduling, and task plans |
 | `exec/` | Shared executor contracts, operation budgets, and scoped work helpers |
 | `exec/execution/` | Common incremental task, completion, and frontier protocol |
-| `cycle/` | Cycle contracts, borrowed generator containers, and concrete Pasta bindings |
-| `poseidon/` | Poseidon contracts and the fixed Pasta parameter sets |
-| `poly/` | Polynomial operations through field traits |
+| `cycle/` | Optional cycle contracts, borrowed generator containers, and Pasta bindings |
+| `poseidon/` | Fixed Pasta parameter sets and optional consumer trait views |
+| `poly/` | Optional polynomial operations through consumer field traits |
 | `polynomial/` | Native Pasta polynomial evaluation, interpolation, division, and folding |
 
 The `field` and `curve` modules explicitly re-export their concrete types;
 callers use paths such as `field::Fp` and `curve::Pallas`.
 Their private Pasta modules keep representation-specific code separate from
-generic contracts. Field butterfly kernels live in `field/pasta/butterfly/`;
+generic contracts. Each domain's `traits.rs` keeps its optional consumer
+contracts and Pasta implementations together. The unstable `traits` feature
+gates those interfaces and their generic helpers, including `poly` and `cycle`.
+Native arithmetic must not depend on the consumer contracts, even when the
+feature is enabled. Standard Rust operators stay beside the concrete types.
+Field butterfly kernels live in `field/pasta/butterfly/`;
 they are the small arithmetic steps used by `fft/`, not a second transform API.
 Likewise, `curve/pasta/buckets.rs` owns the coordinate formulas used by MSM
 bucket reduction, keeping raw affine coordinates private to the curve implementation.

@@ -56,7 +56,7 @@ fn loose<M: PrimeModulus>(value: PastaField<M>) -> PastaField<M> {
 fn exercise<C: PastaCurve>() {
     let q = modulus::<C::Scalar>();
     for log_size in 0..=6 {
-        let domain = Domain::<C::Scalar>::new(log_size).unwrap();
+        let domain = Domain::<PastaField<C::Scalar>>::new(log_size).unwrap();
         let size = domain.size();
         let dense: Vec<_> = field_samples::<C::Scalar>()
             .take(size)
@@ -159,7 +159,7 @@ fn lengths<C: PastaCurve>() {
         }
     }
     for size in [1, 2, 4, 8, 16] {
-        let domain = Domain::<C::Scalar>::for_size(size).unwrap();
+        let domain = Domain::<PastaField<C::Scalar>>::for_size(size).unwrap();
         let mut values = vec![ProjectivePoint::<C>::GENERATOR; size + 2];
         let tail = [ProjectivePoint::IDENTITY, ProjectivePoint::GENERATOR.neg()];
         values[size..].copy_from_slice(&tail);

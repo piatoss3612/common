@@ -8,7 +8,7 @@ use zakura_udon::{
     fft::{
         Domain, ElementOrder, Expansion, ExpansionOrder, ExpansionStorage, InputSupport,
         InverseScale, StorageLayout, Transform,
-        run::{ExpansionBank, ExpansionPlan, ExpansionRun},
+        execution::{ExpansionBank, ExpansionPlan, ExpansionRun},
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -16,7 +16,7 @@ use zakura_udon::{
 fn check<M: PrimeModulus>() {
     const SLOTS: usize = 3;
     for size in [8, 64] {
-        let base = Transform::new(Domain::<M>::for_size(size).unwrap().subgroup());
+        let base = Transform::new(Domain::<PastaField<M>>::for_size(size).unwrap().subgroup());
         for (residues, coset) in [1, 2, 8].into_iter().flat_map(|n| [(n, false), (n, true)]) {
             let domain = Domain::for_size(size * residues).unwrap();
             let domain = if coset {

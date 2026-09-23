@@ -28,7 +28,7 @@ queues, scoped borrows, cancellation, and failure draining. The
 
 [`exec::run`](../crates/udon/src/exec/run/mod.rs) contains the common task and
 completion protocol. [`curve::msm::run`](../crates/udon/src/curve/msm/run.rs) and
-[`fft::run`](../crates/udon/src/fft/run.rs) supply arithmetic plans and runs.
+[`fft::execution`](../crates/udon/src/fft/execution/mod.rs) supply arithmetic plans and runs.
 Plans resolve implementation choices from mathematical inputs, physical storage
 layout, and `exec::ExecutionOptions`. Arithmetic runs use private frontiers over
 caller-owned `TaskStorage`, with

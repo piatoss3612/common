@@ -197,7 +197,7 @@ impl<M: PrimeModulus> BitReversedPowers<M> {
         }
     }
     pub(super) fn at(&self, index: usize) -> PastaField<M> {
-        self.shift.pow_u64(reverse(index, self.log_size) as u64)
+        self.shift.pow_u64(bit_reverse(index, self.log_size) as u64)
     }
     pub(super) fn next(&self, index: usize, power: PastaField<M>) -> PastaField<M> {
         power.mul(&self.ratios[index.trailing_ones() as usize])

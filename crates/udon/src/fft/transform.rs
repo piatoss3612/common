@@ -1,8 +1,8 @@
-use super::execution::Geometry;
+use super::planning::Geometry;
 use super::factors::{Factors, InverseFinish};
 use super::{
     CoefficientView, CosetDomain, Executor, FftError, PastaField, PrimeModulus, Strategy, Tables,
-    reverse,
+    bit_reverse,
 };
 #[cfg(test)]
 use super::{assert_length, check_prefix};
@@ -25,7 +25,7 @@ use crate::field::butterfly::{butterfly, divide_by_power_of_two, scale as scale_
 /// accepts shorter coefficient or evaluation inputs through
 /// [`super::TransformRequest`]. Direct transforms adapt to scratch capacity;
 /// [`Self::scratch_requirements`] reports the preferred size under the given resource
-/// limits. [`super::run::FftPlan::retained_fields`] sizes the fixed workspace of a
+/// limits. [`super::execution::FftPlan::retained_fields`] sizes the fixed workspace of a
 /// resolved plan. Direct transforms accept empty scratch. Resolved plans require their
 /// declared workspace. Buffer contract violations panic before writes; request
 /// validation follows [`Self::execute`].
@@ -124,12 +124,12 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     /// Counts initialized field elements. Direct execution can use smaller storage
     /// and select another implementation. The query does not allocate or reserve
     /// storage; it resolves a contiguous transform through
-    /// [`super::run::FftPlan::new`], with its planning errors.
+    /// [`super::execution::FftPlan::new`], with its planning errors.
     pub fn scratch_requirements(
         self,
         options: crate::exec::ExecutionOptions,
     ) -> Result<usize, FftError> {
-        Ok(super::run::FftPlan::new(
+        Ok(super::execution::FftPlan::new(
             self,
             super::TransformRequest::new(super::Direction::Forward),
             super::StorageLayout::Contiguous,
@@ -190,7 +190,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     /// Scratch, including an empty slice, limits the implementation selected for
     /// this call; unused scratch tails are untouched.
     ///
-    /// Request errors follow [`super::run::FftPlan::new`]. Violating the input or
+    /// Request errors follow [`super::execution::FftPlan::new`]. Violating the input or
     /// buffer requirements panics. These checks and returned errors precede writes. An
     /// executor panic may partially change data; the module's [working-storage
     /// rules](super) describe validity during unwinding.
@@ -204,8 +204,12 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         scratch: &mut [PastaField<M>],
     ) -> Result<(), FftError> {
         let options = options.for_scratch::<PastaField<M>>(scratch.len());
-        let mut plan =
-            super::run::FftPlan::new(self, request, super::StorageLayout::Contiguous, options)?;
+        let mut plan = super::execution::FftPlan::new(
+            self,
+            request,
+            super::StorageLayout::Contiguous,
+            options,
+        )?;
         if let Some(input) = input {
             if request.direction == super::Direction::Forward {
                 plan = plan.with_input_scale(input.normalization_factor());
@@ -453,9 +457,9 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         options: Strategy,
         request: super::TransformRequest,
         separate: bool,
-    ) -> Result<super::run::FftPlan<'a, M>, FftError> {
+    ) -> Result<super::execution::FftPlan<'a, M>, FftError> {
         let nz = |n| core::num::NonZeroUsize::new(n).unwrap();
-        super::run::FftPlan::with_strategy(
+        super::execution::FftPlan::with_strategy(
             self,
             crate::fft::TransformRequest {
                 input_storage: if separate {
@@ -489,7 +493,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     }
 
     pub(super) fn reversed(self, index: usize) -> usize {
-        reverse(index, self.domain.domain().log_size())
+        bit_reverse(index, self.domain.domain().log_size())
     }
 
     #[cfg(test)]

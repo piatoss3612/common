@@ -326,7 +326,7 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
             (
                 "empty-interpolation",
                 "interpolation needs an output class",
-                "src/fft/run/interpolation.rs",
+                "src/fft/execution/interpolation.rs",
             ),
         ] {
             consumer.check(

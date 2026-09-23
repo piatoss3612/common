@@ -168,7 +168,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
                         let source = if self.input_order == output_order {
                             i
                         } else {
-                            reverse(i, self.base_size().ilog2())
+                            bit_reverse(i, self.base_size().ilog2())
                         };
                         *value = input[source];
                         if let Some(factor) = first_factor {

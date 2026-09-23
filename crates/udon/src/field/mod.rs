@@ -47,7 +47,8 @@ pub(crate) mod word;
 
 pub use batch::{
     BatchInversionError, batch_invert, batch_invert_groups, batch_invert_groups_scaled,
-    batch_invert_scaled, batch_invert_with_scratch, try_batch_invert_by, try_batch_invert_scaled_by,
+    batch_invert_scaled, batch_invert_with_scratch, try_batch_invert_by,
+    try_batch_invert_scaled_by,
 };
 pub(crate) use batch::{NonzeroInversionLanes, invert_nonzero};
 pub use constant_prefix::{ConstantPrefix, ConstantPrefixError};

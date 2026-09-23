@@ -18,7 +18,7 @@ use super::{
     Codelet, Direction, Domain, ElementOrder, FftError, InputStorage, InputSupport, InverseScale,
     PastaField, PrimeModulus, Transform, TransformRequest, TwiddleTable,
     factors::ForwardShift,
-    reverse,
+    bit_reverse,
     stages::{StageKernel, twiddle_table},
 };
 use crate::exec::{
@@ -622,12 +622,12 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                         let logical = if plan.native_input() == ElementOrder::Natural {
                             index
                         } else {
-                            reverse(index, plan.size().ilog2())
+                            bit_reverse(index, plan.size().ilog2())
                         };
                         let physical = if plan.request.input_order == ElementOrder::Natural {
                             logical
                         } else {
-                            reverse(logical, plan.size().ilog2())
+                            bit_reverse(logical, plan.size().ilog2())
                         };
                         *value = source.get(physical).copied().unwrap_or(PastaField::ZERO);
                     }
@@ -683,7 +683,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                         let logical = if plan.native_input() == ElementOrder::Natural {
                             index
                         } else {
-                            reverse(index, plan.size().ilog2())
+                            bit_reverse(index, plan.size().ilog2())
                         };
                         *value = if logical >= support {
                             PastaField::ZERO
@@ -691,7 +691,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                             let physical = if plan.request.input_order == ElementOrder::Natural {
                                 logical
                             } else {
-                                reverse(logical, plan.size().ilog2())
+                                bit_reverse(logical, plan.size().ilog2())
                             };
                             *source.get(physical).expect("invalid input view")
                         };
@@ -709,13 +709,13 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
             WorkKind::Reorder => {
                 for (offset, value) in values.iter_mut().enumerate() {
                     *value = *source
-                        .get(reverse(self.start + offset, plan.size().ilog2()))
+                        .get(bit_reverse(self.start + offset, plan.size().ilog2()))
                         .expect("invalid reorder source");
                 }
             }
             WorkKind::Permute => {
                 for index in self.start..self.start + tile {
-                    let other = reverse(index, plan.size().ilog2());
+                    let other = bit_reverse(index, plan.size().ilog2());
                     if index < other {
                         values.swap(index, other);
                     }
@@ -841,7 +841,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     let logical = if plan.request.output_order == ElementOrder::Natural {
                         physical
                     } else {
-                        reverse(physical, plan.size().ilog2())
+                        bit_reverse(physical, plan.size().ilog2())
                     };
                     if inverse {
                         if normalized {
@@ -877,12 +877,12 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
             let logical = if plan.request.input_order == ElementOrder::Natural {
                 physical
             } else {
-                reverse(physical, log_size)
+                bit_reverse(physical, log_size)
             };
             let destination = if plan.native_input() == ElementOrder::Natural {
                 logical
             } else {
-                reverse(logical, log_size)
+                bit_reverse(logical, log_size)
             };
             values[destination] = if logical < support {
                 *source.get(physical).expect("invalid input view")
@@ -918,7 +918,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
         let mut offset = 0;
         while offset < values.len() {
             let index = self.start + offset;
-            let degree = reverse(index / repeat, width.ilog2());
+            let degree = bit_reverse(index / repeat, width.ilog2());
             let mut value = source.get(degree).copied().unwrap_or(PastaField::ZERO);
             if degree < source.len() && twist {
                 if let Some(scales) = plan.residue_scales {
@@ -951,7 +951,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 let index = if order == ElementOrder::Natural {
                     self.start + offset
                 } else {
-                    reverse(self.start + offset, plan.size().ilog2())
+                    bit_reverse(self.start + offset, plan.size().ilog2())
                 };
                 *value = value.mul(&scales[index]);
                 if scale {
@@ -971,7 +971,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 let degree = if order == ElementOrder::Natural {
                     self.start + offset
                 } else {
-                    reverse(self.start + offset, plan.size().ilog2())
+                    bit_reverse(self.start + offset, plan.size().ilog2())
                 };
                 if scale || !degree.is_multiple_of(3) {
                     *value = value.mul(&cycle.at(degree));

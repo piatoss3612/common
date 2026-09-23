@@ -28,7 +28,7 @@ use crate::{
     },
     fft::{
         Direction, Domain, StorageLayout, Transform, TransformRequest,
-        run::{Buffers as FftBuffers, FftKernel, FftPlan, FftRun, Resources as FftResources},
+        execution::{Buffers as FftBuffers, FftKernel, FftPlan, FftRun, Resources as FftResources},
     },
     field::{CanonicalUint, Fp, Fq, PallasBase},
 };
@@ -302,7 +302,7 @@ fn scoped_impl<const CHECK: bool, O>(
             + size_of::<Admission<'_, CLASSES>>()
             + size_of::<Stats>()
             + size_of::<[Option<crate::curve::msm::run::Request<'_>>; FRONTIER]>()
-            + size_of::<[Option<crate::fft::run::Request<'_>>; FRONTIER]>()
+            + size_of::<[Option<crate::fft::execution::Request<'_>>; FRONTIER]>()
             + size_of::<ReadyRange<'_>>()
             + size_of::<Option<Segment<'_>>>()
             + size_of_val(fixture)
@@ -591,7 +591,7 @@ fn scoped_impl<const CHECK: bool, O>(
                             }
                             assert_eq!(*result, expected, "MSM round {round}, operation {op}");
                             let n = fixture.fft_plans[round][op].size();
-                            let root = Domain::<PallasBase>::for_size(n).unwrap().root();
+                            let root = Domain::<Fp>::for_size(n).unwrap().root();
                             for index in [0, 1, n / 3, n / 2, n - 1] {
                                 let point = root.pow_u64(index as u64);
                                 let expected = fixture.coefficients[..n]

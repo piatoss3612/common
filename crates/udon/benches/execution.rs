@@ -12,7 +12,7 @@ use zakura_udon::{
         msm::{self, Bases, Input, Requirements, ScalarStorage, Scratch},
     },
     exec::{ExecutionOptions, Executor, TaskBudget},
-    fft::{Direction, Domain, StorageLayout, Transform, TransformRequest, run::FftPlan},
+    fft::{Direction, Domain, StorageLayout, Transform, TransformRequest, execution::FftPlan},
     field::{CanonicalUint, Fp, Fq},
 };
 

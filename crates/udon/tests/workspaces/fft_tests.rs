@@ -8,8 +8,9 @@ use zakura_udon::{
     fft::{
         self, Direction, Domain, ElementOrder, EvaluationLayout, EvaluationView, Expansion,
         ExpansionOrder, ExpansionStorage, InputStorage, InputSupport, InverseScale, StorageLayout,
-        TransformRequest, reference,
-        run::{ExpansionPlan, InterpolationPlan},
+        TransformRequest,
+        execution::{ExpansionPlan, InterpolationPlan},
+        reference,
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -316,7 +317,9 @@ fn expansion_products_and_fused_classes() {
 
 #[test]
 fn incomplete_producers_and_panics_require_refill() {
-    let domain = Domain::<PallasBase>::for_size(16).unwrap().subgroup();
+    let domain = Domain::<PastaField<PallasBase>>::for_size(16)
+        .unwrap()
+        .subgroup();
     let plan = fft::Transform::new(domain);
     let mut storage = [PastaField::ZERO; 16];
     {

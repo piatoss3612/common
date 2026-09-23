@@ -10,7 +10,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use zakura_udon::{
     exec::{ExecutionOptions, Executor, SerialExecutor, TaskBudget},
     fft::{
-        run::{ExpansionPlan, FftPlan, InterpolationPlan},
+        execution::{ExpansionPlan, FftPlan, InterpolationPlan},
         *,
     },
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
@@ -96,7 +96,7 @@ fn inputs<M: PrimeModulus>(size: usize) -> Vec<PastaField<M>> {
 fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &Runner) {
     for size in [2048, 16384, 1 << 20] {
         for (shift_name, coset) in [("subgroup", false), ("zeta", true)] {
-            let domain = Domain::<M>::for_size(size).unwrap();
+            let domain = Domain::<PastaField<M>>::for_size(size).unwrap();
             let domain = if coset {
                 domain.coset()
             } else {
@@ -203,7 +203,7 @@ fn transforms<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &
 }
 
 fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &Runner) {
-    let base = Transform::new(Domain::<M>::new(11).unwrap().subgroup());
+    let base = Transform::new(Domain::<PastaField<M>>::new(11).unwrap().subgroup());
     let extended = Domain::new(14).unwrap().coset();
     let input = inputs(base.domain().size());
     let mut group = criterion.benchmark_group(format!(
@@ -366,7 +366,7 @@ fn pipelines<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &R
 }
 
 fn expansion_prefixes<M: PrimeModulus>(criterion: &mut Criterion, field: &str, runner: &Runner) {
-    let domain = Domain::<M>::new(11).unwrap().subgroup();
+    let domain = Domain::<PastaField<M>>::new(11).unwrap().subgroup();
     let extended = Domain::new(14).unwrap().coset();
     let mut twiddles = vec![PastaField::ZERO; domain.size() / 2];
     let tables = TablesMut {
@@ -457,7 +457,7 @@ fn preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
         }
     }
     let base_size = 2048;
-    let extended = Domain::<M>::for_size(16384).unwrap().coset();
+    let extended = Domain::<PastaField<M>>::for_size(16384).unwrap().coset();
     let mut scales = vec![PastaField::ZERO; extended.size()];
     for normalization in [
         ExpansionScaleNormalization::Coefficients,
@@ -509,7 +509,7 @@ fn power_preparation<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
 
 fn periodic_inverse<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     for size in [256, 16384] {
-        let domain = Domain::<M>::for_size(size).unwrap().coset();
+        let domain = Domain::<PastaField<M>>::for_size(size).unwrap().coset();
         let input = inputs::<M>(size);
         let mut expected = input.clone();
         reference::inverse_transform(
@@ -599,7 +599,7 @@ fn periodic_inverse<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
 }
 
 fn subgroup_expansion<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
-    let base = Transform::new(Domain::<M>::for_size(2048).unwrap().subgroup());
+    let base = Transform::new(Domain::<PastaField<M>>::for_size(2048).unwrap().subgroup());
     let input = inputs(base.domain().size());
     let mut group = criterion.benchmark_group(format!("{field}/subgroup_expansion"));
     for residues in [1, 8] {

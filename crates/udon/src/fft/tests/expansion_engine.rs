@@ -1,6 +1,6 @@
 //! Test-only expansion driver over explicit transform schedules.
 //!
-//! The production [`ExpansionPlan`](crate::fft::run::ExpansionPlan) resolves
+//! The production [`ExpansionPlan`](crate::fft::execution::ExpansionPlan) resolves
 //! its geometry from [`ExecutionOptions`](crate::exec::ExecutionOptions).
 //! This driver instead takes caller-selected tile, column, and task counts so
 //! tests can exercise every schedule directly, and it shares the transform
@@ -11,7 +11,7 @@ use crate::fft::{
     Codelet, CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, Expansion,
     ExpansionOrder, ExpansionScaleNormalization, FftError, InverseScale, PastaField, PrimeModulus,
     Residue, Strategy, Transform, assert_length, check_domain_size, check_field_count,
-    check_prefix, check_scratch, min, reverse, stages::StageKernel, transform::Run,
+    check_prefix, check_scratch, min, bit_reverse, stages::StageKernel, transform::Run,
 };
 
 /// Caller-selected concurrency across residues and within each base transform.
@@ -393,7 +393,7 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
             for (residue, output) in output.chunks_exact_mut(size).enumerate() {
                 let block = first + residue;
                 let residue = if self.order == ExpansionOrder::BitReversed {
-                    reverse(block, self.expansion.layout().residues().ilog2())
+                    bit_reverse(block, self.expansion.layout().residues().ilog2())
                 } else {
                     block
                 };

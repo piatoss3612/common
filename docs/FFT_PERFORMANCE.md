@@ -6,7 +6,7 @@ choices under supplied constraints. See the [FFT guide](FFT.md) for
 operation contracts and resource queries.
 
 The tables below were collected on September 12, 2026. They retain comparisons
-between internal strategies, but the current `fft::run` drivers and scratch
+between internal strategies, but the current `fft::execution` drivers and scratch
 requirements differ from the measured versions.
 Use these results as evidence of tradeoffs and the commands below for current
 timings. Obtain temporary storage counts from the current plans.

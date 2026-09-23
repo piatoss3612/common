@@ -5,7 +5,7 @@ use zakura_udon::{
     exec::{ExecutionOptions, SerialExecutor},
     fft::{
         Direction, Domain, ElementOrder, StorageLayout, Transform, TransformRequest,
-        VanishingDivision, run::FftPlan,
+        VanishingDivision, execution::FftPlan,
     },
     field::{PastaField, PrimeModulus},
 };
@@ -22,7 +22,7 @@ pub fn benchmarks<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
             (1024, 4, ElementOrder::BitReversed, true),
             (16384, 16, ElementOrder::BitReversed, false),
         ] {
-            let domain = Domain::<M>::for_size(size).unwrap();
+            let domain = Domain::<PastaField<M>>::for_size(size).unwrap();
             let n = size / count;
             let division = VanishingDivision::new(domain, &shift, n).unwrap();
             let output_count = if full { count } else { count - 1 };

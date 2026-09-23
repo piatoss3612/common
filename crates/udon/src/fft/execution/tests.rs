@@ -57,7 +57,7 @@ fn reference_transform<M: PrimeModulus>(
 
 fn check<M: PrimeModulus>() {
     for size in [1, 8, 64, 1024] {
-        let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
+        let plan = Transform::new(Domain::<PastaField<M>>::for_size(size).unwrap().coset());
         let original: Vec<_> = (0..size)
             .map(|i| PastaField::from_u64((i * i + 3) as u64))
             .collect();
@@ -179,7 +179,7 @@ fn prefix_regions_match_independent_powers() {
     use super::{FftKernel, ForwardShift};
     fn check<M: PrimeModulus>() {
         let size = 1024;
-        let domain = Domain::<M>::for_size(size).unwrap();
+        let domain = Domain::<PastaField<M>>::for_size(size).unwrap();
         let arbitrary = PastaField::<M>::from_u64(7);
         let shifts = [
             ForwardShift::for_domain(domain.subgroup()),
@@ -231,7 +231,7 @@ fn prefix_regions_match_independent_powers() {
                                 kernel.initialize_prefix(&mut output, &source.as_slice());
                                 for (offset, value) in output.iter().enumerate() {
                                     let degree =
-                                        super::reverse((start + offset) / repeat, width.ilog2());
+                                        super::bit_reverse((start + offset) / repeat, width.ilog2());
                                     let expected = source
                                         .get(degree)
                                         .copied()
@@ -256,7 +256,7 @@ fn prefix_regions_match_independent_powers() {
 }
 
 fn fused_scales<M: PrimeModulus>() {
-    use crate::{exec::run::ReadView, fft::run::Buffers};
+    use crate::{exec::run::ReadView, fft::execution::Buffers};
 
     struct Source<'a, M: PrimeModulus>(&'a [PastaField<M>], bool);
     impl<M: PrimeModulus> ReadView<PastaField<M>> for Source<'_, M> {
@@ -272,7 +272,7 @@ fn fused_scales<M: PrimeModulus>() {
     }
 
     for size in [1, 64] {
-        let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
+        let plan = Transform::new(Domain::<PastaField<M>>::for_size(size).unwrap().coset());
         let original: Vec<_> = (0..size)
             .map(|i| PastaField::from_u64((i * i + 3) as u64))
             .collect();
@@ -338,7 +338,7 @@ fn fused_full_inputs_apply_coset_factors_and_input_scale_once() {
 
 fn blocked<M: PrimeModulus>() {
     for (size, tile) in [(64, 8), (1024, 32)] {
-        let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
+        let plan = Transform::new(Domain::<PastaField<M>>::for_size(size).unwrap().coset());
         let original: Vec<_> = (0..size)
             .map(|i| PastaField::from_u64((i * i + 3) as u64))
             .collect();
@@ -479,7 +479,7 @@ fn sparse_tables<M: PrimeModulus>() {
     use crate::fft::{TwiddleDescription, TwiddleStorage, TwiddleTable};
     let nz = |n| NonZeroUsize::new(n).unwrap();
     let size = 64;
-    let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
+    let plan = Transform::new(Domain::<PastaField<M>>::for_size(size).unwrap().coset());
     let original: Vec<_> = (0..size)
         .map(|i| PastaField::from_u64((i * i + 3) as u64))
         .collect();
@@ -557,7 +557,7 @@ fn sparse_initialization_and_partial_panels_share_forward_twiddles() {
 fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
     use crate::{
         exec::run::ReadView,
-        fft::run::{Bank, Buffers},
+        fft::execution::{Bank, Buffers},
         field::Fp,
     };
     use core::cell::RefCell;
@@ -678,7 +678,7 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
 fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
     use crate::{
         exec::run::{Outcome, ReadView, TaskError},
-        fft::run::{Buffers, Resources},
+        fft::execution::{Buffers, Resources},
         field::Fp,
     };
     use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -893,7 +893,7 @@ fn batch_planning_orders_panels_and_validation() {
 fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
     use crate::{
         exec::run::{Outcome, TaskError},
-        fft::run::Buffers,
+        fft::execution::Buffers,
         field::Fp,
     };
     let nz = |n| NonZeroUsize::new(n).unwrap();

@@ -6,15 +6,17 @@
 //! Callers supply roots and inverse lengths. The optimized Pasta API is
 //! [`super::Transform`].
 //!
-//! [`PastaField`] values transform over their own field. [`ProjectivePoint`]
-//! values transform over their curve's scalar field, supporting coefficient
-//! and Lagrange basis conversion in artifact generators. Group arithmetic is
+//! Every [`Field`] is its own twiddle domain and butterfly value, so field
+//! elements transform over their own field. [`ProjectivePoint`] values
+//! transform over their curve's scalar field, supporting coefficient and
+//! Lagrange basis conversion in artifact generators. Group arithmetic is
 //! variable-time and needs no allocation; callers can batch-normalize outputs
-//! with [`crate::curve::batch_normalize`].
+//! with [`crate::curve::batch_normalize`]. [`super::Domain`] binds these
+//! transforms to a domain's root and normalization.
 
 use crate::{
     curve::{PastaCurve, ProjectivePoint},
-    field::{PastaField, PrimeModulus},
+    field::{Field, PastaField},
 };
 
 #[cfg(test)]
@@ -25,7 +27,8 @@ mod tests;
 /// For correct transforms, these operations must agree with multiplication in
 /// a commutative ring: [`Self::ONE`] is its multiplicative identity, and
 /// [`Self::multiply`] is associative and commutative. [`Self::square`] must
-/// agree with multiplying a value by itself. A field is sufficient.
+/// agree with multiplying a value by itself. A field is sufficient, and every
+/// [`Field`] implements this trait through its operators.
 /// The transform's root requirements are documented on [`transform`]. These
 /// algebraic laws are not checked and are not memory-safety requirements.
 pub trait Twiddle: Copy {
@@ -44,6 +47,7 @@ pub trait Twiddle: Copy {
 /// and scalar addition, compose according to scalar multiplication, and leave
 /// the value unchanged for [`Twiddle::ONE`]. Cloning must preserve the value.
 /// Violating these unchecked laws can produce incorrect transform results.
+/// Every [`Field`] is a butterfly value over itself.
 pub trait Butterfly<T: Twiddle>: Clone {
     /// Scales this value.
     fn scaled(&self, twiddle: &T) -> Self;
@@ -53,25 +57,27 @@ pub trait Butterfly<T: Twiddle>: Clone {
     fn negated(&self) -> Self;
 }
 
-impl<M: PrimeModulus> Twiddle for PastaField<M> {
-    const ONE: Self = Self::ONE;
+// The field's operators forward to its kernels, so these instances add no
+// arithmetic path.
+impl<F: Field> Twiddle for F {
+    const ONE: Self = <F as Field>::ONE;
     fn multiply(&self, rhs: &Self) -> Self {
-        self.mul(rhs)
+        *self * rhs
     }
     fn square(&self) -> Self {
-        self.square()
+        Field::square(self)
     }
 }
 
-impl<M: PrimeModulus> Butterfly<Self> for PastaField<M> {
-    fn scaled(&self, twiddle: &Self) -> Self {
-        self.mul(twiddle)
+impl<F: Field> Butterfly<F> for F {
+    fn scaled(&self, twiddle: &F) -> Self {
+        *self * twiddle
     }
     fn add(&self, rhs: &Self) -> Self {
-        self.add(rhs)
+        *self + rhs
     }
     fn negated(&self) -> Self {
-        self.neg()
+        -*self
     }
 }
 
@@ -112,7 +118,7 @@ pub fn transform<T: Twiddle, V: Butterfly<T>>(values: &mut [V], root: &T) {
     );
     let log_size = size.ilog2();
     for index in 0..size {
-        let reversed = super::reverse(index, log_size);
+        let reversed = super::bit_reverse(index, log_size);
         if index < reversed {
             values.swap(index, reversed);
         }

@@ -14,9 +14,15 @@ is variable-time, with no constant-time guarantee for secret inputs; see the
 ## Domains and transform order
 
 [`Domain`](../crates/udon/src/fft/domain.rs) constructs a subgroup with the
-canonical Pasta root for its size. Use `Domain::new(k)` for `2^k` elements or
-`Domain::for_size(n)` for an element count. The constructor documents supported
-orders and target address-space limits. Size one is supported.
+canonical root for its size. It is generic over the field type, so
+`Domain::<Fp>::new(k)` gives `2^k` elements and `Domain::for_size(n)` an element
+count; code written against `FftField` constructs domains the same way. The
+constructor documents supported orders and target address-space limits. Size
+one is supported. `elements()` iterates the subgroup in natural order,
+`vanishing(x)` and `contains(x)` evaluate `x^n - 1`, and
+`lagrange_evaluations` writes the Lagrange basis at a point into a caller
+slice with one shared inversion. `bit_reverse` maps between natural and
+bit-reversed positions.
 
 `domain.subgroup()` selects shift one; `domain.coset()` selects the field's
 order-three `ZETA` shift. These are the two supported transform domains.
@@ -55,13 +61,17 @@ semantics; it cannot establish which polynomial produced the evaluations.
 
 The [`reference` module](../crates/udon/src/fft/reference.rs) retains a simple
 generic transform through `Twiddle` and `Butterfly`. It takes explicit roots;
-its inverse also takes the inverse size. This is useful as an independent
-schedule or for a downstream value type. Its trait contracts define the
-algebraic laws that a custom implementation must satisfy.
+its inverse also takes the inverse size. Every `Field` is its own twiddle
+domain and butterfly value, and `Domain::transform` and
+`Domain::inverse_transform` bind these transforms to a domain's root and
+normalization for any butterfly value, including projective points over their
+scalar field. This is useful as an independent schedule or for a downstream
+value type. The trait contracts define the algebraic laws that a custom
+implementation must satisfy.
 
 ## Transform plans and task budgets
 
-[`run::FftPlan`](../crates/udon/src/fft/run.rs) resolves a `TransformRequest`
+[`execution::FftPlan`](../crates/udon/src/fft/execution/mod.rs) resolves a `TransformRequest`
 from a domain/table `Transform`, `StorageLayout`, and shared
 [`ExecutionOptions`](../crates/udon/src/exec.rs). The options supply a total task
 budget and optional workspace byte ceiling. The default is serial execution
@@ -208,7 +218,7 @@ scratch. The
 separate tiles. Divide budgets between simultaneous application operations;
 copying a budget does not reserve or limit threads.
 
-[`fft::run`](../crates/udon/src/fft/run.rs) exposes bounded transform, expansion,
+[`fft::execution`](../crates/udon/src/fft/execution/mod.rs) exposes bounded transform, expansion,
 and interpolation work to an application scheduler. Each run owns its buffer
 barriers; completed transforms and residue blocks can ready their consumers
 while other operations continue. The [execution guide](EXECUTION.md) explains
@@ -285,7 +295,7 @@ This uses coefficient support; an inverse `TransformRequest` prefix instead
 describes evaluation positions and does not recover `q`. Consumers of `p`'s
 coefficients still need the full product.
 
-[`run::ExpansionPlan`](../crates/udon/src/fft/run/expansion.rs) fixes liveness,
+[`execution::ExpansionPlan`](../crates/udon/src/fft/execution/expansion.rs) fixes liveness,
 input support, ordering, and resource constraints. `coefficient_fields()` reports
 separate coefficient workspace; `scratch_fields()` reports synchronous transform
 scratch. The workspace ceiling covers both. The plan divides its total task
@@ -375,7 +385,7 @@ before interpolation.
 
 ## Fused class interpolation
 
-[`run::InterpolationPlan`](../crates/udon/src/fft/run/interpolation.rs) combines
+[`execution::InterpolationPlan`](../crates/udon/src/fft/execution/interpolation.rs) combines
 classes supplied as `(Transform, ElementOrder)` pairs. Entry zero is the output;
 other classes may be smaller and independently use subgroup or `ZETA` shifts.
 The caller supplies storage layout, whether lift buffers may be consumed, and

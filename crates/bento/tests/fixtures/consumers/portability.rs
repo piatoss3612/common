@@ -16,7 +16,7 @@ use udon::exec::{
 use udon::fft::{
     Direction, Domain, ElementOrder, EvaluationLayout, Expansion, ExpansionScales, FftError,
     ResidueLayout, StorageLayout, TableRequirements, TablesMut, Transform, TransformRequest,
-    run::{FftPlan, InterpolationPlan},
+    execution::{FftPlan, InterpolationPlan},
 };
 use udon::field::{
     Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum, Reduced,

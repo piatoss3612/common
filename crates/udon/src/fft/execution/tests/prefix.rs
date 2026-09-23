@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     exec::run::ReadView,
-    fft::{factors::ForwardShift, reverse, run::FftKernel},
+    fft::{factors::ForwardShift, bit_reverse, run::FftKernel},
 };
 use std::{
     hint::black_box,
@@ -21,7 +21,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
         let mut offset = 0;
         while offset < values.len() {
             let index = self.start + offset;
-            let degree = reverse(index / repeat, width.ilog2());
+            let degree = bit_reverse(index / repeat, width.ilog2());
             let mut value = source.get(degree).copied().unwrap_or(PastaField::ZERO);
             if degree < source.len() && plan.twist() {
                 let power = plan
@@ -42,7 +42,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 let index = if order == ElementOrder::Natural {
                     self.start + offset
                 } else {
-                    reverse(self.start + offset, plan.size().ilog2())
+                    bit_reverse(self.start + offset, plan.size().ilog2())
                 };
                 *value = value.mul(&scales[index]);
                 if plan.input_scale.reduce() != PastaField::<M>::ONE.reduce() {
@@ -55,7 +55,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 let degree = if order == ElementOrder::Natural {
                     self.start + offset
                 } else {
-                    reverse(self.start + offset, plan.size().ilog2())
+                    bit_reverse(self.start + offset, plan.size().ilog2())
                 };
                 *value = value.mul(&cycle.at(degree));
             }
@@ -110,7 +110,7 @@ fn median(mut run: impl FnMut()) -> f64 {
 
 fn compare<M: PrimeModulus>(name: &str) {
     let size = 4096;
-    let domain = Domain::<M>::for_size(size).unwrap();
+    let domain = Domain::<PastaField<M>>::for_size(size).unwrap();
     let shift = PastaField::<M>::from_u64(7);
     for prefix in [10, 128, 256, 1024] {
         let source: Vec<_> = crate::test_support::field_samples::<M>()

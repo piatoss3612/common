@@ -17,7 +17,7 @@ pub fn benchmarks<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
             (10, 480, 32),
             (10, 0, 1024),
         ] {
-            let subgroup = Domain::<M>::new(log).unwrap();
+            let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
             let domain = if coset {
                 subgroup.coset()
             } else {
@@ -163,7 +163,7 @@ pub fn benchmarks<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
         }
     }
 
-    let domain = Domain::<M>::new(10).unwrap().coset();
+    let domain = Domain::<PastaField<M>>::new(10).unwrap().coset();
     let points: [_; 4] = super::inputs::<M>(4).try_into().unwrap();
     for count in [8, 256] {
         let range = 256..256 + count;

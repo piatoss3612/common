@@ -59,7 +59,9 @@ the [performance report](docs/FIELD_PERFORMANCE.md#optional-larger-square-root-t
 for latency, build-time, and storage tradeoffs.
 
 The [`fft` module](crates/udon/src/fft/mod.rs) provides power-of-two transforms,
-cosets, residue expansion, and fused class interpolation for both fields.
+cosets, residue expansion, and fused class interpolation for both fields. Its
+`Domain` also runs the generic reference transforms over any butterfly value and
+evaluates vanishing and Lagrange polynomials for consumers of the field traits.
 Callers own all tables, buffers, scratch, and parallel execution; Udon's FFT
 setup and execution do not allocate or require a feature flag. See the
 [FFT guide](docs/FFT.md) for layouts, scratch requirements, and downstream table

@@ -1,10 +1,10 @@
 //! Power-of-two field transforms with caller-owned tables, buffers, and execution.
 //!
 //! [`Transform`] binds a domain and borrowed tables, with synchronous transform
-//! conveniences. [`run::FftPlan`] fixes reusable transform semantics and geometry;
+//! conveniences. [`execution::FftPlan`] fixes reusable transform semantics and geometry;
 //! its working buffers are borrowed only for execution. [`Expansion`]
 //! evaluates a base polynomial on a larger coset without constructing a full
-//! zero-padded transform. [`run::InterpolationPlan`] combines interpolations from
+//! zero-padded transform. [`execution::InterpolationPlan`] combines interpolations from
 //! several domains into one coefficient vector.
 //! [`CosetDomain::evaluate_lagrange`] evaluates a requested natural-index basis
 //! range at a field point, with caller-owned output and inversion scratch.
@@ -14,14 +14,18 @@
 //! a constant prefix; [`CosetDomain::interpolate_constant_prefix`] recovers their
 //! coefficients directly.
 //!
+//! [`Domain`] also runs the generic [`mod@reference`] transforms over any
+//! [`reference::Butterfly`] value and evaluates vanishing and Lagrange
+//! polynomials for consumers written against [`crate::field::FftField`].
+//!
 //! Setup and execution never allocate. Tables may be prepared into mutable
 //! slices or borrowed from downstream Bento POD artifacts. Shared resource limits
 //! come from [`ExecutionOptions`](crate::exec::ExecutionOptions). Udon chooses
 //! arithmetic schedules within those limits. The scoped [`Executor`] supplies parallel
 //! execution without requiring a particular runtime or an allocator in Udon.
 //! An executor's own allocations are outside Udon's storage requirements.
-//! [`run::FftPlan`] fixes order, normalization, and transform geometry.
-//! [`run::ExpansionPlan`] additionally fixes coefficient storage and residue
+//! [`execution::FftPlan`] fixes order, normalization, and transform geometry.
+//! [`execution::ExpansionPlan`] additionally fixes coefficient storage and residue
 //! ordering. Their drivers execute synchronously or expose incremental tasks.
 //!
 //! Field arithmetic is variable-time, with no constant-time guarantee for
@@ -112,7 +116,7 @@
 //!     exec::{ExecutionOptions, SerialExecutor},
 //!     fft::{Direction, Domain, Expansion, ExpansionOrder, ExpansionStorage,
 //!         ElementOrder, InputSupport, StorageLayout, Transform, TransformRequest,
-//!         run::{ExpansionPlan, FftPlan}},
+//!         execution::{ExpansionPlan, FftPlan}},
 //! };
 //!
 //! let options = ExecutionOptions::default();
@@ -152,7 +156,7 @@ use crate::field::{PastaField, PrimeModulus};
 
 mod constant_prefix;
 mod domain;
-mod execution;
+pub mod execution;
 mod expansion;
 mod expansion_operation;
 mod expansion_scales;
@@ -161,9 +165,9 @@ mod interpolation;
 mod lagrange;
 mod layout;
 mod operation;
+mod planning;
 mod powers;
 pub mod reference;
-pub mod run;
 mod stages;
 mod tables;
 mod transform;
@@ -171,8 +175,6 @@ mod vanishing;
 
 pub use constant_prefix::ConstantPrefixExpansion;
 pub use domain::{CosetDomain, Domain};
-use execution::Strategy;
-use execution::check_scratch;
 pub use expansion::Expansion;
 pub use expansion_operation::{ExpansionOrder, ExpansionStorage, Residue};
 pub use expansion_scales::{ExpansionScaleNormalization, ExpansionScales};
@@ -183,6 +185,8 @@ pub use layout::{
     CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, InverseScale, ResidueLayout,
 };
 pub use operation::{Direction, InputStorage, InputSupport, StorageLayout, TransformRequest};
+use planning::Strategy;
+use planning::check_scratch;
 pub use powers::{TwiddleDescription, TwiddleStorage, TwiddleTable};
 use stages::Codelet;
 pub use tables::{TableRequirements, Tables, TablesMut};
@@ -255,7 +259,12 @@ fn check_prefix(actual: usize, min: usize, max: usize) -> Result<(), FftError> {
 
 const fn check_field_count(count: usize) -> Result<usize, FftError> {
     // Both sealed Pasta fields have the same four-limb representation.
-    if count <= (isize::MAX as usize) / core::mem::size_of::<crate::field::Fp>() {
+    check_element_count::<crate::field::Fp>(count)
+}
+
+const fn check_element_count<T>(count: usize) -> Result<usize, FftError> {
+    let size = core::mem::size_of::<T>();
+    if size == 0 || count <= (isize::MAX as usize) / size {
         Ok(count)
     } else {
         Err(FftError::SizeOverflow)
@@ -277,9 +286,16 @@ const fn min(left: usize, right: usize) -> usize {
     if left < right { left } else { right }
 }
 
-fn reverse(index: usize, log_size: u32) -> usize {
+/// Reverses the low `log_size` bits of `index`, discarding the others.
+///
+/// This is the permutation between natural and bit-reversed transform orders;
+/// see [`ElementOrder`]. `log_size = 0` returns zero, and `log_size` of at
+/// least `usize::BITS` reverses every bit.
+pub fn bit_reverse(index: usize, log_size: u32) -> usize {
     if log_size == 0 {
         0
+    } else if log_size >= usize::BITS {
+        index.reverse_bits()
     } else {
         index.reverse_bits() >> (usize::BITS - log_size)
     }

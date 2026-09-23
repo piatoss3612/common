@@ -6,7 +6,7 @@
 use super::factors::Factors;
 use super::{
     ElementOrder, Executor, InverseScale, PastaField, PrimeModulus, Transform, TwiddleDescription,
-    TwiddleStorage, TwiddleTable, reverse,
+    TwiddleStorage, TwiddleTable, bit_reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
 use crate::field::butterfly::{
@@ -167,7 +167,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
         });
         request.inverse_scale = self.scale;
         request.output_order = self.output_order;
-        let mut plan = super::run::FftPlan::with_strategy(
+        let mut plan = super::execution::FftPlan::with_strategy(
             self.plan,
             request,
             nz(options.tile_len),
@@ -571,7 +571,7 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
             let index = if desired_reversed == bit_reversed {
                 index
             } else {
-                reverse(index, self.plan.domain.domain().log_size())
+                bit_reverse(index, self.plan.domain.domain().log_size())
             };
             scale(value, &factor[index])
         } else {

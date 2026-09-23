@@ -12,7 +12,8 @@ use zakura_udon::{
     fft::{
         CoefficientView, CosetDomain, Direction, Domain, ElementOrder, Expansion,
         ExpansionScaleNormalization, ExpansionScales, InputStorage, InputSupport, StorageLayout,
-        TableRequirements, Tables, TablesMut, TransformRequest, reference, run::InterpolationPlan,
+        TableRequirements, Tables, TablesMut, TransformRequest, execution::InterpolationPlan,
+        reference,
     },
     field::{CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus},
 };

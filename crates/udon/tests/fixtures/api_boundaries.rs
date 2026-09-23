@@ -9,8 +9,8 @@ mod facade {
             VanishingFactors,
         },
         field::{
-            ConstantPrefix, ConstantPrefixError, FftField, Fp, Fq, PallasBase, PallasScalar, PastaField,
-            PrimeModulus, Reduced,
+            ConstantPrefix, ConstantPrefixError, FftField, Fp, Fq, PallasBase, PallasScalar,
+            PastaField, PrimeModulus, Reduced,
         },
         polynomial::{
             EvaluationPlan, InterpolationError, InterpolationPlan, InterpolationPreparation,
@@ -47,7 +47,7 @@ fn interpolation<M: PrimeModulus>() {
     let mut weights = [PastaField::ZERO; 3];
     let preparation: InterpolationPreparation<'_, M, Reduced> =
         InterpolationPlan::prepare_denominators(&points, &mut weights).unwrap();
-    let domain = Domain::<M>::new(2).unwrap().subgroup();
+    let domain = Domain::<PastaField<M>>::new(2).unwrap().subgroup();
     let query = PastaField::<M>::from_u64(7);
     let mut basis = [PastaField::ZERO; 4];
     let basis_completion = domain.prepare_lagrange(&query, 0..4, &mut basis).unwrap();
@@ -131,7 +131,7 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
         PastaField::<M>::from_u64(5).pow_u64(1 << 32).reduce()
     );
     let two = PastaField::<M>::from_u64(2);
-    let domain = Domain::<M>::new(2).unwrap().coset();
+    let domain = Domain::<PastaField<M>>::new(2).unwrap().coset();
     let node = domain.shift().mul(&domain.domain().root());
     let mut basis = [PastaField::ZERO; 4];
     domain
@@ -168,7 +168,7 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
     );
     #[cfg(feature = "lagrange-field-mismatch")]
     {
-        let _ = Domain::<PallasBase>::new(1)
+        let _ = Domain::<PastaField<PallasBase>>::new(1)
             .unwrap()
             .subgroup()
             .evaluate_lagrange(&<Fq>::ONE, 0..1, &mut [<Fp>::ZERO], &mut []);
@@ -180,7 +180,7 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
     #[cfg(feature = "lagrange-completion-field-mismatch")]
     {
         let mut values = [<Fp>::ZERO];
-        let completion = Domain::<PallasBase>::new(1)
+        let completion = Domain::<PastaField<PallasBase>>::new(1)
             .unwrap()
             .subgroup()
             .prepare_lagrange(&<Fp>::ZERO, 0..1, &mut values)
@@ -384,8 +384,8 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
 }
 
 fn constant_prefix<M: PrimeModulus>() {
-    let base = Domain::<M>::new(2).unwrap().subgroup();
-    let extended = Domain::<M>::new(3).unwrap().coset();
+    let base = Domain::<PastaField<M>>::new(2).unwrap().subgroup();
+    let extended = Domain::<PastaField<M>>::new(3).unwrap().coset();
     let tail = [PastaField::<M>::from_u64(9).reduce()];
     let constant = PastaField::<M>::from_u64(3).reduce();
     let input: ConstantPrefix<'_, M, Reduced> = ConstantPrefix::new(4, &constant, &tail).unwrap();
@@ -431,7 +431,7 @@ fn constant_prefix<M: PrimeModulus>() {
     #[cfg(feature = "tail-field-mismatch")]
     {
         let input = ConstantPrefix::new(4, &<Fq>::ONE, &[<Fq>::ONE]).unwrap();
-        let _ = Domain::<PallasBase>::new(2)
+        let _ = Domain::<PastaField<PallasBase>>::new(2)
             .unwrap()
             .subgroup()
             .interpolate_constant_prefix(input, &mut [<Fp>::ZERO; 4], &mut [<Fp>::ZERO]);
@@ -447,7 +447,7 @@ fn vanishing_division<M: PrimeModulus>() {
         exec::{ExecutionOptions, SerialExecutor},
         fft::{ElementOrder, Transform},
     };
-    let domain = Domain::<M>::new(2).unwrap();
+    let domain = Domain::<PastaField<M>>::new(2).unwrap();
     let shift = PastaField::<M>::from_u64(7);
     let division = VanishingDivision::new(domain, &shift.reduce(), 2).unwrap();
     let mut values = core::array::from_fn::<_, 4, _>(|j| {
@@ -494,8 +494,12 @@ fn vanishing_division<M: PrimeModulus>() {
     }
     #[cfg(feature = "vanishing-finish-field-mismatch")]
     {
-        let division =
-            VanishingDivision::new(Domain::<PallasBase>::new(0).unwrap(), &<Fp>::ZETA, 1).unwrap();
+        let division = VanishingDivision::new(
+            Domain::<PastaField<PallasBase>>::new(0).unwrap(),
+            &<Fp>::ZETA,
+            1,
+        )
+        .unwrap();
         division.write_pieces(&[<Fq>::ZERO], ElementOrder::Natural, &mut [], &mut []);
     }
     #[cfg(feature = "vanishing-finish-reduced-storage")]
@@ -885,7 +889,7 @@ fn main() {
     #[cfg(feature = "invalid-loose-limbs")]
     let _ = const { <Fp>::from_montgomery_limbs([u64::MAX; 4]) };
     #[cfg(feature = "empty-interpolation")]
-    let _ = arithmetic::fft::run::InterpolationPlan::<PallasBase, 0>::new(
+    let _ = arithmetic::fft::execution::InterpolationPlan::<PallasBase, 0>::new(
         [],
         false,
         arithmetic::fft::StorageLayout::Contiguous,

@@ -36,7 +36,7 @@ fn integer_evaluate(coefficients: &[BigUint], x: &BigUint, p: &BigUint) -> BigUi
 fn integer_cases<M: PrimeModulus>() {
     let p = modulus::<M>();
     for log in 0..=4 {
-        let domain = Domain::<M>::new(log).unwrap();
+        let domain = Domain::<PastaField<M>>::new(log).unwrap();
         let size = domain.size();
         let root = canonical(&domain.root());
         for shift in [
@@ -112,7 +112,7 @@ fn integer_cases<M: PrimeModulus>() {
                             .map(|i| {
                                 transformed[match order {
                                     ElementOrder::Natural => i,
-                                    ElementOrder::BitReversed => reverse(i, log),
+                                    ElementOrder::BitReversed => bit_reverse(i, log),
                                 }]
                             })
                             .collect();
@@ -157,7 +157,7 @@ fn integer_cases<M: PrimeModulus>() {
                                 .map(|i| {
                                     evaluations[match order {
                                         ElementOrder::Natural => i,
-                                        ElementOrder::BitReversed => reverse(i, log),
+                                        ElementOrder::BitReversed => bit_reverse(i, log),
                                     }]
                                 })
                                 .collect();
@@ -167,7 +167,7 @@ fn integer_cases<M: PrimeModulus>() {
                             for (i, value) in values.iter().enumerate() {
                                 let row = match order {
                                     ElementOrder::Natural => i,
-                                    ElementOrder::BitReversed => reverse(i, log),
+                                    ElementOrder::BitReversed => bit_reverse(i, log),
                                 };
                                 assert_eq!(canonical(value), divided[row]);
                             }
@@ -188,7 +188,7 @@ fn integer_division_and_piece_prefixes() {
 
 fn composition<M: PrimeModulus>() {
     for size in [1, 8, 64, 1024] {
-        let domain = Domain::<M>::for_size(size).unwrap();
+        let domain = Domain::<PastaField<M>>::for_size(size).unwrap();
         let n = (size / 4).max(1);
         let division = VanishingDivision::new(domain, &PastaField::<M>::ZETA.reduce(), n).unwrap();
         let h = inputs::<M>(size - n);
@@ -209,7 +209,7 @@ fn composition<M: PrimeModulus>() {
                     for tasks in [1, 4] {
                         let options = ExecutionOptions::default()
                             .with_task_budget(crate::exec::TaskBudget::new(tasks).unwrap());
-                        let plan = run::FftPlan::new(
+                        let plan = execution::FftPlan::new(
                             transform,
                             TransformRequest {
                                 input_order,
@@ -224,7 +224,7 @@ fn composition<M: PrimeModulus>() {
                             .map(|i| {
                                 evaluations[match input_order {
                                     ElementOrder::Natural => i,
-                                    ElementOrder::BitReversed => reverse(i, domain.log_size()),
+                                    ElementOrder::BitReversed => bit_reverse(i, domain.log_size()),
                                 }]
                             })
                             .collect();
@@ -255,7 +255,7 @@ fn transform_orders_tables_and_scratch_reuse() {
 }
 
 fn contracts<M: PrimeModulus>() {
-    let domain = Domain::<M>::new(3).unwrap();
+    let domain = Domain::<PastaField<M>>::new(3).unwrap();
     for n in [0, 3, 16, usize::MAX] {
         assert!(matches!(
             VanishingDivision::new(domain, &PastaField::<M>::ZETA, n),
@@ -328,7 +328,7 @@ fn contracts<M: PrimeModulus>() {
     assert_eq!(bytes_of_slice(&short), bytes_of_slice(&[sentinel; 3]));
     let largest = (0..=32)
         .rev()
-        .find_map(|log| Domain::<M>::new(log).ok())
+        .find_map(|log| Domain::<PastaField<M>>::new(log).ok())
         .unwrap();
     let plan = VanishingDivision::new(largest, &PastaField::<M>::ZETA, 1).unwrap();
     assert_eq!(plan.piece_count(), largest.size());

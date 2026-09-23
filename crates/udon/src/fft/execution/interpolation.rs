@@ -205,7 +205,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     /// use zakura_udon::{
     ///     exec::{ExecutionOptions, SerialExecutor},
     ///     field::Fp,
-    ///     fft::{Domain, ElementOrder, StorageLayout, Transform, run::InterpolationPlan},
+    ///     fft::{Domain, ElementOrder, StorageLayout, Transform, execution::InterpolationPlan},
     /// };
     ///
     /// let output_domain = Domain::new(1).unwrap().coset();
@@ -282,7 +282,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
                     != self.transforms[target].request.input_order;
                 for (index, value) in before[target].iter_mut().enumerate() {
                     let source = if different_order {
-                        reverse(index, self.transforms[i].size().ilog2())
+                        bit_reverse(index, self.transforms[i].size().ilog2())
                     } else {
                         index
                     };
@@ -408,7 +408,7 @@ impl<M: PrimeModulus> AdditionKernel<M> {
         super::super::assert_length("addition factor", 0, factor.len());
         for (offset, value) in values.iter_mut().enumerate() {
             let index = if self.reversed {
-                reverse(self.start + offset, self.size.ilog2())
+                bit_reverse(self.start + offset, self.size.ilog2())
             } else {
                 offset
             };

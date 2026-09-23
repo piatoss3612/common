@@ -6,7 +6,7 @@ use crate::field::{PallasBase, PallasScalar};
 fn interpreted_codelets<M: PrimeModulus>() {
     for steps in [&RADIX4[..], &RADIX8[..]] {
         let size = if steps.len() == 4 { 4 } else { 8 };
-        let domain = Domain::<M>::for_size(size).unwrap().subgroup();
+        let domain = Domain::<PastaField<M>>::for_size(size).unwrap().subgroup();
         let input = inputs(size);
         for inverse in [false, true] {
             for dif in [false, true] {

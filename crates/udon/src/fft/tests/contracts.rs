@@ -1,9 +1,9 @@
 use super::*;
-use crate::fft::run::ExpansionPlan;
+use crate::fft::execution::ExpansionPlan;
 use core::num::NonZeroUsize;
 
 fn bindings<M: PrimeModulus>() {
-    let subgroup = Domain::<M>::new(4).unwrap();
+    let subgroup = Domain::<PastaField<M>>::new(4).unwrap();
     let domain = subgroup.coset();
     let other = subgroup.subgroup();
     assert_eq!(subgroup, Domain::for_size(16).unwrap());
@@ -98,7 +98,7 @@ fn bindings_borrow_trusted_tables_and_check_shapes() {
 
 fn twiddle_oracle<M: PrimeModulus>() {
     for log in 0..=9 {
-        let domain = Domain::<M>::new(log).unwrap();
+        let domain = Domain::<PastaField<M>>::new(log).unwrap();
         let root = domain.root();
         for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
             let description = TwiddleDescription {
@@ -146,7 +146,7 @@ fn twiddle_recurrences_match_independent_exponentiation() {
 }
 
 fn product_domain<M: PrimeModulus>() {
-    let base = Transform::new(Domain::<M>::new(3).unwrap().subgroup());
+    let base = Transform::new(Domain::<PastaField<M>>::new(3).unwrap().subgroup());
     let domain = Domain::new(5).unwrap().coset();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let coefficients = inputs(base.domain().size());
@@ -244,7 +244,7 @@ fn short_products_require_the_same_ordered_coset_before_execution() {
 }
 
 fn retained_with_base_tables<M: PrimeModulus>() {
-    let domain = Domain::<M>::new(3).unwrap().subgroup();
+    let domain = Domain::<PastaField<M>>::new(3).unwrap().subgroup();
     let extended = Domain::new(5).unwrap().coset();
     let prepared = Prepared::new(domain);
     let coefficients = inputs(domain.size());

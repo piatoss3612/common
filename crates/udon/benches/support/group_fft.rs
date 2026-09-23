@@ -69,7 +69,7 @@ pub(super) fn benchmarks<C: PastaCurve>(criterion: &mut Criterion, curve: &str) 
     for shape in ["dense", "sparse", "cancellation"] {
         let mut group = criterion.benchmark_group(format!("{curve}/group_fft/{shape}"));
         for size in [1, 2, 4, 8, 16, 64, 256, 1024] {
-            let domain = Domain::<C::Scalar>::for_size(size).unwrap();
+            let domain = Domain::<PastaField<C::Scalar>>::for_size(size).unwrap();
             let mut coefficients = super::inputs::<C::Scalar>(size + 3)[3..].to_vec();
             let repeated = PastaField::from_u64(7);
             for (index, coefficient) in coefficients.iter_mut().enumerate() {

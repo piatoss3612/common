@@ -1,4 +1,4 @@
-use super::{Domain, ElementOrder, FftError, PastaField, PrimeModulus, assert_length, reverse};
+use super::{Domain, ElementOrder, FftError, PastaField, PrimeModulus, assert_length, bit_reverse};
 use crate::field::{ReductionState, batch_invert};
 
 /// Division by `X^n - 1` on a shifted domain of size `N`, written as pieces.
@@ -48,7 +48,7 @@ use crate::field::{ReductionState, batch_invert};
 /// ```
 #[derive(Clone, Copy, Debug)]
 pub struct VanishingDivision<M: PrimeModulus> {
-    domain: Domain<M>,
+    domain: Domain<PastaField<M>>,
     shift: PastaField<M>,
     piece_size: usize,
     seed: PastaField<M>,
@@ -72,7 +72,7 @@ impl<M: PrimeModulus> VanishingDivision<M> {
     /// or `shift^domain.size() = 1`. Preparation uses constant storage and field
     /// inversions; repeated finishes reuse the returned plan.
     pub fn new<S: ReductionState>(
-        domain: Domain<M>,
+        domain: Domain<PastaField<M>>,
         shift: &PastaField<M, S>,
         piece_size: usize,
     ) -> Result<Self, FftError> {
@@ -112,7 +112,7 @@ impl<M: PrimeModulus> VanishingDivision<M> {
     }
 
     /// The subgroup supplying the size and root, without the evaluation shift.
-    pub const fn domain(self) -> Domain<M> {
+    pub const fn domain(self) -> Domain<PastaField<M>> {
         self.domain
     }
 
@@ -139,7 +139,7 @@ impl<M: PrimeModulus> VanishingDivision<M> {
     /// `self.domain().subgroup()`** of the numerator's evaluations. Its physical
     /// output order is `order`; do not supply an inverse or coset transform.
     /// These mathematical input requirements are not checked. For example,
-    /// [`super::run::FftPlan`] can select either output order and any input order.
+    /// [`super::execution::FftPlan`] can select either output order and any input order.
     ///
     /// Piece `j` receives coefficients of degrees `j*n .. (j+1)*n`, in ascending
     /// order, where `n = self.piece_size()`. Supply a prefix of at most
@@ -186,7 +186,7 @@ impl<M: PrimeModulus> VanishingDivision<M> {
                 let index = size.wrapping_sub(degree) & (size - 1);
                 let index = match order {
                     ElementOrder::Natural => index,
-                    ElementOrder::BitReversed => reverse(index, self.domain.log_size()),
+                    ElementOrder::BitReversed => bit_reverse(index, self.domain.log_size()),
                 };
                 let scale = match self.untwist {
                     Untwist::Periodic(cycle) => cycle[degree % 3],
@@ -291,7 +291,7 @@ impl<'a, M: PrimeModulus> VanishingFactors<'a, M> {
         for (index, value) in values.iter_mut().enumerate() {
             let row = match order {
                 ElementOrder::Natural => index,
-                ElementOrder::BitReversed => reverse(index, domain.log_size()),
+                ElementOrder::BitReversed => bit_reverse(index, domain.log_size()),
             };
             *value = value.mul(&self.factors[row % self.factors.len()]);
         }

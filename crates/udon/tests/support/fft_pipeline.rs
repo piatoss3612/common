@@ -4,7 +4,7 @@ use spin::{RwLock, RwLockReadGuard as Read, RwLockWriteGuard as Write};
 use std::{vec, vec::Vec};
 use zakura_udon::{
     exec::run::ReadView,
-    fft::run::{Bank, Buffers, Request, Resources},
+    fft::execution::{Bank, Buffers, Request, Resources},
     field::{PastaField, PrimeModulus},
 };
 

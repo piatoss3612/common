@@ -8,7 +8,7 @@ use udon::{
     fft::{
         Direction, Domain, EvaluationLayout, EvaluationView, Expansion,
         ExpansionScaleNormalization, ExpansionScales, InputStorage, StorageLayout, Tables,
-        TransformRequest, TwiddleTable, run::FftPlan,
+        TransformRequest, TwiddleTable, execution::FftPlan,
     },
     field::{PastaField, PrimeModulus},
 };

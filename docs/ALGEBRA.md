@@ -42,7 +42,7 @@ curve's **scalar** field. Each linked entry states the additional hypotheses.
 | A polynomial supported at a few domain nodes | Factor out the complement's vanishing polynomial and use [short_product](algebra/FFT.md#expansionshort_product). |
 | Almost all evaluations equal one constant | Write `f = c + sum (y_i-c)*L_i` and use [constant-prefix interpolation or extension](algebra/FFT.md#constant-prefix-interpolation). |
 | A numerator divisible by `X^n-1`, sampled away from its roots | Use [VanishingDivision](algebra/FFT.md#vanishingdivision) for quotient pieces, or its factors for divided evaluations. |
-| A sum of polynomials sampled on different domains | [Class interpolation](algebra/FFT.md#runinterpolationplan-for-a-sum-of-classes) interpolates and adds coefficients with zero extension. |
+| A sum of polynomials sampled on different domains | [Class interpolation](algebra/FFT.md#executioninterpolationplan-for-a-sum-of-classes) interpolates and adds coefficients with zero extension. |
 | A coefficient commitment whose input is available as evaluations | Apply the inverse group FFT to the bases: [reference transforms](algebra/FFT.md#reference-transforms-and-group-bases). |
 
 ## Move linear work to the side that repeats

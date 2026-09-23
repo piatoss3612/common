@@ -2,7 +2,7 @@
 
 use crate::{
     exec::run::ReadView,
-    fft::run::{Bank, Buffers, FftPlan, Request, Resources},
+    fft::execution::{Bank, Buffers, FftPlan, Request, Resources},
     field::{PastaField, PrimeModulus},
 };
 use core::ops::Range;

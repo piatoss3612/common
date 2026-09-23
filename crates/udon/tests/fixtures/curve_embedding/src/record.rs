@@ -6,6 +6,7 @@ use udon::{
         PastaCurve, PreparedAffinePoint,
     },
     fft::Domain,
+    field::PastaField,
 };
 
 pub const DESCRIPTION: FixedBaseDescription = FixedBaseDescription { window_bits: 4 };
@@ -82,7 +83,7 @@ impl<C: PastaCurve> SrsRecord<C> {
     }
 
     /// The domain shared by the generator and consumer.
-    pub fn domain(&self) -> Domain<C::Scalar> {
+    pub fn domain(&self) -> Domain<PastaField<C::Scalar>> {
         Domain::for_size(SRS_SIZE).unwrap()
     }
 }

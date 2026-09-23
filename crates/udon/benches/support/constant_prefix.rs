@@ -7,15 +7,15 @@ use zakura_udon::{
         ConstantPrefixExpansion, Direction, Domain, ElementOrder, Expansion, ExpansionOrder,
         ExpansionScaleNormalization, ExpansionScales, ExpansionStorage, InputSupport,
         StorageLayout, TransformRequest,
-        run::{ExpansionPlan, FftPlan},
+        execution::{ExpansionPlan, FftPlan},
     },
     field::{ConstantPrefix, PastaField, PrimeModulus},
 };
 
 pub fn benchmarks<M: PrimeModulus>(criterion: &mut Criterion, field: &str) {
     for n in [64, 1024, 16384] {
-        let base = Domain::<M>::for_size(n).unwrap().subgroup();
-        let target = Domain::<M>::for_size(n * 4).unwrap().coset();
+        let base = Domain::<PastaField<M>>::for_size(n).unwrap().subgroup();
+        let target = Domain::<PastaField<M>>::for_size(n * 4).unwrap().coset();
         let size = target.size();
         let tables = super::Prepared::new(base);
         let transform = tables.tables().bind(base);

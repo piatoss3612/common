@@ -64,7 +64,7 @@ fn ranges_field<M: PrimeModulus>() {
     let p = modulus::<M>();
     let sentinel = from_raw::<M>(&(&p * 2u8 - 1u8));
     for log in 0..=5 {
-        let subgroup = Domain::<M>::new(log).unwrap();
+        let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
         let n = subgroup.size();
         for domain in [subgroup.subgroup(), subgroup.coset()] {
             let mut points: Vec<_> = field_samples::<M>().take(3).collect();
@@ -159,7 +159,7 @@ fn lagrange_ranges_match_integer_basis_products() {
 }
 
 fn grouped_field<M: PrimeModulus>() {
-    let subgroup = Domain::<M>::new(4).unwrap();
+    let subgroup = Domain::<PastaField<M>>::new(4).unwrap();
     let domains = [subgroup.subgroup(), subgroup.coset(), subgroup.coset()];
     let points = [
         PastaField::from_u64(7),
@@ -237,7 +237,7 @@ fn lagrange_completion_shares_unscaled_inversion_batches() {
 }
 
 fn errors_field<M: PrimeModulus>() {
-    let domain = Domain::<M>::new(3).unwrap().coset();
+    let domain = Domain::<PastaField<M>>::new(3).unwrap().coset();
     let original = [from_raw::<M>(&(modulus::<M>() * 2u8 - 1u8)); 12];
     for range in [
         core::ops::Range { start: 2, end: 1 },
@@ -313,7 +313,7 @@ fn errors_field<M: PrimeModulus>() {
     // Exercise the largest addressable domain without allocating its full size.
     let subgroup = (0..=32)
         .rev()
-        .find_map(|log| Domain::<M>::new(log).ok())
+        .find_map(|log| Domain::<PastaField<M>>::new(log).ok())
         .unwrap();
     let n = subgroup.size();
     for domain in [subgroup.subgroup(), subgroup.coset()] {

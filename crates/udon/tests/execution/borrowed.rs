@@ -9,7 +9,7 @@ use zakura_udon::{
         ExecutionOptions, SerialExecutor, TaskBudget,
         run::{Identity, TaskStorage},
     },
-    fft::{self, run as fft_run},
+    fft::{self, execution as fft_run},
     field::{Fp, Fq, PallasBase},
 };
 

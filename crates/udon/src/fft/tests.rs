@@ -14,6 +14,7 @@ mod composition;
 mod constant_prefix;
 mod contracts;
 mod expansion_engine;
+mod domain;
 mod lagrange;
 mod operations;
 mod pipelines;
@@ -104,7 +105,7 @@ pub(super) fn ordered<M: PrimeModulus>(
             values[if order == ElementOrder::Natural {
                 i
             } else {
-                reverse(i, values.len().ilog2())
+                bit_reverse(i, values.len().ilog2())
             }]
         })
         .collect()
@@ -162,7 +163,7 @@ fn assert_loose_bound<M: PrimeModulus>(values: &[PastaField<M>]) {
 fn small_transforms<M: PrimeModulus>() {
     // Debug must be available with only the public field-modulus bound.
     fn assert_debug<T: core::fmt::Debug>() {}
-    assert_debug::<Domain<M>>();
+    assert_debug::<Domain<PastaField<M>>>();
     assert_debug::<CosetDomain<M>>();
     assert_debug::<Transform<'_, M>>();
     assert_debug::<Tables<'_, M>>();
@@ -200,8 +201,8 @@ fn small_transforms<M: PrimeModulus>() {
         counts
     };
     for log in 0..=6 {
-        let subgroup = Domain::<M>::new(log).unwrap();
-        let by_size = Domain::<M>::for_size(1 << log).unwrap();
+        let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
+        let by_size = Domain::<PastaField<M>>::for_size(1 << log).unwrap();
         assert_eq!(by_size.size(), subgroup.size());
         assert_eq!(by_size.log_size(), log);
         assert_eq!((by_size.root()).reduce(), (subgroup.root()).reduce());
@@ -315,7 +316,7 @@ fn small_dfts_both_fields_all_table_modes() {
 
 fn prefixes<M: PrimeModulus>() {
     for log in 0..=8 {
-        let domain = Domain::<M>::new(log).unwrap().coset();
+        let domain = Domain::<PastaField<M>>::new(log).unwrap().coset();
         let prepared = Prepared::new(domain);
         let input = inputs(domain.size());
         for table in [Tables::default(), prepared.tables()] {
@@ -391,7 +392,7 @@ impl Executor for Threads {
 
 fn source_sizes<M: PrimeModulus>() {
     for log in 11..=14 {
-        let domain = Domain::<M>::new(log).unwrap().coset();
+        let domain = Domain::<PastaField<M>>::new(log).unwrap().coset();
         let prepared = Prepared::new(domain);
         let plan = prepared.tables().bind(domain);
         let coefficients = inputs(domain.size());
@@ -440,7 +441,7 @@ fn larger_transform<M: PrimeModulus>() {
             (PastaField::<_>::ONE.neg()).reduce()
         );
     }
-    let subgroup = Domain::<M>::for_size(1 << 16).unwrap();
+    let subgroup = Domain::<PastaField<M>>::for_size(1 << 16).unwrap();
     assert_eq!(subgroup.log_size(), 16);
     let domain = subgroup.coset();
     let prepared = Prepared::new(domain);
@@ -480,7 +481,7 @@ fn larger_transforms_and_all_root_orders_match_reference() {
 
 fn expansions<M: PrimeModulus>() {
     for log in [0, 1, 3, 6] {
-        let base_domain = Domain::<M>::new(log).unwrap();
+        let base_domain = Domain::<PastaField<M>>::new(log).unwrap();
         let base_tables = Prepared::new(base_domain.subgroup());
         let base = base_tables.tables().bind(base_domain.subgroup());
         let coefficients = inputs(base_domain.size());
@@ -628,7 +629,7 @@ fn residue_expansion_and_fused_short_products_match_direct_evaluation() {
 }
 
 fn large_expansion<M: PrimeModulus>() {
-    let base_domain = Domain::<M>::new(11).unwrap();
+    let base_domain = Domain::<PastaField<M>>::new(11).unwrap();
     let prepared = Prepared::new(base_domain.subgroup());
     let base = prepared.tables().bind(base_domain.subgroup());
     let coefficients = inputs(base_domain.size());
@@ -734,7 +735,7 @@ impl Executor for FailAt {
 
 #[test]
 fn every_expansion_transform_uses_the_callers_executor_and_options() {
-    let base = Transform::new(Domain::<PallasBase>::new(6).unwrap().subgroup());
+    let base = Transform::new(Domain::<Fp>::new(6).unwrap().subgroup());
     let coefficients = inputs(base.domain().size());
     let options = ExpansionStrategy {
         // With no joins across residues, every observed join is intra-residue.
@@ -811,7 +812,7 @@ fn every_expansion_transform_uses_the_callers_executor_and_options() {
 }
 
 fn prepared_evaluation_expansions<M: PrimeModulus>() {
-    let subgroup = Domain::<M>::new(6).unwrap().subgroup();
+    let subgroup = Domain::<PastaField<M>>::new(6).unwrap().subgroup();
     let prepared = Prepared::new(subgroup);
     let coefficients = inputs::<M>(subgroup.size());
     let evaluations = direct(&coefficients, subgroup);
@@ -891,7 +892,7 @@ fn prepared_evaluation_expansion_supports_every_base_table_subset() {
 }
 
 fn constant_prefixes<M: PrimeModulus>() {
-    let base = Transform::new(Domain::<M>::new(6).unwrap().subgroup());
+    let base = Transform::new(Domain::<PastaField<M>>::new(6).unwrap().subgroup());
     let transform = Strategy {
         tile_len: 8,
         columns_per_task: 3,
@@ -1005,7 +1006,7 @@ fn constant_prefixes_and_subgroup_copies_skip_transform_scheduling() {
 
 #[test]
 fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
-    let base = Transform::new(Domain::<PallasBase>::new(6).unwrap().subgroup());
+    let base = Transform::new(Domain::<Fp>::new(6).unwrap().subgroup());
     let input = inputs(base.domain().size());
     let transform = Strategy {
         tile_len: 8,
@@ -1165,9 +1166,9 @@ fn expansion_validates_options_and_partitioned_scratch_before_mutation() {
 }
 
 fn classed<M: PrimeModulus>(log: u32) {
-    let domain = Domain::<M>::new(log).unwrap().coset();
-    let smaller = Domain::<M>::new(log - 1).unwrap().coset();
-    let smallest = Domain::<M>::new(log - 2).unwrap().subgroup();
+    let domain = Domain::<PastaField<M>>::new(log).unwrap().coset();
+    let smaller = Domain::<PastaField<M>>::new(log - 1).unwrap().coset();
+    let smallest = Domain::<PastaField<M>>::new(log - 2).unwrap().subgroup();
     let full_coefficients = inputs(domain.size());
     let small_coefficients = inputs(smaller.size());
     let smallest_coefficients = inputs(smallest.size());
@@ -1218,7 +1219,7 @@ fn classed<M: PrimeModulus>(log: u32) {
         for tasks in [1, 3] {
             let mut values = [full.clone(), small.clone(), smallest_values.clone()];
             let transforms = [plan, small_plan, Transform::new(smallest)].map(|plan| {
-                run::FftPlan::with_strategy(
+                execution::FftPlan::with_strategy(
                     plan,
                     TransformRequest {
                         input_order: if plan.domain().size() == smallest.size() {
@@ -1233,7 +1234,7 @@ fn classed<M: PrimeModulus>(log: u32) {
                 )
                 .unwrap()
             });
-            let plan = run::InterpolationPlan::with_transforms(transforms, false);
+            let plan = execution::InterpolationPlan::with_transforms(transforms, false);
             let mut scratch: [_; 3] = core::array::from_fn(|i| {
                 vec![PastaField::ONE; plan.snapshot_fields(i).unwrap() + 2]
             });
@@ -1432,7 +1433,7 @@ fn size_queries_validate_without_constructing_domains() {
 
     for log in 0..usize::BITS {
         let size = 1usize << log;
-        let expected = Domain::<PallasBase>::for_size(size).map(|_| ());
+        let expected = Domain::<Fp>::for_size(size).map(|_| ());
         assert_eq!(TableRequirements::for_size(size).map(|_| ()), expected);
         assert_eq!(Strategy::SERIAL.requirements(size).map(|_| ()), expected);
         assert_eq!(
@@ -1464,28 +1465,19 @@ fn size_queries_validate_without_constructing_domains() {
 
 #[test]
 fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
+    assert!(matches!(Domain::<Fp>::new(33), Err(FftError::InvalidSize)));
     assert!(matches!(
-        Domain::<PallasBase>::new(33),
-        Err(FftError::InvalidSize)
-    ));
-    assert!(matches!(
-        Domain::<PallasBase>::new(u32::MAX),
+        Domain::<Fp>::new(u32::MAX),
         Err(FftError::InvalidSize)
     ));
     for size in [0, 3, 7, usize::MAX] {
-        assert!(Domain::<PallasBase>::for_size(size).is_err());
+        assert!(Domain::<Fp>::for_size(size).is_err());
     }
     let domain = Domain::new(6).unwrap().subgroup();
     if usize::BITS == 32 {
-        assert!(matches!(
-            Domain::<PallasBase>::new(32),
-            Err(FftError::SizeOverflow)
-        ));
+        assert!(matches!(Domain::<Fp>::new(32), Err(FftError::SizeOverflow)));
     } else {
-        assert_eq!(
-            Domain::<PallasBase>::new(32).unwrap().size() as u64,
-            1u64 << 32
-        );
+        assert_eq!(Domain::<Fp>::new(32).unwrap().size() as u64, 1u64 << 32);
     }
     let plan = Transform::new(domain);
     let options = Strategy {
@@ -1624,7 +1616,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
         assert_eq!(bytes_of_slice(&output), bytes_of_slice(&original));
     }
     assert!(matches!(
-        run::InterpolationPlan::new(
+        execution::InterpolationPlan::new(
             [
                 (Transform::new(domain), ElementOrder::Natural),
                 (
@@ -1716,7 +1708,7 @@ fn invalid_descriptions_and_short_scratch_do_not_mutate_buffers() {
 
 #[test]
 fn table_preparation_checks_all_lengths_before_writing() {
-    let domain = Domain::<PallasBase>::new(3).unwrap().coset();
+    let domain = Domain::<PastaField<PallasBase>>::new(3).unwrap().coset();
     let mut valid = [Fp::from_u64(17); 4];
     let mut wrong = [Fp::ONE; 3];
     assert!(
@@ -1768,7 +1760,7 @@ fn executor_panics_leave_public_buffers_within_loose_bounds() {
             panic!("executor failure");
         }
     }
-    let domain = Domain::<PallasBase>::new(6).unwrap().subgroup();
+    let domain = Domain::<Fp>::new(6).unwrap().subgroup();
     let plan = Transform::new(domain);
     let options = Strategy {
         tile_len: 8,
@@ -1820,7 +1812,7 @@ fn inverse_panics_leave_outputs_and_scratch_within_loose_bounds() {
             columns_per_task: 3,
             max_tasks: 3,
         };
-        let subgroup = Domain::<M>::new(7).unwrap();
+        let subgroup = Domain::<PastaField<M>>::new(7).unwrap();
         let input = inputs(subgroup.size());
         for coset in [false, true] {
             let domain = if coset {
@@ -1871,7 +1863,7 @@ fn inverse_panics_leave_outputs_and_scratch_within_loose_bounds() {
 
 #[test]
 fn nested_expansion_panics_leave_all_scratch_partitions_canonical() {
-    let base = Transform::new(Domain::<PallasBase>::new(6).unwrap().subgroup());
+    let base = Transform::new(Domain::<Fp>::new(6).unwrap().subgroup());
     let expansion = Expansion::new(base, Domain::new(9).unwrap().subgroup(), None).unwrap();
     let options = ExpansionStrategy {
         max_residue_tasks: 3,

@@ -16,7 +16,7 @@ use zakura_udon::{
     fft::{
         Direction, Domain, ElementOrder, Expansion, ExpansionOrder, ExpansionStorage, InputStorage,
         InputSupport, StorageLayout, Transform, TransformRequest,
-        run::{ExpansionPlan, ExpansionRun, FftPlan},
+        execution::{ExpansionPlan, ExpansionRun, FftPlan},
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -273,7 +273,7 @@ fn cached_plans_allow_unused_parallel_slots() {
 
 fn fft<M: PrimeModulus>() {
     for size in [64, 2048, 4096] {
-        let domain = Domain::<M>::for_size(size).unwrap().coset();
+        let domain = Domain::<PastaField<M>>::for_size(size).unwrap().coset();
         let transform = Transform::new(domain);
         for tasks in [1, 4] {
             for limit in [0, 64 * 32, size * 32] {
@@ -353,7 +353,7 @@ fn fft<M: PrimeModulus>() {
             }
         }
     }
-    let base = Transform::new(Domain::<M>::for_size(4096).unwrap().subgroup());
+    let base = Transform::new(Domain::<PastaField<M>>::for_size(4096).unwrap().subgroup());
     let expansion = Expansion::new(base, Domain::for_size(8192).unwrap().subgroup(), None).unwrap();
     let plan = ExpansionPlan::new(
         expansion,

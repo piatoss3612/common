@@ -3,7 +3,7 @@
 [Algebra reference](../ALGEBRA.md). The
 [`exec`](../../crates/udon/src/exec.rs),
 [`curve::msm::run`](../../crates/udon/src/curve/msm/run.rs), and
-[`fft::run`](../../crates/udon/src/fft/run.rs) APIs preserve the arithmetic
+[`fft::execution`](../../crates/udon/src/fft/execution/mod.rs) APIs preserve the arithmetic
 described in the other chapters while changing how its pieces become
 available. Choose a synchronous call when its result is the next useful
 boundary; choose an incremental run when independent work or downstream
@@ -255,7 +255,7 @@ consumers rather than being tied to the worker that executed them.
 
 ### `FftRun`
 
-`FftRun::new` binds an [`FftPlan`](FFT.md#runfftplan) to frontier
+`FftRun::new` binds an [`FftPlan`](FFT.md#executionfftplan) to frontier
 metadata; its `product` flag requests the plan's terminal elementwise
 factor in physical output order. `ready`, `ready_from`, `try_claim`,
 and `complete` expose and publish bounded stages until `is_complete`
@@ -299,7 +299,7 @@ bundles from the same storage.
 ### `ExpansionRun`, `ExpansionRequest`, and `ExpansionBank`
 
 `ExpansionRun<SLOTS>` executes an
-[`ExpansionPlan`](FFT.md#expansionstorage-and-runexpansionplan) through
+[`ExpansionPlan`](FFT.md#expansionstorage-and-executionexpansionplan) through
 a bounded set of inverse and residue-transform slots. Each completed
 residue represents the original bounded-degree polynomial on one specified
 target coset.
@@ -322,7 +322,7 @@ residue can enable its own consumer independently of later residues.
 
 `InterpolationRun<CLASSES>` incrementally computes the polynomial sum
 described by
-[`run::InterpolationPlan`](FFT.md#runinterpolationplan-for-a-sum-of-classes).
+[`execution::InterpolationPlan`](FFT.md#executioninterpolationplan-for-a-sum-of-classes).
 `new` binds transform and addition frontiers per class.
 `ready_transform_from` and `try_claim_transform` expose inverses;
 `ready_addition_from` and `try_claim_addition` expose merges and

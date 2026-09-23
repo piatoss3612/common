@@ -1,5 +1,5 @@
 use super::*;
-use crate::fft::run::FftPlan;
+use crate::fft::execution::FftPlan;
 use crate::test_support::max_loose_limbs;
 use core::num::NonZeroUsize;
 
@@ -11,7 +11,7 @@ fn operations<M: PrimeModulus>() {
     for log in 0..=6 {
         for coset in [false, true] {
             let domain = {
-                let subgroup = Domain::<M>::new(log).unwrap();
+                let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
                 if coset {
                     subgroup.coset()
                 } else {
@@ -94,7 +94,7 @@ fn schedules_and_orders_match_independent_transforms() {
 }
 
 fn prefixes_and_products<M: PrimeModulus>() {
-    let domain = Domain::<M>::new(5).unwrap().coset();
+    let domain = Domain::<PastaField<M>>::new(5).unwrap().coset();
     let plan = Transform::new(domain);
     let values = inputs(domain.size());
     let factors = direct(&values, domain);
@@ -184,7 +184,7 @@ fn inverse_prefix_scale_and_terminal_products_match_direct_sums() {
 }
 
 fn twiddle_tables<M: PrimeModulus, E: Executor>(executor: &E) {
-    let domain = Domain::<M>::new(6).unwrap().coset();
+    let domain = Domain::<PastaField<M>>::new(6).unwrap().coset();
     let plan = Transform::new(domain);
     let input = inputs(domain.size());
     for size in [1, 8, 64, 256] {
@@ -232,7 +232,7 @@ fn bound_plan_tables<M: PrimeModulus>() {
     for log in [0, 1, 2, 3, 8] {
         for coset in [false, true] {
             let domain = {
-                let subgroup = Domain::<M>::new(log).unwrap();
+                let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
                 if coset {
                     subgroup.coset()
                 } else {
@@ -312,7 +312,7 @@ fn periodic_inverse<M: PrimeModulus>() {
     for log in 0..=6 {
         for coset in [false, true] {
             let domain = {
-                let subgroup = Domain::<M>::new(log).unwrap();
+                let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
                 if coset {
                     subgroup.coset()
                 } else {
@@ -457,7 +457,7 @@ fn transform_configuration_and_scratch_are_checked_before_mutation() {
 
 #[test]
 fn parallel_panics_preserve_loose_field_bounds() {
-    let domain = Domain::<PallasScalar>::new(8).unwrap().coset();
+    let domain = Domain::<PastaField<PallasScalar>>::new(8).unwrap().coset();
     let prepared = Prepared::new(domain);
     for tables in [Tables::default(), prepared.tables()] {
         let plan = tables.bind(domain);

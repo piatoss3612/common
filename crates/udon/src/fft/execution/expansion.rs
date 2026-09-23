@@ -265,7 +265,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
 
     fn transform(&self, block: usize, in_place: bool) -> FftPlan<'t, M> {
         let residue = if self.order == ExpansionOrder::BitReversed {
-            reverse(block, self.residues().ilog2())
+            bit_reverse(block, self.residues().ilog2())
         } else {
             block
         };

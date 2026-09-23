@@ -10,7 +10,9 @@ use zakura_udon::{
     },
     fft::{
         ClassState, Domain, ElementOrder, StorageLayout, Transform,
-        run::{AdditionKernel, Bank, FftKernel, InterpolationPlan, InterpolationRun, Request},
+        execution::{
+            AdditionKernel, Bank, FftKernel, InterpolationPlan, InterpolationRun, Request,
+        },
     },
     field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
 };
@@ -47,7 +49,7 @@ fn check<M: PrimeModulus>() {
         for tile in [8, 64] {
             for flip in [false, true] {
                 let plans = core::array::from_fn::<_, CLASSES, _>(|i| {
-                    let domain = Domain::<M>::for_size(sizes[i]).unwrap();
+                    let domain = Domain::<PastaField<M>>::for_size(sizes[i]).unwrap();
                     Transform::new(if cosets[i] {
                         domain.coset()
                     } else {

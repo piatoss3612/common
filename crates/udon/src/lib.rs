@@ -24,7 +24,8 @@
 //! inherent arithmetic. [`fft::Domain`] runs the generic reference transforms
 //! and evaluates vanishing and Lagrange polynomials, [`poly`] provides
 //! polynomial utilities over the field traits, and [`poseidon`] carries
-//! the Pasta Poseidon parameters.
+//! the Pasta Poseidon parameters. [`cycle`] binds the fields, curves,
+//! generators, and Poseidon instances of a curve cycle to one marker type.
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
 //! embedded storage. Construction establishes their invariants; embedding
@@ -69,6 +70,7 @@
 
 mod checks;
 pub mod curve;
+pub mod cycle;
 pub mod exec;
 pub mod fft;
 pub mod field;

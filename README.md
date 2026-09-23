@@ -53,7 +53,10 @@ and `DeferredField` traits describe both fields to generic code such as proof
 systems parameterized over the curve cycle. The
 [`poly` module](crates/udon/src/poly/mod.rs) provides polynomial utilities over
 those traits, and the [`poseidon` module](crates/udon/src/poseidon/mod.rs)
-carries the Pasta Poseidon parameters.
+carries the Pasta Poseidon parameters. The
+[`cycle` module](crates/udon/src/cycle.rs) binds the fields, curves, borrowed
+generators, and Poseidon instances of the Pasta cycle to one `Cycle` marker for
+proof systems generic over a curve cycle.
 Fields implement `bento::Pod`, so downstream build scripts can generate them
 with Udon and embed their Montgomery representations for direct runtime use;
 see the [field storage example](docs/POD.md#storing-field-elements).

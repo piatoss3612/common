@@ -2,13 +2,10 @@ use core::fmt;
 
 use super::{Field, PastaField, PrimeModulus};
 
-fn inverse_seed<M: PrimeModulus>(
-    value: &PastaField<M>,
-    scale: Option<&PastaField<M>>,
-) -> Option<PastaField<M>> {
+fn inverse_seed<F: Field>(value: &F, scale: Option<&F>) -> Option<F> {
     value
         .invert()
-        .map(|inverse| scale.map_or(inverse, |scale| inverse.mul(scale)))
+        .map(|inverse| scale.map_or(inverse, |scale| inverse * scale))
 }
 
 /// Two product chains sharing one inversion.
@@ -17,36 +14,31 @@ fn inverse_seed<M: PrimeModulus>(
 /// reverse order with the saved prefixes. Separate even and odd lanes shorten
 /// multiplication dependencies. Callers can seed the lanes with their first
 /// factors to avoid multiplication by one and unused final updates.
-struct InversionLanes<M: PrimeModulus>([PastaField<M>; 2]);
+struct InversionLanes<F: Field>([F; 2]);
 
-impl<M: PrimeModulus> InversionLanes<M> {
-    fn push(&mut self, index: usize, value: &PastaField<M>) -> PastaField<M> {
+impl<F: Field> InversionLanes<F> {
+    fn push(&mut self, index: usize, value: &F) -> F {
         let product = &mut self.0[index & 1];
         let prefix = *product;
-        *product = product.mul(value);
+        *product *= value;
         prefix
     }
 
-    fn invert(self, scale: Option<&PastaField<M>>) -> Self {
+    fn invert(self, scale: Option<&F>) -> Self {
         // For lane products a and b, multiplying (a*b)^-1 by the opposite
         // product recovers each lane's inverse with one field inversion.
         // Applying the scale to this seed carries it into both recovery lanes.
-        let inverse = inverse_seed(&self.0[0].mul(&self.0[1]), scale)
+        let inverse = inverse_seed(&(self.0[0] * self.0[1]), scale)
             .expect("a product of nonzero field elements is nonzero");
-        Self([inverse.mul(&self.0[1]), inverse.mul(&self.0[0])])
+        Self([inverse * self.0[1], inverse * self.0[0]])
     }
 
-    fn pop(
-        &mut self,
-        index: usize,
-        value: &PastaField<M>,
-        prefix: &PastaField<M>,
-    ) -> PastaField<M> {
+    fn pop(&mut self, index: usize, value: &F, prefix: &F) -> F {
         let inverse = &mut self.0[index & 1];
         // The prefix cancels earlier factors; multiplying by this value then
         // removes it from the lane inverse for the next step.
-        let result = inverse.mul(prefix);
-        *inverse = inverse.mul(value);
+        let result = *inverse * prefix;
+        *inverse *= value;
         result
     }
 }
@@ -61,20 +53,20 @@ impl<M: PrimeModulus> InversionLanes<M> {
 /// A lane's first push returns `None`, and its matching pop ignores the prefix.
 /// Seeding these endpoints avoids multiplication by one; a single occupied lane
 /// also avoids the product merge needed to share an inversion across two lanes.
-pub(crate) struct NonzeroInversionLanes<M: PrimeModulus> {
-    products: InversionLanes<M>,
+pub(crate) struct NonzeroInversionLanes<F: Field> {
+    products: InversionLanes<F>,
     first: [Option<usize>; 2],
 }
 
-impl<M: PrimeModulus> NonzeroInversionLanes<M> {
+impl<F: Field> NonzeroInversionLanes<F> {
     pub(crate) fn new() -> Self {
         Self {
-            products: InversionLanes([PastaField::ONE; 2]),
+            products: InversionLanes([F::ONE; 2]),
             first: [None; 2],
         }
     }
 
-    pub(crate) fn push(&mut self, index: usize, value: &PastaField<M>) -> Option<PastaField<M>> {
+    pub(crate) fn push(&mut self, index: usize, value: &F) -> Option<F> {
         let lane = index & 1;
         if self.first[lane].is_some() {
             Some(self.products.push(index, value))
@@ -89,7 +81,7 @@ impl<M: PrimeModulus> NonzeroInversionLanes<M> {
         self.invert_scaled(None)
     }
 
-    fn invert_scaled(mut self, scale: Option<&PastaField<M>>) -> Option<Self> {
+    fn invert_scaled(mut self, scale: Option<&F>) -> Option<Self> {
         let lane = match self.first {
             [None, None] => return None,
             [Some(_), Some(_)] => {
@@ -104,12 +96,7 @@ impl<M: PrimeModulus> NonzeroInversionLanes<M> {
         Some(self)
     }
 
-    pub(crate) fn pop(
-        &mut self,
-        index: usize,
-        value: &PastaField<M>,
-        prefix: &PastaField<M>,
-    ) -> PastaField<M> {
+    pub(crate) fn pop(&mut self, index: usize, value: &F, prefix: &F) -> F {
         if self.first[index & 1] == Some(index) {
             self.products.0[index & 1]
         } else {
@@ -183,17 +170,20 @@ impl core::error::Error for BatchInversionError {}
 /// fields the entire input is one batch; smaller buffers bound the batch size,
 /// and empty scratch inverts values individually. Initial scratch contents do
 /// not matter and the unused tail is untouched. No allocation is performed.
+/// Empty or all-zero inputs perform no inversion.
 /// Arithmetic is variable-time, including the locations of zeros.
+///
+/// Dispatches through [`Field::batch_invert`].
 ///
 /// ```
 /// use zakura_udon::field::{Fp, batch_invert};
 /// let mut values = [Fp::from_u64(7), Fp::ZERO, Fp::from_u64(3)];
-/// batch_invert(&mut values, &mut [Fp::ZERO; 3]);
+/// batch_invert(&mut values, &mut [Fp::ZERO; 2]);
 /// assert_eq!(values[0].mul(&<Fp>::from_u64(7)).reduce(), Fp::ONE);
 /// assert!(values[1].is_zero());
 /// ```
-pub fn batch_invert<M: PrimeModulus>(values: &mut [PastaField<M>], scratch: &mut [PastaField<M>]) {
-    batch_invert_groups(&mut [values], scratch)
+pub fn batch_invert<F: Field>(values: &mut [F], scratch: &mut [F]) {
+    F::batch_invert(values, scratch)
 }
 
 /// Replaces each nonzero value `x` by `scale / x`, preserving zeros.
@@ -219,45 +209,11 @@ pub fn batch_invert_scaled<M: PrimeModulus>(
     batch_invert_groups_scaled(&mut [values], scale, scratch)
 }
 
-/// Replaces each nonzero value by its inverse, preserving zeros.
+/// Equivalent to [`batch_invert`], including support for small or empty scratch.
 ///
-/// Montgomery's trick uses one inversion and three multiplications per element
-/// for the whole slice. `scratch` holds the running prefix products and must
-/// have at least `values.len()` elements; its initial contents do not matter
-/// and its unused tail is untouched. Arithmetic is variable-time, including
-/// the locations of zeros.
-///
-/// This is the form for code generic over [`Field`]. Pasta callers can also
-/// use [`batch_invert`], which accepts smaller scratch.
-///
-/// # Panics
-///
-/// Panics before any write if `scratch` is shorter than `values`.
+/// See [`batch_invert`] for the scratch and zero-preservation contract.
 pub fn batch_invert_with_scratch<F: Field>(values: &mut [F], scratch: &mut [F]) {
-    assert!(
-        scratch.len() >= values.len(),
-        "batch inversion scratch must cover every value"
-    );
-
-    let mut product = F::ONE;
-    for (value, prefix) in values.iter().zip(scratch.iter_mut()) {
-        *prefix = product;
-        if !value.is_zero() {
-            product *= value;
-        }
-    }
-
-    let mut inverse = product
-        .invert()
-        .expect("a product of nonzero field elements is nonzero");
-    for (value, prefix) in values.iter_mut().zip(scratch.iter()).rev() {
-        if value.is_zero() {
-            continue;
-        }
-        let value_inverse = inverse * prefix;
-        inverse *= *value;
-        *value = value_inverse;
-    }
+    batch_invert(values, scratch)
 }
 
 /// Inverts nonzero values across disjoint slices with shared inversions.
@@ -274,10 +230,7 @@ pub fn batch_invert_with_scratch<F: Field>(values: &mut [F], scratch: &mut [F]) 
 /// Each group's [`AsMut::as_mut`] must expose the same slice throughout the
 /// call. Arrays, mutable slices, and vectors satisfy this requirement. A custom
 /// implementation that changes its view can produce incorrect results or panic.
-pub fn batch_invert_groups<M: PrimeModulus>(
-    groups: &mut [impl AsMut<[PastaField<M>]>],
-    scratch: &mut [PastaField<M>],
-) {
+pub fn batch_invert_groups<F: Field>(groups: &mut [impl AsMut<[F]>], scratch: &mut [F]) {
     batch_invert_groups_inner(groups, None, scratch)
 }
 
@@ -297,15 +250,17 @@ pub fn batch_invert_groups_scaled<M: PrimeModulus>(
     batch_invert_groups_inner(groups, Some(scale), scratch)
 }
 
-fn batch_invert_groups_inner<M: PrimeModulus>(
-    groups: &mut [impl AsMut<[PastaField<M>]>],
-    scale: Option<&PastaField<M>>,
-    scratch: &mut [PastaField<M>],
+fn batch_invert_groups_inner<F: Field>(
+    groups: &mut [impl AsMut<[F]>],
+    scale: Option<&F>,
+    scratch: &mut [F],
 ) {
     if scratch.is_empty() {
         for group in groups {
             for value in group.as_mut() {
-                *value = inverse_seed(value, scale).unwrap_or(PastaField::ZERO);
+                if !value.is_zero() {
+                    *value = inverse_seed(value, scale).expect("nonzero value");
+                }
             }
         }
         return;

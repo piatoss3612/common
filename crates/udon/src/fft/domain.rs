@@ -4,7 +4,7 @@ use super::{
     FftError, check_element_count, factors::Shift,
     reference::{Butterfly, inverse_transform, transform},
 };
-use crate::field::{FftField, PastaField, PrimeModulus, batch_invert_with_scratch};
+use crate::field::{FftField, PastaField, PrimeModulus, batch_invert};
 
 /// A radix-2 subgroup with its canonical root of unity and the scalars
 /// transforms over it need.
@@ -188,7 +188,7 @@ impl<F: FftField> Domain<F> {
             *evaluation = x - power;
             power *= self.root;
         }
-        batch_invert_with_scratch(evaluations, scratch);
+        batch_invert(evaluations, scratch);
 
         let mut numerator = vanishing * self.size_inverse;
         for evaluation in evaluations.iter_mut() {

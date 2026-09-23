@@ -1,8 +1,9 @@
 use super::*;
 use crate::field::count_inversions;
 use crate::field::{
-    BatchInversionError, batch_invert, batch_invert_groups, batch_invert_groups_scaled,
-    batch_invert_scaled, try_batch_invert_by, try_batch_invert_scaled_by,
+    BatchInversionError, Field, batch_invert, batch_invert_groups, batch_invert_groups_scaled,
+    batch_invert_scaled, batch_invert_with_scratch, try_batch_invert_by,
+    try_batch_invert_scaled_by,
 };
 use crate::test_support::field_samples;
 
@@ -86,7 +87,7 @@ fn exercise<M: PrimeModulus>() {
         batch_invert(&mut zeros, &mut scratch);
         assert!(zeros.iter().all(PastaField::is_zero));
     }
-    batch_invert_groups::<M>(&mut [] as &mut [&mut [PastaField<M>]], &mut []);
+    batch_invert_groups::<PastaField<M>>(&mut [] as &mut [&mut [PastaField<M>]], &mut []);
     let mut singleton = [sentinel];
     batch_invert(&mut singleton, &mut scratch);
     assert_eq!(
@@ -116,6 +117,74 @@ fn exercise<M: PrimeModulus>() {
 fn zero_preserving_batches() {
     exercise::<PallasBase>();
     exercise::<PallasScalar>();
+}
+
+fn single_slice_batches<M: PrimeModulus>() {
+    type Invert<F> = fn(&mut [F], &mut [F]);
+    // Exercise the trait method and both public names against the independent
+    // integer inverse.
+    let methods: [(&str, Invert<PastaField<M>>); 3] = [
+        ("batch_invert", batch_invert::<PastaField<M>>),
+        ("with_scratch", batch_invert_with_scratch::<PastaField<M>>),
+        ("trait", <PastaField<M> as Field>::batch_invert),
+    ];
+    let p = modulus::<M>();
+    let samples = samples::<M>(9);
+    let sentinel = PastaField::<M>::from_u64(19);
+    for all_zero in [false, true] {
+        let original: Vec<_> = samples
+            .iter()
+            .map(|(value, _)| if all_zero { PastaField::ZERO } else { *value })
+            .collect();
+        let integers: Vec<_> = samples
+            .iter()
+            .map(|(_, integer)| {
+                if all_zero {
+                    BigUint::from(0u8)
+                } else {
+                    integer.clone()
+                }
+            })
+            .collect();
+        let expected: Vec<_> = integers
+            .iter()
+            .map(|integer| integer.modpow(&(&p - 2u8), &p))
+            .collect();
+        for len in [0, 1, 2, 3, 7, original.len()] {
+            for capacity in [0, 1, 2, 3, 7, len.saturating_sub(1), len, len + 3] {
+                let expected_inversions = original[..len]
+                    .chunks(capacity.max(1))
+                    .filter(|batch| batch.iter().any(|value| !value.is_zero()))
+                    .count();
+                for (name, invert) in methods {
+                    let mut values = original[..len].to_vec();
+                    let mut scratch = vec![sentinel; capacity + 2];
+                    // Reusing dirty scratch must also invert the result back.
+                    for expected in [&expected[..len], &integers[..len]] {
+                        let inversions = count_inversions(|| {
+                            invert(&mut values, &mut scratch[..capacity]);
+                        });
+                        assert_eq!(
+                            inversions, expected_inversions,
+                            "{name}, length {len}, capacity {capacity}, all zero {all_zero}"
+                        );
+                        for (actual, expected) in values.iter().zip(expected) {
+                            assert_value(*actual, expected);
+                        }
+                        assert!(scratch[len.min(capacity)..].iter().all(|value| {
+                            value.montgomery_limbs() == sentinel.montgomery_limbs()
+                        }));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn batch_entry_points_share_the_scratch_contract() {
+    single_slice_batches::<PallasBase>();
+    single_slice_batches::<PallasScalar>();
 }
 
 fn group_boundaries<M: PrimeModulus>() {

@@ -153,6 +153,10 @@ impl<M: PrimeModulus> Field for PastaField<M> {
         PastaField::invert(self)
     }
 
+    fn batch_invert(values: &mut [Self], scratch: &mut [Self]) {
+        super::batch_invert_groups(&mut [values], scratch)
+    }
+
     fn sqrt(&self) -> Option<Self> {
         self.reduce().sqrt().map(PastaField::into_loose)
     }

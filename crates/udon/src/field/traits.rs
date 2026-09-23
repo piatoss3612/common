@@ -85,6 +85,14 @@ pub trait Field:
     /// Returns the multiplicative inverse, or `None` for zero.
     fn invert(&self) -> Option<Self>;
 
+    /// Replaces nonzero values by their inverses, preserving zeros.
+    ///
+    /// Implements [`super::batch_invert`]'s contract: scratch bounds the batch
+    /// size, empty scratch uses individual inversions, and unused scratch is
+    /// untouched. Empty and all-zero batches perform no inversion. No
+    /// allocation is performed.
+    fn batch_invert(values: &mut [Self], scratch: &mut [Self]);
+
     /// Returns a square root, or `None` for a nonsquare.
     ///
     /// Either root may be returned; zero returns `Some(ZERO)`.

@@ -10,7 +10,7 @@ mod facade {
         },
         field::{
             ConstantPrefix, ConstantPrefixError, FftField, Fp, Fq, PallasBase, PallasScalar,
-            PastaField, PrimeModulus, Reduced,
+            PastaField, PrimeModulus, Reduced, batch_invert_groups, batch_invert_with_scratch,
         },
         polynomial::{
             EvaluationPlan, InterpolationError, InterpolationPlan, InterpolationPreparation,
@@ -333,6 +333,21 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
         generic(two),
         PastaField::<M>::ONE.neg() * four + PastaField::<M>::ONE
     );
+
+    // Both entry points work with only a Field bound and bounded scratch.
+    fn generic_batch<F: arithmetic::field::Field>(value: F) {
+        let original = [F::ZERO, value, value.square()];
+        let mut values = original;
+        let mut scratch = [F::ZERO; 2];
+        batch_invert_with_scratch(&mut values, &mut scratch);
+        assert_eq!(values[0], F::ZERO);
+        assert_eq!(values[1] * original[1], F::ONE);
+        assert_eq!(values[2] * original[2], F::ONE);
+        let (left, right) = values.split_at_mut(1);
+        batch_invert_groups(&mut [left, right], &mut scratch[..1]);
+        assert_eq!(values, original);
+    }
+    generic_batch(two);
 
     #[cfg(feature = "loose-order")]
     let _ = core::cmp::Ord::cmp(&two, &four);

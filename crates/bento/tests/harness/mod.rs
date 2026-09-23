@@ -1,3 +1,5 @@
+//! Nested Cargo execution and temporary workspaces shared by Bento consumers.
+
 use std::{
     path::Path,
     process::{Command, Output},

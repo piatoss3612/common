@@ -6,16 +6,15 @@
 
 use std::{fs, path::Path};
 
-mod support;
-use support::{cargo, diagnostics};
+use crate::harness::{self, cargo, diagnostics};
 
 #[test]
 fn generated_records_round_trip_through_file_embedding() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.join("../..").canonicalize().unwrap();
-    let temporary = support::workspace("bento-embedding-");
+    let temporary = harness::workspace("bento-embedding-");
     let directory = temporary.path();
-    let fixtures = manifest.join("tests/fixtures/pod/embedding");
+    let fixtures = manifest.join("tests/pod/fixtures/embedding");
     let facade = workspace.join("crates/bento");
     fs::create_dir_all(directory.join("src")).unwrap();
     fs::write(

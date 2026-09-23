@@ -62,6 +62,32 @@ modules contain production plans and kernels; `exec::execution` supplies their s
 task protocol. The
 [crate guide](CRATES.md#udon-module-boundaries) explains their ownership.
 
+## Bento test layout
+
+Bento's facade tests exercise macro expansion in callers and the storage APIs
+those expansions use. They are grouped by feature, with fixtures inside the
+owning suite. Paths below are relative to `crates/bento/`.
+
+| Location | Responsibility | Selection |
+| --- | --- | --- |
+| `tests/addition_chain/` | Expansion behavior, hygiene, value ownership, and compiler rejections | `--test addition_chain` |
+| `tests/const_arithmetic/` | Constant-only inputs and arithmetic precondition rejections | `--test const_arithmetic` |
+| `tests/pod/` | Derived records, byte views, compiler contracts, and artifact embedding | `--test pod` |
+| `tests/api/` | Dependency aliases, support paths, re-exports, and target portability | `--test api` |
+| `tests/<feature>/fixtures/` | Consumer source files and stored data owned by that suite | Through the owning tests |
+| `tests/harness/` | Cargo execution, isolated workspaces, and diagnostic checks | Included by the suites that need them |
+
+Each `main.rs` only declares its suite's modules. The dependency matrix owns
+its complete consumers under `tests/api/fixtures/dependencies/`, including
+their arithmetic and POD modules. It exercises those APIs through different
+dependency arrangements; feature-specific rejection cases live with their
+feature. Compiler case tables reuse one temporary workspace per matrix.
+POD's parameterized record cases stay in its compiler test as Rust tokens.
+
+Reference arithmetic and storage implementation tests stay beside their code
+in `bento-core`. Parser and expansion tests stay beside each macro in
+`bento-macros`, under the existing `proc/` and `derive/` modules.
+
 ## Test roles
 
 - Unit tests check algorithms and local contracts against independent references.
@@ -100,7 +126,7 @@ Miri checks storage separately from native nested-Cargo consumers:
 
 ```console
 cargo +nightly-2026-09-06 miri test --locked -p zakura-bento-core --lib pod::
-cargo +nightly-2026-09-06 miri test --locked -p zakura-bento --test pod
+cargo +nightly-2026-09-06 miri test --locked -p zakura-bento --test pod storage::
 cargo +nightly-2026-09-06 miri test --locked -p zakura-udon --test field --test curve pod::
 ```
 
@@ -108,7 +134,7 @@ Install that toolchain with `miri` and `rust-src` as described in CI. Portabilit
 requires the `thumbv7em-none-eabi` and `s390x-unknown-linux-gnu` target libraries:
 
 ```console
-cargo test --release --locked -p zakura-bento --test portability -- --ignored
+cargo test --release --locked -p zakura-bento --test api portability:: -- --ignored
 ```
 
 This builds `no_std` consumers with both square-root configurations, checks
@@ -127,8 +153,9 @@ without concurrent builds or tests.
 Keep complete Rust consumer programs in `.rs` files inside a `fixtures/`
 directory owned by their suite. Udon keeps field, curve, and FFT artifact
 consumers under their domain's `fixtures/embedding/` directory. Cross-domain
-compiler consumers live in `tests/api/fixtures/`; Bento keeps its consumers
-under `tests/fixtures/`.
+compiler consumers live in `tests/api/fixtures/`. Bento also groups its
+fixtures under their owning suites, including its dependency matrix under
+`tests/api/fixtures/dependencies/`.
 Preserve relative module and data paths. Udon's `api/fixtures/boundaries` fixture
 keeps successful facade use in `src/pass.rs` and rejections in separate field,
 curve, and FFT modules. Run one rejection feature

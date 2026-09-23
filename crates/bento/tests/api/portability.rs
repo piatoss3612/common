@@ -2,15 +2,14 @@
 
 use std::{fs, path::Path};
 
-mod support;
-use support::{cargo, diagnostics};
+use crate::harness::{self, cargo, diagnostics};
 
 #[test]
 #[ignore = "requires thumbv7em-none-eabi and s390x-unknown-linux-gnu target libraries"]
 fn target_portability_contracts() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let repository = manifest.join("../..").canonicalize().unwrap();
-    let temporary = support::workspace("bento-portability-");
+    let temporary = harness::workspace("bento-portability-");
     let root = temporary.path();
     fs::create_dir(root.join("src")).unwrap();
     let facade = repository.join("crates/bento");
@@ -42,7 +41,7 @@ sqrt-table-large = ["udon/sqrt-table-large"]
     .unwrap();
     fs::copy(repository.join("Cargo.lock"), root.join("Cargo.lock")).unwrap();
     fs::copy(
-        manifest.join("tests/fixtures/consumers/portability.rs"),
+        manifest.join("tests/api/fixtures/portability.rs"),
         root.join("src/lib.rs"),
     )
     .unwrap();

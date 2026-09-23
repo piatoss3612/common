@@ -226,7 +226,7 @@ indirect re-exports, or ambiguous arrangements; see the
 Follow the [testing guide](TESTING.md) for compiler, Miri, and portability
 checks. Use full builds to establish deferred layout failures, and generate
 files through the storage API when testing the artifact workflow. The
-[embedding round trip](../crates/bento/tests/embedding.rs) is one such consumer.
+[embedding round trip](../crates/bento/tests/pod/embedding.rs) is one such consumer.
 
 [pod-derive]: ../crates/bento/src/lib.rs
 [pod-contract]: ../crates/bento-core/src/pod/mod.rs

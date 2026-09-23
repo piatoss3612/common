@@ -121,22 +121,22 @@ fn generic_records_and_phantom_markers() {
 #[test]
 fn file_embedding_preserves_records_arrays_and_empty_layouts() {
     bento::embed_struct! {
-        static RECORD: Record = "../examples/data/record.bin";
+        static RECORD: Record = "fixtures/record.bin";
     }
     bento::embed_array! {
-        static WORDS: [u32; 2] = "../examples/data/record.bin";
+        static WORDS: [u32; 2] = "fixtures/record.bin";
     }
     bento::embed_array! {
-        static EMPTY: [u64; 0] = "fixtures/pod/empty.bin";
+        static EMPTY: [u64; 0] = "fixtures/empty.bin";
     }
     #[repr(C, align(64))]
     #[derive(Clone, Copy, bento::Pod)]
     struct Empty;
     bento::embed_struct! {
-        static ZERO: Empty = "fixtures/pod/empty.bin";
+        static ZERO: Empty = "fixtures/empty.bin";
     }
     bento::embed_array! {
-        static ZEROS: [Empty; 3] = "fixtures/pod/empty.bin";
+        static ZEROS: [Empty; 3] = "fixtures/empty.bin";
     }
     assert_eq!(RECORD.low, 0x0201);
     assert_eq!(RECORD.high, 0x0403);

@@ -1,4 +1,4 @@
-use facade_default::Value;
+use addition_chain_consumer::Value;
 
 fn main() {
     let value = Value(7);

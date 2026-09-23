@@ -1,20 +1,19 @@
-//! Cargo consumers check dependency paths, const evaluation, and diagnostics.
+//! Cargo consumers check dependency aliases, support paths, and re-exports.
 //!
 //! Tests inside the facade already see its direct core dependency, so
 //! separate consumer manifests exercise the dependencies available to callers.
 
 use std::{fs, path::Path};
 
-mod support;
-use support::{cargo, diagnostics};
+use crate::harness::{self, cargo, diagnostics};
 
 #[test]
-fn downstream_paths_no_std_doctests_and_diagnostics() {
+fn downstream_dependency_paths_and_doctests() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.join("../..").canonicalize().unwrap();
-    let temporary = support::workspace("bento-macros-");
+    let temporary = harness::workspace("bento-dependencies-");
     let root = temporary.path();
-    let fixtures = manifest.join("tests/fixtures");
+    let fixtures = manifest.join("tests/api/fixtures/dependencies");
     let facade = workspace.join("crates/bento");
     let core = workspace.join("crates/bento-core");
     let macros = workspace.join("crates/bento-macros");
@@ -38,31 +37,31 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
     for (name, source, dependencies, features) in [
         (
             "facade-default",
-            "consumers/facade.rs",
+            "facade.rs",
             format!("zakura-bento = {{ path = {facade:?} }}"),
             "renamed = []",
         ),
         (
             "facade-renamed",
-            "consumers/facade.rs",
+            "facade.rs",
             "support.workspace = true".into(),
             "default = [\"renamed\"]\nrenamed = []",
         ),
         (
             "direct-core",
-            "consumers/direct_core.rs",
+            "direct_core.rs",
             "support-core.workspace = true\nmacros.workspace = true\nsupport = { workspace = true, optional = true }".into(),
             "with-facade = [\"dep:support\"]",
         ),
         (
             "reexport",
-            "pod/reexport.rs",
+            "reexport.rs",
             "bridge = { package = \"facade-default\", path = \"../facade-default\" }".into(),
             "",
         ),
         (
             "missing-support",
-            "consumers/missing_support.rs",
+            "missing_support.rs",
             "macros.workspace = true".into(),
             "",
         ),
@@ -78,11 +77,11 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         .unwrap();
         fs::copy(fixtures.join(source), package.join("src/lib.rs")).unwrap();
         fs::copy(
-            fixtures.join("const_arithmetic/consumer.rs"),
+            fixtures.join("arithmetic.rs"),
             package.join("src/arithmetic.rs"),
         )
         .unwrap();
-        fs::copy(fixtures.join("pod/consumer.rs"), package.join("src/pod.rs")).unwrap();
+        fs::copy(fixtures.join("pod.rs"), package.join("src/pod.rs")).unwrap();
         fs::write(package.join("src/record.bin"), [1, 2, 3, 4, 5, 6, 7, 8]).unwrap();
     }
 
@@ -113,17 +112,9 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         )).unwrap();
         if name == "build-only" {
             fs::write(package.join("src/lib.rs"), "#![no_std]\n").unwrap();
-            fs::copy(
-                fixtures.join("consumers/build_only.rs"),
-                package.join("build.rs"),
-            )
-            .unwrap();
+            fs::copy(fixtures.join("build_only.rs"), package.join("build.rs")).unwrap();
         } else {
-            fs::copy(
-                fixtures.join("consumers/facade_usage.rs"),
-                package.join("src/lib.rs"),
-            )
-            .unwrap();
+            fs::copy(fixtures.join("facade_usage.rs"), package.join("src/lib.rs")).unwrap();
         }
     }
 
@@ -180,106 +171,4 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
         diagnostic.contains("missing-support/src/lib.rs:"),
         "{diagnostic}"
     );
-
-    // Only register failing binaries after the successful consumer build.
-    // Check stable messages and source locations, not whole rustc renderings.
-    let package = root.join("facade-default");
-    fs::create_dir_all(package.join("src/bin")).unwrap();
-    let manifest_path = package.join("Cargo.toml");
-    let mut manifest_text = fs::read_to_string(&manifest_path).unwrap();
-    for (fixture, expected) in [
-        (
-            "addition_chain/zero",
-            "addition_chain! scalar must be nonzero; the trait has no identity operation",
-        ),
-        (
-            "addition_chain/suffix",
-            "addition_chain! scalar must be an unsuffixed integer literal",
-        ),
-        (
-            "addition_chain/constant",
-            "expected an integer literal or tonelli_shanks",
-        ),
-        (
-            "addition_chain/negative",
-            "addition_chain! scalar must be positive",
-        ),
-        (
-            "addition_chain/forwarded_negative",
-            "addition_chain! scalar must be positive",
-        ),
-        ("addition_chain/missing_trait", "Value: AdditionChain"),
-        ("addition_chain/missing_clone", "Value: Clone"),
-        ("addition_chain/moved_value", "use of moved value: `value`"),
-        ("const_arithmetic/invalid_modulus", "modulus must be odd"),
-        (
-            "const_arithmetic/invalid_two_adicity",
-            "two_adicity exceeds the trailing zeros",
-        ),
-        ("const_arithmetic/unreduced_base", "base must be reduced"),
-        (
-            "const_arithmetic/unreduced_power_table",
-            "base must be reduced",
-        ),
-        (
-            "const_arithmetic/ratio_overflow",
-            "quotient exceeds five limbs",
-        ),
-        (
-            "const_arithmetic/runtime_arguments",
-            "attempt to use a non-constant value in a constant",
-        ),
-        (
-            "const_arithmetic/const_fn_arguments",
-            "attempt to use a non-constant value in a constant",
-        ),
-        (
-            "const_arithmetic/const_local",
-            "attempt to use a non-constant value in a constant",
-        ),
-        (
-            "const_arithmetic/direct_functions",
-            "expected value, found macro",
-        ),
-        (
-            "const_arithmetic/direct_context",
-            "could not find `MontgomeryContext` in `m255`",
-        ),
-        (
-            "const_arithmetic/invalid_runtime_expression",
-            "modulus must be odd",
-        ),
-    ] {
-        let name = Path::new(fixture).file_name().unwrap().to_str().unwrap();
-        fs::copy(
-            fixtures.join(format!("{fixture}.rs")),
-            package.join(format!("src/bin/{name}.rs")),
-        )
-        .unwrap();
-        manifest_text.push_str(&format!("\n[[bin]]\nname = {name:?}\n"));
-        fs::write(&manifest_path, &manifest_text).unwrap();
-        let output = cargo(
-            root,
-            &["build", "--release", "-p", "facade-default", "--bin", name],
-        );
-        let diagnostic = diagnostics(&output);
-        assert!(!output.status.success(), "{name} unexpectedly compiled");
-        assert!(diagnostic.contains(expected), "{name}: {diagnostic}");
-        assert!(
-            diagnostic.contains(&format!("src/bin/{name}.rs:")),
-            "{diagnostic}"
-        );
-        let source = fs::read_to_string(fixtures.join(format!("{fixture}.rs"))).unwrap();
-        for (line, _) in source
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| line.ends_with("// rejected"))
-        {
-            assert!(
-                diagnostic.contains(&format!("src/bin/{name}.rs:{}:", line + 1)),
-                "missing diagnostic for line {}: {diagnostic}",
-                line + 1,
-            );
-        }
-    }
 }

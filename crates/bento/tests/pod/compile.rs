@@ -10,8 +10,7 @@ use std::{fs, path::PathBuf};
 use proc_macro2::TokenStream;
 use quote::quote;
 
-mod support;
-use support::{cargo, diagnostics};
+use crate::harness::{self, cargo, diagnostics};
 
 struct Consumer {
     _temporary: tempfile::TempDir,
@@ -24,7 +23,7 @@ impl Consumer {
             .join("../..")
             .canonicalize()
             .unwrap();
-        let temporary = support::workspace("bento-pod-");
+        let temporary = harness::workspace("bento-pod-");
         let directory = temporary.path().to_path_buf();
         fs::create_dir_all(directory.join("src/bin")).unwrap();
         let facade = workspace.join("crates/bento");

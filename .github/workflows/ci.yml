@@ -76,7 +76,7 @@ jobs:
         run: |
           cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib pod::
       - name: Check public storage API
-        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod
+        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod storage::
       - name: Check field and affine point storage
         run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --test field --test curve pod::
 
@@ -90,4 +90,4 @@ jobs:
       - name: Install target libraries
         run: rustup target add thumbv7em-none-eabi s390x-unknown-linux-gnu
       - name: Build portable libraries and check unsupported layouts
-        run: cargo test --release --locked -p zakura-bento --test portability -- --ignored
+        run: cargo test --release --locked -p zakura-bento --test api portability:: -- --ignored

@@ -3,7 +3,7 @@
 
 mod facade {
     pub use arithmetic::{
-        curve::{AffinePoint, Pallas, PastaCurve, Vesta, glv_decompose},
+        curve::{Affine, AffinePoint, Pallas, PastaCurve, Vesta, glv_decompose},
         fft::{
             ConstantPrefixExpansion, Domain, LagrangeCompletion, LagrangeError, VanishingDivision,
             VanishingFactors,
@@ -751,6 +751,16 @@ fn curve<C: PastaCurve>() {
     assert_eq!(
         glv_decompose::<C>(&PastaField::<C::Scalar>::ONE.neg()),
         (-1, 0),
+    );
+    fn commit<A: Affine>(bases: &[A], scalars: &[A::Scalar]) -> A::Projective {
+        A::msm(scalars, bases)
+    }
+    assert_eq!(
+        commit(
+            &[generator.to_point()],
+            &[PastaField::<C::Scalar>::from_u64(2)]
+        ),
+        generator.to_projective().double(),
     );
 
     #[cfg(feature = "glv-a")]

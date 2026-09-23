@@ -17,7 +17,7 @@ impl<C: PastaCurve> fmt::Debug for AffinePoint<C> {
 
 impl<C: PastaCurve> AffinePoint<C> {
     /// The curve coefficient `B = 5` in `y² = x³ + B`, in the coordinate field.
-    pub(super) const B: PastaField<C::Base> =
+    pub const B: PastaField<C::Base> =
         PastaField::from_montgomery_limbs(m255::from_u64!(&C::Base::MODULUS, 5));
 
     /// The generator `(-1, 2)`.

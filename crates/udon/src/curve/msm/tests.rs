@@ -1280,3 +1280,52 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
     check::<Pallas>();
     check::<Vesta>();
 }
+
+/// The trait entry point runs the planned kernel over bounded stack scratch.
+/// It must agree with the retained ladder across the streaming geometry,
+/// with identity bases and zero scalars mixed in, for both curves.
+fn affine_trait_msm<C: PastaCurve>() {
+    use crate::curve::Affine;
+
+    let generator = Point::<C>::GENERATOR;
+    for size in [
+        0usize, 1, 2, 5, 15, 16, 17, 63, 64, 65, 100, 255, 256, 257, 600, 1030,
+    ] {
+        let scalars: Vec<PastaField<C::Scalar>> = (0..size)
+            .map(|index| match index % 7 {
+                0 => PastaField::ZERO,
+                1 => PastaField::ONE,
+                2 => PastaField::<C::Scalar>::ONE.neg(),
+                _ => PastaField::<C::Scalar>::from_u64(index as u64 + 3)
+                    .mul(&PastaField::<C::Scalar>::DELTA),
+            })
+            .collect();
+        let bases: Vec<Point<C>> = (0..size)
+            .map(|index| {
+                if index % 11 == 4 {
+                    Point::IDENTITY
+                } else {
+                    generator
+                        .mul_projective(&PastaField::<C::Scalar>::from_u64(index as u64 + 1))
+                        .to_point()
+                }
+            })
+            .collect();
+        let mut expected = ProjectivePoint::IDENTITY;
+        for (scalar, base) in scalars.iter().zip(&bases) {
+            let base = base.to_projective();
+            expected = expected.add(&scalar::multiply(scalar, |sum| sum.add(&base)));
+        }
+        assert_eq!(
+            <Point<C> as Affine>::msm(&scalars, &bases),
+            expected,
+            "{size} terms"
+        );
+    }
+}
+
+#[test]
+fn affine_trait_msm_matches_the_retained_ladder() {
+    affine_trait_msm::<Pallas>();
+    affine_trait_msm::<Vesta>();
+}

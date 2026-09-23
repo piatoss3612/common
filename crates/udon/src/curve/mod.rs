@@ -12,7 +12,8 @@
 //! [`EisensteinScalar`] retains joint digits for compact tables, and
 //! [`EisensteinTableBatch`] prepares or multiplies several bases together.
 //! [`msm`] sums dense or indexed scalar/base terms with caller-owned scratch
-//! and execution.
+//! and execution. Operators forward to these methods, and [`Affine`] and
+//! [`Projective`] describe both curves to generic code.
 //!
 //! Affine coordinates use [`Reduced`] field elements; projective coordinates
 //! and scalars may use loose residues. Constructors establish the field and
@@ -45,11 +46,13 @@ mod encoding;
 mod fixed_base;
 mod glv;
 pub mod msm;
+mod ops;
 mod parameters;
 mod point;
 mod projective;
 mod reduce;
 mod table_entry;
+mod traits;
 
 pub use batch::batch_normalize;
 pub use eisenstein::{EisensteinScalar, EisensteinTable};
@@ -58,6 +61,7 @@ pub use fixed_base::{FixedBaseDescription, FixedBaseTable};
 pub use glv::glv_decompose;
 pub use parameters::{Pallas, PastaCurve, Vesta};
 pub use table_entry::{CurveTableEntry, CurveTableRequirements, PreparedAffinePoint};
+pub use traits::{Affine, Projective};
 
 #[cfg(test)]
 mod tests;
@@ -69,6 +73,9 @@ mod tests;
 /// a little-endian target. Coordinates use [`Reduced`] residues satisfying
 /// `y² = x³ + 5`. Constructors establish these invariants; trusted [`bento::Pod`]
 /// storage preserves them without runtime validation.
+///
+/// Use [`Self::from_bytes`] to decode untrusted protocol inputs. POD byte
+/// views do not validate coordinate ranges or curve membership.
 ///
 /// Use [`Self::to_bytes`] for protocol encoding. [`crate::STORED_FORM`]
 /// identifies the field representation only; artifact owners must separately

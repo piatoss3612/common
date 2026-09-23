@@ -34,6 +34,18 @@ private and can be borrowed through `coordinates()`. Affine coordinates use
 `Point::add`, `sub`, and `double` return `ProjectivePoint` without inversion.
 The caller decides when affine coordinates are needed and normalizes explicitly.
 
+Operators forward to these methods: `+`, `-`, and their assignment forms apply
+to `ProjectivePoint`, unary `-` to every representation, and `*` by a loose
+scalar to every representation, returning a `ProjectivePoint`. The
+[`Affine`](../crates/udon/src/curve/traits.rs) and `Projective` traits expose
+`Point` and `ProjectivePoint` to code generic over a curve, with the base and
+scalar fields as associated `FftField` types. For the Pasta points,
+`Affine::msm` runs the planned kernel from the
+[`msm` module](#multiscalar-multiplication) serially over about 14 KiB of
+stack scratch, and `Affine::batch_to_affine` shares inversions from bounded
+stack storage; use the modules directly for parallel execution or reusable
+scratch.
+
 `AffinePoint::from_xy(x, y)` takes reduced field elements and checks the curve
 equation. Reduction is guaranteed by the coordinate types. It rejects `(0, 0)`
 and other off-curve coordinates.

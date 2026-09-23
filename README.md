@@ -68,8 +68,9 @@ feature definitions.
 
 The [`curve` module](crates/udon/src/curve/mod.rs) provides Pallas and Vesta
 points, canonical encodings, GLV/Eisenstein scalar multiplication, batch
-normalization, and borrowed compact and expanded fixed-base tables. Scalar
-preparation can be reused across compact tables. The
+normalization, and borrowed compact and expanded fixed-base tables. Operator
+forms and the `Affine` and `Projective` traits expose both curves to generic
+code. Scalar preparation can be reused across compact tables. The
 [`msm` module](crates/udon/src/curve/msm/mod.rs) sums dense or indexed inputs
 with caller-owned scratch and execution.
 Nonidentity `AffinePoint` and cached `PreparedAffinePoint` entries implement

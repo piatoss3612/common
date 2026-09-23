@@ -19,8 +19,9 @@
 //! shared by arithmetic and downstream workloads. [`exec::run`] supplies bounded
 //! task claims and typed admission for application schedulers; [`curve::msm::run`]
 //! and [`fft::run`] expose incremental arithmetic with exclusively leased scratch.
-//! [`field::Field`] and [`field::FftField`] describe the fields to generic
-//! code, with operator forms forwarding to the inherent arithmetic.
+//! [`field::Field`], [`field::FftField`], and [`curve::Affine`] describe the
+//! fields and curves to generic code, with operator forms forwarding to the
+//! inherent arithmetic.
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
 //! embedded storage. Construction establishes their invariants; embedding

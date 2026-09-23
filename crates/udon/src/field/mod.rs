@@ -85,8 +85,10 @@ const ENCODED_SIZE: usize = 32;
 ///
 /// The operator traits forward to the inherent methods. Binary operators
 /// take operands in the same state and return loose values; assignment
-/// operators apply to loose values. [`Field`] and its companions expose the
-/// same operations to generic code.
+/// operators apply to loose values. Iterator sums and products accept owned
+/// or borrowed elements in either state and return loose values; empty
+/// iterators return zero and one, respectively. [`Field`] and its companions
+/// expose the same operations to generic code.
 ///
 /// Implements [`bento::Pod`] so a constructed value can be written as bytes
 /// and embedded with its exact limbs and representation state. Stored values

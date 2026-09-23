@@ -1,6 +1,80 @@
 use super::*;
 use crate::field::count_inversions;
 
+#[test]
+fn trait_mixed_addition_matches_affine_reference_without_inversion() {
+    fn generic<P: Projective>(lhs: &P, rhs: &P::Affine) -> P {
+        lhs.add_mixed(rhs)
+    }
+
+    fn check<C: PastaCurve>() {
+        let generator = Point::<C>::GENERATOR;
+        let mut points = vec![Point::IDENTITY, generator, generator.neg()];
+        points.extend(
+            field_samples::<C::Scalar>()
+                .take(8)
+                .map(|scalar| generator.mul_projective(&scalar).to_point()),
+        );
+        let modulus = crate::test_support::modulus::<C::Base>();
+        for (i, lhs) in points.iter().enumerate() {
+            for rhs in &points {
+                let expected = reference::Reference::from_point(lhs)
+                    .add(&reference::Reference::from_point(rhs), &modulus);
+                let mut actual = ProjectivePoint::IDENTITY;
+                assert_eq!(
+                    count_inversions(|| actual = generic(&scaled(lhs, i as u64 + 2), rhs)),
+                    0,
+                );
+                expected.assert_point(&actual.to_point());
+            }
+        }
+    }
+
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
+#[test]
+fn projective_iterator_sums_match_affine_reference_without_inversion() {
+    fn generic<P: Projective>(points: &[P]) -> (P, P) {
+        (points.iter().sum(), points.iter().copied().sum())
+    }
+
+    fn check<C: PastaCurve>() {
+        let generator = Point::<C>::GENERATOR;
+        let points: Vec<_> = field_samples::<C::Scalar>()
+            .take(16)
+            .enumerate()
+            .flat_map(|(i, scalar)| {
+                let point = generator.mul_projective(&scalar).to_point();
+                [
+                    scaled(&point, i as u64 + 2),
+                    scaled(&point.neg(), i as u64 + 3),
+                    scaled(&Point::IDENTITY, 1),
+                    generator.to_projective(),
+                ]
+            })
+            .collect();
+        let modulus = crate::test_support::modulus::<C::Base>();
+        let mut expected = reference::Reference::identity();
+        for length in 0..=points.len() {
+            let mut actual = (ProjectivePoint::IDENTITY, ProjectivePoint::IDENTITY);
+            assert_eq!(count_inversions(|| actual = generic(&points[..length])), 0);
+            expected.assert_point(&actual.0.to_point());
+            expected.assert_point(&actual.1.to_point());
+            if let Some(next) = points.get(length) {
+                expected = expected.add(
+                    &reference::Reference::from_point(&next.to_point()),
+                    &modulus,
+                );
+            }
+        }
+    }
+
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
 fn trait_msm<C: PastaCurve>() {
     let generator = Point::<C>::GENERATOR;
     let points = [

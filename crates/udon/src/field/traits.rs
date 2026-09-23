@@ -17,7 +17,7 @@
 
 use core::{
     fmt::Debug,
-    iter::Sum,
+    iter::{Product, Sum},
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
@@ -29,6 +29,8 @@ use core::{
 /// `a *= &b` needs. Equality compares field elements, not representations.
 /// Implementations may hold redundant representations internally, as
 /// [`PastaField`](super::PastaField) does with its loose residues.
+/// Iterator sums and products accept owned or borrowed elements; empty
+/// iterators return [`ZERO`](Self::ZERO) and [`ONE`](Self::ONE), respectively.
 pub trait Field:
     Copy
     + Eq
@@ -53,6 +55,8 @@ pub trait Field:
     + for<'a> MulAssign<&'a Self>
     + Sum
     + for<'a> Sum<&'a Self>
+    + Product
+    + for<'a> Product<&'a Self>
 {
     /// The additive identity.
     const ZERO: Self;

@@ -39,7 +39,10 @@ to `ProjectivePoint`, unary `-` to every representation, and `*` by a loose
 scalar to every representation, returning a `ProjectivePoint`. The
 [`Affine`](../crates/udon/src/curve/traits.rs) and `Projective` traits expose
 `Point` and `ProjectivePoint` to code generic over a curve, with the base and
-scalar fields as associated `FftField` types. For the Pasta points,
+scalar fields as associated `FftField` types. `Projective::add_mixed` adds an
+identity-capable affine point without inversion; nonidentity operands use
+`ProjectivePoint::add_mixed`. Projective iterators support `sum()` over owned
+or borrowed points, with identity for an empty iterator. For the Pasta points,
 `Affine::msm` runs the planned kernel from the
 [`msm` module](#multiscalar-multiplication) serially over about 14 KiB of
 stack scratch, and `Affine::batch_to_affine` shares inversions from bounded

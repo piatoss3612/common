@@ -326,6 +326,7 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
     assert_eq!(two.double(), four);
     assert_ne!(two, four);
     assert_eq!(two + two, four);
+    assert_eq!(two * PastaField::from_u64(3), PastaField::from_u64(6));
     fn generic<F: FftField>(value: F) -> F {
         value.square() * F::root_of_unity(1).unwrap() + F::ONE
     }
@@ -348,6 +349,15 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
         assert_eq!(values, original);
     }
     generic_batch(two);
+
+    fn generic_product<F: arithmetic::field::Field>(value: F) {
+        let values = [value, F::from(3)];
+        assert_eq!(values.iter().product::<F>(), value * F::from(3));
+        assert_eq!(values.into_iter().product::<F>(), value * F::from(3));
+        assert_eq!(core::iter::empty::<F>().product::<F>(), F::ONE);
+        assert_eq!(core::iter::empty::<&F>().product::<F>(), F::ONE);
+    }
+    generic_product(two);
 
     // Match consumers that hold only the field trait and a domain descriptor.
     fn generic_transform<F: FftField>(value: F) {
@@ -792,6 +802,18 @@ fn curve<C: PastaCurve>() {
         ),
         generator.to_projective().double(),
     );
+
+    fn generic_group<P: arithmetic::curve::Projective>(point: P, affine: P::Affine) {
+        assert_eq!(point.add_mixed(&affine), point.double());
+        assert_eq!(point.add_mixed(&P::Affine::identity()), point);
+        assert_eq!(point.add_mixed(&affine.negate()), P::identity());
+        let points = [point, point];
+        assert_eq!(points.iter().sum::<P>(), point.double());
+        assert_eq!(points.into_iter().sum::<P>(), point.double());
+        assert_eq!(core::iter::empty::<P>().sum::<P>(), P::identity());
+        assert_eq!(core::iter::empty::<&P>().sum::<P>(), P::identity());
+    }
+    generic_group(generator.to_projective(), generator.to_point());
 
     #[cfg(feature = "glv-a")]
     let _ = C::GLV_A;

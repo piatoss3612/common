@@ -10,7 +10,10 @@
 //! instances delegate the same way, so generic code reaches the same kernels
 //! as direct callers.
 
-use core::{iter::Sum, ops};
+use core::{
+    iter::{Product, Sum},
+    ops,
+};
 
 use crate::{
     exec::{ExecutionOptions, SerialExecutor},
@@ -128,6 +131,22 @@ impl<M: PrimeModulus, T: ReductionState> Sum<PastaField<M, T>> for PastaField<M>
 impl<'a, M: PrimeModulus, T: ReductionState> Sum<&'a PastaField<M, T>> for PastaField<M> {
     fn sum<I: Iterator<Item = &'a PastaField<M, T>>>(iter: I) -> Self {
         iter.fold(Self::ZERO, |sum, term| PastaField::add(&sum, term))
+    }
+}
+
+impl<M: PrimeModulus, T: ReductionState> Product<PastaField<M, T>> for PastaField<M> {
+    fn product<I: Iterator<Item = PastaField<M, T>>>(iter: I) -> Self {
+        iter.fold(Self::ONE, |product, factor| {
+            PastaField::mul(&product, &factor)
+        })
+    }
+}
+
+impl<'a, M: PrimeModulus, T: ReductionState> Product<&'a PastaField<M, T>> for PastaField<M> {
+    fn product<I: Iterator<Item = &'a PastaField<M, T>>>(iter: I) -> Self {
+        iter.fold(Self::ONE, |product, factor| {
+            PastaField::mul(&product, factor)
+        })
     }
 }
 

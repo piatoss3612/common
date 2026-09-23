@@ -111,6 +111,40 @@ fn arithmetic_and_ordering_match_integer_operations() {
     check_arithmetic::<PallasScalar>();
 }
 
+#[test]
+fn iterator_products_match_integer_products() {
+    fn generic<F: crate::field::Field>(values: &[F]) -> (F, F) {
+        (values.iter().product(), values.iter().copied().product())
+    }
+
+    fn check<M: PrimeModulus>() {
+        let p = modulus::<M>();
+        let samples = samples::<M>(16);
+        // Rotations cover zero in each position, including the loose zero
+        // stored as the modulus, without making every product vanish.
+        for offset in 0..samples.len() {
+            for length in [0, 1, 2, 3, 8, 17, 65] {
+                let factors: Vec<_> = samples.iter().cycle().skip(offset).take(length).collect();
+                let expected = factors
+                    .iter()
+                    .fold(BigUint::from(1u8), |product, (_, integer)| {
+                        product * integer % &p
+                    });
+                let loose: Vec<_> = factors.iter().map(|(value, _)| *value).collect();
+                let reduced: Vec<_> = loose.iter().map(|value| value.reduce()).collect();
+                let (borrowed, owned) = generic(&loose);
+                assert_value(borrowed, &expected);
+                assert_value(owned, &expected);
+                assert_value(reduced.iter().product::<PastaField<M>>(), &expected);
+                assert_value(reduced.into_iter().product::<PastaField<M>>(), &expected);
+            }
+        }
+    }
+
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
 fn check_square_roots<M: PrimeModulus>() {
     let p = modulus::<M>();
     let euler_exponent = (&p - 1u8) >> 1usize;

@@ -8,7 +8,7 @@
 //! [`ProjectivePoint`] delegate the same way, running the planned multiscalar
 //! multiplication and batch normalization over bounded stack scratch.
 
-use core::ops;
+use core::{iter::Sum, ops};
 
 use super::{
     Affine, AffinePoint, PastaCurve, Point, Projective, ProjectivePoint, batch_normalize,
@@ -95,6 +95,22 @@ forward_point_operator!(Add, add, add);
 forward_point_operator!(Sub, sub, sub);
 forward_point_assign_operator!(AddAssign, add_assign, add);
 forward_point_assign_operator!(SubAssign, sub_assign, sub);
+
+impl<C: PastaCurve> Sum for ProjectivePoint<C> {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::IDENTITY, |sum, point| {
+            ProjectivePoint::add(&sum, &point)
+        })
+    }
+}
+
+impl<'a, C: PastaCurve> Sum<&'a ProjectivePoint<C>> for ProjectivePoint<C> {
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Self::IDENTITY, |sum, point| {
+            ProjectivePoint::add(&sum, point)
+        })
+    }
+}
 
 macro_rules! forward_negation {
     ($point:ident) => {
@@ -271,6 +287,13 @@ impl<C: PastaCurve> Projective for ProjectivePoint<C> {
 
     fn double(&self) -> Self {
         ProjectivePoint::double(self)
+    }
+
+    fn add_mixed(&self, rhs: &Point<C>) -> Self {
+        match rhs.as_affine() {
+            Some(point) => ProjectivePoint::add_mixed(self, point),
+            None => *self,
+        }
     }
 
     fn endomorphism(&self) -> Self {

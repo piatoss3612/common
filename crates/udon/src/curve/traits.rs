@@ -19,6 +19,7 @@
 
 use core::{
     fmt::Debug,
+    iter::Sum,
     ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign},
 };
 
@@ -135,7 +136,8 @@ pub trait Affine:
 ///
 /// The operators are the complete group law, including identity, and
 /// multiplication by a scalar. Equality compares group elements, not
-/// representations.
+/// representations. Iterator sums accept owned or borrowed points; empty
+/// iterators return [`identity`](Self::identity).
 pub trait Projective:
     Copy
     + Eq
@@ -156,6 +158,8 @@ pub trait Projective:
     + Mul<Self::Scalar, Output = Self>
     + for<'a> Mul<&'a Self::Scalar, Output = Self>
     + From<Self::Affine>
+    + Sum
+    + for<'a> Sum<&'a Self>
 {
     /// The field containing the coordinates.
     type Base: FftField;
@@ -177,6 +181,13 @@ pub trait Projective:
 
     /// Returns `2 * self`.
     fn double(&self) -> Self;
+
+    /// Adds an affine point without inversion, admitting identity in either
+    /// operand and handling equal points and inverse pairs.
+    ///
+    /// For Pasta, nonidentity affine operands use
+    /// [`ProjectivePoint::add_mixed`](super::ProjectivePoint::add_mixed).
+    fn add_mixed(&self, rhs: &Self::Affine) -> Self;
 
     /// Applies the curve endomorphism; see [`Affine::endomorphism`].
     fn endomorphism(&self) -> Self;

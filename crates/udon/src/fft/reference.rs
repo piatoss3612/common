@@ -89,9 +89,13 @@ impl<C: PastaCurve> Butterfly<PastaField<C::Scalar>> for ProjectivePoint<C> {
 /// Here `n = values.len()`, and `*` means [`Butterfly::scaled`]. Both input and
 /// output are in natural order. Supply a principal root of order `n`: its
 /// multiplicative order is exactly `n`, and `sum(root^(i*k), i = 0..n) = 0`
-/// for every `0 < k < n`. In a field, any root of exact order `n` satisfies
-/// this sum condition. Root validity is not checked; a wrong root can give an
-/// incorrect transform. A singleton is the identity.
+/// for every `0 < k < n`. For `n > 1`, also require `root^(n/2) = -1` so that
+/// each radix-two butterfly can use subtraction for its second output. The
+/// character sums alone do not imply this when `n` is not invertible in the
+/// scalar ring. A field root of exact order `n` satisfies all these conditions.
+/// A forward transform does not otherwise require an invertible length.
+/// Root validity is not checked; a wrong root can give an incorrect transform.
+/// A singleton is the identity.
 ///
 /// # Panics
 ///
@@ -139,9 +143,10 @@ pub fn transform<T: Twiddle, V: Butterfly<T>>(values: &mut [V], root: &T) {
 
 /// Transforms at `inverse_root`, then scales every output by `size_inverse`.
 ///
-/// To undo [`transform`], supply the multiplicative inverse of its principal
-/// root and of the scalar `values.len()`. The length must be invertible in the
-/// scalar ring. Neither scalar is validated. Both sides use natural order.
+/// To undo [`transform`], supply the multiplicative inverse of a root meeting
+/// its full contract and of the scalar `values.len()`. The length must be
+/// invertible in the scalar ring. Neither scalar is validated. Both sides use
+/// natural order.
 ///
 /// # Panics
 ///

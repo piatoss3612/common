@@ -1973,3 +1973,79 @@ fn generic_reference_supports_a_foreign_field() {
         );
     }
 }
+
+#[test]
+fn generic_reference_forward_supports_noninvertible_lengths() {
+    use reference::{Butterfly, Twiddle};
+
+    // (Z/4Z)[i]/(i^2 + 1) has a valid fourth root even though four is zero.
+    // Requiring an invertible length for the forward transform would exclude it.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct Z4i(u32, u32);
+    impl Twiddle for Z4i {
+        const ONE: Self = Self(1, 0);
+        fn multiply(&self, rhs: &Self) -> Self {
+            Self(
+                (self.0 * rhs.0 + 16 - self.1 * rhs.1) % 4,
+                (self.0 * rhs.1 + self.1 * rhs.0) % 4,
+            )
+        }
+        fn square(&self) -> Self {
+            self.multiply(self)
+        }
+    }
+    impl Butterfly<Self> for Z4i {
+        fn scaled(&self, rhs: &Self) -> Self {
+            self.multiply(rhs)
+        }
+        fn add(&self, rhs: &Self) -> Self {
+            Self((self.0 + rhs.0) % 4, (self.1 + rhs.1) % 4)
+        }
+        fn negated(&self) -> Self {
+            Self((4 - self.0) % 4, (4 - self.1) % 4)
+        }
+    }
+    fn power(value: Z4i, exponent: usize) -> Z4i {
+        (0..exponent).fold(Z4i::ONE, |acc, _| acc.multiply(&value))
+    }
+
+    for size in [1, 2, 4] {
+        let root = power(Z4i(0, 1), 4 / size);
+        assert_eq!(power(root, size), Z4i::ONE);
+        for exponent in 1..size {
+            assert_ne!(power(root, exponent), Z4i::ONE);
+            let character_sum =
+                (0..size).fold(Z4i(0, 0), |sum, i| sum.add(&power(root, i * exponent)));
+            assert_eq!(character_sum, Z4i(0, 0));
+        }
+        if size > 1 {
+            assert_eq!(power(root, size / 2), Z4i::ONE.negated());
+            // A nonzero annihilator proves the length is not a unit.
+            assert_eq!(Z4i(size as u32 % 4, 0).multiply(&Z4i(2, 0)), Z4i(0, 0));
+        }
+        for fixture in 0..=size {
+            let input: Vec<_> = (0..size)
+                .map(|i| {
+                    if fixture == size {
+                        Z4i((i as u32 + 1) % 4, (i as u32 + 3) % 4)
+                    } else {
+                        Z4i(u32::from(i == fixture), 0)
+                    }
+                })
+                .collect();
+            let expected: Vec<_> = (0..size)
+                .map(|row| {
+                    input
+                        .iter()
+                        .enumerate()
+                        .fold(Z4i(0, 0), |sum, (column, value)| {
+                            sum.add(&value.multiply(&power(root, row * column)))
+                        })
+                })
+                .collect();
+            let mut output = input;
+            reference::transform(&mut output, &root);
+            assert_eq!(output, expected, "size={size} fixture={fixture}");
+        }
+    }
+}

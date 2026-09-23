@@ -9,7 +9,7 @@ mod facade {
             VanishingFactors,
         },
         field::{
-            ConstantPrefix, ConstantPrefixError, Fp, Fq, PallasBase, PallasScalar, PastaField,
+            ConstantPrefix, ConstantPrefixError, FftField, Fp, Fq, PallasBase, PallasScalar, PastaField,
             PrimeModulus, Reduced,
         },
         polynomial::{
@@ -321,8 +321,19 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
         let _ = fp_plan.evaluate(&[<Fq>::ONE]);
     }
 
-    #[cfg(feature = "loose-equality")]
-    let _ = two == four;
+    // Loose values compare as field elements, and the operator forms and
+    // field traits are reachable through the facade for both fields.
+    assert_eq!(two.double(), four);
+    assert_ne!(two, four);
+    assert_eq!(two + two, four);
+    fn generic<F: FftField>(value: F) -> F {
+        value.square() * F::root_of_unity(1).unwrap() + F::ONE
+    }
+    assert_eq!(
+        generic(two),
+        PastaField::<M>::ONE.neg() * four + PastaField::<M>::ONE
+    );
+
     #[cfg(feature = "loose-order")]
     let _ = core::cmp::Ord::cmp(&two, &four);
     #[cfg(feature = "loose-sqrt")]

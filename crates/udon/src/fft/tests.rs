@@ -1314,22 +1314,22 @@ fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
             None
         );
         for (input_len, output_len) in [(31, 32), (33, 32), (32, 31), (32, 33)] {
-            let source = vec![Fp::ONE; input_len];
-            let mut destination = vec![Fp::ZERO; output_len];
+            let source = vec![<Fp>::ONE; input_len];
+            let mut destination = vec![<Fp>::ZERO; output_len];
             assert!(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     layout.copy_from_natural(&source, &mut destination);
                 }))
                 .is_err()
             );
-            assert_eq!(destination, vec![Fp::ZERO; output_len]);
+            assert_eq!(destination, vec![<Fp>::ZERO; output_len]);
             assert!(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     layout.copy_to_natural(&source, &mut destination);
                 }))
                 .is_err()
             );
-            assert_eq!(destination, vec![Fp::ZERO; output_len]);
+            assert_eq!(destination, vec![<Fp>::ZERO; output_len]);
         }
     }
 }

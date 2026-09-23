@@ -18,6 +18,10 @@
 //! [`fraction_prefixes`] computes running products of ordered fractions with
 //! caller-owned scratch. [`ConstantPrefix`] borrows an explicit tail after a
 //! repeated value for materialization or structured FFT and MSM operations.
+//!
+//! Operators forward to the inherent methods, and [`Field`], [`FftField`], and
+//! [`DeferredField`] describe the fields to generic code. Both Pasta fields
+//! implement them through the same kernels.
 
 use core::{fmt, marker::PhantomData};
 
@@ -29,6 +33,7 @@ mod encoding;
 mod fractions;
 mod inversion;
 mod montgomery;
+mod ops;
 mod parameters;
 mod powers;
 mod products;
@@ -36,22 +41,25 @@ mod representation;
 mod safegcd;
 mod small;
 mod sqrt;
+mod traits;
 mod uint;
 pub(crate) mod word;
 
 pub use batch::{
     BatchInversionError, batch_invert, batch_invert_groups, batch_invert_groups_scaled,
-    batch_invert_scaled, try_batch_invert_by, try_batch_invert_scaled_by,
+    batch_invert_scaled, batch_invert_with_scratch, try_batch_invert_by, try_batch_invert_scaled_by,
 };
 pub(crate) use batch::{NonzeroInversionLanes, invert_nonzero};
 pub use constant_prefix::{ConstantPrefix, ConstantPrefixError};
+pub use encoding::{low_u64, random};
 pub use fractions::{FractionPrefixError, fraction_prefixes, fraction_prefixes_in_place};
 #[cfg(test)]
 pub(crate) use inversion::count_inversions;
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub(crate) use powers::fill_powers;
-pub use products::ProductSum;
+pub use products::{ProductSum, dot};
 pub use representation::{Loose, Reduced, ReductionState};
+pub use traits::{DeferredField, FftField, Field};
 pub use uint::CanonicalUint;
 
 use montgomery::{montgomery_multiply, montgomery_square, reduce_once};
@@ -67,10 +75,17 @@ const ENCODED_SIZE: usize = 32;
 /// The representation state `S` carries the bound on the stored Montgomery
 /// integer: [`Loose`] permits `[0, 2p)` and [`Reduced`] permits `[0, p)`.
 /// Arithmetic returns loose values. [`reduce`](Self::reduce) produces the
-/// unique representative required by equality, ordering, and square roots.
+/// unique representative required by ordering and square roots. Equality
+/// compares field elements in either state: reduced values compare their
+/// limbs, and loose values first pay the conditional subtraction of `reduce`.
 /// The exact loose limbs of an arithmetic result are not guaranteed; equivalent
 /// computations can produce different representatives within the bound.
 /// Ordering and debug output use the canonical field integer.
+///
+/// The operator traits forward to the inherent methods. Binary operators
+/// take operands in the same state and return loose values; assignment
+/// operators apply to loose values. [`Field`] and its companions expose the
+/// same operations to generic code.
 ///
 /// Implements [`bento::Pod`] so a constructed value can be written as bytes
 /// and embedded with its exact limbs and representation state. Stored values
@@ -102,14 +117,20 @@ pub type Fp<S = Loose> = PastaField<PallasBase, S>;
 /// The Vesta coordinate field and Pallas scalar field.
 pub type Fq<S = Loose> = PastaField<PallasScalar, S>;
 
-impl<M: PrimeModulus> PartialEq for PastaField<M, Reduced> {
+impl<M: PrimeModulus, S: ReductionState> PartialEq for PastaField<M, S> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        self.limbs == other.limbs
+        if S::REDUCED {
+            self.limbs == other.limbs
+        } else {
+            // Loose values have two representations; compare their canonical
+            // Montgomery limbs after one conditional subtraction each.
+            reduce_once::<M>(self.limbs) == reduce_once::<M>(other.limbs)
+        }
     }
 }
 
-impl<M: PrimeModulus> Eq for PastaField<M, Reduced> {}
+impl<M: PrimeModulus, S: ReductionState> Eq for PastaField<M, S> {}
 
 impl<M: PrimeModulus> Ord for PastaField<M, Reduced> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
@@ -207,6 +228,11 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Embeds an unsigned 64-bit integer; every such integer is below both moduli.
     pub fn from_u64(value: u64) -> Self {
         Self::from_canonical_limbs([value, 0, 0, 0])
+    }
+
+    /// Embeds an unsigned 128-bit integer; every such integer is below both moduli.
+    pub fn from_u128(value: u128) -> Self {
+        Self::from_canonical_limbs([value as u64, (value >> 64) as u64, 0, 0])
     }
 
     /// Returns whether this value is zero, recognizing both `0` and `p`

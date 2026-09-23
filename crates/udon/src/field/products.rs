@@ -1,4 +1,4 @@
-//! Wide product accumulation and signed product differences.
+//! Inner products, wide product accumulation, and signed product differences.
 //!
 //! The range arguments beside each kernel explain how much reduction its
 //! accumulator needs before returning a loose field element.
@@ -7,7 +7,36 @@ use core::marker::PhantomData;
 
 use super::montgomery::{montgomery_reduce_unreduced, reduce_once, reduce_twice_modulus};
 use super::word::{adc, mac, multiply_wide, sbb, square_wide};
-use super::{PastaField, PrimeModulus, ReductionState};
+use super::{Field, PastaField, PrimeModulus, ReductionState};
+
+#[cfg(test)]
+#[path = "tests/products.rs"]
+mod tests;
+
+/// Returns the inner product of two equal-length sequences.
+///
+/// Dispatches through [`Field::sum_of_product_pairs`]; Pasta fields defer
+/// Montgomery reduction across the sum.
+///
+/// # Panics
+///
+/// Panics if the lengths differ.
+pub fn dot<'a, F: Field, A, B>(lhs: A, rhs: B) -> F
+where
+    A: IntoIterator<Item = &'a F>,
+    B: IntoIterator<Item = &'a F>,
+    A::IntoIter: ExactSizeIterator,
+    B::IntoIter: ExactSizeIterator,
+{
+    let lhs = lhs.into_iter();
+    let rhs = rhs.into_iter();
+    assert_eq!(
+        lhs.len(),
+        rhs.len(),
+        "dot product operands must have equal length"
+    );
+    F::sum_of_product_pairs(lhs.zip(rhs))
+}
 
 /// A sum of field products with deferred Montgomery reduction.
 ///

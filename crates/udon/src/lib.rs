@@ -19,14 +19,16 @@
 //! shared by arithmetic and downstream workloads. [`exec::run`] supplies bounded
 //! task claims and typed admission for application schedulers; [`curve::msm::run`]
 //! and [`fft::run`] expose incremental arithmetic with exclusively leased scratch.
+//! [`field::Field`] and [`field::FftField`] describe the fields to generic
+//! code, with operator forms forwarding to the inherent arithmetic.
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
 //! embedded storage. Construction establishes their invariants; embedding
 //! preserves their exact representations for immediate use. Field arithmetic
-//! returns [`field::Loose`] values; explicit reduction produces [`field::Reduced`]
-//! values for equality, ordering, and square roots. [`stored_form!`] names the
-//! limb representation; artifact schemas identify the field, reduction state,
-//! and curve.
+//! returns [`field::Loose`] values, which compare as field elements; explicit
+//! reduction produces [`field::Reduced`] values for ordering and square roots.
+//! [`stored_form!`] names the limb representation; artifact schemas identify
+//! the field, reduction state, and curve.
 //!
 //! Arithmetic is variable-time and provides no constant-time guarantee for
 //! secret inputs.

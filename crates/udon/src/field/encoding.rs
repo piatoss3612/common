@@ -7,7 +7,7 @@ use core::marker::PhantomData;
 
 use super::montgomery::{montgomery_multiply, montgomery_reduce, montgomery_reduce_unreduced};
 use super::word::{adc, compare_limbs, multiply_wide};
-use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus, ReductionState};
+use super::{CanonicalUint, ENCODED_SIZE, Field, PastaField, PrimeModulus, ReductionState};
 
 /// Constructs an [`Fp`](crate::field::Fp) constant from hexadecimal text.
 ///
@@ -217,6 +217,24 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     pub fn is_odd(&self) -> bool {
         self.to_canonical_uint().bit(0) == Some(true)
     }
+}
+
+/// Samples a field element by reducing 64 bytes from the caller's source.
+///
+/// Calls `fill` exactly once with the entire buffer. The callback must fill it
+/// with uniformly random bytes; cryptographic use requires a cryptographically
+/// secure source. Reduction follows [`Field::from_uniform_bytes`], without
+/// rejection sampling or additional draws.
+pub fn random<F: Field>(fill: impl FnOnce(&mut [u8; 64])) -> F {
+    let mut bytes = [0u8; 64];
+    fill(&mut bytes);
+    F::from_uniform_bytes(&bytes)
+}
+
+/// Returns the low 64 bits of the canonical integer representative.
+pub fn low_u64<F: Field>(value: &F) -> u64 {
+    let bytes = value.to_bytes();
+    u64::from_le_bytes(bytes[..8].try_into().expect("eight bytes"))
 }
 
 // Raw operands may exceed p. Compile-time checks in

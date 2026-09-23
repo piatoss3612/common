@@ -119,7 +119,8 @@ primes are slightly above `2^254`. The
 [kernel proof](../crates/udon/src/field/montgomery.rs) uses `p = R/4 + c` and
 `16c² < R` to rule out an output at or above `2p`; parameter derivation checks
 these premises at compile time. Explicit `reduce()` converts a loose value to
-the reduced type required by equality, ordering, and square roots.
+the reduced type required by ordering and square roots; equality canonicalizes
+loose operands itself with the same conditional subtraction.
 
 The chain planner prefers smaller prepared tables on arithmetic-cost ties.
 Planned and supplied chains share one operation graph and compact, unrolled,

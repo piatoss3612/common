@@ -271,6 +271,13 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
         Self::from_loose(Self::TWO_INVERSE.pow_u64(u64::from(log_size)).limbs)
     }
 
+    /// The generator `5` of the multiplicative group of nonzero elements.
+    ///
+    /// The two-adic roots of unity, [`Self::DELTA`], and [`Self::ZETA`] are
+    /// powers of this element.
+    pub const MULTIPLICATIVE_GENERATOR: Self =
+        Self::from_montgomery(m255::from_u64!(&M::MODULUS, GENERATOR));
+
     /// `5^(2^32)`, a generator of the odd-order multiplicative subgroup.
     ///
     /// This subgroup has order `(p - 1) / 2^32`, where `p` is the field's

@@ -1,6 +1,6 @@
 use core::fmt;
 
-use super::{PastaField, PrimeModulus};
+use super::{Field, PastaField, PrimeModulus};
 
 fn inverse_seed<M: PrimeModulus>(
     value: &PastaField<M>,
@@ -217,6 +217,47 @@ pub fn batch_invert_scaled<M: PrimeModulus>(
     scratch: &mut [PastaField<M>],
 ) {
     batch_invert_groups_scaled(&mut [values], scale, scratch)
+}
+
+/// Replaces each nonzero value by its inverse, preserving zeros.
+///
+/// Montgomery's trick uses one inversion and three multiplications per element
+/// for the whole slice. `scratch` holds the running prefix products and must
+/// have at least `values.len()` elements; its initial contents do not matter
+/// and its unused tail is untouched. Arithmetic is variable-time, including
+/// the locations of zeros.
+///
+/// This is the form for code generic over [`Field`]. Pasta callers can also
+/// use [`batch_invert`], which accepts smaller scratch.
+///
+/// # Panics
+///
+/// Panics before any write if `scratch` is shorter than `values`.
+pub fn batch_invert_with_scratch<F: Field>(values: &mut [F], scratch: &mut [F]) {
+    assert!(
+        scratch.len() >= values.len(),
+        "batch inversion scratch must cover every value"
+    );
+
+    let mut product = F::ONE;
+    for (value, prefix) in values.iter().zip(scratch.iter_mut()) {
+        *prefix = product;
+        if !value.is_zero() {
+            product *= value;
+        }
+    }
+
+    let mut inverse = product
+        .invert()
+        .expect("a product of nonzero field elements is nonzero");
+    for (value, prefix) in values.iter_mut().zip(scratch.iter()).rev() {
+        if value.is_zero() {
+            continue;
+        }
+        let value_inverse = inverse * prefix;
+        inverse *= *value;
+        *value = value_inverse;
+    }
 }
 
 /// Inverts nonzero values across disjoint slices with shared inversions.

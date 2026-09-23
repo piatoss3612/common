@@ -22,7 +22,8 @@
 //! [`field::Field`], [`field::FftField`], and [`curve::Affine`] describe the
 //! fields and curves to generic code, with operator forms forwarding to the
 //! inherent arithmetic. [`fft::Domain`] runs the generic reference transforms
-//! and evaluates vanishing and Lagrange polynomials.
+//! and evaluates vanishing and Lagrange polynomials, and [`poly`] provides
+//! polynomial utilities over the field traits.
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
 //! embedded storage. Construction establishes their invariants; embedding
@@ -70,6 +71,7 @@ pub mod curve;
 pub mod exec;
 pub mod fft;
 pub mod field;
+pub mod poly;
 pub mod polynomial;
 mod stored_form;
 

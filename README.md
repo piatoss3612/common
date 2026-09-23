@@ -50,7 +50,9 @@ variable-time and provides no constant-time guarantee for secret inputs.
 Field parameters and fixed exponentiation schedules use `bento` at compile time.
 Operator forms forward to the inherent arithmetic, and the `Field`, `FftField`,
 and `DeferredField` traits describe both fields to generic code such as proof
-systems parameterized over the curve cycle.
+systems parameterized over the curve cycle. The
+[`poly` module](crates/udon/src/poly/mod.rs) provides polynomial utilities over
+those traits.
 Fields implement `bento::Pod`, so downstream build scripts can generate them
 with Udon and embed their Montgomery representations for direct runtime use;
 see the [field storage example](docs/POD.md#storing-field-elements).

@@ -40,6 +40,11 @@ implementation call inside `const { ... }`. Do not export arithmetic functions
 or contexts through the facade: Udon must use this support only at compile time.
 POD storage APIs retain their existing const methods.
 
+Within core's `pod` module, the trait and primitive implementations define the
+storage contract, `layout` owns target measurements and validation, and
+`storage` owns byte views and aligned buffers. The facade preserves the public
+paths while the macro crate emits checks through the core-owned trait metadata.
+
 Use associated constants for fixed values tied to a type, such as field
 parameters and execution presets. Perform construction and representation checks
 in constant initializers so they do not depend on optimizer constant folding.

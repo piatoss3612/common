@@ -25,10 +25,11 @@ ordinary suites and have separate commands below.
 
 ## CI enforcement
 
-The arithmetic matrix executes release workspace tests and debug Udon tests
-natively on x86-64 and ARM64, each with `traits` disabled and enabled and with
-both square-root configurations. Consumer-interface tests stay in their owning
-domains and run with `traits`; native kernel tests run in every configuration.
+The arithmetic matrix runs on x86-64 and ARM64, with one job for each
+architecture and square-root table configuration. Each job executes workspace
+release tests and debug Udon tests with `traits` disabled and enabled.
+Consumer-interface tests stay in their owning domains and run with `traits`;
+native kernel tests run in every configuration.
 Lints, slow compiler and artifact consumers, benchmark smoke tests, Miri, and
 target portability have separate jobs. Cross-target compilation is additional
 coverage; it does not replace either native runner.

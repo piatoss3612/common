@@ -314,4 +314,31 @@ mod tests {
         partial_finish::<PallasBase>();
         partial_finish::<PallasScalar>();
     }
+
+    fn partial_butterfly<M: PrimeModulus>() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+
+        let a = PastaField::<M>::ONE.neg();
+        let b = PastaField::<M>::from_u64(2).neg();
+        let mut values = [a, b];
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let (left, right) = values.split_at_mut(1);
+                butterfly(&mut left[0], &mut right[0], None);
+                panic!("interrupt loose region");
+            }))
+            .is_err()
+        );
+        let twice = integer(M::MODULUS) * 2u32;
+        for (value, expected) in values.iter().zip([a.add(&b), a.sub(&b)]) {
+            assert!(integer(value.limbs) < twice);
+            assert_eq!(value.reduce(), expected.reduce());
+        }
+    }
+
+    #[test]
+    fn interrupted_butterflies_leave_valid_loose_values_without_cleanup() {
+        partial_butterfly::<PallasBase>();
+        partial_butterfly::<PallasScalar>();
+    }
 }

@@ -25,8 +25,8 @@ impl Identity {
 #[derive(Clone, Copy, Debug)]
 pub struct TaskKey<'a> {
     identity: &'a Identity,
-    pub(super) epoch: usize,
-    pub(super) index: usize,
+    epoch: usize,
+    index: usize,
 }
 
 impl TaskKey<'_> {
@@ -39,7 +39,7 @@ impl TaskKey<'_> {
 /// A compact consecutive range of currently claimable tasks.
 #[derive(Clone, Debug)]
 #[cfg(test)]
-pub(crate) struct ReadyRange<'a> {
+pub(super) struct ReadyRange<'a> {
     identity: Option<&'a Identity>,
     epoch: usize,
     range: Range<usize>,
@@ -48,14 +48,14 @@ pub(crate) struct ReadyRange<'a> {
 #[cfg(test)]
 impl<'a> ReadyRange<'a> {
     /// Empty output storage for [`Frontier::ready`].
-    pub const EMPTY: Self = Self {
+    pub(super) const EMPTY: Self = Self {
         identity: None,
         epoch: 0,
         range: 0..0,
     };
 
     /// Task identities without materializing a graph or task array.
-    pub fn tasks(&self) -> impl Iterator<Item = TaskKey<'a>> + '_ {
+    pub(super) fn tasks(&self) -> impl Iterator<Item = TaskKey<'a>> + '_ {
         self.range.clone().map(|index| TaskKey {
             identity: self.identity.unwrap(),
             epoch: self.epoch,
@@ -64,7 +64,7 @@ impl<'a> ReadyRange<'a> {
     }
 
     /// Number of represented tasks.
-    pub fn len(&self) -> usize {
+    fn len(&self) -> usize {
         self.range.len()
     }
 }
@@ -91,7 +91,7 @@ impl TaskStorage {
 
 #[derive(Debug)]
 pub(super) struct Ticket<'a> {
-    pub(super) identity: &'a Identity,
+    identity: &'a Identity,
     pub(super) key: TaskKey<'a>,
 }
 
@@ -99,18 +99,18 @@ pub(super) struct Ticket<'a> {
 #[derive(Debug)]
 pub(crate) struct Completed<R, O> {
     /// The entire owned bundle, including retained input guards and scratch.
-    pub resources: R,
+    pub(crate) resources: R,
     /// Kernel output; absent for cancellation or unwinding.
-    pub output: Option<O>,
+    pub(crate) output: Option<O>,
     /// Whether execution returned normally, unwound, or never started.
-    pub outcome: Outcome,
+    pub(crate) outcome: Outcome,
     /// Consecutive completed task indices retired by this publication.
     ///
     /// Reduce or otherwise consume retained partials in this range before
     /// claiming work that reuses their slots. Its length is bounded by the
     /// number of frontier slots.
     #[cfg(test)]
-    pub retired: Range<usize>,
+    retired: Range<usize>,
 }
 
 /// A bounded ordered frontier with out-of-order task completion.
@@ -153,7 +153,11 @@ impl<'a> Frontier<'a> {
     }
 
     /// Binds a frontier, panicking if no storage is supplied.
-    pub fn new(identity: &'a mut Identity, storage: &'a mut [TaskStorage], total: usize) -> Self {
+    pub(crate) fn new(
+        identity: &'a mut Identity,
+        storage: &'a mut [TaskStorage],
+        total: usize,
+    ) -> Self {
         assert!(!storage.is_empty(), "frontier storage must be nonempty");
         for slot in storage.iter_mut() {
             *slot = TaskStorage::EMPTY;
@@ -174,7 +178,7 @@ impl<'a> Frontier<'a> {
     /// Does not claim work. Repeated calls may report the same tasks; resource
     /// availability and arbitration belong to the application scheduler.
     #[cfg(test)]
-    pub fn ready(&self, output: &mut [ReadyRange<'a>]) -> usize {
+    pub(super) fn ready(&self, output: &mut [ReadyRange<'a>]) -> usize {
         if self.failed {
             return 0;
         }
@@ -206,7 +210,7 @@ impl<'a> Frontier<'a> {
     /// Iterates every ready key in the bounded frontier, including ranges
     /// separated by claimed tasks. The scan visits at most `capacity()` slots.
     /// A scheduler can skip resource-blocked keys without hiding later work.
-    pub fn tasks(&self) -> impl Iterator<Item = TaskKey<'a>> + '_ {
+    pub(crate) fn tasks(&self) -> impl Iterator<Item = TaskKey<'a>> + '_ {
         let end = if self.failed {
             self.start
         } else {
@@ -229,7 +233,7 @@ impl<'a> Frontier<'a> {
     /// `None` leaves this frontier unchanged; partial acquisitions must be
     /// rolled back by the provider. A stale or already claimed key returns an
     /// error without calling `acquire`. A kernel receives no executor.
-    pub fn try_claim<K: Kernel<R>, R>(
+    pub(crate) fn try_claim<K: Kernel<R>, R>(
         &mut self,
         key: TaskKey<'a>,
         kernel: K,
@@ -254,7 +258,7 @@ impl<'a> Frontier<'a> {
 
     /// Checks claim identity before deriving task indices or resource ranges.
     /// This does not reserve the task. The coordinator must still claim it.
-    pub fn check_key(&self, key: TaskKey<'a>) -> Result<(), TaskError> {
+    pub(crate) fn check_key(&self, key: TaskKey<'a>) -> Result<(), TaskError> {
         if self.failed {
             return Err(TaskError::Failed);
         }
@@ -278,7 +282,7 @@ impl<'a> Frontier<'a> {
     /// Foreign completions are returned intact in the error. Tasks cannot forge
     /// or clone completion tickets. Accepts failed completions after poisoning
     /// so an application can drain every outstanding task before cancellation.
-    pub fn complete<R, O>(
+    pub(crate) fn complete<R, O>(
         &mut self,
         completion: Completion<'a, R, O>,
     ) -> Result<Completed<R, O>, (TaskError, Completion<'a, R, O>)> {
@@ -316,7 +320,7 @@ impl<'a> Frontier<'a> {
     }
 
     /// Starts the next dependency epoch after all current work succeeded.
-    pub fn restart(&mut self, total: usize) -> Result<(), TaskError> {
+    pub(crate) fn restart(&mut self, total: usize) -> Result<(), TaskError> {
         if !self.is_complete() {
             return Err(if self.failed {
                 TaskError::Failed
@@ -332,18 +336,21 @@ impl<'a> Frontier<'a> {
     }
 
     /// Whether every task in the epoch succeeded and was published.
-    pub fn is_complete(&self) -> bool {
+    pub(crate) fn is_complete(&self) -> bool {
         !self.failed && self.start == self.total
     }
 
     /// Whether any accepted completion failed or was cancelled.
     #[cfg(test)]
-    pub fn is_failed(&self) -> bool {
+    fn is_failed(&self) -> bool {
         self.failed
     }
 
     /// Number of detached tasks whose completion has not been published.
-    pub fn inflight(&self) -> usize {
+    pub(crate) fn inflight(&self) -> usize {
         self.inflight
     }
 }
+
+#[cfg(test)]
+mod tests;

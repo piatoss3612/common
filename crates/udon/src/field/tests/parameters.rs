@@ -1,6 +1,16 @@
 use super::*;
+use crate::field::parameters::TWO_ADICITY;
+use bento::const_arithmetic::u256;
 
-fn check_parameters<M: PrimeModulus>(zeta_power: u32) {
+// Runtime square roots use a generated multiplication schedule instead of the
+// ordinary exponent `(t - 1) / 2`, where `p - 1 = t * 2^32`. Derive that
+// exponent here so the schedule and the fixed vectors can be checked against it.
+pub(super) const PALLAS_BASE_SQRT_EXPONENT: [u64; 4] =
+    u256::tonelli_shanks_exponent!(&PallasBase::MODULUS, TWO_ADICITY);
+pub(super) const PALLAS_SCALAR_SQRT_EXPONENT: [u64; 4] =
+    u256::tonelli_shanks_exponent!(&PallasScalar::MODULUS, TWO_ADICITY);
+
+fn check_parameters<M: PrimeModulus>(zeta_power: u32, sqrt_exponent: [u64; 4]) {
     let p = modulus::<M>();
     let one = BigUint::from(1u8);
     let five = BigUint::from(5u8);
@@ -16,7 +26,7 @@ fn check_parameters<M: PrimeModulus>(zeta_power: u32) {
     assert_eq!(signed62(&M::MODULUS_SIGNED62), BigInt::from(p.clone()));
     let odd_cofactor = (&p - 1u8) >> 32usize;
     assert!(odd_cofactor.bit(0));
-    assert_eq!(integer(&M::SQRT_EXPONENT), (&odd_cofactor - 1u8) >> 1usize);
+    assert_eq!(integer(&sqrt_exponent), (&odd_cofactor - 1u8) >> 1usize);
     let inverse_two = (&p + 1u8) >> 1usize;
     assert_value(PastaField::<M>::TWO_INVERSE, &inverse_two);
     for exponent in (0..=33).chain([40, 256, u32::MAX]) {
@@ -72,6 +82,6 @@ fn check_parameters<M: PrimeModulus>(zeta_power: u32) {
 
 #[test]
 fn parameter_derivations_match_big_integers() {
-    check_parameters::<PallasBase>(2);
-    check_parameters::<PallasScalar>(1);
+    check_parameters::<PallasBase>(2, PALLAS_BASE_SQRT_EXPONENT);
+    check_parameters::<PallasScalar>(1, PALLAS_SCALAR_SQRT_EXPONENT);
 }

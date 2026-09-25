@@ -17,10 +17,10 @@ fn inverse_seed<M: PrimeModulus>(
 /// reverse order with the saved prefixes. Separate even and odd lanes shorten
 /// multiplication dependencies. Callers can seed the lanes with their first
 /// factors to avoid multiplication by one and unused final updates.
-pub(crate) struct InversionLanes<M: PrimeModulus>(pub(crate) [PastaField<M>; 2]);
+struct InversionLanes<M: PrimeModulus>([PastaField<M>; 2]);
 
 impl<M: PrimeModulus> InversionLanes<M> {
-    pub(crate) fn push(&mut self, index: usize, value: &PastaField<M>) -> PastaField<M> {
+    fn push(&mut self, index: usize, value: &PastaField<M>) -> PastaField<M> {
         let product = &mut self.0[index & 1];
         let prefix = *product;
         *product = product.mul(value);
@@ -36,7 +36,7 @@ impl<M: PrimeModulus> InversionLanes<M> {
         Self([inverse.mul(&self.0[1]), inverse.mul(&self.0[0])])
     }
 
-    pub(crate) fn pop(
+    fn pop(
         &mut self,
         index: usize,
         value: &PastaField<M>,

@@ -1,7 +1,7 @@
 //! Opt-in native controls. Counters and fixture checks are outside timed loops.
 use super::*;
 use crate::{
-    curve::{CurveTableEntry, Pallas, Vesta},
+    curve::{CurveTableEntry, Pallas, Vesta, reduce},
     exec::SerialExecutor,
     test_support::field_samples,
 };
@@ -89,7 +89,7 @@ fn phases() {
             });
             let options = BatchOptions::new(
                 ArithmeticOptions::DEFAULT
-                    .with_kernel(Kernel::Booth {
+                    .with_algorithm(Algorithm::Booth {
                         width: Some(8),
                         accumulation: Accumulation::Auto,
                     })
@@ -97,8 +97,8 @@ fn phases() {
             );
             let input = Input::new(Bases::Affine(&bases), &scalars);
             let mut records = vec![ScalarStorage::ZERO; n];
-            prepared::prepare(
-                input.scalars,
+            PreparedScalars::<C>::prepare(
+                &scalars,
                 &mut records,
                 TaskBudget::SERIAL,
                 &SerialExecutor,
@@ -165,7 +165,7 @@ fn phases() {
                     || {
                         level_points.copy_from_slice(&saved_points);
                         level_lens.copy_from_slice(&saved_lens);
-                        black_box(buckets::reduce_level::<C, false>(
+                        black_box(reduce::reduce_level::<C, false>(
                             &mut level_points,
                             &starts,
                             &mut level_lens,
@@ -177,7 +177,7 @@ fn phases() {
                 level_index += 1;
             }
             let mut levels = Vec::new();
-            buckets::reduce_with::<C, false>(
+            reduce::reduce_with::<C, false>(
                 &mut points[..total],
                 &starts,
                 &mut lens,
@@ -201,7 +201,7 @@ fn phases() {
                 })
                 .collect();
             timing("weighted_collapse_window_0", n, count * 64, || {
-                black_box(buckets::collapse(&survivors, &lens));
+                black_box(reduce::collapse(&survivors, &lens));
             });
             let r = input.requirements_with(options).unwrap();
             let mut affine = vec![AffinePoint::GENERATOR; r.affine()];
@@ -243,7 +243,7 @@ fn phases() {
                 }
                 sum
             };
-            let mut buffers = tests::Buffers::new(r);
+            let mut buffers = Buffers::new(r);
             assert_eq!(
                 fold(),
                 input
@@ -273,12 +273,7 @@ fn retained_windows<C: PastaCurve>(
     let chunk_size = records.len();
     for (chunk, source) in scalars.chunks(chunk_size).enumerate() {
         let records = &mut records[..source.len()];
-        prepared::prepare(
-            Scalars::Raw(source),
-            records,
-            TaskBudget::SERIAL,
-            &SerialExecutor,
-        );
+        PreparedScalars::<C>::prepare(source, records, TaskBudget::SERIAL, &SerialExecutor);
         let digits = &mut digits[..geometry.storage_len(source.len()).unwrap()];
         recode::write(records, geometry, digits);
         for (window, buckets) in buckets.chunks_exact_mut(geometry.buckets()).enumerate() {
@@ -335,7 +330,7 @@ fn native_controls() {
                 let mut fields = vec![PastaField::ZERO; n * 3];
                 let mut writes = vec![0; n / 2];
                 let mut histogram = Vec::new();
-                buckets::reduce_with::<C, false>(
+                reduce::reduce_with::<C, false>(
                     &mut points,
                     &starts,
                     &mut lengths,
@@ -350,20 +345,17 @@ fn native_controls() {
                         points.copy_from_slice(&bases[..n]);
                         lengths.copy_from_slice(&lens);
                         match mode {
-                            0 => buckets::reduce_original(
+                            0 => reduce::reduce_original(
                                 &mut points,
                                 &starts,
                                 &mut lengths,
                                 &mut fields,
                                 &mut writes,
                             ),
-                            1 => buckets::reduce(
-                                &mut points,
-                                &starts,
-                                &mut lengths,
-                                &mut fields[..n],
-                            ),
-                            _ => buckets::reduce_with::<C, true>(
+                            1 => {
+                                reduce::reduce(&mut points, &starts, &mut lengths, &mut fields[..n])
+                            }
+                            _ => reduce::reduce_with::<C, true>(
                                 &mut points,
                                 &starts,
                                 &mut lengths,
@@ -388,20 +380,20 @@ fn native_controls() {
                             points.copy_from_slice(&bases[..n]);
                             lengths.copy_from_slice(&lens);
                             match mode {
-                                0 => buckets::reduce_original(
+                                0 => reduce::reduce_original(
                                     &mut points,
                                     &starts,
                                     &mut lengths,
                                     &mut fields,
                                     &mut writes,
                                 ),
-                                1 => buckets::reduce(
+                                1 => reduce::reduce(
                                     &mut points,
                                     &starts,
                                     &mut lengths,
                                     &mut fields[..n],
                                 ),
-                                _ => buckets::reduce_with::<C, true>(
+                                _ => reduce::reduce_with::<C, true>(
                                     &mut points,
                                     &starts,
                                     &mut lengths,
@@ -418,14 +410,19 @@ fn native_controls() {
         for n in [128, 1024, 8192] {
             let input = Input::new(Bases::Affine(&bases[..n]), &scalars[..n]);
             let options = BatchOptions::default();
-            let mut buffers = tests::Buffers::new(input.requirements_with(options).unwrap());
+            let mut buffers = Buffers::new(input.requirements_with(options).unwrap());
             let expected = input
                 .execute_with(options, &SerialExecutor, buffers.borrow())
                 .unwrap();
             for width in [4, 6, 8] {
                 let geometry = recode::Geometry::Booth(width);
                 let mut all = vec![ScalarStorage::ZERO; n];
-                prepared::prepare(input.scalars, &mut all, TaskBudget::SERIAL, &SerialExecutor);
+                PreparedScalars::<C>::prepare(
+                    &scalars[..n],
+                    &mut all,
+                    TaskBudget::SERIAL,
+                    &SerialExecutor,
+                );
                 let mut packed = vec![0; geometry.storage_len(n).unwrap()];
                 timing(
                     &std::format!("recode_width_{width}"),
@@ -487,7 +484,7 @@ fn native_controls() {
                     let o = BatchOptions::new(
                         options
                             .arithmetic()
-                            .with_kernel(Kernel::Booth {
+                            .with_algorithm(Algorithm::Booth {
                                 width: Some(u32::from(width)),
                                 accumulation: Accumulation::Projective,
                             })
@@ -495,7 +492,7 @@ fn native_controls() {
                             .with_chunk_size(NonZeroUsize::new(chunk).unwrap()),
                     );
                     let r = input.requirements_with(o).unwrap();
-                    let mut buffers = tests::Buffers::new(r);
+                    let mut buffers = Buffers::new(r);
                     assert_eq!(
                         input
                             .execute_with(o, &SerialExecutor, buffers.borrow())

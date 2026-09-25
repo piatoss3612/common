@@ -8,13 +8,13 @@ use zakura_udon::{
     field::{PastaField, PrimeModulus},
 };
 
-pub struct Banks<M: PrimeModulus> {
+pub(crate) struct Banks<M: PrimeModulus> {
     banks: Vec<Vec<RwLock<Vec<PastaField<M>>>>>,
     tiles: Vec<usize>,
 }
 
 impl<M: PrimeModulus> Banks<M> {
-    pub fn new(sizes: &[usize], tile: usize, contiguous: Range<usize>) -> Self {
+    pub(crate) fn new(sizes: &[usize], tile: usize, contiguous: Range<usize>) -> Self {
         assert!(sizes.iter().all(|size| size.div_ceil(tile) <= 32));
         let tiles: Vec<_> = sizes
             .iter()
@@ -40,12 +40,12 @@ impl<M: PrimeModulus> Banks<M> {
             tiles,
         }
     }
-    pub fn write(&self, bank: usize, values: &[PastaField<M>]) {
+    pub(crate) fn write(&self, bank: usize, values: &[PastaField<M>]) {
         for (slot, values) in self.banks[bank].iter().zip(values.chunks(self.tiles[bank])) {
             slot.write()[..values.len()].copy_from_slice(values);
         }
     }
-    pub fn read(&self, bank: usize) -> Vec<PastaField<M>> {
+    pub(crate) fn read(&self, bank: usize) -> Vec<PastaField<M>> {
         self.banks[bank]
             .iter()
             .flat_map(|s| s.read().clone())
@@ -68,7 +68,7 @@ impl<M: PrimeModulus> Banks<M> {
         }
         Some(result)
     }
-    pub fn acquire(
+    pub(crate) fn acquire(
         &self,
         task: &Request<'_>,
         input: usize,
@@ -124,7 +124,7 @@ impl<M: PrimeModulus> ReadView<PastaField<M>> for Source<'_, M> {
     }
 }
 
-pub struct Lease<'a, M: PrimeModulus> {
+pub(crate) struct Lease<'a, M: PrimeModulus> {
     write: Write<'a, Vec<PastaField<M>>>,
     pair: Option<Write<'a, Vec<PastaField<M>>>>,
     source: Source<'a, M>,

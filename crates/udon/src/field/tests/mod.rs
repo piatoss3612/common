@@ -1,12 +1,11 @@
 //! Independent integer references for runtime field arithmetic.
 
-pub(super) use super::{
+use super::{
     CanonicalUint, PallasBase, PallasScalar, PastaField, PrimeModulus, Reduced, ReductionState,
 };
-use crate::test_support::xorshift64;
-pub(super) use crate::test_support::{integer, modulus};
-pub(super) use num_bigint::{BigInt, BigUint};
-pub(super) use std::{vec, vec::Vec};
+use crate::test_support::{integer, modulus, xorshift64};
+use num_bigint::{BigInt, BigUint};
+use std::{vec, vec::Vec};
 
 mod arithmetic;
 mod batch;
@@ -14,8 +13,11 @@ mod batch_inversion;
 mod constant_prefix;
 mod constants;
 mod encoding;
+mod fractions;
+mod inversion;
 mod kernels;
 mod parameters;
+mod products;
 mod sqrt_ratios;
 mod uint;
 
@@ -27,7 +29,7 @@ pub(super) fn limbs<const N: usize>(value: &BigUint) -> [u64; N] {
     result
 }
 
-pub(super) fn field<M: PrimeModulus>(value: &BigUint) -> PastaField<M> {
+fn field<M: PrimeModulus>(value: &BigUint) -> PastaField<M> {
     PastaField::from_canonical_uint(CanonicalUint::from_limbs(limbs(value))).unwrap()
 }
 
@@ -44,7 +46,7 @@ pub(super) fn assert_value<M: PrimeModulus, S: ReductionState>(
     assert_eq!(BigUint::from_bytes_le(&actual.to_bytes()), expected);
 }
 
-pub(super) fn deterministic_bytes<const N: usize>(state: &mut u64) -> [u8; N] {
+fn deterministic_bytes<const N: usize>(state: &mut u64) -> [u8; N] {
     core::array::from_fn(|_| xorshift64(state) as u8)
 }
 
@@ -99,7 +101,7 @@ pub(super) fn signed_mod(value: BigInt, modulus: &BigUint) -> BigUint {
     ((value % &p + &p) % &p).to_biguint().unwrap()
 }
 
-pub(super) fn signed62(limbs: &[i64; 5]) -> BigInt {
+fn signed62(limbs: &[i64; 5]) -> BigInt {
     limbs
         .iter()
         .rev()

@@ -4,7 +4,7 @@ use bento::const_arithmetic::{m255, u256};
 use core::{fmt, marker::PhantomData};
 
 use super::{AffinePoint, PastaCurve, Point, ProjectivePoint, curve_rhs};
-use crate::field::{PastaField, PrimeModulus, Reduced};
+use crate::field::{PastaField, PrimeModulus, Reduced, ReductionState};
 
 impl<C: PastaCurve> fmt::Debug for AffinePoint<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -89,6 +89,57 @@ impl<C: PastaCurve> AffinePoint<C> {
         ProjectivePoint::from_affine(self)
     }
 
+    /// Completes an affine addition from its slope `λ`.
+    ///
+    /// Returns `(λ² − x1 − x2, λ(x1 − x) − y1)` with reduced coordinates. The
+    /// caller establishes that the operands describe a nonidentity sum.
+    #[inline]
+    pub(super) fn from_slope<S: ReductionState>(
+        x1: &PastaField<C::Base, S>,
+        y1: &PastaField<C::Base, S>,
+        x2: &PastaField<C::Base, S>,
+        slope: &PastaField<C::Base>,
+    ) -> Self {
+        let x = slope.square().sub(x1).sub(x2);
+        let y = slope.mul(&x1.sub(&x)).sub(y1);
+        Self {
+            x: x.reduce(),
+            y: y.reduce(),
+            marker: PhantomData,
+        }
+    }
+
+    /// [`Self::from_slope`] with a fused `mul_sub` for the `y` coordinate.
+    #[inline]
+    pub(super) fn from_slope_fused<S: ReductionState>(
+        x1: &PastaField<C::Base, S>,
+        y1: &PastaField<C::Base, S>,
+        x2: &PastaField<C::Base, S>,
+        slope: &PastaField<C::Base>,
+    ) -> Self {
+        let x = slope.square().sub(x1).sub(x2);
+        let y = slope.mul_sub(&x1.sub(&x), y1);
+        Self {
+            x: x.reduce(),
+            y: y.reduce(),
+            marker: PhantomData,
+        }
+    }
+
+    /// The doubling slope numerator `3x²`, as `2x² + x²`.
+    #[inline]
+    pub(super) fn tangent_numerator(&self) -> PastaField<C::Base> {
+        let xx = self.x.square();
+        xx.double().add(&xx)
+    }
+
+    /// Adds `q` given `inverse = 1 / (q.x − self.x)`; the x coordinates must differ.
+    #[inline]
+    pub(super) fn chord_with_inverse(&self, q: &Self, inverse: &PastaField<C::Base>) -> Self {
+        let slope = q.y.sub(&self.y).mul(inverse);
+        Self::from_slope(&self.x, &self.y, &q.x, &slope)
+    }
+
     /// Multiplies by a scalar without inversion.
     ///
     /// Processes the full canonical scalar; zero returns identity. The scalar
@@ -103,7 +154,7 @@ impl<C: PastaCurve> AffinePoint<C> {
         // Short scalars use the binary ladder without paying for table setup.
         let scalar = scalar.to_canonical_uint();
         if scalar.highest_set_bit().is_none_or(|high| high < 64) {
-            super::scalar::multiply_canonical(scalar, |point| point.add_mixed(self))
+            super::projective::multiply_canonical(scalar, |point| point.add_mixed(self))
         } else {
             super::effective::multiply(&self.to_projective(), scalar)
         }

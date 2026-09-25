@@ -813,7 +813,7 @@ fn curve<C: PastaCurve>() {
     #[cfg(feature = "msm-arithmetic")]
     let _ = arithmetic::curve::msm::ArithmeticOptions::default();
     #[cfg(feature = "msm-kernel")]
-    let _ = arithmetic::curve::msm::Kernel::Auto;
+    let _ = arithmetic::curve::msm::Algorithm::Auto;
     #[cfg(feature = "msm-accumulation")]
     let _ = arithmetic::curve::msm::Accumulation::Auto;
     #[cfg(feature = "fft-codelet")]
@@ -834,6 +834,13 @@ enum Foreign {}
 
 #[cfg(feature = "foreign-reduction")]
 impl arithmetic::field::ReductionState for Foreign {}
+
+// The representation bound is selected by the sealed supertrait, not exposed
+// through the public marker trait.
+fn reduction_flag<S: arithmetic::field::ReductionState>() {
+    #[cfg(feature = "foreign-reduction-flag")]
+    let _ = S::REDUCED;
+}
 
 #[cfg(feature = "foreign-modulus")]
 impl PrimeModulus for Foreign {
@@ -860,6 +867,7 @@ fn main() {
     );
     field::<PallasBase>(FP_PARAMETERS);
     field::<PallasScalar>(FQ_PARAMETERS);
+    reduction_flag::<Reduced>();
     curve::<Pallas>();
     curve::<Vesta>();
 }

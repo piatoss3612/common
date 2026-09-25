@@ -1,8 +1,8 @@
 use super::*;
-use crate::field::{PallasBase, PallasScalar, count_inversions};
-use crate::test_support::{field_samples, integer, modulus};
-use num_bigint::BigUint;
-use std::{vec, vec::Vec};
+use crate::field::{
+    FractionPrefixError, count_inversions, fraction_prefixes, fraction_prefixes_in_place,
+};
+use crate::test_support::field_samples;
 
 fn from_raw<M: PrimeModulus>(raw: &BigUint) -> PastaField<M> {
     let digits = raw.to_u64_digits();
@@ -282,12 +282,4 @@ fn check_errors<M: PrimeModulus>() {
 fn invalid_lengths_leave_both_buffers_unchanged() {
     check_errors::<PallasBase>();
     check_errors::<PallasScalar>();
-    assert_eq!(
-        validate(usize::MAX, usize::MAX, usize::MAX),
-        Err(FractionPrefixError::LengthOverflow)
-    );
-    assert_eq!(
-        validate(usize::MAX - 1, usize::MAX, usize::MAX),
-        Ok(usize::MAX)
-    );
 }

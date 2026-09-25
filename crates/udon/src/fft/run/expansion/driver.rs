@@ -1,7 +1,7 @@
-use super::super::{ExpansionOrder, ExpansionStorage, assert_length};
-use super::expansion::ExpansionPlan;
-use super::*;
+use super::super::*;
+use super::ExpansionPlan;
 use crate::exec::Executor;
+use crate::fft::{CoefficientView, ExpansionOrder, ExpansionStorage, assert_length, check_scratch};
 
 impl<M: PrimeModulus> ExpansionPlan<'_, M> {
     /// Scratch field count for contiguous execution.
@@ -13,7 +13,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         self.scratch_fields
     }
 
-    pub(crate) fn scratch_fields_with(&self, max_tasks: NonZeroUsize) -> usize {
+    pub(in crate::fft) fn scratch_fields_with(&self, max_tasks: NonZeroUsize) -> usize {
         // Retained fields per residue are bounded by the base domain, so the
         // combined scratch fits within the validated extended domain.
         self.snapshot_fields() * self.residues().min(max_tasks.get())
@@ -40,7 +40,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         if let Some(factor) = factor {
             assert_length("factor", output, factor.len());
         }
-        super::super::check_scratch(self.scratch_fields_with(max_tasks), scratch)
+        check_scratch(self.scratch_fields_with(max_tasks), scratch)
     }
 
     /// Expands preserved input into contiguous residue blocks.
@@ -71,7 +71,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         factor: Option<&[PastaField<M>]>,
         scratch: &mut [PastaField<M>],
         executor: &E,
-    ) -> Option<super::super::CoefficientView<'c, M>> {
+    ) -> Option<CoefficientView<'c, M>> {
         self.execute_with(
             input,
             output,
@@ -87,7 +87,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         clippy::too_many_arguments,
         reason = "Internal driver receives disjoint buffers and a task allowance."
     )]
-    pub(crate) fn execute_with<'c, E: Executor>(
+    pub(in crate::fft) fn execute_with<'c, E: Executor>(
         self,
         input: &[PastaField<M>],
         output: &mut [PastaField<M>],
@@ -96,7 +96,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         scratch: &mut [PastaField<M>],
         max_tasks: NonZeroUsize,
         executor: &E,
-    ) -> Option<super::super::CoefficientView<'c, M>> {
+    ) -> Option<CoefficientView<'c, M>> {
         self.check(input.len(), output.len(), factor, scratch.len(), max_tasks);
         assert_length(
             "coefficients",
@@ -189,7 +189,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         }
         match self.storage {
             ExpansionStorage::CoefficientWorkspace { scale } => {
-                Some(super::super::CoefficientView::new(coefficients, scale))
+                Some(CoefficientView::new(coefficients, scale))
             }
             _ => None,
         }
@@ -210,7 +210,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         factor: Option<&[PastaField<M>]>,
         scratch: &mut [PastaField<M>],
         executor: &E,
-    ) -> super::super::CoefficientView<'c, M> {
+    ) -> CoefficientView<'c, M> {
         self.execute_disposable_with(
             input,
             output,
@@ -221,7 +221,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         )
     }
 
-    pub(crate) fn execute_disposable_with<'c, E: Executor>(
+    pub(in crate::fft) fn execute_disposable_with<'c, E: Executor>(
         self,
         input: &'c mut [PastaField<M>],
         output: &mut [PastaField<M>],
@@ -229,7 +229,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         scratch: &mut [PastaField<M>],
         max_tasks: NonZeroUsize,
         executor: &E,
-    ) -> super::super::CoefficientView<'c, M> {
+    ) -> CoefficientView<'c, M> {
         self.check(input.len(), output.len(), factor, scratch.len(), max_tasks);
         let ExpansionStorage::DisposableInput { scale } = self.storage else {
             panic!("execute_disposable requires disposable input");
@@ -237,7 +237,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         self.inverse()
             .execute_with(None, input, None, scratch, max_tasks, executor);
         self.residue_transforms(input, output, factor, 0, scratch, max_tasks, executor);
-        super::super::CoefficientView::new(input, scale)
+        CoefficientView::new(input, scale)
     }
 
     #[expect(

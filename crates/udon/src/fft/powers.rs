@@ -2,7 +2,7 @@ use super::{
     FftError, PastaField, PrimeModulus, assert_length, check_domain_size, check_field_count,
 };
 
-pub(super) use crate::field::fill_powers;
+use crate::field::fill_powers;
 
 /// Retained representation of subgroup powers, independent of value ordering.
 ///
@@ -74,11 +74,11 @@ impl TwiddleDescription {
 /// [`Self::bind`] borrows trusted stored entries.
 #[derive(Clone, Copy)]
 pub struct TwiddleTable<'a, M: PrimeModulus> {
-    pub(super) description: TwiddleDescription,
-    pub(super) values: &'a [PastaField<M>],
+    description: TwiddleDescription,
+    values: &'a [PastaField<M>],
     // Keep the stored orientation so kernels can borrow ordinary inverse tables
     // and conjugate on lookup without copying their entries.
-    pub(super) inverse: bool,
+    inverse: bool,
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for TwiddleTable<'_, M> {
@@ -133,6 +133,24 @@ impl<'a, M: PrimeModulus> TwiddleTable<'a, M> {
             values,
             inverse: false,
         })
+    }
+
+    // Kernels borrow a transform's already checked table slices in either
+    // root orientation without rechecking their lengths.
+    pub(super) const fn trusted(
+        description: TwiddleDescription,
+        values: &'a [PastaField<M>],
+        inverse: bool,
+    ) -> Self {
+        Self {
+            description,
+            values,
+            inverse,
+        }
+    }
+
+    pub(super) const fn is_inverse(self) -> bool {
+        self.inverse
     }
 
     /// Generation semantics; the field is also fixed by the type parameter.

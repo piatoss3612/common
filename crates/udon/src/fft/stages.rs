@@ -3,24 +3,40 @@
 //! Every butterfly preserves the loose field bound, including intermediate
 //! values visible when an executor unwinds.
 
-use super::finish::Factors;
+use super::factors::Factors;
 use super::{
-    Codelet, ElementOrder, Executor, InverseScale, PastaField, PrimeModulus, Transform,
-    TwiddleDescription, TwiddleStorage, TwiddleTable, reverse,
+    ElementOrder, Executor, InverseScale, PastaField, PrimeModulus, Transform, TwiddleDescription,
+    TwiddleStorage, TwiddleTable, reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-use crate::field::fft::{butterfly, butterfly_dif, divide_by_power_of_two, scale};
+use crate::field::butterfly::{butterfly, butterfly_dif, divide_by_power_of_two, scale};
+
+#[cfg(test)]
+mod tests;
+
+/// Small straight-line radix schedules, including differential-test candidates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Codelet {
+    /// Individual radix-2 rounds.
+    Radix2,
+    /// Four-value local schedules.
+    #[cfg(test)]
+    Radix4,
+    /// Eight-value local schedules.
+    #[cfg(test)]
+    Radix8,
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct StageKernel<'a, 'b, M: PrimeModulus> {
-    pub plan: Transform<'a, M>,
-    pub inverse: bool,
-    pub dif: bool,
-    pub scale: InverseScale,
-    pub codelet: Codelet,
-    pub twiddles: Option<TwiddleTable<'a, M>>,
-    pub output_order: ElementOrder,
-    pub factor: Option<&'b [PastaField<M>]>,
+    pub(super) plan: Transform<'a, M>,
+    pub(super) inverse: bool,
+    pub(super) dif: bool,
+    pub(super) scale: InverseScale,
+    pub(super) codelet: Codelet,
+    pub(super) twiddles: Option<TwiddleTable<'a, M>>,
+    pub(super) output_order: ElementOrder,
+    pub(super) factor: Option<&'b [PastaField<M>]>,
 }
 
 // Four useful mathematical schedules, rather than a Cartesian product of all
@@ -39,7 +55,7 @@ impl<'a, 'b, M: PrimeModulus, const MODE: u8> core::ops::Deref for Schedule<'_, 
 impl<M: PrimeModulus> StageKernel<'_, '_, M> {
     // Explicit tables also cover bounded, column-major panels. Dispatch once
     // per stage; the default recurrence path shares transform::Kernel::cross.
-    pub fn columns(
+    pub(super) fn columns(
         &self,
         values: &mut [PastaField<M>],
         first: usize,
@@ -57,7 +73,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
                     stride: if packed { 1 } else { description.size / block },
                     offset: if packed { block / 2 - 1 } else { 0 },
                     half: block / 2,
-                    conjugate: table.inverse != self.inverse,
+                    conjugate: table.is_inverse() != self.inverse,
                 }
             });
             let root: PastaField<M> = if self.inverse {
@@ -115,7 +131,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
 
     // A detached tile pair has no executor or child resource requests. The
     // same provider selection serves complete stages and incremental runs.
-    pub fn pair(
+    pub(super) fn pair(
         &self,
         left: &mut [PastaField<M>],
         right: &mut [PastaField<M>],
@@ -134,7 +150,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
     // Continues an initialized transform, including the fused interpolation
     // paths. Kernel-local calls use `run` with a serial executor.
     #[cfg(test)]
-    pub fn drive<E: Executor>(
+    pub(super) fn drive<E: Executor>(
         &self,
         values: &mut [PastaField<M>],
         first: usize,
@@ -178,7 +194,7 @@ impl<M: PrimeModulus> StageKernel<'_, '_, M> {
         );
     }
 
-    pub fn run<E: Executor>(
+    pub(super) fn run<E: Executor>(
         &self,
         values: &mut [PastaField<M>],
         first: usize,
@@ -222,14 +238,14 @@ pub(super) fn twiddle_table<'a, M: PrimeModulus>(
         .or_else(|| opposite.map(|values| (values, !inverse)))?;
     // Transform binding has checked the slice lengths. The public twiddle binder
     // describes forward roots, so retain the ordinary table's orientation here.
-    Some(TwiddleTable {
-        description: TwiddleDescription {
+    Some(TwiddleTable::trusted(
+        TwiddleDescription {
             size: plan.domain.size(),
             storage: TwiddleStorage::Dense,
         },
         values,
-        inverse: direction,
-    })
+        direction,
+    ))
 }
 
 // Specialize the provider family at each stage, rather than dispatching among
@@ -288,7 +304,7 @@ macro_rules! dispatch_powers {
         if let Some(table) = $kernel.table($block) {
             let description = table.description();
             let dense = DensePowers { values: table.as_slice(), stride: description.size / $block,
-                offset: 0, half: $block / 2, conjugate: table.inverse != $kernel.inverse() };
+                offset: 0, half: $block / 2, conjugate: table.is_inverse() != $kernel.inverse() };
             match description.storage {
                 TwiddleStorage::Dense => $kernel.$method($($argument,)+ dense),
                 TwiddleStorage::StagePacked => $kernel.$method($($argument,)+ DensePowers { stride: 1, offset: $block / 2 - 1, ..dense }),
@@ -350,7 +366,7 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
         }
     }
 
-    pub fn run<E: Executor>(
+    fn run<E: Executor>(
         &self,
         values: &mut [PastaField<M>],
         first: usize,
@@ -674,11 +690,11 @@ fn paired<
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Step {
-    pub left: usize,
-    pub right: usize,
-    pub block: usize,
-    pub exponent: usize,
+struct Step {
+    left: usize,
+    right: usize,
+    block: usize,
+    exponent: usize,
 }
 
 const fn schedule<const N: usize>(radix: usize) -> [Step; N] {
@@ -713,5 +729,5 @@ const fn schedule<const N: usize>(radix: usize) -> [Step; N] {
     }
     result
 }
-pub(super) const RADIX4: [Step; 4] = schedule(4);
-pub(super) const RADIX8: [Step; 12] = schedule(8);
+const RADIX4: [Step; 4] = schedule(4);
+const RADIX8: [Step; 12] = schedule(8);

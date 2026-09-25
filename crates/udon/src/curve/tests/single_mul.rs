@@ -10,7 +10,7 @@ fn normalized<C: PastaCurve>(
 ) -> ProjectivePoint<C> {
     let points = match affine {
         Some(p) => eisenstein::representatives_affine(p),
-        None => eisenstein::representatives(base),
+        None => representatives(base),
     };
     let mut entries = [PreparedAffinePoint::from_affine(&AffinePoint::GENERATOR); 8];
     let mut field = [PastaField::ZERO; 8];
@@ -35,7 +35,7 @@ fn compare<C: PastaCurve>(c: &mut criterion::Criterion, name: &str) {
     let mut group = c.benchmark_group(std::format!("{name}/single_mul"));
     for n in [1, 64, 512, 8192] {
         for i in 0..n {
-            let expected = scalar::multiply(&scalars[i], |sum| sum.add(&bases[i]));
+            let expected = multiply(&scalars[i], |sum| sum.add(&bases[i]));
             assert_eq!(bases[i].mul(&scalars[i]), expected);
             assert_eq!(affine[i].mul_projective(&scalars[i]), expected);
             assert_eq!(normalized(&bases[i], None, &scalars[i]), expected);

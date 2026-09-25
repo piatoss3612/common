@@ -63,7 +63,7 @@ The returned input's `selection()` can retain the chosen mapping after
 the original row is gone. Reuse that support only when later rows are
 known to vanish at the omitted positions. If support is already known,
 construct an indexed selection directly. See the
-[support conversion](../../crates/udon/src/curve/msm/support.rs).
+[support conversion](../../crates/udon/src/curve/msm/nonzero.rs).
 
 ### `Input`
 

@@ -64,18 +64,69 @@ impl<C: PastaCurve> EisensteinScalar<C> {
     }
 
     fn certify_batch(mut self) -> Self {
-        self.batch_safe = Some(super::eisenstein_batch::ladder_safe::<C>(self.digits()));
+        self.batch_safe = Some(ladder_safe::<C>(self.digits()));
         self
     }
 
     pub(super) fn batch_safe(&self) -> bool {
         self.batch_safe
-            .unwrap_or_else(|| super::eisenstein_batch::ladder_safe::<C>(self.digits()))
+            .unwrap_or_else(|| ladder_safe::<C>(self.digits()))
     }
 
     pub(super) fn digits(&self) -> &[u8] {
         &self.digits[..self.len]
     }
+
+    /// Wraps recoded digits directly, bypassing scalar decomposition.
+    #[cfg(test)]
+    pub(super) fn from_digits(digits: &[u8]) -> Self {
+        let mut stored = [0; MAX_DIGITS];
+        stored[..digits.len()].copy_from_slice(digits);
+        Self {
+            digits: stored,
+            len: digits.len(),
+            batch_safe: None,
+            marker: PhantomData,
+        }
+    }
+}
+
+/// The scalar-field value of one nonzero digit code.
+pub(super) fn digit_scalar<C: PastaCurve>(code: u8) -> PastaField<C::Scalar> {
+    let value = usize::from(code - 1);
+    let (mut a, mut b) = REPRESENTATIVES[value / 6];
+    for _ in 0..(value % 6) / 2 {
+        (a, b) = (-b, a - b);
+    }
+    let signed = |x: i8| {
+        let f = PastaField::<C::Scalar>::from_u64(u64::from(x.unsigned_abs()));
+        if x < 0 { f.neg() } else { f }
+    };
+    let d = signed(a).add(&signed(b).mul(&PastaField::<C::Scalar>::ZETA));
+    if value & 1 == 1 { d.neg() } else { d }
+}
+
+fn ladder_safe<C: PastaCurve>(digits: &[u8]) -> bool {
+    let Some((&top, rest)) = digits.split_last() else {
+        return false;
+    };
+    let mut s = digit_scalar::<C>(top);
+    // All nonidentity bases have the same prime order. Checking the schedule
+    // in the scalar field is therefore exact for every base in the batch,
+    // including schedules whose intermediate integer coefficients wrap.
+    for &code in rest.iter().rev() {
+        let twice = s.double();
+        if code == 0 {
+            s = twice;
+        } else {
+            let d = digit_scalar::<C>(code);
+            if d.reduce() == s.reduce() || d.reduce() == twice.neg().reduce() {
+                return false;
+            }
+            s = twice.add(&d);
+        }
+    }
+    true
 }
 
 /// Coefficients `a + b*lambda`, in retained table order.
@@ -144,34 +195,6 @@ pub(super) fn recode(mut a: i128, mut b: i128) -> ([u8; MAX_DIGITS], usize) {
     (digits, len)
 }
 
-#[cfg(test)]
-pub(super) fn representatives<C: PastaCurve>(base: &ProjectivePoint<C>) -> [ProjectivePoint<C>; 8] {
-    // Write phi(P) for P.endomorphism(). For difference = base - phi(base),
-    // difference - phi(difference) = [-3] phi(base). Two endomorphisms then
-    // give [-3] base without doublings; sums with phi(base) and further
-    // rotations produce REPRESENTATIVES in the required order.
-    let phi = base.endomorphism();
-    let difference = base.sub(&phi);
-    let b = difference.sub(&difference.endomorphism());
-    let b_phi = b.endomorphism();
-    let minus_three = b_phi.endomorphism();
-    let three_a = phi.add(&minus_three);
-    let three_b = phi.sub(&minus_three);
-    let four_a = phi.sub(&b_phi);
-    let four_b = phi.add(&b_phi);
-    let nineteen = phi.add(&four_b);
-    [
-        *base,
-        difference,
-        four_a.endomorphism(),
-        three_b.endomorphism().neg(),
-        minus_three.neg(),
-        three_a.neg(),
-        four_b.endomorphism().endomorphism(),
-        nineteen.endomorphism().endomorphism(),
-    ]
-}
-
 pub(super) fn representatives_affine<C: PastaCurve>(
     base: &AffinePoint<C>,
 ) -> [ProjectivePoint<C>; 8] {
@@ -219,8 +242,8 @@ pub(super) fn representatives_affine<C: PastaCurve>(
 /// The entry count is encoded in the borrowed array type.
 #[derive(Clone, Copy)]
 pub struct EisensteinTable<'a, C: PastaCurve, E: CurveTableEntry<C> = AffinePoint<C>> {
-    pub(super) base: AffinePoint<C>,
-    pub(super) entries: &'a [E; 8],
+    base: AffinePoint<C>,
+    entries: &'a [E; 8],
 }
 
 impl<C: PastaCurve, E: CurveTableEntry<C>> core::fmt::Debug for EisensteinTable<'_, C, E> {

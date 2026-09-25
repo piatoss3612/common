@@ -146,9 +146,8 @@
 //! # Ok::<(), zakura_udon::fft::FftError>(())
 //! ```
 
+use crate::checks::assert_length;
 use crate::exec::Executor;
-#[cfg(test)]
-use crate::exec::SerialExecutor;
 use crate::field::{PastaField, PrimeModulus};
 
 mod constant_prefix;
@@ -157,9 +156,8 @@ mod execution;
 mod expansion;
 mod expansion_operation;
 mod expansion_scales;
-mod finish;
+mod factors;
 mod interpolation;
-mod interpolation_parallel;
 mod lagrange;
 mod layout;
 mod operation;
@@ -173,23 +171,20 @@ mod vanishing;
 
 pub use constant_prefix::ConstantPrefixExpansion;
 pub use domain::{CosetDomain, Domain};
-pub(crate) use execution::Strategy;
+use execution::Strategy;
 use execution::check_scratch;
 pub use expansion::Expansion;
-#[cfg(test)]
-use expansion::ExpansionStrategy;
 pub use expansion_operation::{ExpansionOrder, ExpansionStorage, Residue};
 pub use expansion_scales::{ExpansionScaleNormalization, ExpansionScales};
 pub use interpolation::ClassState;
-use interpolation::{Class, interpolate_classes, interpolation_scratch};
-use interpolation_parallel::interpolate_sum;
+use interpolation::{Class, interpolate_classes, interpolate_sum};
 pub use lagrange::{LagrangeCompletion, LagrangeError};
 pub use layout::{
     CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, InverseScale, ResidueLayout,
 };
-pub(crate) use operation::Codelet;
 pub use operation::{Direction, InputStorage, InputSupport, StorageLayout, TransformRequest};
 pub use powers::{TwiddleDescription, TwiddleStorage, TwiddleTable};
+use stages::Codelet;
 pub use tables::{TableRequirements, Tables, TablesMut};
 pub use transform::Transform;
 pub use vanishing::{VanishingDivision, VanishingFactors};
@@ -249,10 +244,6 @@ impl core::fmt::Display for FftError {
 }
 
 impl core::error::Error for FftError {}
-
-fn assert_length(buffer: &str, expected: usize, actual: usize) {
-    assert_eq!(actual, expected, "{buffer} length");
-}
 
 fn check_prefix(actual: usize, min: usize, max: usize) -> Result<(), FftError> {
     if (min..=max).contains(&actual) {

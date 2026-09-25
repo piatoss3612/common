@@ -74,7 +74,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         )
     }
 
-    pub(crate) fn execute_with<E: Executor>(
+    pub(in crate::fft) fn execute_with<E: Executor>(
         self,
         input: Option<&[PastaField<M>]>,
         values: &mut [PastaField<M>],
@@ -285,7 +285,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         self.batch_fields_with(count, NonZeroUsize::new(self.budget.get()).unwrap())
     }
 
-    pub(crate) fn batch_fields_with(
+    pub(super) fn batch_fields_with(
         self,
         count: usize,
         max_tasks: NonZeroUsize,
@@ -361,7 +361,7 @@ impl<M: PrimeModulus> FftPlan<'_, M> {
         )
     }
 
-    pub(crate) fn execute_batch_with<E: Executor>(
+    pub(super) fn execute_batch_with<E: Executor>(
         self,
         values: &mut [PastaField<M>],
         scratch: &mut [PastaField<M>],

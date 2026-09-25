@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    curve::{Pallas, Vesta, msm::tests::Buffers, scalar},
+    curve::{Pallas, Vesta, msm::test_support::Buffers, tests::multiply},
     exec::{ExecutionOptions, SerialExecutor},
     field::PrimeModulus,
     test_support::{field_samples, modulus},
@@ -50,7 +50,7 @@ fn bases<C: PastaCurve>(n: usize) -> Vec<Point<C>> {
             if i % 7 == 0 {
                 Point::IDENTITY
             } else {
-                scalar::multiply(&s, |sum| sum.add(&ProjectivePoint::GENERATOR)).to_point()
+                multiply(&s, |sum| sum.add(&ProjectivePoint::GENERATOR)).to_point()
             }
         })
         .collect()

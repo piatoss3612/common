@@ -1,6 +1,6 @@
 //! Scalar classification and GLV storage independent of an execution geometry.
 
-use core::marker::PhantomData;
+use core::{marker::PhantomData, ops::Range};
 
 use super::{CurveError, PastaCurve, Scalars, assert_scratch, checked_count};
 use crate::{
@@ -283,7 +283,7 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// and scalar record storage. Returns [`CurveError::SizeOverflow`] if the
     /// byte slice would be too large. See [`Self::cache`] for reuse conditions.
     #[cfg(test)]
-    pub(crate) fn cache_len_with(
+    pub(super) fn cache_len_with(
         &self,
         options: super::ArithmeticOptions,
     ) -> Result<usize, CurveError> {
@@ -300,7 +300,7 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// Returns [`CurveError::SizeOverflow`] if sizing fails. Insufficient storage
     /// panics before writes. Bytes beyond the required prefix remain untouched.
     #[cfg(test)]
-    pub(crate) fn cache_with(
+    pub(super) fn cache_with(
         &self,
         options: super::ArithmeticOptions,
         storage: &'a mut [u8],
@@ -315,6 +315,32 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
             shape: self.shape,
             cached: Some(super::recode::Cache { geometry, digits }),
         })
+    }
+
+    /// Drops any retained recoding cache, keeping the scalar records.
+    pub(super) const fn without_cache(self) -> Self {
+        Self {
+            cached: None,
+            ..self
+        }
+    }
+
+    /// Borrows the records in `range`. A whole-row shape bound remains valid
+    /// for each chunk; execution retains its selected geometry in the job
+    /// metadata, so the cache does not carry over.
+    pub(super) fn slice(self, range: Range<usize>) -> Self {
+        Self {
+            records: &self.records[range],
+            shape: self.shape,
+            cached: None,
+        }
+    }
+
+    /// Retained digits recoded for exactly `geometry`, if cached.
+    pub(super) fn cached_digits(&self, geometry: super::recode::Geometry) -> Option<&'a [u8]> {
+        self.cached
+            .filter(|c| c.geometry == geometry)
+            .map(|c| c.digits)
     }
 
     /// Number of prepared coefficients.
@@ -353,7 +379,7 @@ pub(super) fn validate_canonical<C: PastaCurve>(
     Ok(())
 }
 
-pub(super) fn prepare<C: PastaCurve, X: Executor>(
+fn prepare<C: PastaCurve, X: Executor>(
     source: Scalars<'_, C>,
     records: &mut [ScalarStorage<C>],
     budget: TaskBudget,

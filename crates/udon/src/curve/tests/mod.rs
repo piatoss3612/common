@@ -6,13 +6,14 @@ use std::{vec, vec::Vec};
 
 mod arithmetic;
 mod contracts;
+mod digits;
 mod eisenstein;
 mod eisenstein_batch;
 mod fixed_base;
 mod fixed_base_sum;
 mod glv;
 mod incomplete;
-pub(crate) mod reference;
+pub(super) mod reference;
 mod single_mul;
 
 pub(super) fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {
@@ -54,4 +55,40 @@ pub(super) fn scaled<C: PastaCurve>(point: &Point<C>, scale: u64) -> ProjectiveP
         z,
         marker: PhantomData,
     }
+}
+
+/// Binary-ladder oracle: each `add_base` call must add the same base.
+pub(super) fn multiply<C: PastaCurve>(
+    scalar: &PastaField<C::Scalar>,
+    add_base: impl Fn(&ProjectivePoint<C>) -> ProjectivePoint<C>,
+) -> ProjectivePoint<C> {
+    projective::multiply_canonical(scalar.to_canonical_uint(), add_base)
+}
+
+/// Complete-formula oracle for the eight Eisenstein representatives of `base`.
+pub(super) fn representatives<C: PastaCurve>(base: &ProjectivePoint<C>) -> [ProjectivePoint<C>; 8] {
+    // Write phi(P) for P.endomorphism(). For difference = base - phi(base),
+    // difference - phi(difference) = [-3] phi(base). Two endomorphisms then
+    // give [-3] base without doublings; sums with phi(base) and further
+    // rotations produce REPRESENTATIVES in the required order.
+    let phi = base.endomorphism();
+    let difference = base.sub(&phi);
+    let b = difference.sub(&difference.endomorphism());
+    let b_phi = b.endomorphism();
+    let minus_three = b_phi.endomorphism();
+    let three_a = phi.add(&minus_three);
+    let three_b = phi.sub(&minus_three);
+    let four_a = phi.sub(&b_phi);
+    let four_b = phi.add(&b_phi);
+    let nineteen = phi.add(&four_b);
+    [
+        *base,
+        difference,
+        four_a.endomorphism(),
+        three_b.endomorphism().neg(),
+        minus_three.neg(),
+        three_a.neg(),
+        four_b.endomorphism().endomorphism(),
+        nineteen.endomorphism().endomorphism(),
+    ]
 }

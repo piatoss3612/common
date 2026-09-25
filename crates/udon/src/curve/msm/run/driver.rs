@@ -83,8 +83,9 @@ impl<C: PastaCurve> Windows<'_, '_, '_, C> {
         let (left_claims, right_claims) = self.claims.split_at_mut(middle);
         let (left_outputs, right_outputs) = self.outputs.split_at_mut(middle);
         let (left_receipts, right_receipts) = self.receipts.split_at_mut(middle);
-        let (left_scratch, right_scratch) =
-            schedule::split_scratch(self.scratch, self.work.times::<C>(left_leases).unwrap());
+        let (left_scratch, right_scratch) = self
+            .scratch
+            .split(self.work.times::<C>(left_leases).unwrap());
         executor.join(
             || {
                 Windows {
@@ -125,7 +126,7 @@ impl<C: PastaCurve> MsmPlan<C> {
         self.requirements_with(NonZeroUsize::new(self.job.budget.get()).unwrap())
     }
 
-    pub(crate) fn requirements_with(&self, leases: NonZeroUsize) -> Requirements {
+    pub(super) fn requirements_with(&self, leases: NonZeroUsize) -> Requirements {
         let count = self.output_slots().min(leases.get()).min(32);
         let r = self
             .retained
@@ -164,7 +165,7 @@ impl<C: PastaCurve> MsmPlan<C> {
         )
     }
 
-    pub(crate) fn execute_with<E: Executor>(
+    pub(super) fn execute_with<E: Executor>(
         self,
         input: Input<'_, C>,
         leases: NonZeroUsize,
@@ -180,7 +181,7 @@ impl<C: PastaCurve> MsmPlan<C> {
         if input.is_empty() {
             return ProjectivePoint::IDENTITY;
         }
-        let (retained, mut temporary) = schedule::split_scratch(scratch, self.retained);
+        let (retained, mut temporary) = scratch.split(self.retained);
         let Scratch {
             scalars,
             digits,

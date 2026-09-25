@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    curve::{AffinePoint, Pallas, Point, Vesta, scalar},
+    curve::{AffinePoint, Pallas, Point, Vesta, tests::multiply},
     exec::{SerialExecutor, TaskBudget},
     field::PastaField,
     test_support::field_samples,
@@ -113,7 +113,7 @@ fn differential<C: PastaCurve>() {
                                 |sum, (i, k)| {
                                     let base =
                                         points[row * row_stride + i * term_stride].to_projective();
-                                    sum.add(&scalar::multiply(k, |p| p.add(&base)))
+                                    sum.add(&multiply(k, |p| p.add(&base)))
                                 },
                             )
                         })
@@ -424,7 +424,7 @@ fn validation_capacity_and_unwind() {
 #[test]
 fn scalar_boundaries_chunks_and_task_ceilings() {
     fn check<C: PastaCurve>() {
-        use crate::curve::msm::{ScalarStorage, tests::JoinWidth};
+        use crate::curve::msm::{ScalarStorage, test_support::JoinWidth};
         use crate::field::PrimeModulus;
         let scalar_cases = [
             PastaField::ZERO,
@@ -444,7 +444,7 @@ fn scalar_boundaries_chunks_and_task_ceilings() {
             let base = [g];
             let matrix = SharedScalarInput::new(Bases::Affine(&base), prepared, 9, 0, 0).unwrap();
             let total = raw.iter().fold(PastaField::ZERO, |sum, s| sum.add(s));
-            let expected = scalar::multiply(&total, |sum| sum.add(&g.to_projective()));
+            let expected = multiply(&total, |sum| sum.add(&g.to_projective()));
             for tasks in [1, 3, 5] {
                 for limit in [8192, usize::MAX] {
                     let options = ExecutionOptions::DEFAULT

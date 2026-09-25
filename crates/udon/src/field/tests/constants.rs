@@ -162,13 +162,13 @@ const PALLAS_SCALAR: Vectors = Vectors {
     ],
 };
 
-fn check_field<M: PrimeModulus>(vectors: &Vectors) {
+fn check_field<M: PrimeModulus>(vectors: &Vectors, sqrt_exponent: [u64; 4]) {
     assert_eq!(M::MODULUS, vectors.modulus);
     assert_eq!(M::MONTGOMERY_INV, vectors.montgomery_inv);
     assert_eq!(M::R, vectors.r);
     assert_eq!(M::R2, vectors.r2);
     assert_eq!(M::B448, vectors.b448);
-    assert_eq!(M::SQRT_EXPONENT, vectors.sqrt_exponent);
+    assert_eq!(sqrt_exponent, vectors.sqrt_exponent);
     assert_eq!(M::TWO_INVERSE, vectors.two_inverse);
     assert_eq!(
         PastaField::<M>::root_of_unity(32)
@@ -189,10 +189,13 @@ fn check_field<M: PrimeModulus>(vectors: &Vectors) {
 
 #[test]
 fn pallas_base_constants_match_fixed_vectors() {
-    check_field::<PallasBase>(&PALLAS_BASE);
+    check_field::<PallasBase>(&PALLAS_BASE, super::parameters::PALLAS_BASE_SQRT_EXPONENT);
 }
 
 #[test]
 fn pallas_scalar_constants_match_fixed_vectors() {
-    check_field::<PallasScalar>(&PALLAS_SCALAR);
+    check_field::<PallasScalar>(
+        &PALLAS_SCALAR,
+        super::parameters::PALLAS_SCALAR_SQRT_EXPONENT,
+    );
 }

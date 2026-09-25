@@ -152,12 +152,10 @@ impl<'a, C: PastaCurve> SharedScalarInput<'a, C> {
         for first in (0..self.terms()).step_by(plan.job.cap) {
             let end = self.terms().min(first + plan.job.cap);
             let records = &self.scalars.records[first..end];
-            let digits = if let Some(cache) = self
-                .scalars
-                .cached
-                .filter(|c| c.geometry == plan.job.geometry && plan.job.cap == self.terms())
+            let digits = if plan.job.cap == self.terms()
+                && let Some(cache) = self.scalars.cached_digits(plan.job.geometry)
             {
-                cache.digits
+                cache
             } else {
                 let len = plan.job.geometry.storage_len(records.len()).unwrap();
                 let digits = &mut scratch.digits[..len];
@@ -335,7 +333,7 @@ fn run_tasks<C: PastaCurve, X: Executor>(
         let left_workers = workers / 2;
         let left_tasks = (results.len() / lanes) / 2;
         let (left, right) = results.split_at_mut(left_tasks * lanes);
-        let (a, b) = schedule::split_scratch(scratch, work.times::<C>(left_workers).unwrap());
+        let (a, b) = scratch.split(work.times::<C>(left_workers).unwrap());
         executor.join(
             || {
                 run_tasks(

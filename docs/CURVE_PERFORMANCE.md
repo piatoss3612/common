@@ -155,7 +155,7 @@ identity branches remain complete. Independent affine integer references and
 field-halving boundary checks establish their arithmetic behavior separately
 from timings.
 
-The [affine bucket reducer](../crates/udon/src/curve/msm/buckets.rs) recovers
+The [affine bucket reducer](../crates/udon/src/curve/reduce.rs) recovers
 inverses while adding and compacting point pairs, sharing an inversion across
 one level. Its chord attempt falls back to complete reduction on a zero
 product before changing points or lengths. The fallback also preserves odd

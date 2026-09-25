@@ -34,3 +34,57 @@ pub(crate) fn fill_powers<M: PrimeModulus>(
         *last = even.mul(&stride);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::field::{PallasBase, PallasScalar, word::compare_limbs};
+    use crate::test_support::field_samples;
+    use std::vec;
+
+    fn power_oracle<M: PrimeModulus>() {
+        let mut largest = M::TWICE_MODULUS;
+        largest[0] -= 1;
+        let samples = [
+            PastaField::ZERO,
+            PastaField::from_montgomery_limbs(M::MODULUS),
+            PastaField::from_montgomery_limbs(largest),
+            PastaField::ONE,
+            PastaField::<M>::ONE.neg(),
+            PastaField::from_u64(7),
+            field_samples::<M>().next().unwrap(),
+        ];
+        for first in samples {
+            for step in samples {
+                for len in (0..=35).chain([63, 64, 65, 255, 256, 257]) {
+                    let sentinel = PastaField::from_u64(19);
+                    let mut values = vec![sentinel; len + 2];
+                    fill_powers(first, step, &mut values[1..len + 1]);
+                    for (i, value) in values[1..len + 1].iter().enumerate() {
+                        assert_eq!(value.reduce(), first.mul(&step.pow_u64(i as u64)).reduce());
+                        // Every entry keeps the loose bound and encodes canonically.
+                        assert!(
+                            compare_limbs(&value.montgomery_limbs(), &M::TWICE_MODULUS).is_lt()
+                        );
+                        assert_eq!(
+                            PastaField::<M>::from_bytes(value.to_bytes())
+                                .map(|value| value.reduce()),
+                            Some(value.reduce())
+                        );
+                    }
+                    assert_eq!(values[0].montgomery_limbs(), sentinel.montgomery_limbs());
+                    assert_eq!(
+                        values[len + 1].montgomery_limbs(),
+                        sentinel.montgomery_limbs()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn power_recurrences_match_independent_exponentiation() {
+        power_oracle::<PallasBase>();
+        power_oracle::<PallasScalar>();
+    }
+}

@@ -8,19 +8,12 @@ fn reference<C: PastaCurve, E: CurveTableEntry<C>>(
         .iter()
         .zip(scalars)
         .fold(ProjectivePoint::IDENTITY, |sum, (table, scalar)| {
-            sum.add(&crate::curve::scalar::multiply(scalar, |sum| {
-                sum.add_mixed(table.base())
-            }))
+            sum.add(&multiply(scalar, |sum| sum.add_mixed(table.base())))
         })
 }
 
 fn check<C: PastaCurve, E: CurveTableEntry<C>>() {
     let g = AffinePoint::<C>::GENERATOR;
-    for width in 2..=8 {
-        let carries = crate::curve::parameters::GlvParameters::<C>::BOUNDS
-            .map(|bound| crate::curve::fixed_base::signed_window_digits(bound, width).1);
-        assert_eq!(carries, [false, width == 2]);
-    }
     let bases = [g, g, g.neg(), g.endomorphism(), g, g.neg(), g];
     let mut storage = Vec::new();
     for (i, base) in bases.iter().enumerate() {
@@ -130,8 +123,7 @@ fn check<C: PastaCurve, E: CurveTableEntry<C>>() {
             let expected = points
                 .iter()
                 .fold(ProjectivePoint::IDENTITY, |sum, p| sum.add_mixed(p));
-            let result =
-                crate::curve::msm::buckets::sum(&mut points, &mut vec![PastaField::ZERO; len]);
+            let result = crate::curve::reduce::sum(&mut points, &mut vec![PastaField::ZERO; len]);
             assert_eq!(result, expected);
         }
     }

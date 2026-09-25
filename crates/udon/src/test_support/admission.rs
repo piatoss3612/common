@@ -11,14 +11,14 @@ use core::array;
 /// Each index denotes one exact block type and capacity. Fp and Fq blocks, or
 /// differently sized blocks of the same field, must use different classes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Resources<const N: usize>(pub [usize; N]);
+pub(crate) struct Resources<const N: usize>(pub(crate) [usize; N]);
 
 impl<const N: usize> Resources<N> {
     /// No blocks.
-    pub const ZERO: Self = Self([0; N]);
+    pub(crate) const ZERO: Self = Self([0; N]);
 
     /// Whether every requested count fits this capacity.
-    pub fn fits(self, capacity: Self) -> bool {
+    pub(crate) fn fits(self, capacity: Self) -> bool {
         self.0
             .iter()
             .zip(capacity.0)
@@ -52,11 +52,11 @@ impl<const N: usize> Resources<N> {
 
 /// A typed block class, including idle provisioned capacity.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct BlockClass {
+pub(crate) struct BlockClass {
     /// Number of initialized compatible blocks in the arena.
-    pub blocks: usize,
+    pub(crate) blocks: usize,
     /// Charged bytes per block, including padding and per-block lease metadata.
-    pub block_bytes: usize,
+    pub(crate) block_bytes: usize,
 }
 
 /// Provisioned working storage under a byte ceiling.
@@ -66,16 +66,16 @@ pub struct BlockClass {
 /// external final outputs, and persistent plans and tables are separate. Worker
 /// runtime overhead is also separate; this is not a process RSS limit.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ArenaLayout<const N: usize> {
+pub(crate) struct ArenaLayout<const N: usize> {
     /// Typed storage classes; bytes cannot substitute for compatible blocks.
-    pub classes: [BlockClass; N],
+    pub(crate) classes: [BlockClass; N],
     /// All other provisioned run, frontier, queue, and scheduler metadata.
-    pub metadata_bytes: usize,
+    pub(crate) metadata_bytes: usize,
 }
 
 impl<const N: usize> ArenaLayout<N> {
     /// Checks the full provisioned capacity, returning its charged byte count.
-    pub fn check(self, ceiling: usize) -> Result<usize, ResourceError> {
+    pub(crate) fn check(self, ceiling: usize) -> Result<usize, ResourceError> {
         let bytes = self
             .classes
             .iter()
@@ -91,7 +91,7 @@ impl<const N: usize> ArenaLayout<N> {
     }
 
     /// Exact compatible block counts.
-    pub fn capacity(self) -> Resources<N> {
+    pub(crate) fn capacity(self) -> Resources<N> {
         Resources(self.classes.map(|class| class.blocks))
     }
 }
@@ -103,16 +103,16 @@ impl<const N: usize> ArenaLayout<N> {
 /// its tasks, and `retained` bounds all simultaneously live retained blocks.
 /// Temporary leases must be released when a bounded task completes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Profile<const N: usize> {
+pub(crate) struct Profile<const N: usize> {
     /// Maximum simultaneously retained blocks through the release frontier.
-    pub retained: Resources<N>,
+    pub(crate) retained: Resources<N>,
     /// Componentwise maximum temporary bundle of any single task.
-    pub temporary: Resources<N>,
+    pub(crate) temporary: Resources<N>,
 }
 
 /// Admission or accounting failure. Failed methods leave accounting unchanged.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ResourceError {
+pub(crate) enum ResourceError {
     /// Arithmetic overflow in a count or byte requirement.
     Overflow,
     /// The complete reservation or lease bundle does not currently fit.
@@ -131,7 +131,7 @@ pub enum ResourceError {
 
 /// Caller-owned storage for one admitted segment.
 #[derive(Debug)]
-pub struct SegmentStorage<const N: usize> {
+pub(crate) struct SegmentStorage<const N: usize> {
     generation: usize,
     profile: Option<Profile<N>>,
     live: Resources<N>,
@@ -141,7 +141,7 @@ pub struct SegmentStorage<const N: usize> {
 
 impl<const N: usize> SegmentStorage<N> {
     /// Unused metadata. Storage must remain bound until admission is drained.
-    pub const EMPTY: Self = Self {
+    pub(crate) const EMPTY: Self = Self {
         generation: 0,
         profile: None,
         live: Resources::ZERO,
@@ -152,8 +152,8 @@ impl<const N: usize> SegmentStorage<N> {
 
 /// A nonforgeable token for an admitted segment.
 #[derive(Debug)]
-pub struct Segment<'a> {
-    owner: &'a zakura_udon::exec::run::Identity,
+pub(crate) struct Segment<'a> {
+    owner: &'a crate::exec::run::Identity,
     slot: usize,
     generation: usize,
 }
@@ -163,7 +163,7 @@ pub struct Segment<'a> {
 /// Return this token with [`Admission::finish_task`], even after a kernel panic.
 /// Dropping it deliberately leaves the accounting occupied.
 #[derive(Debug)]
-pub struct TaskPermit<'a, const N: usize> {
+pub(crate) struct TaskPermit<'a, const N: usize> {
     segment: Segment<'a>,
     temporary: Resources<N>,
     retained: Resources<N>,
@@ -184,8 +184,8 @@ pub struct TaskPermit<'a, const N: usize> {
 /// nonblocking acquisition and this accounting as one coordinator transaction,
 /// rolling back acquired guards if accounting fails.
 #[derive(Debug)]
-pub struct Admission<'a, const N: usize> {
-    identity: &'a zakura_udon::exec::run::Identity,
+pub(crate) struct Admission<'a, const N: usize> {
+    identity: &'a crate::exec::run::Identity,
     slots: &'a mut [SegmentStorage<N>],
     capacity: Resources<N>,
     used: Resources<N>,
@@ -197,8 +197,8 @@ impl<'a, const N: usize> Admission<'a, N> {
     ///
     /// Obtain `capacity` from a checked [`ArenaLayout`]. Outstanding tokens keep
     /// the identity borrowed, preventing rebinding that arena before they end.
-    pub fn new(
-        identity: &'a mut zakura_udon::exec::run::Identity,
+    pub(crate) fn new(
+        identity: &'a mut crate::exec::run::Identity,
         slots: &'a mut [SegmentStorage<N>],
         capacity: Resources<N>,
     ) -> Self {
@@ -215,7 +215,7 @@ impl<'a, const N: usize> Admission<'a, N> {
     }
 
     /// Admits a segment if its full progress reservation fits.
-    pub fn admit(&mut self, profile: Profile<N>) -> Result<Segment<'a>, ResourceError> {
+    pub(crate) fn admit(&mut self, profile: Profile<N>) -> Result<Segment<'a>, ResourceError> {
         let mut retained = profile.retained;
         let mut temporary = profile.temporary;
         for slot in self.slots.iter() {
@@ -261,7 +261,7 @@ impl<'a, const N: usize> Admission<'a, N> {
     ///
     /// Existing retained input blocks remain charged until their last consumer
     /// completes. Temporary and retained requests must fit the declared profile.
-    pub fn try_task(
+    pub(crate) fn try_task(
         &mut self,
         segment: &Segment<'a>,
         temporary: Resources<N>,
@@ -301,7 +301,7 @@ impl<'a, const N: usize> Admission<'a, N> {
     /// `retain_outputs` commits newly retained blocks to the segment; `false`
     /// rolls back those blocks too. A failed kernel must not publish its output.
     /// A stale token is returned intact in the error so the owner can drain it.
-    pub fn finish_task(
+    pub(crate) fn finish_task(
         &mut self,
         permit: TaskPermit<'a, N>,
         retain_outputs: bool,
@@ -321,7 +321,7 @@ impl<'a, const N: usize> Admission<'a, N> {
     }
 
     /// Releases retained accounting after its final consumer and actual guard.
-    pub fn release_retained(
+    pub(crate) fn release_retained(
         &mut self,
         segment: &Segment<'_>,
         released: Resources<N>,
@@ -337,7 +337,10 @@ impl<'a, const N: usize> Admission<'a, N> {
     }
 
     /// Releases an empty segment reservation. Errors return the token intact.
-    pub fn retire(&mut self, segment: Segment<'a>) -> Result<(), (ResourceError, Segment<'a>)> {
+    pub(crate) fn retire(
+        &mut self,
+        segment: Segment<'a>,
+    ) -> Result<(), (ResourceError, Segment<'a>)> {
         let index = match self.index(&segment) {
             Ok(index) => index,
             Err(error) => return Err((error, segment)),
@@ -351,12 +354,12 @@ impl<'a, const N: usize> Admission<'a, N> {
     }
 
     /// Currently charged live retained and temporary blocks.
-    pub fn used(&self) -> Resources<N> {
+    pub(crate) fn used(&self) -> Resources<N> {
         self.used
     }
 
     /// Componentwise peak usage since construction (not a simultaneous vector).
-    pub fn peak(&self) -> Resources<N> {
+    pub(crate) fn peak(&self) -> Resources<N> {
         self.peak
     }
 }

@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
-    curve::msm::tests::Buffers,
-    curve::{Pallas, Vesta, scalar},
+    curve::msm::test_support::Buffers,
+    curve::{Pallas, Vesta, tests::multiply},
     exec::{ExecutionOptions, SerialExecutor},
     field::{CanonicalUint, PrimeModulus},
     test_support::{field_samples, modulus},
@@ -28,9 +28,7 @@ fn reference<C: PastaCurve>(
         .iter()
         .zip(coefficients)
         .fold(ProjectivePoint::IDENTITY, |sum, (base, coefficient)| {
-            sum.add(&scalar::multiply(coefficient, |sum| {
-                sum.add(&base.to_projective())
-            }))
+            sum.add(&multiply(coefficient, |sum| sum.add(&base.to_projective())))
         })
 }
 

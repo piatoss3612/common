@@ -16,10 +16,6 @@ use zakura_udon::{
     field::{CanonicalUint, Fp, Fq},
 };
 
-#[path = "../tests/support/msm_run.rs"]
-#[allow(dead_code)]
-mod msm_run;
-
 struct Pool;
 impl Executor for Pool {
     fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)

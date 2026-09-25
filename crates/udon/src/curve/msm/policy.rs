@@ -1,19 +1,17 @@
 //! Private kernel controls used by selection and arithmetic tests.
 
-#[cfg(test)]
-use super::CurveError;
 use crate::exec::TaskBudget;
 use core::num::NonZeroUsize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Accumulation {
+pub(super) enum Accumulation {
     Auto,
     Affine,
     Projective,
     Hybrid,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Kernel {
+pub(super) enum Algorithm {
     Auto,
     #[cfg_attr(
         not(test),
@@ -34,47 +32,50 @@ pub(crate) enum Kernel {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ArithmeticOptions {
+pub(super) struct ArithmeticOptions {
     pub(super) max_terms_per_pass: Option<NonZeroUsize>,
     pub(super) chunk_size: Option<NonZeroUsize>,
-    pub(super) kernel: Kernel,
+    pub(super) algorithm: Algorithm,
 }
 impl ArithmeticOptions {
-    pub(crate) const DEFAULT: Self = Self {
+    pub(super) const DEFAULT: Self = Self {
         max_terms_per_pass: None,
         chunk_size: None,
-        kernel: Kernel::Auto,
+        algorithm: Algorithm::Auto,
     };
     #[cfg(test)]
-    pub(crate) const fn with_max_terms_per_pass(mut self, cap: Option<NonZeroUsize>) -> Self {
+    pub(super) const fn with_max_terms_per_pass(mut self, cap: Option<NonZeroUsize>) -> Self {
         self.max_terms_per_pass = cap;
         self
     }
     #[cfg(test)]
-    pub(crate) const fn with_chunk_size(mut self, terms: NonZeroUsize) -> Self {
+    pub(super) const fn with_chunk_size(mut self, terms: NonZeroUsize) -> Self {
         self.chunk_size = Some(terms);
         self
     }
     #[cfg(test)]
-    pub(crate) const fn with_kernel(mut self, kernel: Kernel) -> Result<Self, CurveError> {
-        if let Kernel::Booth {
+    pub(super) const fn with_algorithm(
+        mut self,
+        algorithm: Algorithm,
+    ) -> Result<Self, InvalidWindow> {
+        if let Algorithm::Booth {
             width: Some(bits), ..
         }
-        | Kernel::StreamingBooth { width: Some(bits) } = kernel
+        | Algorithm::StreamingBooth { width: Some(bits) } = algorithm
             && (bits < 4 || bits > 12)
         {
-            return Err(CurveError::InvalidMsmWindow { bits });
+            return Err(InvalidWindow { bits });
         }
-        self.kernel = kernel;
+        self.algorithm = algorithm;
         Ok(self)
     }
     pub(super) const fn streaming(self) -> bool {
-        matches!(self.kernel, Kernel::StreamingBooth { .. })
+        matches!(self.algorithm, Algorithm::StreamingBooth { .. })
     }
     pub(super) const fn accumulation(self) -> Accumulation {
-        match self.kernel {
-            Kernel::Booth { accumulation, .. } => accumulation,
-            Kernel::StreamingBooth { .. } => Accumulation::Projective,
+        match self.algorithm {
+            Algorithm::Booth { accumulation, .. } => accumulation,
+            Algorithm::StreamingBooth { .. } => Accumulation::Projective,
             _ => Accumulation::Auto,
         }
     }
@@ -93,38 +94,38 @@ impl Default for ArithmeticOptions {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BatchOptions {
+pub(super) struct BatchOptions {
     pub(super) arithmetic: ArithmeticOptions,
     pub(super) task_budget: TaskBudget,
     pub(super) memory_limit: Option<usize>,
 }
 impl BatchOptions {
-    pub(crate) const fn new(arithmetic: ArithmeticOptions) -> Self {
+    pub(super) const fn new(arithmetic: ArithmeticOptions) -> Self {
         Self {
             arithmetic,
             task_budget: TaskBudget::SERIAL,
             memory_limit: None,
         }
     }
-    pub(crate) const fn with_task_budget(mut self, budget: TaskBudget) -> Self {
+    pub(super) const fn with_task_budget(mut self, budget: TaskBudget) -> Self {
         self.task_budget = budget;
         self
     }
     #[cfg(test)]
-    pub(crate) const fn with_memory_limit(mut self, bytes: usize) -> Self {
+    pub(super) const fn with_memory_limit(mut self, bytes: usize) -> Self {
         self.memory_limit = Some(bytes);
         self
     }
     #[cfg(test)]
-    pub(crate) const fn arithmetic(&self) -> ArithmeticOptions {
+    pub(super) const fn arithmetic(&self) -> ArithmeticOptions {
         self.arithmetic
     }
     #[cfg(test)]
-    pub(crate) const fn task_budget(&self) -> TaskBudget {
+    pub(super) const fn task_budget(&self) -> TaskBudget {
         self.task_budget
     }
     #[cfg(test)]
-    pub(crate) const fn memory_limit(&self) -> Option<usize> {
+    pub(super) const fn memory_limit(&self) -> Option<usize> {
         self.memory_limit
     }
 }
@@ -141,4 +142,11 @@ impl From<crate::exec::ExecutionOptions> for BatchOptions {
             memory_limit: options.memory_limit(),
         }
     }
+}
+
+/// A test-selected Booth width outside `4..=12`.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InvalidWindow {
+    pub(super) bits: u32,
 }

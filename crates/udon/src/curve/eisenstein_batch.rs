@@ -194,10 +194,10 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
             return None;
         }
         let entries = &self.entries[index * 8..(index + 1) * 8];
-        Some(EisensteinTable {
-            base: entries[0].affine(),
-            entries: entries.try_into().expect("one complete table"),
-        })
+        Some(EisensteinTable::bind(
+            &entries[0].affine(),
+            entries.try_into().expect("one complete table"),
+        ))
     }
 
     /// Returns the field capacity for a single batch multiplication pass.
@@ -329,21 +329,6 @@ pub(super) fn prepare_inner<
 // the small nonzero Eisenstein coefficient differences or sums vanish. Their
 // norms are far below either prime group order. No exceptional-point branches
 // or projective intermediates are needed for these nonidentity inputs.
-fn chord<C: PastaCurve>(
-    p: AffinePoint<C>,
-    q: AffinePoint<C>,
-    inverse: PastaField<C::Base>,
-) -> AffinePoint<C> {
-    let slope = q.y.sub(&p.y).mul(&inverse);
-    let x = slope.square().sub(&p.x).sub(&q.x);
-    let y = slope.mul(&p.x.sub(&x)).sub(&p.y);
-    AffinePoint {
-        x: x.reduce(),
-        y: y.reduce(),
-        marker: PhantomData,
-    }
-}
-
 fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     bases: &[B],
     entries: &mut [E],
@@ -359,14 +344,14 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     invert_nonzero(&mut denom[..n], prefix);
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
         let p = group[0].affine();
-        let d = chord(p, group[0].rotated(1).neg(), denom[i]);
+        let d = p.chord_with_inverse(&group[0].rotated(1).neg(), &denom[i]);
         group[1] = E::from_affine(&d);
         denom[i] = group[1].rotated(1).x.sub(&d.x);
     }
     invert_nonzero(&mut denom[..n], prefix);
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
         let d = group[1].affine();
-        let b = chord(d, group[1].rotated(1).neg(), denom[i]);
+        let b = d.chord_with_inverse(&group[1].rotated(1).neg(), &denom[i]);
         let minus_three = b.rotated(2);
         group[4] = E::from_affine(&minus_three.neg());
     }
@@ -383,14 +368,17 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
         let phi = group[0].rotated(1);
         let minus_three = group[4].affine().neg();
         let b_phi = group[4].rotated(2).neg();
-        group[5] = E::from_affine(&chord(phi, minus_three, denom[2 * i]).neg());
+        group[5] = E::from_affine(&phi.chord_with_inverse(&minus_three, &denom[2 * i]).neg());
         group[3] = E::from_affine(
-            &chord(phi, minus_three.neg(), denom[2 * i])
+            &phi.chord_with_inverse(&minus_three.neg(), &denom[2 * i])
                 .endomorphism()
                 .neg(),
         );
-        group[2] = E::from_affine(&chord(phi, b_phi.neg(), denom[2 * i + 1]).endomorphism());
-        let four_b = chord(phi, b_phi, denom[2 * i + 1]);
+        group[2] = E::from_affine(
+            &phi.chord_with_inverse(&b_phi.neg(), &denom[2 * i + 1])
+                .endomorphism(),
+        );
+        let four_b = phi.chord_with_inverse(&b_phi, &denom[2 * i + 1]);
         group[6] = E::from_affine(&four_b.rotated(2));
     }
     for (i, group) in entries.chunks_exact(8).enumerate() {
@@ -398,46 +386,11 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     }
     invert_nonzero(&mut denom[..n], prefix);
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
-        let p = chord(group[0].rotated(1), group[6].rotated(1), denom[i]);
+        let p = group[0]
+            .rotated(1)
+            .chord_with_inverse(&group[6].rotated(1), &denom[i]);
         group[7] = E::from_affine(&p.rotated(2));
     }
-}
-
-fn digit_scalar<C: PastaCurve>(code: u8) -> PastaField<C::Scalar> {
-    let value = usize::from(code - 1);
-    let (mut a, mut b) = eisenstein::REPRESENTATIVES[value / 6];
-    for _ in 0..(value % 6) / 2 {
-        (a, b) = (-b, a - b);
-    }
-    let signed = |x: i8| {
-        let f = PastaField::<C::Scalar>::from_u64(u64::from(x.unsigned_abs()));
-        if x < 0 { f.neg() } else { f }
-    };
-    let d = signed(a).add(&signed(b).mul(&PastaField::<C::Scalar>::ZETA));
-    if value & 1 == 1 { d.neg() } else { d }
-}
-
-pub(super) fn ladder_safe<C: PastaCurve>(digits: &[u8]) -> bool {
-    let Some((&top, rest)) = digits.split_last() else {
-        return false;
-    };
-    let mut s = digit_scalar::<C>(top);
-    // All nonidentity bases have the same prime order. Checking the schedule
-    // in the scalar field is therefore exact for every base in the batch,
-    // including schedules whose intermediate integer coefficients wrap.
-    for &code in rest.iter().rev() {
-        let twice = s.double();
-        if code == 0 {
-            s = twice;
-        } else {
-            let d = digit_scalar::<C>(code);
-            if d.reduce() == s.reduce() || d.reduce() == twice.neg().reduce() {
-                return false;
-            }
-            s = twice.add(&d);
-        }
-    }
-    true
 }
 
 fn multiply_inner<C: PastaCurve, E: CurveTableEntry<C>, X: Executor>(
@@ -589,12 +542,15 @@ mod tests {
             &SerialExecutor,
         );
         for (digits, safe) in cases {
-            assert_eq!(ladder_safe::<C>(digits), safe);
+            assert_eq!(
+                EisensteinScalar::<C>::from_digits(digits).batch_safe(),
+                safe
+            );
             let mut scalar = PastaField::ZERO;
             for &code in digits.iter().rev() {
                 scalar = scalar.double();
                 if code != 0 {
-                    scalar = scalar.add(&digit_scalar::<C>(code));
+                    scalar = scalar.add(&eisenstein::digit_scalar::<C>(code));
                 }
             }
             if digits.len() == len {
@@ -611,7 +567,7 @@ mod tests {
                 &SerialExecutor,
             );
             for (base, actual) in bases.iter().zip(output) {
-                let expected = crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(base));
+                let expected = crate::curve::tests::multiply(&scalar, |sum| sum.add_mixed(base));
                 assert_eq!(actual, expected);
             }
         }

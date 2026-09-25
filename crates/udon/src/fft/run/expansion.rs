@@ -1,6 +1,8 @@
 use super::super::{Expansion, ExpansionOrder, ExpansionStorage};
 use super::*;
 
+mod driver;
+
 /// Worker-independent expansion geometry and input liveness.
 ///
 /// Use [`Self::execute`] for preserved input, [`Self::execute_disposable`] to
@@ -12,19 +14,19 @@ use super::*;
 /// incremental execution.
 #[derive(Clone, Copy, Debug)]
 pub struct ExpansionPlan<'t, M: PrimeModulus> {
-    pub(super) expansion: Expansion<'t, M>,
-    pub(super) storage: ExpansionStorage,
-    pub(super) order: ExpansionOrder,
-    pub(super) support: InputSupport,
-    pub(super) input_order: ElementOrder,
+    expansion: Expansion<'t, M>,
+    storage: ExpansionStorage,
+    order: ExpansionOrder,
+    support: InputSupport,
+    input_order: ElementOrder,
     forward: FftPlan<'t, M>,
     in_place: Option<FftPlan<'t, M>>,
     inverse: Option<FftPlan<'t, M>>,
     coefficient_scale: PastaField<M>,
     coefficient_fields: usize,
     snapshot_fields: usize,
-    pub(super) scratch_fields: usize,
-    pub(super) budget: crate::exec::TaskBudget,
+    scratch_fields: usize,
+    budget: crate::exec::TaskBudget,
     memory_limit: Option<usize>,
 }
 
@@ -64,7 +66,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         let coefficient_bytes = shape.coefficient_fields() * core::mem::size_of::<PastaField<M>>();
         let mut budget = options.task_budget();
         loop {
-            let (jobs, inner) = budget.partition(expansion.layout.residues()).unwrap();
+            let (jobs, inner) = budget.partition(expansion.layout().residues()).unwrap();
             let mut inner_options = options.with_task_budget(inner);
             if let Some(limit) = options.memory_limit() {
                 let remaining =
@@ -102,7 +104,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
     /// Validation of support and tile geometry follows [`FftPlan::new`]; a
     /// prefix for evaluation input returns
     /// [`FftError::InvalidExecution`]. The expansion's tables remain borrowed.
-    pub(crate) fn with_strategy(
+    pub(in crate::fft) fn with_strategy(
         expansion: Expansion<'t, M>,
         storage: ExpansionStorage,
         order: ExpansionOrder,
@@ -220,7 +222,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
 
     /// Number of independently completed output residue blocks.
     pub const fn residues(&self) -> usize {
-        self.expansion.layout.residues()
+        self.expansion.layout().residues()
     }
 
     /// Fields in each residue and in a retained coefficient bank.
@@ -257,11 +259,11 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         }
     }
 
-    pub(super) fn inverse(&self) -> FftPlan<'t, M> {
+    fn inverse(&self) -> FftPlan<'t, M> {
         self.inverse.expect("evaluation input requires an inverse")
     }
 
-    pub(super) fn transform(&self, block: usize, in_place: bool) -> FftPlan<'t, M> {
+    fn transform(&self, block: usize, in_place: bool) -> FftPlan<'t, M> {
         let residue = if self.order == ExpansionOrder::BitReversed {
             reverse(block, self.residues().ilog2())
         } else {

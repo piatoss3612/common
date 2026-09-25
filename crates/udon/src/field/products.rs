@@ -9,10 +9,6 @@ use super::montgomery::{montgomery_reduce_unreduced, reduce_once, reduce_twice_m
 use super::word::{adc, mac, multiply_wide, sbb, square_wide};
 use super::{PastaField, PrimeModulus, ReductionState};
 
-#[cfg(test)]
-#[path = "tests/products.rs"]
-mod tests;
-
 /// A sum of field products with deferred Montgomery reduction.
 ///
 /// Use [`add_product`](Self::add_product) for products,
@@ -535,4 +531,78 @@ fn merge_columns(columns: [[u64; 3]; 4]) -> [u64; 3] {
         result = [low, middle, high];
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::field::tests::{assert_value, limbs, samples};
+    use crate::field::{PallasBase, PallasScalar};
+    use crate::test_support::{integer, modulus};
+    use num_bigint::BigUint;
+    use std::vec;
+
+    fn check_overflow<M: PrimeModulus>() {
+        let p = modulus::<M>();
+        let radix = BigUint::from(1u8) << 256usize;
+        let inverse_r = radix.modpow(&(&p - 2u8), &p);
+        // The accumulator stores products scaled by R²; finish returns a field
+        // element scaled by R, which assert_value compares to an ordinary integer.
+        let inverse_r_squared = &inverse_r * &inverse_r % &p;
+        let maximum = (BigUint::from(1u8) << 576usize) - 1u8;
+        let full = || ProductSum::<M> {
+            wide: [u64::MAX; 8],
+            carry: u64::MAX,
+            marker: PhantomData,
+        };
+        let term = PastaField::<M>::from_montgomery_limbs(limbs(&(&p * 2u8 - 1u8)));
+        let stored = integer(&term.montgomery_limbs());
+        for (value, _) in samples::<M>(8) {
+            let raw = integer(&value.montgomery_limbs());
+            let square = &raw * &raw;
+            let mut starts = vec![maximum.clone(), &maximum - &square];
+            if square != BigUint::from(0u8) {
+                starts.push(&maximum - &square + 1u8);
+            }
+            for start in starts {
+                let raw = limbs::<9>(&start);
+                let mut sum = ProductSum::<M> {
+                    wide: raw[..8].try_into().unwrap(),
+                    carry: raw[8],
+                    marker: PhantomData,
+                };
+                sum.add_square(&value);
+                assert_value(sum.finish(), &((&start + &square) * &inverse_r_squared));
+            }
+        }
+        let mut sum = full();
+        sum.add_product(&term, &term);
+        assert_value(
+            sum.finish(),
+            &((&maximum + &stored * &stored) * &inverse_r_squared),
+        );
+        let mut sum = full();
+        sum.add_term(&term);
+        assert_value(
+            sum.finish(),
+            &((&maximum + &stored * &radix) * &inverse_r_squared),
+        );
+        let mut sum = full();
+        sum.merge(&full());
+        sum.add_product(&term, &term);
+        sum.add_square(&term);
+        sum.add_term(&term);
+        assert_value(
+            sum.finish(),
+            &((&maximum * 2u8 + &stored * &stored * 2u8 + &stored * &radix) * &inverse_r_squared),
+        );
+        assert_value(full().finish(), &(&maximum * &inverse_r_squared));
+        assert_value(ProductSum::<M>::default().finish(), &BigUint::from(0u8));
+    }
+
+    #[test]
+    fn all_accumulator_mutations_preserve_overflow_bits() {
+        check_overflow::<PallasBase>();
+        check_overflow::<PallasScalar>();
+    }
 }

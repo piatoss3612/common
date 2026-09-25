@@ -11,7 +11,7 @@ use super::{FftError, check_domain_size, check_field_count, min};
 /// concurrency when the transform exceeds one tile. Use [`Self::SERIAL`] for a
 /// single whole-transform tile with no scratch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Strategy {
+pub(super) struct Strategy {
     /// Number of consecutive elements processed by each local tile transform.
     pub tile_len: usize,
     /// Maximum columns in each cross-tile scratch partition, clamped to a tile.
@@ -21,7 +21,7 @@ pub(crate) struct Strategy {
 }
 
 impl Strategy {
-    pub(crate) const fn select(
+    pub(super) const fn select(
         size: usize,
         options: crate::exec::ExecutionOptions,
         available: usize,
@@ -42,7 +42,7 @@ impl Strategy {
         }
     }
 
-    pub(crate) const fn columns(
+    pub(super) const fn columns(
         tile: usize,
         tiles: usize,
         options: crate::exec::ExecutionOptions,
@@ -72,13 +72,13 @@ impl Strategy {
     /// Increasing only [`Self::max_tasks`] retains the whole-transform tile.
     /// Start from [`Self::default`] or also set [`Self::tile_len`] to enable
     /// tiled execution.
-    pub const SERIAL: Self = Self {
+    pub(super) const SERIAL: Self = Self {
         tile_len: 1usize << (usize::BITS - 1),
         columns_per_task: 1,
         max_tasks: 1,
     };
 
-    pub(super) const fn validate(self) -> Result<(), FftError> {
+    const fn validate(self) -> Result<(), FftError> {
         if !self.tile_len.is_power_of_two() || self.columns_per_task == 0 || self.max_tasks == 0 {
             Err(FftError::InvalidExecution)
         } else {
@@ -86,7 +86,7 @@ impl Strategy {
         }
     }
 
-    pub(super) const fn geometry(self, size: usize) -> Geometry {
+    const fn geometry(self, size: usize) -> Geometry {
         let tile_len = min(self.tile_len, size);
         let columns = min(self.columns_per_task, tile_len);
         Geometry {
@@ -109,7 +109,7 @@ impl Strategy {
     /// [`FftError::InvalidExecution`] for invalid settings, or
     /// [`FftError::SizeOverflow`] if the scratch count overflows `usize` or its
     /// field slice would exceed `isize::MAX` bytes.
-    pub const fn requirements(self, size: usize) -> Result<usize, FftError> {
+    pub(super) const fn requirements(self, size: usize) -> Result<usize, FftError> {
         if let Err(error) = self.validate() {
             return Err(error);
         }
@@ -153,8 +153,8 @@ pub(super) fn check_scratch(required: usize, provided: usize) {
 }
 
 pub(super) struct Geometry {
-    pub tile_len: usize,
-    pub tiles: usize,
-    pub columns: usize,
-    pub jobs: usize,
+    pub(super) tile_len: usize,
+    pub(super) tiles: usize,
+    pub(super) columns: usize,
+    pub(super) jobs: usize,
 }

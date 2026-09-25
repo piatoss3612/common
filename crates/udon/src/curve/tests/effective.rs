@@ -1,8 +1,8 @@
 use super::*;
 use crate::{
     curve::{
-        Pallas, Vesta, eisenstein, scalar,
-        tests::{scalar_corpus, scaled},
+        Pallas, Vesta, eisenstein,
+        tests::{multiply, scalar_corpus, scaled},
     },
     field::PrimeModulus,
 };
@@ -11,7 +11,7 @@ fn ladder<C: PastaCurve>(
     base: &ProjectivePoint<C>,
     value: &PastaField<C::Scalar>,
 ) -> ProjectivePoint<C> {
-    scalar::multiply(value, |sum| sum.add(base))
+    multiply(value, |sum| sum.add(base))
 }
 
 fn representatives<C: PastaCurve>() {

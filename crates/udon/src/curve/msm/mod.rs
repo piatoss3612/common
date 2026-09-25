@@ -75,35 +75,51 @@ use super::{
 };
 use crate::exec::{ExecutionOptions, Executor};
 use crate::field::{CanonicalUint, PastaField};
-#[cfg(test)]
-use core::num::NonZeroUsize;
 
-#[cfg(test)]
-use crate::exec::TaskBudget;
+macro_rules! size {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(e) => return Err(e),
+        }
+    };
+}
+const fn min(a: usize, b: usize) -> usize {
+    if a < b { a } else { b }
+}
+const fn max(a: usize, b: usize) -> usize {
+    if a > b { a } else { b }
+}
+const fn add(a: usize, b: usize) -> Result<usize, CurveError> {
+    match a.checked_add(b) {
+        Some(n) => Ok(n),
+        None => Err(CurveError::SizeOverflow),
+    }
+}
 
 mod policy;
-pub(crate) use policy::{Accumulation, ArithmeticOptions, BatchOptions, Kernel};
+use policy::{Accumulation, Algorithm, ArithmeticOptions, BatchOptions};
 
-pub(super) mod buckets;
 mod coalesce;
 mod kernels;
 mod matrix;
+mod nonzero;
 mod prepared;
 mod recode;
 mod schedule;
+mod storage;
 mod suffix;
 mod sum;
-mod support;
 
 pub mod run;
 pub use coalesce::{CoalescingKey, CoalescingPlan, IndexedCoalescingPlan};
 pub use matrix::SharedScalarInput;
 pub use prepared::{PreparedScalars, ScalarStorage};
-#[cfg(test)]
-use run::{BatchPlan, JobStorage, WorkerStorage};
 pub use suffix::SuffixBasis;
 pub use sum::BasisSum;
 const BOOTH_MIN: usize = 128;
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -163,6 +179,13 @@ pub struct Selection<'a, C: PastaCurve> {
     indices: Option<&'a [u32]>,
 }
 impl<'a, C: PastaCurve> Selection<'a, C> {
+    /// Retains an index mapping already checked against `bases`.
+    const fn from_validated(bases: Bases<'a, C>, indices: &'a [u32]) -> Self {
+        Self {
+            bases,
+            indices: Some(indices),
+        }
+    }
     /// Selects every base in storage order.
     pub const fn new(bases: Bases<'a, C>) -> Self {
         Self {
@@ -312,13 +335,7 @@ impl<'a, C: PastaCurve> Scalars<'a, C> {
             Self::Unsigned(s) => Self::Unsigned(&s[range]),
             Self::Signed(s) => Self::Signed(&s[range]),
             Self::Canonical(s) => Self::Canonical(&s[range]),
-            Self::Prepared(s) => Self::Prepared(PreparedScalars {
-                // A whole-row bound remains valid for each chunk; execution
-                // already retains its selected geometry in the job metadata.
-                records: &s.records[range],
-                shape: s.shape,
-                cached: None,
-            }),
+            Self::Prepared(s) => Self::Prepared(s.slice(range)),
         }
     }
 }
@@ -405,7 +422,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
         )?;
         let scratch = scratch.checked(plan.requirements);
         let mut output = [ProjectivePoint::IDENTITY];
-        schedule::execute(
+        run::batch::execute(
             &plan,
             core::slice::from_ref(self),
             &mut output,
@@ -426,7 +443,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     /// [`CurveError::MemoryLimit`] under the
     /// [memory policy](BatchOptions::with_memory_limit).
     #[cfg(test)]
-    pub(crate) const fn requirements_for_len(
+    const fn requirements_for_len(
         terms: usize,
         options: BatchOptions,
     ) -> Result<Requirements, CurveError> {
@@ -436,10 +453,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     ///
     /// Errors and memory accounting match [`batch_requirements`].
     #[cfg(test)]
-    pub(crate) fn requirements_with(
-        &self,
-        options: BatchOptions,
-    ) -> Result<Requirements, CurveError> {
+    fn requirements_with(&self, options: BatchOptions) -> Result<Requirements, CurveError> {
         batch_requirements(core::slice::from_ref(self), options)
     }
     /// Computes the sum with caller-owned scratch and execution resources.
@@ -453,7 +467,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     /// An executor panic may leave scratch partially written; scoped work must
     /// finish unwinding before reuse, as required by [`Executor`].
     #[cfg(test)]
-    pub(crate) fn execute_with<X: Executor>(
+    fn execute_with<X: Executor>(
         &self,
         options: BatchOptions,
         executor: &X,
@@ -485,6 +499,47 @@ pub struct Requirements {
     indices: usize,
 }
 impl Requirements {
+    const ZERO: Self = Self {
+        scalars: 0,
+        digits: 0,
+        affine: 0,
+        projective: 0,
+        field: 0,
+        indices: 0,
+    };
+    const fn include(self, b: Self) -> Self {
+        Self {
+            scalars: max(self.scalars, b.scalars),
+            digits: max(self.digits, b.digits),
+            affine: max(self.affine, b.affine),
+            projective: max(self.projective, b.projective),
+            field: max(self.field, b.field),
+            indices: max(self.indices, b.indices),
+        }
+    }
+    const fn plus(self, b: Self) -> Result<Self, CurveError> {
+        Ok(Self {
+            scalars: size!(add(self.scalars, b.scalars)),
+            digits: size!(add(self.digits, b.digits)),
+            affine: size!(add(self.affine, b.affine)),
+            projective: size!(add(self.projective, b.projective)),
+            field: size!(add(self.field, b.field)),
+            indices: size!(add(self.indices, b.indices)),
+        })
+    }
+    const fn times<C: PastaCurve>(self, workers: usize) -> Result<Self, CurveError> {
+        Ok(Self {
+            scalars: size!(checked_count::<ScalarStorage<C>>(self.scalars, workers)),
+            digits: size!(checked_count::<u8>(self.digits, workers)),
+            affine: size!(checked_count::<AffinePoint<C>>(self.affine, workers)),
+            projective: size!(checked_count::<ProjectivePoint<C>>(
+                self.projective,
+                workers
+            )),
+            field: size!(checked_count::<PastaField<C::Base>>(self.field, workers)),
+            indices: size!(checked_count::<usize>(self.indices, workers)),
+        })
+    }
     fn fits(self, available: Self) -> bool {
         self.scalars <= available.scalars
             && self.digits <= available.digits
@@ -623,6 +678,19 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
             indices: self.indices,
         }
     }
+    /// Splits every buffer after its first `left` elements.
+    fn split(self, left: Requirements) -> (Self, Self) {
+        let (sa, sb) = self.scalars.split_at_mut(left.scalars);
+        let (da, db) = self.digits.split_at_mut(left.digits);
+        let (aa, ab) = self.affine.split_at_mut(left.affine);
+        let (pa, pb) = self.projective.split_at_mut(left.projective);
+        let (fa, fb) = self.field.split_at_mut(left.field);
+        let (ia, ib) = self.indices.split_at_mut(left.indices);
+        (
+            Scratch::new(sa, da, aa, pa, fa, ia),
+            Scratch::new(sb, db, ab, pb, fb, ib),
+        )
+    }
     fn capacity(&self) -> Requirements {
         Requirements {
             scalars: self.scalars.len(),
@@ -660,7 +728,7 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
 /// Reusable plan metadata is excluded; size a retained plan with
 /// [`run::BatchPlan::requirements`] instead.
 #[cfg(test)]
-pub(crate) fn batch_requirements<C: PastaCurve>(
+fn batch_requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],
     options: BatchOptions,
 ) -> Result<Requirements, CurveError> {
@@ -674,7 +742,7 @@ pub(crate) fn batch_requirements<C: PastaCurve>(
 /// executor panic may partially write output and scratch; reuse after unwinding follows
 /// [`Input::execute`].
 #[cfg(test)]
-pub(crate) fn execute_batch<C: PastaCurve, X: Executor>(
+fn execute_batch<C: PastaCurve, X: Executor>(
     inputs: &[Input<'_, C>],
     output: &mut [ProjectivePoint<C>],
     options: BatchOptions,
@@ -684,9 +752,6 @@ pub(crate) fn execute_batch<C: PastaCurve, X: Executor>(
     assert_length("output", inputs.len(), output.len());
     let plan = schedule::Plan::new(inputs, options)?;
     let scratch = scratch.checked(plan.requirements);
-    schedule::execute(&plan, inputs, output, executor, scratch);
+    run::batch::execute(&plan, inputs, output, executor, scratch);
     Ok(())
 }
-
-#[cfg(test)]
-mod experiments;

@@ -21,7 +21,7 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
             .filter(|scalar| !scalar.is_zero())
             .take(8)
             .map(|scalar| {
-                *crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(&generator))
+                *multiply(&scalar, |sum| sum.add_mixed(&generator))
                     .to_point()
                     .as_affine()
                     .unwrap()
@@ -48,8 +48,7 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
         let p = modulus::<C::Base>();
         let reference = Reference::from_point(&base.to_point());
         let phi = Reference::from_point(&base.endomorphism().to_point());
-        let scaled_representatives =
-            crate::curve::eisenstein::representatives(&scaled(&base.to_point(), 11));
+        let scaled_representatives = representatives(&scaled(&base.to_point(), 11));
         // Independent affine formulas establish representative ordering.
         for ((&(a, b), entry), projective) in REPRESENTATIVES
             .iter()
@@ -68,7 +67,7 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
             expected.assert_point(&projective.to_point());
         }
         for scalar in scalar_corpus::<C>() {
-            let expected = crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(&base));
+            let expected = multiply(&scalar, |sum| sum.add_mixed(&base));
             assert_eq!(table.mul(&scalar), expected);
             assert_eq!(bound.mul(&scalar), expected);
         }

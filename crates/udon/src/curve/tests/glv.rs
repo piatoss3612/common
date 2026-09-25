@@ -153,45 +153,6 @@ fn joint_digits_cover_rotations_and_extreme_halves() {
     }
 }
 
-#[test]
-fn signed_windows_reconstruct_partial_windows_and_carries() {
-    use crate::curve::fixed_base::signed_window_digits;
-    for w in 2..=8 {
-        let n = 128_usize.div_ceil(w);
-        let mut values = vec![0, 1, u128::MAX, i128::MAX as u128];
-        for bit in (w - 1..128).step_by(w) {
-            let power = 1_u128 << bit;
-            values.extend([power - 1, power, power + 1]);
-        }
-        for value in values {
-            let (digits, carry) = signed_window_digits(value, w);
-            let mut integer = BigInt::from(u8::from(carry));
-            for &digit in digits[..n].iter().rev() {
-                assert!((-(1 << (w - 1))..1 << (w - 1)).contains(&digit));
-                integer = (integer << w) + digit;
-            }
-            assert_eq!(integer, BigInt::from(value));
-        }
-    }
-}
-
-#[test]
-fn pasta_lattice_bounds_allow_only_second_half_width_two_carries() {
-    use crate::curve::fixed_base::signed_window_digits;
-    for bounds in [
-        GlvParameters::<Pallas>::BOUNDS,
-        GlvParameters::<Vesta>::BOUNDS,
-    ] {
-        // Final carry is monotone in the magnitude. These conservative integer
-        // upper bounds exclude every other width and the first width-2 half.
-        for w in 2..=8 {
-            for (half, bound) in bounds.into_iter().enumerate() {
-                assert_eq!(signed_window_digits(bound, w).1, w == 2 && half == 1);
-            }
-        }
-    }
-}
-
 fn endomorphisms<C: PastaCurve>() {
     let p = modulus::<C::Base>();
     let lambda = BigUint::from_bytes_le(&PastaField::<C::Scalar>::ZETA.to_bytes());
@@ -222,7 +183,7 @@ fn endomorphisms<C: PastaCurve>() {
         );
         for scalar in scalar_corpus::<C>() {
             // The retained binary ladder is independent of GLV and recoding.
-            let expected = crate::curve::scalar::multiply(&scalar, |sum| sum.add(&scaled));
+            let expected = multiply(&scalar, |sum| sum.add(&scaled));
             assert_eq!(point.mul_projective(&scalar), expected);
             assert_eq!(scaled.mul(&scalar), expected);
         }

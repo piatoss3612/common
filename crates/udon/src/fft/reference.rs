@@ -17,6 +17,9 @@ use crate::{
     field::{PastaField, PrimeModulus},
 };
 
+#[cfg(test)]
+mod tests;
+
 /// The scalar domain containing a transform's roots of unity.
 ///
 /// For correct transforms, these operations must agree with multiplication in

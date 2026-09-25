@@ -37,3 +37,25 @@ pub(crate) fn integer(limbs: &[u64]) -> BigUint {
 pub(crate) fn modulus<M: PrimeModulus>() -> BigUint {
     integer(&M::MODULUS)
 }
+
+/// Twice the modulus: the exclusive bound of the loose representation.
+pub(crate) fn twice_modulus<M: PrimeModulus>() -> BigUint {
+    modulus::<M>() * 2u8
+}
+
+/// The largest loose Montgomery integer, `2p - 1`, as limbs.
+pub(crate) fn max_loose_limbs<M: PrimeModulus>() -> [u64; 4] {
+    let digits = (twice_modulus::<M>() - 1u8).to_u64_digits();
+    let mut limbs = [0; 4];
+    limbs[..digits.len()].copy_from_slice(&digits);
+    limbs
+}
+
+pub(crate) mod admission;
+#[path = "../../tests/support/fft_pipeline.rs"]
+pub(crate) mod fft_pipeline;
+pub(crate) mod fft_run;
+#[path = "../../tests/support/msm_run.rs"]
+pub(crate) mod msm_run;
+#[path = "../../tests/support/run_pool.rs"]
+pub(crate) mod run_pool;

@@ -17,7 +17,7 @@ use core::{num::NonZeroUsize, ops::Range};
 use super::{
     Codelet, Direction, Domain, ElementOrder, FftError, InputStorage, InputSupport, InverseScale,
     PastaField, PrimeModulus, Transform, TransformRequest, TwiddleTable,
-    operation::ForwardShift,
+    factors::ForwardShift,
     reverse,
     stages::{StageKernel, twiddle_table},
 };
@@ -38,7 +38,8 @@ pub use interpolation::{
     AdditionKernel, AdditionRequest, InterpolationPlan, InterpolationPublished, InterpolationRun,
 };
 mod driver;
-mod expansion_driver;
+#[cfg(test)]
+mod tests;
 
 /// Worker-independent tile geometry and transform semantics.
 ///
@@ -146,7 +147,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// unscaled forward transform, or non-power-of-two tile returns
     /// [`FftError::InvalidExecution`]. No storage is bound or modified. Tables in
     /// `plan` remain borrowed across runs.
-    pub(crate) fn with_strategy(
+    pub(in crate::fft) fn with_strategy(
         plan: Transform<'t, M>,
         request: TransformRequest,
         tile: NonZeroUsize,
@@ -247,7 +248,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Returns [`FftError::SizeOverflow`] if the retained field count overflows
     /// `usize` or its field slice would exceed `isize::MAX` bytes.
     /// A single-fragment transform keeps its local kernel without panels.
-    pub(crate) fn with_columns(
+    pub(in crate::fft) fn with_columns(
         mut self,
         columns: NonZeroUsize,
         panels: NonZeroUsize,
@@ -270,7 +271,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Each task leases the whole values bank exclusively. This avoids a full
     /// retained snapshot, at the cost of serializing permutation tasks for this run.
     /// Other phases still use bounded fragment leases.
-    pub(crate) fn with_contiguous_permutation(mut self) -> Self {
+    pub(in crate::fft) fn with_contiguous_permutation(mut self) -> Self {
         self.contiguous_permutation = true;
         self
     }
@@ -284,7 +285,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// execution is unchanged. Without this option, tasks gather into disjoint
     /// destination tiles.
     #[cfg(test)]
-    pub(crate) fn with_scatter_initialization(mut self) -> Self {
+    pub(in crate::fft) fn with_scatter_initialization(mut self) -> Self {
         self.scatter_input = true;
         self
     }
@@ -454,7 +455,7 @@ pub enum Bank {
 
 /// A bounded FFT kernel family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkKind {
+enum WorkKind {
     /// Complete a transform that fits one local tile, fusing its phases.
     Fused,
     /// Initialize a destination tile, zeroing unsupported input positions.
@@ -487,7 +488,7 @@ pub struct Request<'a> {
     /// Nonforgeable claim identity.
     pub key: TaskKey<'a>,
     #[cfg(test)]
-    pub(crate) kind: WorkKind,
+    kind: WorkKind,
     /// Bank and global range of the first exclusive output fragment.
     pub write: (Bank, Range<usize>),
     /// Second exclusive fragment for a butterfly pair.
@@ -605,7 +606,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                         input,
                         values,
                         if plan.inverse() {
-                            ForwardShift::Domain(super::domain::Shift::Subgroup)
+                            ForwardShift::Domain(super::factors::Shift::Subgroup)
                         } else {
                             plan.shift
                         },
@@ -829,11 +830,11 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 let normalized = plan.request.inverse_scale == InverseScale::Normalized;
                 let subgroup = plan.plan.domain().is_subgroup();
                 let factors = if !inverse || subgroup {
-                    super::finish::Factors::Identity
+                    super::factors::Factors::Identity
                 } else if normalized {
-                    super::finish::Factors::normalized(plan.plan.domain())
+                    super::factors::Factors::normalized(plan.plan.domain())
                 } else {
-                    super::finish::Factors::untwist(plan.plan.domain())
+                    super::factors::Factors::untwist(plan.plan.domain())
                 };
                 for (offset, value) in values.iter_mut().enumerate() {
                     let physical = self.start + offset;
@@ -845,7 +846,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     if inverse {
                         if normalized {
                             *value = if subgroup {
-                                crate::field::fft::divide_by_power_of_two(
+                                crate::field::butterfly::divide_by_power_of_two(
                                     *value,
                                     plan.size().ilog2(),
                                 )
@@ -955,7 +956,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 }
             } else {
                 let powers =
-                    super::operation::BitReversedPowers::new(shift, inverse, plan.size().ilog2());
+                    super::factors::BitReversedPowers::new(shift, inverse, plan.size().ilog2());
                 let mut power = powers.at(self.start).mul(&plan.input_scale);
                 let len = values.len();
                 for (offset, value) in values.iter_mut().enumerate() {

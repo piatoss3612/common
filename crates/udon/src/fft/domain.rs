@@ -1,4 +1,4 @@
-use super::{FftError, PastaField, PrimeModulus, check_field_count};
+use super::{FftError, PastaField, PrimeModulus, check_field_count, factors::Shift};
 
 /// A radix-2 subgroup and its canonical Pasta root of unity.
 ///
@@ -97,28 +97,6 @@ impl<M: PrimeModulus> Domain<M> {
     /// Constructs the evaluation points `ZETA * root^j` for `0 <= j < size`.
     pub fn coset(self) -> CosetDomain<M> {
         CosetDomain::new(self, Shift::Zeta)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Shift {
-    Subgroup,
-    Zeta,
-}
-
-impl Shift {
-    pub const fn value<M: PrimeModulus>(self) -> PastaField<M> {
-        match self {
-            Self::Subgroup => PastaField::ONE,
-            Self::Zeta => PastaField::ZETA,
-        }
-    }
-
-    pub const fn inverse<M: PrimeModulus>(self) -> PastaField<M> {
-        match self {
-            Self::Subgroup => PastaField::ONE,
-            Self::Zeta => PastaField::ZETA_INVERSE,
-        }
     }
 }
 

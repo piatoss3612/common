@@ -1,9 +1,5 @@
 use super::{PastaField, PrimeModulus, ReductionState};
 
-#[cfg(test)]
-#[path = "tests/fractions.rs"]
-mod tests;
-
 /// Invalid buffer lengths for running products of fractions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FractionPrefixError {
@@ -242,4 +238,21 @@ fn prefixes<M: PrimeModulus, D: ReductionState>(
         }
     }
     values[0] = *initial;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FractionPrefixError, validate};
+
+    #[test]
+    fn length_validation_rejects_overflow_before_buffer_checks() {
+        assert_eq!(
+            validate(usize::MAX, usize::MAX, usize::MAX),
+            Err(FractionPrefixError::LengthOverflow)
+        );
+        assert_eq!(
+            validate(usize::MAX - 1, usize::MAX, usize::MAX),
+            Ok(usize::MAX)
+        );
+    }
 }

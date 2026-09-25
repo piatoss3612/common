@@ -1,53 +1,15 @@
+use super::run::{BatchPlan, JobStorage, WorkerStorage};
+use super::test_support::{Buffers, JoinWidth};
 use super::*;
 use crate::{
-    curve::{Pallas, Vesta, scalar},
-    exec::SerialExecutor,
+    curve::{Pallas, Vesta, tests::multiply},
+    exec::{SerialExecutor, TaskBudget},
     test_support::field_samples,
 };
+use core::num::NonZeroUsize;
 use std::{vec, vec::Vec};
 
-pub(super) struct Buffers<C: PastaCurve> {
-    scalars: Vec<ScalarStorage<C>>,
-    digits: Vec<u8>,
-    affine: Vec<AffinePoint<C>>,
-    projective: Vec<ProjectivePoint<C>>,
-    field: Vec<PastaField<C::Base>>,
-    indices: Vec<usize>,
-}
-
-impl<C: PastaCurve> Buffers<C> {
-    pub(super) fn new(r: Requirements) -> Self {
-        Self {
-            scalars: vec![ScalarStorage::ZERO; r.scalars + 1],
-            digits: vec![73; r.digits + 1],
-            affine: vec![AffinePoint::GENERATOR; r.affine + 1],
-            projective: vec![ProjectivePoint::GENERATOR; r.projective + 1],
-            field: vec![PastaField::ONE; r.field + 1],
-            indices: vec![73; r.indices + 1],
-        }
-    }
-    pub(super) fn borrow(&mut self) -> Scratch<'_, C> {
-        Scratch {
-            scalars: &mut self.scalars,
-            digits: &mut self.digits,
-            affine: &mut self.affine,
-            projective: &mut self.projective,
-            field: &mut self.field,
-            indices: &mut self.indices,
-        }
-    }
-    fn tails(&self, r: Requirements) {
-        assert!(self.scalars[r.scalars] == ScalarStorage::ZERO);
-        assert_eq!(self.digits[r.digits], 73);
-        assert_eq!(self.affine[r.affine], AffinePoint::GENERATOR);
-        assert_eq!(self.projective[r.projective], ProjectivePoint::GENERATOR);
-        assert_eq!(
-            (self.field[r.field]).reduce(),
-            (PastaField::<_>::ONE).reduce()
-        );
-        assert_eq!(self.indices[r.indices], 73);
-    }
-}
+mod experiments;
 
 struct Pool;
 impl Executor for Pool {
@@ -59,41 +21,6 @@ impl Executor for Pool {
         B: Send,
     {
         rayon::join(left, right)
-    }
-}
-
-/// Measures the widest set of independent leaves exposed by a join tree.
-///
-/// Jobs run sequentially: consecutive joins take a maximum; joined branches add.
-/// This checks the allowance without relying on OS scheduling or worker counts.
-pub(super) struct JoinWidth(pub(super) core::sync::atomic::AtomicUsize);
-impl JoinWidth {
-    pub(super) fn measure<R>(&self, work: impl FnOnce() -> R) -> (R, usize) {
-        use core::sync::atomic::{AtomicUsize, Ordering};
-        struct Restore<'a>(&'a AtomicUsize, usize);
-        impl Drop for Restore<'_> {
-            fn drop(&mut self) {
-                self.0.store(self.1, Ordering::Relaxed);
-            }
-        }
-        let _restore = Restore(&self.0, self.0.swap(1, Ordering::Relaxed));
-        let result = work();
-        (result, self.0.load(Ordering::Relaxed))
-    }
-}
-impl Executor for JoinWidth {
-    fn join<L, R, A, B>(&self, left: L, right: R) -> (A, B)
-    where
-        L: FnOnce() -> A + Send,
-        R: FnOnce() -> B + Send,
-        A: Send,
-        B: Send,
-    {
-        let ((a, left), (b, right)) =
-            SerialExecutor.join(|| self.measure(left), || self.measure(right));
-        self.0
-            .fetch_max(left + right, core::sync::atomic::Ordering::Relaxed);
-        (a, b)
     }
 }
 
@@ -111,7 +38,7 @@ fn reference<C: PastaCurve>(input: &Input<'_, C>) -> ProjectivePoint<C> {
             Bases::Compact(b) => b.get(j).unwrap().base().to_projective(),
             Bases::CompactPrepared(b) => b.get(j).unwrap().base().to_projective(),
         };
-        sum = sum.add(&scalar::multiply(k, |sum| sum.add(&base)));
+        sum = sum.add(&multiply(k, |sum| sum.add(&base)));
     }
     sum
 }
@@ -754,136 +681,6 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
 }
 
 #[test]
-fn packed_midpoint_carries_reconstruct_signed_extremes() {
-    use crate::curve::scalar::centered_digit;
-    use num_bigint::BigInt;
-    for width in [2, 4, 8] {
-        for negative in [false, true] {
-            for value in [0, 1, 127, 128, 129, 255, 256, u128::MAX, i128::MAX as u128] {
-                let mut carry = 0;
-                let mut magnitude = value;
-                let mut digits = Vec::new();
-                for _ in 0..128 / width {
-                    let digit = centered_digit(
-                        (magnitude & ((1 << width) - 1)) as u16,
-                        negative,
-                        &mut carry,
-                        width,
-                    );
-                    assert!((-(1 << (width - 1))..1 << (width - 1)).contains(&digit));
-                    assert_eq!(digit as i8 as i16, digit);
-                    digits.push(digit);
-                    magnitude >>= width;
-                }
-                let mut actual = BigInt::from(if negative { -carry } else { carry });
-                for d in digits.into_iter().rev() {
-                    actual = (actual << width) + d;
-                }
-                let expected = BigInt::from(value);
-                assert_eq!(actual, if negative { -expected } else { expected });
-            }
-        }
-    }
-}
-
-#[test]
-fn affine_reducer_and_weighted_collapse_match_biguint() {
-    fn check<C: PastaCurve>() {
-        use crate::{curve::tests::reference::Reference, test_support::modulus};
-        use num_bigint::BigUint;
-        let modulus = modulus::<C::Base>();
-        let g = AffinePoint::<C>::GENERATOR;
-        let pool: Vec<_> = (1..=13)
-            .map(|i| {
-                *g.mul_projective(&PastaField::<_>::from_u64(i))
-                    .to_point()
-                    .as_affine()
-                    .unwrap()
-            })
-            .collect();
-        for case in 0..96 {
-            let mut points = Vec::new();
-            let mut starts = Vec::new();
-            let mut lens = Vec::new();
-            let mut expected = Vec::new();
-            for bucket in 0..7 {
-                starts.push(points.len());
-                let n = (case * 7 + bucket * 3) % 19;
-                lens.push(n);
-                let mut sum = Reference::identity();
-                for i in 0..n {
-                    // Includes all-cancelling levels, odd survivors, and equal
-                    // operands alongside distinct points.
-                    let mut p = pool[if case % 3 == 0 {
-                        bucket
-                    } else {
-                        (case + i / 2) % pool.len()
-                    }];
-                    if case % 2 == 0 && i % 2 == 1 {
-                        p = p.neg();
-                    }
-                    sum = sum.add(&Reference::from_point(&p.to_point()), &modulus);
-                    points.push(p);
-                }
-                expected.push(sum);
-            }
-            let mut control = points.clone();
-            let mut control_lens = lens.clone();
-            let pairs = points.len() / 2;
-            let mut fused = points.clone();
-            let mut fused_lens = lens.clone();
-            let mut fields = vec![PastaField::ONE; pairs * 2 + 3];
-            while fused_lens.iter().any(|&n| n > 1) {
-                buckets::reduce_fused::<C, false>(
-                    &mut fused,
-                    &starts,
-                    &mut fused_lens,
-                    &mut fields[..pairs * 2],
-                );
-            }
-            buckets::reduce_original(
-                &mut control,
-                &starts,
-                &mut control_lens,
-                &mut vec![PastaField::ZERO; pairs * 6],
-                &mut vec![0; pairs],
-            );
-            buckets::reduce(
-                &mut points,
-                &starts,
-                &mut lens,
-                &mut vec![PastaField::ONE; pairs * 2],
-            );
-            assert_eq!(lens, control_lens);
-            assert_eq!(lens, fused_lens);
-            assert!(
-                fields[pairs * 2..]
-                    .iter()
-                    .all(|x| x.reduce() == PastaField::ONE)
-            );
-            let mut survivors = vec![g; starts.len()];
-            let mut weighted = Reference::identity();
-            for i in 0..starts.len() {
-                let result = if lens[i] == 0 {
-                    Point::IDENTITY
-                } else {
-                    survivors[i] = points[starts[i]];
-                    assert_eq!(points[starts[i]], control[starts[i]]);
-                    assert_eq!(points[starts[i]], fused[starts[i]]);
-                    points[starts[i]].to_point()
-                };
-                expected[i].assert_point(&result);
-                weighted =
-                    weighted.add(&expected[i].mul(&BigUint::from(i + 1), &modulus), &modulus);
-            }
-            weighted.assert_point(&buckets::collapse(&survivors, &lens).to_point());
-        }
-    }
-    check::<Pallas>();
-    check::<Vesta>();
-}
-
-#[test]
 fn production_booth_rows_reconstruct_both_glv_halves() {
     fn check<C: PastaCurve>() {
         use num_bigint::BigInt;
@@ -940,7 +737,7 @@ fn forced_kernels_chunks_and_incompatible_caches() {
         let prepared =
             PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
         let cached_options = ArithmeticOptions::DEFAULT
-            .with_kernel(Kernel::Booth {
+            .with_algorithm(Algorithm::Booth {
                 width: Some(8),
                 accumulation: Accumulation::Auto,
             })
@@ -973,7 +770,7 @@ fn forced_kernels_chunks_and_incompatible_caches() {
                     }
                     let options = BatchOptions::new(
                         ArithmeticOptions::DEFAULT
-                            .with_kernel(Kernel::Booth {
+                            .with_algorithm(Algorithm::Booth {
                                 width: Some(width),
                                 accumulation,
                             })
@@ -1053,7 +850,7 @@ fn typed_sources_validate_bounds_and_signed_extremes() {
                 let options = width.map_or(BatchOptions::default(), |w| {
                     BatchOptions::new(
                         ArithmeticOptions::DEFAULT
-                            .with_kernel(Kernel::Booth {
+                            .with_algorithm(Algorithm::Booth {
                                 width: Some(w),
                                 accumulation: Accumulation::Auto,
                             })
@@ -1414,7 +1211,7 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
             for chunk in [1, 2, 17, 256, 513] {
                 let options = BatchOptions::new(
                     ArithmeticOptions::DEFAULT
-                        .with_kernel(Kernel::StreamingBooth { width: Some(width) })
+                        .with_algorithm(Algorithm::StreamingBooth { width: Some(width) })
                         .unwrap()
                         .with_chunk_size(NonZeroUsize::new(chunk).unwrap()),
                 );
@@ -1435,7 +1232,7 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
         }
         let o = BatchOptions::new(
             ArithmeticOptions::DEFAULT
-                .with_kernel(Kernel::StreamingBooth { width: Some(4) })
+                .with_algorithm(Algorithm::StreamingBooth { width: Some(4) })
                 .unwrap(),
         )
         .with_memory_limit(32768);

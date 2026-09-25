@@ -1,5 +1,3 @@
-use super::{admission, fft_run, msm_run, run_pool};
-#[path = "../support/mixed_run.rs"]
 mod mixed_run;
 #[test]
 fn heterogeneous_shrinking_rounds_share_one_arena_and_release_consumers() {

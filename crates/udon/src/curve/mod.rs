@@ -32,10 +32,12 @@
 
 use core::{fmt, marker::PhantomData};
 
+use crate::checks::{assert_length, assert_scratch};
 use crate::field::{PastaField, Reduced, ReductionState};
 
 mod affine;
 mod batch;
+mod digits;
 mod effective;
 mod eisenstein;
 mod eisenstein_batch;
@@ -46,7 +48,7 @@ pub mod msm;
 mod parameters;
 mod point;
 mod projective;
-mod scalar;
+mod reduce;
 mod table_entry;
 
 pub use batch::batch_normalize;
@@ -157,12 +159,6 @@ pub enum CurveError {
         /// The supplied width.
         bits: u32,
     },
-    /// An MSM Booth width is outside `4..=12`.
-    #[cfg(test)]
-    InvalidMsmWindow {
-        /// Supplied window width.
-        bits: u32,
-    },
     /// A scalar is not below its modulus, exceeds its bit bound, or has an
     /// invalid bound.
     InvalidScalar {
@@ -213,8 +209,6 @@ impl fmt::Display for CurveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidWindowBits { bits } => write!(f, "window width {bits} is outside 2..=8"),
-            #[cfg(test)]
-            Self::InvalidMsmWindow { bits } => write!(f, "MSM width {bits} is outside 4..=12"),
             Self::InvalidScalar { position } => {
                 write!(f, "invalid MSM scalar at position {position}")
             }
@@ -250,17 +244,6 @@ impl fmt::Display for CurveError {
 }
 
 impl core::error::Error for CurveError {}
-
-fn assert_length(buffer: &str, expected: usize, actual: usize) {
-    assert_eq!(actual, expected, "{buffer} length");
-}
-
-fn assert_scratch(buffer: &str, required: usize, provided: usize) {
-    assert!(
-        provided >= required,
-        "{buffer} scratch requires {required} elements, got {provided}"
-    );
-}
 
 const fn checked_count<T>(count: usize, per_item: usize) -> Result<usize, CurveError> {
     match count.checked_mul(per_item) {

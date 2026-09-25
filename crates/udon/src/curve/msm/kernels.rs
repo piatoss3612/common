@@ -1,10 +1,11 @@
 //! Monomorphic base access and arithmetic for one complete chunk or window.
 
-use super::run::storage::Storage;
+use super::storage::Storage;
+use crate::curve::reduce::{collapse, reduce};
 use crate::exec::run::ReadView;
 
 use super::{
-    Accumulation, Bases, Input, ScalarStorage, buckets,
+    Accumulation, Bases, Input, ScalarStorage,
     recode::{self, Geometry},
 };
 use crate::{
@@ -17,18 +18,18 @@ use crate::{
 };
 
 pub(super) struct Work<'a, C: PastaCurve> {
-    pub affine: &'a mut [AffinePoint<C>],
-    pub projective: &'a mut [ProjectivePoint<C>],
-    pub field: &'a mut [PastaField<C::Base>],
-    pub indices: &'a mut [usize],
+    pub(super) affine: &'a mut [AffinePoint<C>],
+    pub(super) projective: &'a mut [ProjectivePoint<C>],
+    pub(super) field: &'a mut [PastaField<C::Base>],
+    pub(super) indices: &'a mut [usize],
 }
 #[derive(Clone, Copy)]
 pub(super) struct Task {
-    pub offset: usize,
-    pub window: usize,
-    pub pass: usize,
-    pub geometry: Geometry,
-    pub accumulation: Accumulation,
+    pub(super) offset: usize,
+    pub(super) window: usize,
+    pub(super) pass: usize,
+    pub(super) geometry: Geometry,
+    pub(super) accumulation: Accumulation,
 }
 trait Base<C: PastaCurve>: Copy + Sync {
     fn point(self, rotation: usize) -> Option<AffinePoint<C>>;
@@ -72,9 +73,9 @@ impl Indices<'_> {
         }
     }
 }
-pub(super) struct Selection<'a, C: PastaCurve> {
-    pub bases: Bases<'a, C>,
-    pub indices: Option<Indices<'a>>,
+pub(super) struct BaseView<'a, C: PastaCurve> {
+    pub(super) bases: Bases<'a, C>,
+    pub(super) indices: Option<Indices<'a>>,
 }
 struct View<'a, B, const INDEXED: bool> {
     bases: &'a [B],
@@ -112,7 +113,7 @@ pub(super) fn run_view<C: PastaCurve>(
     work: &mut Work<'_, C>,
 ) -> ProjectivePoint<C> {
     run_selected(
-        &Selection {
+        &BaseView {
             bases: input.bases,
             indices: input.indices.map(Indices::Slice),
         },
@@ -124,7 +125,7 @@ pub(super) fn run_view<C: PastaCurve>(
 }
 
 pub(super) fn run_selected<C: PastaCurve>(
-    input: &Selection<'_, C>,
+    input: &BaseView<'_, C>,
     records: impl Storage<ScalarStorage<C>>,
     digits: impl Storage<u8>,
     task: Task,
@@ -140,7 +141,7 @@ pub(super) fn run_selected<C: PastaCurve>(
 }
 
 fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
-    input: &Selection<'_, C>,
+    input: &BaseView<'_, C>,
     bases: &[B],
     records: impl Storage<ScalarStorage<C>>,
     digits: impl Storage<u8>,
@@ -172,7 +173,7 @@ fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
 }
 
 fn access<C: PastaCurve, B: Base<C>>(
-    input: &Selection<'_, C>,
+    input: &BaseView<'_, C>,
     bases: &[B],
     records: impl Storage<ScalarStorage<C>>,
     digits: impl Storage<u8>,
@@ -454,14 +455,14 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
                 }
             },
         );
-        buckets::reduce(&mut points[..total], starts, lens, work.field);
+        reduce(&mut points[..total], starts, lens, work.field);
         for i in 0..buckets {
             if lens[i] != 0 {
                 survivors[i] = points[starts[i]];
             }
         }
     }
-    buckets::collapse(survivors, lens)
+    collapse(survivors, lens)
 }
 
 pub(super) fn stream<C: PastaCurve>(
@@ -482,7 +483,7 @@ pub(super) fn stream_view<C: PastaCurve>(
     sums: &mut [ProjectivePoint<C>],
 ) {
     stream_selected(
-        &Selection {
+        &BaseView {
             bases: input.bases,
             indices: input.indices.map(Indices::Slice),
         },
@@ -494,7 +495,7 @@ pub(super) fn stream_view<C: PastaCurve>(
 }
 
 pub(super) fn stream_selected<C: PastaCurve>(
-    input: &Selection<'_, C>,
+    input: &BaseView<'_, C>,
     terms: usize,
     digits: impl Storage<u8>,
     task: Task,
@@ -583,7 +584,7 @@ pub(super) fn shared<C: PastaCurve>(
 ) {
     if output.len() == 1 {
         output[0] = run_selected(
-            &Selection {
+            &BaseView {
                 bases,
                 indices: Some(Indices::Strided {
                     offset: output_offset,

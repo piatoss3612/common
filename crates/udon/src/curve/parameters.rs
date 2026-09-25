@@ -71,11 +71,11 @@ impl PastaCurve for Vesta {
 /// the full kernel lattice. The fixed-point coefficients are
 /// `g1 = round(2^384 * d/n)` and `g2 = round(2^384 * b/n)`.
 pub(super) struct GlvBasis {
-    pub a: u128,
-    pub b: u128,
-    pub d: u128,
-    pub g1: [u64; 5],
-    pub g2: [u64; 5],
+    pub(super) a: u128,
+    pub(super) b: u128,
+    pub(super) d: u128,
+    pub(super) g1: [u64; 5],
+    pub(super) g2: [u64; 5],
 }
 
 pub(super) struct GlvParameters<C>(core::marker::PhantomData<C>);
@@ -89,10 +89,11 @@ impl<C: PastaCurve> GlvParameters<C> {
     const BB: [u64; 8] = bento::const_arithmetic::u256::mul_wide!(&Self::B, &Self::B);
 
     /// Conservative Babai residual magnitudes, including rounding error.
-    pub const BOUNDS: [u128; 2] = [(C::GLV_A + C::GLV_B) / 2 + 1, (C::GLV_B + Self::D) / 2 + 1];
+    pub(super) const BOUNDS: [u128; 2] =
+        [(C::GLV_A + C::GLV_B) / 2 + 1, (C::GLV_B + Self::D) / 2 + 1];
 
     /// Number of width-eight data windows, requiring no extra carry window.
-    pub const BOOTH_WINDOWS: usize = {
+    pub(super) const BOOTH_WINDOWS: usize = {
         // The top byte plus an incoming carry stays below the positive centered
         // digit threshold. Negating a component therefore needs no extra row either.
         assert!((Self::BOUNDS[0] >> 120) + 1 < 128);
@@ -100,7 +101,7 @@ impl<C: PastaCurve> GlvParameters<C> {
         16
     };
 
-    pub const BASIS: GlvBasis = {
+    pub(super) const BASIS: GlvBasis = {
         use bento::const_arithmetic::{m255, u256};
         let (determinant, carry) = u256::add_with_carry!(
             &[Self::AD[0], Self::AD[1], Self::AD[2], Self::AD[3]],

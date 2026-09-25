@@ -24,10 +24,14 @@ use crate::exec::run::{
     TaskStorage,
 };
 
+pub(super) mod batch;
 mod chunks;
 mod driver;
-pub(super) mod storage;
-pub use super::schedule::{BatchPlan, JobStorage, WorkerStorage};
+mod fragmented;
+#[cfg(test)]
+mod tests;
+pub use super::schedule::JobStorage;
+pub use batch::{BatchPlan, WorkerStorage};
 pub use chunks::{ChunkRequest, ParallelMsmRun};
 
 /// Base metadata for scalar rows supplied by producer tasks after binding.
@@ -190,7 +194,7 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// Returns [`CurveError::SizeOverflow`] for unrepresentable storage counts
     /// or bytes, before binding or writing any storage.
     #[cfg(test)]
-    pub(crate) fn new_with(
+    fn new_with(
         terms: usize,
         mut options: ArithmeticOptions,
         grain: NonZeroUsize,
@@ -206,14 +210,7 @@ impl<C: PastaCurve> MsmPlan<C> {
             options,
             crate::exec::TaskBudget::SERIAL,
         );
-        let job = schedule::layout::<C>(
-            cap,
-            geometry,
-            false,
-            false,
-            false,
-            schedule::Options::new(super::BatchOptions::new(options)),
-        )?;
+        let job = schedule::fixed_geometry::<C>(cap, geometry, options)?;
         let retained = Requirements {
             scalars: cap,
             digits: geometry.storage_len(cap)?,
@@ -249,7 +246,7 @@ impl<C: PastaCurve> MsmPlan<C> {
         })
     }
 
-    pub(super) fn from_job(
+    fn from_job(
         terms: usize,
         options: ArithmeticOptions,
         job: schedule::JobStorage,
@@ -345,17 +342,10 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// slack without implicitly selecting a different recoder. Extra window
     /// collapses and retained slots still belong in the caller's cost model.
     #[cfg(test)]
-    pub(crate) fn with_grain(mut self, grain: NonZeroUsize) -> Result<Self, CurveError> {
+    fn with_grain(mut self, grain: NonZeroUsize) -> Result<Self, CurveError> {
         self.cap = self.cap.min(grain.get());
         self.options.chunk_size = NonZeroUsize::new(self.cap.max(1));
-        self.job = schedule::layout::<C>(
-            self.cap,
-            self.job.geometry,
-            false,
-            false,
-            false,
-            schedule::Options::new(super::BatchOptions::new(self.options)),
-        )?;
+        self.job = schedule::fixed_geometry::<C>(self.cap, self.job.geometry, self.options)?;
         self.retained.scalars = self.cap;
         self.retained.digits = self.job.geometry.storage_len(self.cap)?;
         self.retained_for_slots(NonZeroUsize::MIN)?;
@@ -378,10 +368,7 @@ impl<C: PastaCurve> MsmPlan<C> {
             return None;
         }
         match input.scalars {
-            Scalars::Prepared(s) => s
-                .cached
-                .filter(|c| c.geometry == geometry)
-                .map(|c| c.digits),
+            Scalars::Prepared(s) => s.cached_digits(geometry),
             _ => None,
         }
     }
@@ -430,7 +417,7 @@ impl<C: PastaCurve> MsmPlan<C> {
 
 /// Work kind with distinct storage lifetime requirements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkKind {
+enum WorkKind {
     /// Writes one retained scalar and recoding chunk.
     Prepare,
     /// Reads a prepared chunk and computes or deposits one window.
@@ -447,7 +434,7 @@ pub struct Request<'a> {
     /// Claim identity, valid only for this run and dependency epoch.
     pub key: TaskKey<'a>,
     #[cfg(test)]
-    pub(crate) kind: WorkKind,
+    kind: WorkKind,
     /// First input term processed by this task.
     pub offset: usize,
     /// Terms in this chunk.
@@ -457,7 +444,7 @@ pub struct Request<'a> {
     /// First retained recoding byte written during preparation.
     pub digit_start: usize,
     /// Window index, or zero for preparation and reduction.
-    pub(crate) window: usize,
+    window: usize,
     /// Exclusive task scratch. During preparation its scalar and digit fields
     /// describe writes into retained storage, not additional temporary blocks.
     pub scratch: Requirements,
@@ -677,7 +664,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                     }
                     if let Some(input) = self.produced {
                         kernels::stream_selected(
-                            &kernels::Selection {
+                            &kernels::BaseView {
                                 bases: input.bases,
                                 indices: input.indexed.then_some(kernels::Indices::Fragment {
                                     view: source.indices,
@@ -685,7 +672,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                                 }),
                             },
                             self.terms,
-                            storage::Fragmented::new(digits, digit_len),
+                            fragmented::Fragmented::new(digits, digit_len),
                             task,
                             buckets,
                         );
@@ -695,7 +682,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                         kernels::stream_view(
                             &self.input,
                             self.terms,
-                            storage::Fragmented::new(digits, digit_len),
+                            fragmented::Fragmented::new(digits, digit_len),
                             task,
                             buckets,
                         );
@@ -711,15 +698,15 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                     };
                     output[0] = if let Some(input) = self.produced {
                         kernels::run_selected(
-                            &kernels::Selection {
+                            &kernels::BaseView {
                                 bases: input.bases,
                                 indices: input.indexed.then_some(kernels::Indices::Fragment {
                                     view: source.indices,
                                     offset: self.offset,
                                 }),
                             },
-                            storage::Fragmented::new(records, self.terms),
-                            storage::Fragmented::new(digits, digit_len),
+                            fragmented::Fragmented::new(records, self.terms),
+                            fragmented::Fragmented::new(digits, digit_len),
                             task,
                             work,
                         )
@@ -733,8 +720,8 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                             }
                             _ => kernels::run_view(
                                 &self.input,
-                                storage::Fragmented::new(records, self.terms),
-                                storage::Fragmented::new(digits, digit_len),
+                                fragmented::Fragmented::new(records, self.terms),
+                                fragmented::Fragmented::new(digits, digit_len),
                                 task,
                                 work,
                             ),
@@ -893,7 +880,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
             && range != (0..input.len())
             && let Scalars::Prepared(ref mut prepared) = input.scalars
         {
-            prepared.cached = None;
+            *prepared = prepared.without_cache();
         }
         assert!(
             plan.accepts(input),
@@ -1247,7 +1234,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
             && range != (0..input.len())
             && let Scalars::Prepared(ref mut prepared) = input.scalars
         {
-            prepared.cached = None;
+            *prepared = prepared.without_cache();
         }
         assert!(plan.accepts(input), "input preparation must match the plan");
         self.frontier

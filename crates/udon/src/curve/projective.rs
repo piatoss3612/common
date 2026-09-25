@@ -3,7 +3,7 @@
 use core::{fmt, marker::PhantomData};
 
 use super::{AffinePoint, IncompleteDoubleAndAdd, PastaCurve, Point, ProjectivePoint};
-use crate::field::PastaField;
+use crate::field::{CanonicalUint, PastaField};
 
 impl<C: PastaCurve> fmt::Debug for ProjectivePoint<C> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -340,9 +340,28 @@ impl<C: PastaCurve> ProjectivePoint<C> {
         // Short scalars use the binary ladder without paying for table setup.
         let scalar = scalar.to_canonical_uint();
         if scalar.highest_set_bit().is_some_and(|high| high < 64) {
-            super::scalar::multiply_canonical(scalar, |point| point.add(self))
+            multiply_canonical(scalar, |point| point.add(self))
         } else {
             super::effective::multiply(self, scalar)
         }
     }
+}
+
+/// Multiplies a fixed base by an unsigned integer with a binary ladder.
+///
+/// Each `add_base` call must add the same base to the supplied point.
+pub(super) fn multiply_canonical<C: PastaCurve>(
+    scalar: CanonicalUint,
+    add_base: impl Fn(&ProjectivePoint<C>) -> ProjectivePoint<C>,
+) -> ProjectivePoint<C> {
+    let mut result = ProjectivePoint::IDENTITY;
+    if let Some(high) = scalar.highest_set_bit() {
+        for bit in (0..=high).rev() {
+            result = result.double();
+            if scalar.bit(bit).unwrap() {
+                result = add_base(&result);
+            }
+        }
+    }
+    result
 }

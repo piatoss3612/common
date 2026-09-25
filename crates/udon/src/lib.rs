@@ -59,7 +59,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
+#![warn(unreachable_pub)]
 
+mod checks;
 pub mod curve;
 pub mod exec;
 pub mod fft;
@@ -83,8 +85,7 @@ extern crate std;
 #[cfg(test)]
 mod test_support;
 
+// The scheduler fixtures shared with `tests/execution/` name the crate by its
+// package name; this alias lets `test_support` mount those same files.
 #[cfg(test)]
 extern crate self as zakura_udon;
-#[cfg(test)]
-#[path = "../tests/execution/kernels.rs"]
-mod kernel_tests;

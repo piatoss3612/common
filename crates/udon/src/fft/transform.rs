@@ -1,5 +1,5 @@
 use super::execution::Geometry;
-use super::finish::{Factors, InverseFinish};
+use super::factors::{Factors, InverseFinish};
 use super::{
     CoefficientView, CosetDomain, Executor, FftError, PastaField, PrimeModulus, Strategy, Tables,
     reverse,
@@ -7,7 +7,7 @@ use super::{
 #[cfg(test)]
 use super::{assert_length, check_prefix};
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-use crate::field::fft::{butterfly, divide_by_power_of_two, scale as scale_loose};
+use crate::field::butterfly::{butterfly, divide_by_power_of_two, scale as scale_loose};
 
 /// Reusable transform metadata borrowing caller-prepared tables.
 ///
@@ -235,7 +235,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     /// Returns [`FftError::InvalidExecution`] for invalid [`Strategy`],
     /// or [`FftError::SizeOverflow`] if the scratch field slice would exceed
     /// `isize::MAX` bytes or its element count overflows `usize`.
-    pub(crate) const fn scratch_requirements_with(
+    pub(super) const fn scratch_requirements_with(
         self,
         options: Strategy,
     ) -> Result<usize, FftError> {
@@ -243,7 +243,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     }
 
     #[cfg(test)]
-    pub(super) fn check(
+    fn check(
         self,
         buffer: &'static str,
         len: usize,
@@ -260,7 +260,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     ///
     /// Buffer lengths, errors, and the evaluation formula are defined by [`Transform`].
     #[cfg(test)]
-    pub(crate) fn forward_with<E: Executor>(
+    pub(in crate::fft) fn forward_with<E: Executor>(
         self,
         values: &mut [PastaField<M>],
         options: Strategy,
@@ -288,7 +288,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     ///
     /// Both sides use the ordering, lengths, and error contract of [`Transform`].
     #[cfg(test)]
-    pub(crate) fn inverse_with<E: Executor>(
+    pub(in crate::fft) fn inverse_with<E: Executor>(
         self,
         values: &mut [PastaField<M>],
         options: Strategy,
@@ -320,7 +320,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     /// `n` is the domain size. Output coefficients are in increasing degree
     /// order, with the same normalization, lengths, and errors as [`Self::inverse`].
     #[cfg(test)]
-    pub(crate) fn inverse_bit_reversed_with<E: Executor>(
+    pub(in crate::fft) fn inverse_bit_reversed_with<E: Executor>(
         self,
         values: &mut [PastaField<M>],
         options: Strategy,
@@ -348,7 +348,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     /// Both input and output must have the domain size. Ordering, scratch
     /// requirements, and errors are the same as for [`Self::forward`].
     #[cfg(test)]
-    pub(crate) fn forward_into_with<'input, E: Executor>(
+    pub(in crate::fft) fn forward_into_with<'input, E: Executor>(
         self,
         input: impl Into<CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],
@@ -383,7 +383,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     /// Both slices must have the domain size. Ordering, scratch requirements,
     /// and errors are the same as for [`Self::inverse`].
     #[cfg(test)]
-    pub(crate) fn inverse_into_with<E: Executor>(
+    pub(in crate::fft) fn inverse_into_with<E: Executor>(
         self,
         input: &[PastaField<M>],
         output: &mut [PastaField<M>],
@@ -420,7 +420,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     /// order and must have the full domain size. Scratch requirements and other
     /// errors are those of [`Self::forward`], even for an empty prefix.
     #[cfg(test)]
-    pub(crate) fn forward_prefix_with<'input, E: Executor>(
+    pub(in crate::fft) fn forward_prefix_with<'input, E: Executor>(
         self,
         coefficients: impl Into<CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],
@@ -514,7 +514,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         self,
         coefficients: &[PastaField<M>],
         output: &mut [PastaField<M>],
-        shift: super::operation::ForwardShift<M>,
+        shift: super::factors::ForwardShift<M>,
         scales: Option<&[PastaField<M>]>,
         extra: PastaField<M>,
     ) -> usize {
@@ -629,7 +629,7 @@ pub(super) struct Run<'a, 'b, M: PrimeModulus> {
 }
 
 impl<'a, 'b, M: PrimeModulus> Run<'a, 'b, M> {
-    pub(super) fn set_first(&mut self, first: usize) {
+    fn set_first(&mut self, first: usize) {
         self.first = first;
     }
     pub(super) fn forward(first: usize) -> Self {

@@ -1,33 +1,30 @@
 use super::{
-    msm_run::{Arena, Work},
-    run_pool,
+    BatchPlan, Buffers, JobStorage, MsmPlan, MsmRun, ParallelMsmRun, ProducedInput, Resources,
+    SourceBuffers, WorkKind, WorkerStorage,
 };
-use spin::RwLock;
-use std::num::NonZeroUsize;
-use std::{string::ToString, vec, vec::Vec};
-use zakura_udon::{
+use crate::{
     curve::{
         AffinePoint, CurveError, EisensteinTableBatch, Pallas, PastaCurve, Point,
         PreparedAffinePoint, ProjectivePoint, Vesta,
         msm::{
-            Accumulation, ArithmeticOptions, Bases, BatchOptions, Input, Kernel, PreparedScalars,
-            Requirements, ScalarStorage, Scratch, Selection,
-            run::{
-                BatchPlan, JobStorage, MsmPlan, MsmRun, ParallelMsmRun, WorkKind, WorkerStorage,
-            },
+            Accumulation, Algorithm, ArithmeticOptions, Bases, BatchOptions, Input,
+            PreparedScalars, Requirements, ScalarStorage, Scratch, Selection,
+            policy::InvalidWindow,
         },
     },
     exec::{
         SerialExecutor, TaskBudget,
-        run::{Identity, Outcome, TaskStorage},
+        run::{Identity, Outcome, ReadView, TaskError, TaskStorage},
     },
     field::{CanonicalUint, PastaField},
+    test_support::{
+        msm_run::{Arena, Lease, Work},
+        run_pool,
+    },
 };
-
-use zakura_udon::{
-    curve::msm::run::{Buffers, ProducedInput, Resources, SourceBuffers},
-    exec::run::{ReadView, TaskError},
-};
+use spin::RwLock;
+use std::num::NonZeroUsize;
+use std::{string::ToString, vec, vec::Vec};
 
 struct Fragments<'a, T>(&'a [T]);
 impl<T> ReadView<T> for Fragments<'_, T> {
@@ -47,7 +44,7 @@ impl<T> ReadView<T> for Fragments<'_, T> {
     }
 }
 struct ProducedLease<'a, C: PastaCurve> {
-    arithmetic: super::msm_run::Lease<'a, C>,
+    arithmetic: Lease<'a, C>,
     scalars: Fragments<'a, PastaField<C::Scalar>>,
     indices: Fragments<'a, u32>,
 }
@@ -91,7 +88,7 @@ fn produced<C: PastaCurve>() {
         for streaming in [false, true] {
             let options = if streaming {
                 ArithmeticOptions::DEFAULT
-                    .with_kernel(Kernel::StreamingBooth { width: None })
+                    .with_algorithm(Algorithm::StreamingBooth { width: None })
                     .unwrap()
                     .with_chunk_size(NonZeroUsize::new(512).unwrap())
             } else {
@@ -454,22 +451,22 @@ fn check<C: PastaCurve>() {
     let options = [
         ArithmeticOptions::DEFAULT,
         ArithmeticOptions::DEFAULT
-            .with_kernel(Kernel::Joint)
+            .with_algorithm(Algorithm::Joint)
             .unwrap(),
         ArithmeticOptions::DEFAULT
-            .with_kernel(Kernel::Booth {
+            .with_algorithm(Algorithm::Booth {
                 width: Some(11),
                 accumulation: Accumulation::Projective,
             })
             .unwrap(),
         ArithmeticOptions::DEFAULT
-            .with_kernel(Kernel::Booth {
+            .with_algorithm(Algorithm::Booth {
                 width: Some(7),
                 accumulation: Accumulation::Hybrid,
             })
             .unwrap(),
         ArithmeticOptions::DEFAULT
-            .with_kernel(Kernel::StreamingBooth { width: None })
+            .with_algorithm(Algorithm::StreamingBooth { width: None })
             .unwrap(),
     ];
     for options in options {
@@ -597,7 +594,7 @@ fn batch_limits<C: PastaCurve>() {
             Accumulation::Hybrid,
         ] {
             let arithmetic = ArithmeticOptions::DEFAULT
-                .with_kernel(Kernel::Booth {
+                .with_algorithm(Algorithm::Booth {
                     width,
                     accumulation,
                 })
@@ -612,7 +609,7 @@ fn batch_limits<C: PastaCurve>() {
                     &inputs,
                     BatchOptions::new(
                         arithmetic
-                            .with_kernel(Kernel::Booth {
+                            .with_algorithm(Algorithm::Booth {
                                 width: Some(width.unwrap_or(4)),
                                 accumulation,
                             })
@@ -705,7 +702,7 @@ fn batch_limits<C: PastaCurve>() {
     // Retained preparation and digit caches belong to their owner, outside the
     // batch ceiling, even when they are larger than the execution provision.
     let arithmetic = ArithmeticOptions::DEFAULT
-        .with_kernel(Kernel::Booth {
+        .with_algorithm(Algorithm::Booth {
             width: Some(7),
             accumulation: Accumulation::Projective,
         })
@@ -873,7 +870,7 @@ fn run_binding_enforces_plan_and_storage_contracts() {
     let streaming = MsmPlan::new_with(
         2,
         ArithmeticOptions::DEFAULT
-            .with_kernel(Kernel::StreamingBooth { width: None })
+            .with_algorithm(Algorithm::StreamingBooth { width: None })
             .unwrap(),
         NonZeroUsize::MIN,
     )
@@ -1165,7 +1162,7 @@ fn independent_booth_chunks_and_empty_runs() {
     let expected = ladder::<Pallas>(scalars.iter().fold(PastaField::ZERO, |sum, s| sum.add(s)));
     for width in 4..=12 {
         let options = ArithmeticOptions::DEFAULT
-            .with_kernel(Kernel::Booth {
+            .with_algorithm(Algorithm::Booth {
                 width: Some(width),
                 accumulation: Accumulation::Auto,
             })
@@ -1210,37 +1207,38 @@ fn independent_booth_chunks_and_empty_runs() {
 
 #[test]
 fn kernel_selection_validates_widths_and_replaces_all_preferences() {
-    const JOINT: ArithmeticOptions = match ArithmeticOptions::DEFAULT.with_kernel(Kernel::Joint) {
-        Ok(options) => options,
-        Err(_) => panic!("valid kernel"),
-    };
+    const JOINT: ArithmeticOptions =
+        match ArithmeticOptions::DEFAULT.with_algorithm(Algorithm::Joint) {
+            Ok(options) => options,
+            Err(_) => panic!("valid kernel"),
+        };
     for width in [0, 3, 13, u32::MAX] {
         for kernel in [
-            Kernel::Booth {
+            Algorithm::Booth {
                 width: Some(width),
                 accumulation: Accumulation::Auto,
             },
-            Kernel::StreamingBooth { width: Some(width) },
+            Algorithm::StreamingBooth { width: Some(width) },
         ] {
             assert_eq!(
-                JOINT.with_kernel(kernel),
-                Err(CurveError::InvalidMsmWindow { bits: width })
+                JOINT.with_algorithm(kernel),
+                Err(InvalidWindow { bits: width })
             );
         }
     }
     for width in 4..=12 {
         let booth = JOINT
-            .with_kernel(Kernel::Booth {
+            .with_algorithm(Algorithm::Booth {
                 width: Some(width),
                 accumulation: Accumulation::Hybrid,
             })
             .unwrap();
         let streaming = booth
-            .with_kernel(Kernel::StreamingBooth { width: Some(width) })
+            .with_algorithm(Algorithm::StreamingBooth { width: Some(width) })
             .unwrap();
-        assert_eq!(streaming.with_kernel(Kernel::Joint).unwrap(), JOINT);
+        assert_eq!(streaming.with_algorithm(Algorithm::Joint).unwrap(), JOINT);
         assert_eq!(
-            streaming.with_kernel(Kernel::Auto).unwrap(),
+            streaming.with_algorithm(Algorithm::Auto).unwrap(),
             ArithmeticOptions::DEFAULT
         );
         let empty = MsmPlan::<Pallas>::new_with(0, streaming, NonZeroUsize::MIN).unwrap();
@@ -1265,24 +1263,24 @@ fn small_kernel_dispatch<C: PastaCurve>() {
     let prepared =
         PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
     for kernel in [
-        Kernel::Auto,
-        Kernel::Joint,
-        Kernel::Booth {
+        Algorithm::Auto,
+        Algorithm::Joint,
+        Algorithm::Booth {
             width: None,
             accumulation: Accumulation::Affine,
         },
-        Kernel::Booth {
+        Algorithm::Booth {
             width: Some(4),
             accumulation: Accumulation::Projective,
         },
-        Kernel::Booth {
+        Algorithm::Booth {
             width: Some(7),
             accumulation: Accumulation::Hybrid,
         },
-        Kernel::StreamingBooth { width: None },
-        Kernel::StreamingBooth { width: Some(4) },
+        Algorithm::StreamingBooth { width: None },
+        Algorithm::StreamingBooth { width: Some(4) },
     ] {
-        let options = ArithmeticOptions::DEFAULT.with_kernel(kernel).unwrap();
+        let options = ArithmeticOptions::DEFAULT.with_algorithm(kernel).unwrap();
         let original = MsmPlan::<C>::new_with(3, options, NonZeroUsize::new(7).unwrap()).unwrap();
         let plan = original.with_grain(NonZeroUsize::MIN).unwrap();
         assert_eq!(plan.output_slots(), original.output_slots());
@@ -1323,7 +1321,7 @@ fn small_kernel_dispatch<C: PastaCurve>() {
                     if request.kind == WorkKind::Window {
                         windows += 1;
                         match kernel {
-                            Kernel::Booth {
+                            Algorithm::Booth {
                                 accumulation: Accumulation::Projective,
                                 ..
                             } => {
@@ -1331,14 +1329,14 @@ fn small_kernel_dispatch<C: PastaCurve>() {
                                 assert_eq!(request.scratch.field(), 0);
                                 assert!(request.scratch.projective() >= 8);
                             }
-                            Kernel::Booth {
+                            Algorithm::Booth {
                                 accumulation: Accumulation::Affine | Accumulation::Hybrid,
                                 ..
                             } => {
                                 assert!(request.scratch.affine() > 0);
                                 assert!(request.scratch.field() > 0);
                             }
-                            Kernel::StreamingBooth { .. } => assert!(request.buckets > 0),
+                            Algorithm::StreamingBooth { .. } => assert!(request.buckets > 0),
                             _ => {}
                         }
                     }
@@ -1354,7 +1352,7 @@ fn small_kernel_dispatch<C: PastaCurve>() {
             assert_eq!(run.result(), Some(expected));
             assert_eq!(
                 windows,
-                3 * if kernel == Kernel::Auto {
+                3 * if kernel == Algorithm::Auto {
                     1
                 } else {
                     plan.output_slots()
@@ -1362,7 +1360,7 @@ fn small_kernel_dispatch<C: PastaCurve>() {
             );
             assert_eq!(
                 collapses,
-                if matches!(kernel, Kernel::StreamingBooth { .. }) {
+                if matches!(kernel, Algorithm::StreamingBooth { .. }) {
                     plan.output_slots()
                 } else {
                     0
@@ -1377,7 +1375,10 @@ fn small_kernel_dispatch<C: PastaCurve>() {
                 BatchPlan::new_with(&inputs, BatchOptions::new(options), &mut jobs, &mut workers)
                     .unwrap();
             let r = batch.requirements();
-            if matches!(kernel, Kernel::Booth { .. } | Kernel::StreamingBooth { .. }) {
+            if matches!(
+                kernel,
+                Algorithm::Booth { .. } | Algorithm::StreamingBooth { .. }
+            ) {
                 assert!(r.projective() > 0);
                 if source == 0 {
                     assert!(r.digits() > 0);

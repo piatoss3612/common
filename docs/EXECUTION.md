@@ -7,7 +7,7 @@ any compatible ready task, without changing arithmetic plans or redistributing
 per-operation budgets. The target library remains `no_std`, allocation-free,
 and safe Rust. The application supplies synchronization and storage.
 
-The internal [mixed-driver fixture](../crates/udon/tests/support/mixed_run.rs)
+The internal [mixed-driver fixture](../crates/udon/src/exec/run/tests/mixed_run.rs)
 combines two unequal MSMs, two unequal FFTs, application work, immediate consumers,
 and round-challenge fences. It repeats eleven shrinking rounds without growing
 its provision. It uses a private frontier for application work; downstream
@@ -74,7 +74,7 @@ views on the worker in `Resources::buffers`. The small
 [borrowed-owner checks](../crates/udon/tests/execution/borrowed.rs) demonstrate
 both protocols with non-static storage and scoped threads.
 
-The test [fragment provider](../crates/udon/tests/support/fft_run.rs) uses
+The test [fragment provider](../crates/udon/src/test_support/fft_run.rs) uses
 preallocated `spin::RwLock` fragments and nonblocking acquisition. Shared read
 views retain their guards; disjoint writes take exclusive guards. `spin` is a
 development dependency only. The production protocol also accepts ordinary
@@ -209,7 +209,7 @@ metadata, queues, buffer alignment, and unused provider capacity when deciding
 what the application can admit. See
 [`MsmPlan`](../crates/udon/src/curve/msm/run.rs) for the individual query contracts.
 
-The [test fixture's admission policy](../crates/udon/tests/support/admission.rs)
+The [test fixture's admission policy](../crates/udon/src/test_support/admission.rs)
 charges every provisioned block, including idle capacity,
 padding, lease metadata, retained handoff banks, run/frontier state, envelopes,
 and bounded queues. Classes distinguish exact types and capacities: bytes of

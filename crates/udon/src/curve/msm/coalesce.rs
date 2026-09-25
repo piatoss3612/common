@@ -272,11 +272,8 @@ impl<'a, C: PastaCurve> IndexedCoalescingPlan<'a, C> {
         }
         // Preparation checked every index and aggregation only selects from
         // that immutable mapping, so no second bounds scan is needed.
-        Selection {
-            bases: self.selection.bases,
-            indices: Some(&indices[..live]),
-        }
-        .with_scalars(&scalars[..live])
+        Selection::from_validated(self.selection.bases, &indices[..live])
+            .with_scalars(&scalars[..live])
     }
 }
 

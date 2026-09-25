@@ -1,18 +1,15 @@
 //! Affine bucket reduction with one shared inversion per pair-tree level.
 
 use crate::field::invert_nonzero;
-use core::marker::PhantomData;
 
-use crate::{
-    curve::{AffinePoint, PastaCurve, ProjectivePoint},
-    field::PastaField,
-};
+use super::{AffinePoint, PastaCurve, ProjectivePoint};
+use crate::field::PastaField;
 
 /// Sums one bounded batch, sharing inversions until the final small layer.
 ///
 /// The caller supplies at least one field per input point. Cancelled pairs
 /// disappear; no identity is ever stored as a nonidentity affine point.
-pub(in crate::curve) fn sum<C: PastaCurve>(
+pub(super) fn sum<C: PastaCurve>(
     points: &mut [AffinePoint<C>],
     fields: &mut [PastaField<C::Base>],
 ) -> ProjectivePoint<C> {
@@ -53,7 +50,7 @@ pub(super) fn reduce<C: PastaCurve>(
 /// retries [`reduce_level`] with complete formulas before changing points or
 /// lengths, so callers need not exclude doubling or cancellation.
 #[inline(always)]
-pub(super) fn reduce_fused<C: PastaCurve, const INCOMPLETE: bool>(
+fn reduce_fused<C: PastaCurve, const INCOMPLETE: bool>(
     points: &mut [AffinePoint<C>],
     starts: &[usize],
     lens: &mut [usize],
@@ -128,19 +125,12 @@ pub(super) fn reduce_fused<C: PastaCurve, const INCOMPLETE: bool>(
             };
             read += 1;
             let numerator = if !INCOMPLETE && p.x == q.x {
-                let xx = p.x.square();
-                xx.double().add(&xx)
+                p.tangent_numerator()
             } else {
                 q.y.sub(&p.y)
             };
             let slope = numerator.mul(&inverse);
-            let x = slope.square().sub(&p.x).sub(&q.x);
-            let y = slope.mul(&p.x.sub(&x)).sub(&p.y);
-            points[start + written] = AffinePoint {
-                x: x.reduce(),
-                y: y.reduce(),
-                marker: PhantomData,
-            };
+            points[start + written] = AffinePoint::from_slope(&p.x, &p.y, &q.x, &slope);
             written += 1;
         }
         if old & 1 != 0 {
@@ -210,23 +200,16 @@ pub(super) fn reduce_level<C: PastaCurve, const FUSED: bool>(
                 continue;
             }
             let numerator = if p.x == q.x {
-                let xx = p.x.square();
-                xx.double().add(&xx)
+                p.tangent_numerator()
             } else {
                 q.y.sub(&p.y)
             };
             let slope = numerator.mul(&denom[read]);
             read += 1;
-            let x = slope.square().sub(&p.x).sub(&q.x);
-            let y = if FUSED {
-                slope.mul_sub(&p.x.sub(&x), &p.y)
+            points[start + written] = if FUSED {
+                AffinePoint::from_slope_fused(&p.x, &p.y, &q.x, &slope)
             } else {
-                slope.mul(&p.x.sub(&x)).sub(&p.y)
-            };
-            points[start + written] = AffinePoint {
-                x: x.reduce(),
-                y: y.reduce(),
-                marker: PhantomData,
+                AffinePoint::from_slope(&p.x, &p.y, &q.x, &slope)
             };
             written += 1;
         }
@@ -273,8 +256,7 @@ pub(super) fn reduce_original<C: PastaCurve>(
                 y1[staged] = p.y.into_loose();
                 x2[staged] = q.x.into_loose();
                 if p.x == q.x {
-                    let xx = p.x.square();
-                    numerator[staged] = xx.double().add(&xx);
+                    numerator[staged] = p.tangent_numerator();
                     denom[staged] = p.y.double();
                 } else {
                     numerator[staged] = q.y.sub(&p.y);
@@ -295,13 +277,7 @@ pub(super) fn reduce_original<C: PastaCurve>(
         invert_nonzero(&mut denom[..staged], prefix);
         for i in 0..staged {
             let slope = numerator[i].mul(&denom[i]);
-            let x = slope.square().sub(&x1[i]).sub(&x2[i]);
-            let y = slope.mul(&x1[i].sub(&x)).sub(&y1[i]);
-            points[writes[i]] = AffinePoint {
-                x: x.reduce(),
-                y: y.reduce(),
-                marker: PhantomData,
-            };
+            points[writes[i]] = AffinePoint::from_slope(&x1[i], &y1[i], &x2[i], &slope);
         }
         if lens.iter().all(|&n| n <= 1) {
             break;
@@ -327,3 +303,7 @@ pub(super) fn collapse<C: PastaCurve>(
     }
     sum
 }
+
+#[cfg(test)]
+#[path = "tests/reduce.rs"]
+mod tests;

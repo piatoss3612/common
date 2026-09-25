@@ -1,5 +1,5 @@
 use super::*;
-use crate::field::tests::*;
+use crate::field::safegcd::{SAFEGCD_BATCHES, SIGNED62_MASK, divsteps_62, to_signed62, update_fg};
 
 fn check_inverses<M: PrimeModulus>() {
     let p = modulus::<M>();
@@ -89,41 +89,4 @@ fn check_divsteps<M: PrimeModulus>() {
 fn batched_divsteps_match_signed_integer_steps_and_converge() {
     check_divsteps::<PallasBase>();
     check_divsteps::<PallasScalar>();
-}
-
-fn check_bezout_rows<M: PrimeModulus>() {
-    let p = modulus::<M>();
-    let inverse_radix = (BigUint::from(1u8) << 64usize).modpow(&(&p - 2u8), &p);
-    let bound = 1i64 << 62;
-    let rows = [
-        (bound, 0),
-        (-bound, 0),
-        (0, bound),
-        (0, -bound),
-        (bound / 2, -bound / 2),
-        (-1, 1),
-    ];
-    let values = samples::<M>(16);
-    for (a, x) in &values {
-        for (b, y) in &values {
-            for (u, v) in rows {
-                let expected = signed_mod(
-                    BigInt::from(x.clone()) * u + BigInt::from(y.clone()) * v,
-                    &p,
-                ) * &inverse_radix
-                    % &p;
-                assert_value(
-                    PastaField::<M, Reduced>::bezout_row_update(u, &a.reduce(), v, &b.reduce()),
-                    &expected,
-                );
-            }
-        }
-    }
-    assert_eq!(integer(&bezout_offset(&M::MODULUS)), &p << 63usize);
-}
-
-#[test]
-fn signed_bezout_rows_cover_extreme_coefficients() {
-    check_bezout_rows::<PallasBase>();
-    check_bezout_rows::<PallasScalar>();
 }

@@ -69,7 +69,7 @@ pub(crate) fn multiply_default<F: FftField>(
     scratch: &mut [F],
 ) {
     let domain = transform_log_size(a.len(), b.len(), product.len(), scratch.len())
-        .and_then(|log_size| Domain::<F>::new(log_size).ok());
+        .and_then(|log_size| F::domain(log_size).ok());
     if let Some(domain) = domain {
         multiply_by_transform(domain, a, b, product, scratch);
     } else {

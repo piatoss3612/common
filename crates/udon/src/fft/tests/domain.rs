@@ -30,6 +30,24 @@ mod consumer {
     use super::*;
     use crate::field::FftField;
 
+    #[test]
+    fn field_domain_factory_uses_native_parameters() {
+        fn check<M: PrimeModulus>() {
+            for log_size in [0, 1, 4, 8, 16, 32, 33, u32::MAX] {
+                let native = Domain::<PastaField<M>>::new(log_size);
+                let generic = <PastaField<M> as FftField>::domain(log_size);
+                assert_eq!(generic, native);
+                if let (Ok(generic), Ok(native)) = (generic, native) {
+                    assert_eq!(generic.root(), native.root());
+                    assert_eq!(generic.inverse_root(), native.inverse_root());
+                    assert_eq!(generic.size_inverse(), native.size_inverse());
+                }
+            }
+        }
+        check::<PallasBase>();
+        check::<PallasScalar>();
+    }
+
     /// Horner evaluation: the quadratic oracle the transforms are checked against.
     fn evaluate<M: PrimeModulus>(
         coefficients: &[PastaField<M>],
@@ -231,11 +249,67 @@ mod consumer {
     }
 
     #[test]
-    #[should_panic(expected = "scratch must cover every evaluation")]
-    fn lagrange_evaluations_reject_short_scratch() {
+    fn lagrange_evaluations_use_native_ranges_with_bounded_scratch() {
+        fn check<M: PrimeModulus>() {
+            for log_size in [0, 1, 3, 5] {
+                let domain = Domain::<PastaField<M>>::new(log_size).unwrap();
+                let nodes: Vec<_> = domain.elements().collect();
+                for point in nodes
+                    .iter()
+                    .copied()
+                    .chain([PastaField::ZERO, PastaField::DELTA])
+                {
+                    for count in [0, 1, domain.size() / 2, domain.size()] {
+                        let mut expected = vec![PastaField::ZERO; count];
+                        domain
+                            .subgroup()
+                            .evaluate_lagrange(&point, 0..count, &mut expected, &mut [])
+                            .unwrap();
+                        for capacity in [0, 1, count / 2, count, count + 2] {
+                            let mut values = vec![PastaField::DELTA; count];
+                            let mut scratch = vec![PastaField::DELTA; capacity];
+                            assert_eq!(
+                                crate::fft::generic::count_lagrange_evaluations(|| {
+                                    assert_eq!(
+                                        domain.lagrange_evaluations(
+                                            point,
+                                            &mut values,
+                                            &mut scratch
+                                        ),
+                                        nodes.iter().position(|node| *node == point),
+                                    );
+                                }),
+                                0
+                            );
+                            assert_eq!(values, expected);
+                            assert!(
+                                scratch
+                                    .iter()
+                                    .skip(count)
+                                    .all(|value| *value == PastaField::DELTA)
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        check::<PallasBase>();
+        check::<PallasScalar>();
+    }
+
+    #[test]
+    fn field_lagrange_hook_rejects_long_output_before_writes() {
         let domain = Domain::<Fp>::new(2).unwrap();
-        let _ =
-            domain.lagrange_evaluations(<Fp>::DELTA, &mut [<Fp>::ZERO; 4], &mut [<Fp>::ZERO; 3]);
+        let mut values = [Fp::DELTA; 5];
+        let mut scratch = [Fp::DELTA; 5];
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                <Fp as FftField>::lagrange_evaluations(domain, Fp::ZERO, &mut values, &mut scratch)
+            }))
+            .is_err()
+        );
+        assert_eq!(values, [Fp::DELTA; 5]);
+        assert_eq!(scratch, [Fp::DELTA; 5]);
     }
 
     #[test]

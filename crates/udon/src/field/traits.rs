@@ -19,7 +19,7 @@ use super::pasta::TWO_ADICITY;
 use super::{CanonicalUint, PastaField, PrimeModulus, ProductSum};
 use crate::{
     exec::{ExecutionOptions, SerialExecutor},
-    fft::{Domain, Transform},
+    fft::{Domain, FftError, Transform},
 };
 
 use core::{
@@ -237,6 +237,20 @@ pub trait FftField: PrimeField {
     /// The generator raised to `2^TWO_ADICITY`.
     const DELTA: Self;
 
+    /// Constructs the canonical domain of `2^log_size` elements.
+    ///
+    /// Size one is supported. Returns [`FftError::InvalidSize`] above the
+    /// field's two-adicity, or [`FftError::SizeOverflow`] if the element count
+    /// does not fit `usize` or its slice would exceed `isize::MAX` bytes.
+    /// Pasta delegates to the native [`Domain::new`] constructor.
+    fn domain(log_size: u32) -> Result<Domain<Self>, FftError> {
+        let root = Self::root_of_unity(log_size).ok_or(FftError::InvalidSize)?;
+        let inverse_root = Self::root_of_unity_inverse(log_size).ok_or(FftError::InvalidSize)?;
+        Domain::from_roots(log_size, root, inverse_root, || {
+            Self::power_of_two_inverse(log_size)
+        })
+    }
+
     /// Replaces coefficients with evaluations at `domain`'s elements.
     ///
     /// Both sides use natural order. Implements
@@ -267,6 +281,21 @@ pub trait FftField: PrimeField {
     /// expansion and a fused pointwise product.
     fn multiply_polynomials(a: &[Self], b: &[Self], product: &mut [Self], scratch: &mut [Self]) {
         crate::polynomial::multiply_default(a, b, product, scratch)
+    }
+
+    /// Evaluates a prefix of the domain's Lagrange basis at `point`.
+    ///
+    /// Implements [`Domain::lagrange_evaluations`], including its node-index
+    /// result, bounded scratch, and validation before mutation. The default
+    /// uses field operations and [`Field::batch_invert`]. Pasta delegates to
+    /// its native range evaluator with scaled batch inversion.
+    fn lagrange_evaluations(
+        domain: Domain<Self>,
+        point: Self,
+        evaluations: &mut [Self],
+        scratch: &mut [Self],
+    ) -> Option<usize> {
+        crate::fft::lagrange_evaluations(domain, point, evaluations, scratch)
     }
 
     /// Returns a primitive root of unity of order `2^log_size`, or `None`
@@ -424,6 +453,10 @@ impl<M: PrimeModulus> FftField for PastaField<M> {
     const TWO_INVERSE: Self = Self::TWO_INVERSE;
     const DELTA: Self = Self::DELTA;
 
+    fn domain(log_size: u32) -> Result<Domain<Self>, FftError> {
+        Domain::new(log_size)
+    }
+
     fn fft(domain: Domain<Self>, values: &mut [Self]) {
         Transform::new(domain.subgroup())
             .forward(
@@ -448,6 +481,23 @@ impl<M: PrimeModulus> FftField for PastaField<M> {
 
     fn multiply_polynomials(a: &[Self], b: &[Self], product: &mut [Self], scratch: &mut [Self]) {
         crate::polynomial::multiply_pasta(a, b, product, scratch)
+    }
+
+    fn lagrange_evaluations(
+        domain: Domain<Self>,
+        point: Self,
+        evaluations: &mut [Self],
+        scratch: &mut [Self],
+    ) -> Option<usize> {
+        assert!(
+            evaluations.len() <= domain.size(),
+            "Lagrange evaluations exceed the domain size"
+        );
+        domain
+            .subgroup()
+            .evaluate_lagrange(&point, 0..evaluations.len(), evaluations, scratch)
+            .expect("a validated prefix fits the domain and output");
+        domain.contains(point).then(|| domain.index_of(point))
     }
 
     fn root_of_unity(log_size: u32) -> Option<Self> {

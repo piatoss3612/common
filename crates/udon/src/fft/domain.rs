@@ -13,8 +13,8 @@ use crate::field::{PastaField, PrimeModulus};
 ///
 /// [`Self::subgroup`] and [`Self::coset`] configure native Pasta transforms with
 /// caller-owned tables, scratch, and execution. The unstable `traits` feature
-/// also supports consumer field implementations and adds generic evaluation
-/// and transform methods to this same descriptor.
+/// also supports consumer field implementations through `FftField::domain`
+/// and adds generic evaluation and transform methods to this same descriptor.
 #[derive(Clone, Copy, Debug)]
 pub struct Domain<F> {
     log_size: u32,
@@ -33,24 +33,8 @@ impl<F> PartialEq for Domain<F> {
 
 impl<F> Eq for Domain<F> {}
 
-#[cfg(not(feature = "traits"))]
-impl<M: PrimeModulus> Domain<PastaField<M>> {
-    /// Constructs a Pasta domain of `2^log_size` elements.
-    ///
-    /// Returns [`FftError::InvalidSize`] above the field's two-adicity, or
-    /// [`FftError::SizeOverflow`] if its slice would exceed addressable memory.
-    pub fn new(log_size: u32) -> Result<Self, FftError> {
-        Self::pasta(log_size)
-    }
-
-    /// Constructs a domain from its nonzero power-of-two element count.
-    pub fn for_size(size: usize) -> Result<Self, FftError> {
-        Self::pasta_for_size(size)
-    }
-}
-
 impl<F: Copy> Domain<F> {
-    pub(super) fn from_roots(
+    pub(crate) fn from_roots(
         log_size: u32,
         root: F,
         inverse_root: F,
@@ -90,8 +74,13 @@ impl<F: Copy> Domain<F> {
 }
 
 impl<M: PrimeModulus> Domain<PastaField<M>> {
-    // Native setup uses inherent field operations in every feature configuration.
-    pub(super) fn pasta(log_size: u32) -> Result<Self, FftError> {
+    /// Constructs a Pasta domain of `2^log_size` elements.
+    ///
+    /// Size one is supported. Returns [`FftError::InvalidSize`] above the
+    /// field's two-adicity (32), or [`FftError::SizeOverflow`] if the element
+    /// count does not fit `usize` or its slice would exceed `isize::MAX` bytes.
+    /// Uses native field operations in every feature configuration.
+    pub fn new(log_size: u32) -> Result<Self, FftError> {
         let root = PastaField::root_of_unity(log_size).ok_or(FftError::InvalidSize)?;
         let inverse_root =
             PastaField::root_of_unity_inverse(log_size).ok_or(FftError::InvalidSize)?;
@@ -100,11 +89,15 @@ impl<M: PrimeModulus> Domain<PastaField<M>> {
         })
     }
 
-    pub(super) fn pasta_for_size(size: usize) -> Result<Self, FftError> {
+    /// Constructs a domain from its nonzero power-of-two element count.
+    ///
+    /// Returns [`FftError::InvalidSize`] for zero or a non-power-of-two length;
+    /// other size limits and errors are those of [`Self::new`].
+    pub fn for_size(size: usize) -> Result<Self, FftError> {
         if !size.is_power_of_two() {
             return Err(FftError::InvalidSize);
         }
-        Self::pasta(size.ilog2())
+        Self::new(size.ilog2())
     }
 
     /// Treats the subgroup as a transform domain with shift one.

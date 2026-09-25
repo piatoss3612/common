@@ -102,7 +102,7 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
         let first = match normalization {
             ExpansionScaleNormalization::Coefficients => PastaField::ONE,
             ExpansionScaleNormalization::UnscaledInverse => {
-                Domain::<PastaField<M>>::pasta_for_size(base_size)?.size_inverse()
+                Domain::<PastaField<M>>::for_size(base_size)?.size_inverse()
             }
         };
         let mut step = extended.shift();

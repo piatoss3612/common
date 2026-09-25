@@ -143,7 +143,7 @@ mod consumer {
 
         // Match consumers that hold only the field trait and a domain descriptor.
         fn generic_transform<F: FftField>(value: F) {
-            let domain = arithmetic::fft::Domain::<F>::new(2).unwrap();
+            let domain = F::domain(2).unwrap();
             let mut values = [value; 4];
             domain.transform(&mut values);
             assert_eq!(values, [value * F::from(4), F::ZERO, F::ZERO, F::ZERO]);

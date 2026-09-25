@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     curve::{
         AffinePoint, EisensteinTableBatch, Pallas, Point, PreparedAffinePoint, ProjectivePoint,
-        Vesta, msm::tests::Buffers, tests::multiply,
+        Vesta, msm::test_support::Buffers, tests::multiply,
     },
     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     field::{PrimeModulus, Reduced},

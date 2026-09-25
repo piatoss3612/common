@@ -424,7 +424,7 @@ fn validation_capacity_and_unwind() {
 #[test]
 fn scalar_boundaries_chunks_and_task_ceilings() {
     fn check<C: PastaCurve>() {
-        use crate::curve::msm::{ScalarStorage, tests::JoinWidth};
+        use crate::curve::msm::{ScalarStorage, test_support::JoinWidth};
         use crate::field::PrimeModulus;
         let scalar_cases = [
             PastaField::ZERO,

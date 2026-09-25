@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    curve::msm::tests::Buffers,
+    curve::msm::test_support::Buffers,
     curve::{Pallas, Vesta, tests::multiply},
     exec::{ExecutionOptions, SerialExecutor},
     field::{CanonicalUint, PrimeModulus},

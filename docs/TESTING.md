@@ -184,8 +184,8 @@ cargo bench --locked -p zakura-udon --bench msm -- pallas/eisenstein
 
 ```console
 cargo test --release --locked -p zakura-udon --lib compare_batch_inversion_endpoints -- --ignored --nocapture
-cargo test --release --locked -p zakura-udon --lib curve::msm::experiments::native_controls -- --ignored --nocapture
-cargo test --release --locked -p zakura-udon --lib curve::msm::experiments::phases -- --ignored --nocapture
+cargo test --release --locked -p zakura-udon --lib curve::msm::tests::experiments::native_controls -- --ignored --nocapture
+cargo test --release --locked -p zakura-udon --lib curve::msm::tests::experiments::phases -- --ignored --nocapture
 ```
 
 The inversion experiment compares schedules on identical nonzero inputs,

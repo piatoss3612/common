@@ -243,7 +243,7 @@ fn phases() {
                 }
                 sum
             };
-            let mut buffers = tests::Buffers::new(r);
+            let mut buffers = Buffers::new(r);
             assert_eq!(
                 fold(),
                 input
@@ -410,7 +410,7 @@ fn native_controls() {
         for n in [128, 1024, 8192] {
             let input = Input::new(Bases::Affine(&bases[..n]), &scalars[..n]);
             let options = BatchOptions::default();
-            let mut buffers = tests::Buffers::new(input.requirements_with(options).unwrap());
+            let mut buffers = Buffers::new(input.requirements_with(options).unwrap());
             let expected = input
                 .execute_with(options, &SerialExecutor, buffers.borrow())
                 .unwrap();
@@ -492,7 +492,7 @@ fn native_controls() {
                             .with_chunk_size(NonZeroUsize::new(chunk).unwrap()),
                     );
                     let r = input.requirements_with(o).unwrap();
-                    let mut buffers = tests::Buffers::new(r);
+                    let mut buffers = Buffers::new(r);
                     assert_eq!(
                         input
                             .execute_with(o, &SerialExecutor, buffers.borrow())

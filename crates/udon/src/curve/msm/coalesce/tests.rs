@@ -1,7 +1,8 @@
 use super::*;
 use crate::{
     curve::{
-        Pallas, PreparedAffinePoint, ProjectivePoint, Vesta, msm::tests::Buffers, tests::multiply,
+        Pallas, PreparedAffinePoint, ProjectivePoint, Vesta, msm::test_support::Buffers,
+        tests::multiply,
     },
     exec::{ExecutionOptions, SerialExecutor},
     field::{PrimeModulus, Reduced},

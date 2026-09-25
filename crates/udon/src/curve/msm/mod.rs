@@ -75,11 +75,6 @@ use super::{
 };
 use crate::exec::{ExecutionOptions, Executor};
 use crate::field::{CanonicalUint, PastaField};
-#[cfg(test)]
-use core::num::NonZeroUsize;
-
-#[cfg(test)]
-use crate::exec::TaskBudget;
 
 macro_rules! size {
     ($e:expr) => {
@@ -120,11 +115,11 @@ pub mod run;
 pub use coalesce::{CoalescingKey, CoalescingPlan, IndexedCoalescingPlan};
 pub use matrix::SharedScalarInput;
 pub use prepared::{PreparedScalars, ScalarStorage};
-#[cfg(test)]
-use run::{BatchPlan, JobStorage, WorkerStorage};
 pub use suffix::SuffixBasis;
 pub use sum::BasisSum;
 const BOOTH_MIN: usize = 128;
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -760,6 +755,3 @@ fn execute_batch<C: PastaCurve, X: Executor>(
     run::batch::execute(&plan, inputs, output, executor, scratch);
     Ok(())
 }
-
-#[cfg(test)]
-mod experiments;

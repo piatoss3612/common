@@ -316,7 +316,7 @@ mod tests {
     use crate::{
         curve::{
             AffinePoint, Pallas,
-            msm::{ArithmeticOptions, Bases, tests::Buffers},
+            msm::{ArithmeticOptions, Bases, test_support::Buffers},
         },
         exec::{SerialExecutor, TaskBudget},
         field::Fq,

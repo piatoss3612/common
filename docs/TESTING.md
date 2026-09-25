@@ -128,6 +128,8 @@ complete arithmetic exceptions, encoding rejection, GLV/endomorphism operations,
 normalization, and ordinary and retained-table multiplication. Scalar corpora
 straddle short/full-width boundaries; table cases distinguish affine and cached
 entries, preparation, binding, and multiplication.
+The `eisenstein_scalar` cases time `EisensteinScalar::new` alone for individual
+scalar shapes and the full-width corpus, without point multiplication.
 Compare the same 32-scalar corpus at equal width or similar storage budgets.
 Preparation fills allocated buffers; binding borrows existing entries; table
 multiplication includes recoding. Table binding checks dimensions and

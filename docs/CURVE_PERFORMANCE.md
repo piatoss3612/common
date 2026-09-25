@@ -118,11 +118,43 @@ same-scalar ladder saves further work:
 The affine ladder did not consistently beat individual prepared products at
 32 bases, so its current threshold is 64 bases per partition. It uses five
 field elements (160 bytes) of scratch per base and one inversion per column,
-including fused `2P + D` columns. The exact exceptional-schedule check is
-included in batch timings. Below the threshold, or for an exceptional schedule,
-the batch reuses scalar digits with complete projective arithmetic. These
-measurements cover one scalar schedule and do not establish the same savings
-for every scalar or executor budget.
+including fused `2P + D` columns. Every nonzero scalar produced by public
+preparation admits this ladder; the proof is beside
+[`affine_ladder`](../crates/udon/src/curve/eisenstein_batch.rs). Below the
+threshold or with insufficient scratch, the batch reuses scalar digits with
+complete projective arithmetic. The historical batch timings above included a
+redundant exceptional-schedule check. They cover one scalar schedule and do not
+establish the same savings for every scalar or executor budget.
+
+### Scalar preparation
+
+Removing that check from `EisensteinScalar::new` reduced preparation time by
+about 80% for full-width inputs on both curves. These September 25, 2026
+measurements compare revision `3f328cf` with the check removed, using the same
+scalar-preparation benchmark added to both versions. Runs used Rust 1.91.0,
+`aarch64-apple-darwin`, default features, 25 samples, 0.2 seconds of warmup,
+0.5 seconds of measurement, and 1,000 resamples, sequentially without concurrent
+builds or tests. Values are Criterion mean estimates in nanoseconds:
+
+| Scalars prepared | Pallas, before → after | Vesta, before → after |
+| --- | ---: | ---: |
+| Zero | 34.9 → 31.2 | 34.9 → 31.3 |
+| One | 62.1 → 32.3 | 62.5 → 32.4 |
+| Minus one | 63.8 → 32.6 | 64.3 → 32.5 |
+| Dense full-width | 2,043.9 → 405.4 | 2,132.0 → 411.0 |
+| Corpus of 32 full-width scalars | 67,355.1 → 13,177.1 | 67,856.6 → 13,173.9 |
+
+The corpus reductions have 95% confidence intervals of 80.36–80.51% for Pallas
+and 80.49–80.70% for Vesta. These measure scalar preparation alone; execution
+with an already prepared scalar does not include this work.
+
+```console
+cargo bench --locked -p zakura-udon --bench curve -- '(Pallas|Vesta)/eisenstein_scalar/(dense|corpus|zero|one|minus_one)$' --sample-size 25 --warm-up-time 0.2 --measurement-time 0.5 --nresamples 1000 --noplot --save-baseline ladder-certification
+```
+
+For a before/after comparison, run with `--save-baseline ladder-certification`
+on the version with the check, then replace that option with
+`--baseline ladder-certification` on the version without it.
 
 ## Multiscalar multiplication
 

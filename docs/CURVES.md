@@ -194,11 +194,10 @@ prepares the scalar. The const `multiplication_scratch(number_of_bases)` query
 reports field scratch for these batch methods. The type docs include an
 executable example that reuses field scratch after preparation.
 
-`EisensteinScalar::new` also determines whether the scalar permits batched affine
-arithmetic. Callers retain the opaque preparation; Udon selects the batch
-implementation from that fact and the available scratch. The multiplication
-scratch query reports the preferred size. Smaller scratch selects smaller
-batches or complete projective arithmetic, and empty scratch remains valid.
+Udon selects the batch implementation from the batch size and available scratch.
+The multiplication scratch query reports the preferred size. Smaller scratch
+selects smaller batches or complete projective arithmetic, and empty scratch
+remains valid. A zero scalar writes identities.
 
 Use `bind` for stored entries, following the
 [table storage workflow](#preparation-binding-and-stored-formats). A single

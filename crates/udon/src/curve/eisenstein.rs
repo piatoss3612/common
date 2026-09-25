@@ -25,23 +25,16 @@ pub(super) const MAX_DIGITS: usize = 132;
 pub struct EisensteinScalar<C: PastaCurve> {
     digits: [u8; MAX_DIGITS],
     len: usize,
-    batch_safe: Option<bool>,
     marker: PhantomData<C>,
 }
 
 impl<C: PastaCurve> EisensteinScalar<C> {
-    /// Records joint doubling-ladder digits and eligibility for affine batch ladders.
+    /// Records joint doubling-ladder digits for reuse across tables and batches.
     ///
-    /// Eligibility depends only on the scalar and can be reused across any
-    /// nonidentity bases on this curve. Scalars unsuitable for affine batch
-    /// arithmetic remain valid for multiplication. Preparing this reusable
-    /// value includes that eligibility check; individual table
-    /// multiplication need not perform it. Preparation is variable-time and
-    /// allocates no storage.
-    ///
-    /// The scalar uses [`PastaField`]'s loose representation.
+    /// Preparation is variable-time and requires no allocation. The scalar uses
+    /// [`PastaField`]'s loose representation.
     pub fn new(scalar: &PastaField<C::Scalar>) -> Self {
-        Self::for_single(scalar).certify_batch()
+        Self::from_canonical(scalar.to_canonical_uint())
     }
 
     /// Recodes a canonical scalar integer into signed Eisenstein digits.
@@ -54,79 +47,13 @@ impl<C: PastaCurve> EisensteinScalar<C> {
         Self {
             digits,
             len,
-            batch_safe: None,
             marker: PhantomData,
         }
-    }
-
-    pub(super) fn for_single(scalar: &PastaField<C::Scalar>) -> Self {
-        Self::from_canonical(scalar.to_canonical_uint())
-    }
-
-    fn certify_batch(mut self) -> Self {
-        self.batch_safe = Some(ladder_safe::<C>(self.digits()));
-        self
-    }
-
-    pub(super) fn batch_safe(&self) -> bool {
-        self.batch_safe
-            .unwrap_or_else(|| ladder_safe::<C>(self.digits()))
     }
 
     pub(super) fn digits(&self) -> &[u8] {
         &self.digits[..self.len]
     }
-
-    /// Wraps recoded digits directly, bypassing scalar decomposition.
-    #[cfg(test)]
-    pub(super) fn from_digits(digits: &[u8]) -> Self {
-        let mut stored = [0; MAX_DIGITS];
-        stored[..digits.len()].copy_from_slice(digits);
-        Self {
-            digits: stored,
-            len: digits.len(),
-            batch_safe: None,
-            marker: PhantomData,
-        }
-    }
-}
-
-/// The scalar-field value of one nonzero digit code.
-pub(super) fn digit_scalar<C: PastaCurve>(code: u8) -> PastaField<C::Scalar> {
-    let value = usize::from(code - 1);
-    let (mut a, mut b) = REPRESENTATIVES[value / 6];
-    for _ in 0..(value % 6) / 2 {
-        (a, b) = (-b, a - b);
-    }
-    let signed = |x: i8| {
-        let f = PastaField::<C::Scalar>::from_u64(u64::from(x.unsigned_abs()));
-        if x < 0 { f.neg() } else { f }
-    };
-    let d = signed(a).add(&signed(b).mul(&PastaField::<C::Scalar>::ZETA));
-    if value & 1 == 1 { d.neg() } else { d }
-}
-
-fn ladder_safe<C: PastaCurve>(digits: &[u8]) -> bool {
-    let Some((&top, rest)) = digits.split_last() else {
-        return false;
-    };
-    let mut s = digit_scalar::<C>(top);
-    // All nonidentity bases have the same prime order. Checking the schedule
-    // in the scalar field is therefore exact for every base in the batch,
-    // including schedules whose intermediate integer coefficients wrap.
-    for &code in rest.iter().rev() {
-        let twice = s.double();
-        if code == 0 {
-            s = twice;
-        } else {
-            let d = digit_scalar::<C>(code);
-            if d.reduce() == s.reduce() || d.reduce() == twice.neg().reduce() {
-                return false;
-            }
-            s = twice.add(&d);
-        }
-    }
-    true
 }
 
 /// Coefficients `a + b*lambda`, in retained table order.
@@ -144,6 +71,8 @@ pub(super) const REPRESENTATIVES: [(i8, i8); 8] = [
 // All 48 signed unit rotations cover precisely the residue pairs modulo 8
 // that are not both even. Subtracting the selected digit makes both residual
 // coordinates divisible by 8, so the next two ladder digits are zero.
+// The affine ladder proof in eisenstein_batch relies on this spacing and the
+// digit-coordinate bound of 5.
 // Generating the selector keeps its codes tied to the retained table order.
 const SELECTOR: [(i8, i8, u8); 64] = {
     let mut table = [(0, 0, 0); 64];
@@ -155,6 +84,7 @@ const SELECTOR: [(i8, i8, u8); 64] = {
             let mut negative = 0;
             while negative < 2 {
                 let (a, b) = if negative == 0 { (a, b) } else { (-a, -b) };
+                assert!(a.unsigned_abs() <= 5 && b.unsigned_abs() <= 5);
                 let index = (((a & 7) << 3) | (b & 7)) as usize;
                 assert!(table[index].2 == 0);
                 table[index] = (
@@ -336,7 +266,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTable<'a, C, E> {
     /// Uses bounded stack storage without caller scratch or
     /// allocation. Execution is variable-time.
     pub fn mul(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
-        self.mul_prepared(&EisensteinScalar::for_single(scalar))
+        self.mul_prepared(&EisensteinScalar::new(scalar))
     }
 
     /// Multiplies using digits that can be reused across tables and batches.

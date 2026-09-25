@@ -1221,68 +1221,6 @@ fn production_booth_bounds_and_partial_row_visits() {
 }
 
 #[test]
-fn optional_compact_batch_certificate_preserves_fallbacks() {
-    use crate::curve::{EisensteinScalar, EisensteinTableBatch};
-    fn check<C: PastaCurve>() {
-        let bases = [AffinePoint::<C>::GENERATOR; 32];
-        let r = EisensteinTableBatch::<C>::requirements(bases.len()).unwrap();
-        let mut entries = vec![AffinePoint::GENERATOR; r.table_entries];
-        let mut projective = vec![ProjectivePoint::IDENTITY; r.projective_scratch];
-        let mut fields = vec![PastaField::ZERO; r.field_scratch];
-        let tables = EisensteinTableBatch::prepare(
-            &bases,
-            &mut entries,
-            &mut projective,
-            &mut fields,
-            TaskBudget::SERIAL,
-            &SerialExecutor,
-        );
-        let mut fields = vec![
-            PastaField::ZERO;
-            EisensteinTableBatch::<C>::multiplication_scratch(bases.len())
-                .unwrap()
-        ];
-        for scalar in [
-            PastaField::<_>::ZERO,
-            PastaField::<_>::ONE,
-            PastaField::<_>::ONE.neg(),
-        ]
-        .into_iter()
-        .chain(field_samples::<C::Scalar>().take(64))
-        {
-            let prepared = EisensteinScalar::new(&scalar);
-            let certified = prepared;
-            assert_eq!(prepared.digits(), certified.digits());
-            assert_eq!(prepared.batch_safe(), certified.batch_safe());
-            let mut plain = [ProjectivePoint::IDENTITY; 32];
-            let mut cached = plain;
-            tables.mul_prepared(
-                &prepared,
-                &mut plain,
-                &mut fields,
-                TaskBudget::SERIAL,
-                &SerialExecutor,
-            );
-            tables.mul_prepared(
-                &certified,
-                &mut cached,
-                &mut fields,
-                TaskBudget::new(3).unwrap(),
-                &Pool,
-            );
-            assert_eq!(plain, cached);
-            assert!(
-                cached
-                    .iter()
-                    .all(|p| *p == bases[0].mul_projective(&scalar))
-            );
-        }
-    }
-    check::<Pallas>();
-    check::<Vesta>();
-}
-
-#[test]
 fn streaming_buckets_match_complete_chunks_and_reuse() {
     fn check<C: PastaCurve>() {
         let scalars: Vec<_> = field_samples::<C::Scalar>().take(513).collect();

@@ -15,14 +15,11 @@ impl Executor for Pool {
 }
 
 #[test]
-fn affine_ladder_results_normalize_without_inversion() {
+fn public_scalars_use_nonexceptional_affine_ladders() {
     fn check<C: PastaCurve>() {
         let g = AffinePoint::<C>::GENERATOR;
-        let bases: Vec<_> = [g, g.neg(), g.endomorphism()]
-            .into_iter()
-            .cycle()
-            .take(64)
-            .collect();
+        let distinct = [g, g.neg(), g.endomorphism()];
+        let bases: Vec<_> = distinct.into_iter().cycle().take(64).collect();
         let r = EisensteinTableBatch::<C>::requirements(bases.len()).unwrap();
         let mut entries = vec![g; r.table_entries];
         let mut projective = vec![ProjectivePoint::IDENTITY; r.projective_scratch];
@@ -38,35 +35,55 @@ fn affine_ladder_results_normalize_without_inversion() {
             TaskBudget::SERIAL,
             &SerialExecutor,
         );
-        let scalar = PastaField::from_u64(42);
-        let prepared = EisensteinScalar::new(&scalar);
-        assert!(prepared.batch_safe());
         let mut output = vec![ProjectivePoint::IDENTITY; bases.len()];
-        tables.mul_prepared(
-            &prepared,
-            &mut output,
-            &mut field,
-            TaskBudget::SERIAL,
-            &SerialExecutor,
-        );
-        assert!(
-            output
-                .iter()
-                .all(|point| point.z.reduce() == PastaField::ONE)
-        );
-        let expected: Vec<_> = bases
-            .iter()
-            .map(|base| multiply(&scalar, |sum| sum.add_mixed(base)).to_point())
-            .collect();
-        let inversions = crate::field::count_inversions(|| {
-            for (point, expected) in output.iter().zip(&expected) {
-                assert_eq!(point.to_point(), *expected);
+        for scalar in scalar_corpus::<C>()
+            .into_iter()
+            .chain([PastaField::from_montgomery_limbs(C::Scalar::MODULUS)])
+            .chain(field_samples::<C::Scalar>().take(64))
+        {
+            let prepared = EisensteinScalar::new(&scalar);
+            let zero = scalar.reduce() == PastaField::ZERO;
+            assert_eq!(prepared.digits().is_empty(), zero);
+            let products =
+                distinct.map(|base| multiply(&scalar, |sum| sum.add_mixed(&base)).to_point());
+            let expected: Vec<_> = products.into_iter().cycle().take(bases.len()).collect();
+            for reuse in [false, true] {
+                if reuse {
+                    tables.mul_prepared(
+                        &prepared,
+                        &mut output,
+                        &mut field,
+                        TaskBudget::SERIAL,
+                        &SerialExecutor,
+                    );
+                } else {
+                    tables.mul(
+                        &scalar,
+                        &mut output,
+                        &mut field,
+                        TaskBudget::SERIAL,
+                        &SerialExecutor,
+                    );
+                }
+                // Every nonzero public scalar stays in the affine ladder.
+                // Zero keeps its separate identity path.
+                let z = if zero {
+                    PastaField::ZERO
+                } else {
+                    PastaField::ONE
+                };
+                assert!(output.iter().all(|point| point.z.reduce() == z));
+                let inversions = crate::field::count_inversions(|| {
+                    for (point, expected) in output.iter().zip(&expected) {
+                        assert_eq!(point.to_point(), *expected);
+                    }
+                    let mut normalized = vec![Point::IDENTITY; bases.len()];
+                    batch_normalize(&output, &mut normalized, &mut field);
+                    assert_eq!(normalized, expected);
+                });
+                assert_eq!(inversions, 0);
             }
-            let mut normalized = vec![Point::IDENTITY; bases.len()];
-            batch_normalize(&output, &mut normalized, &mut field);
-            assert_eq!(normalized, expected);
-        });
-        assert_eq!(inversions, 0);
+        }
     }
     check::<Pallas>();
     check::<Vesta>();

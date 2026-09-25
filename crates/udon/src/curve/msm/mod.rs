@@ -184,6 +184,13 @@ pub struct Selection<'a, C: PastaCurve> {
     indices: Option<&'a [u32]>,
 }
 impl<'a, C: PastaCurve> Selection<'a, C> {
+    /// Retains an index mapping already checked against `bases`.
+    const fn from_validated(bases: Bases<'a, C>, indices: &'a [u32]) -> Self {
+        Self {
+            bases,
+            indices: Some(indices),
+        }
+    }
     /// Selects every base in storage order.
     pub const fn new(bases: Bases<'a, C>) -> Self {
         Self {
@@ -333,13 +340,7 @@ impl<'a, C: PastaCurve> Scalars<'a, C> {
             Self::Unsigned(s) => Self::Unsigned(&s[range]),
             Self::Signed(s) => Self::Signed(&s[range]),
             Self::Canonical(s) => Self::Canonical(&s[range]),
-            Self::Prepared(s) => Self::Prepared(PreparedScalars {
-                // A whole-row bound remains valid for each chunk; execution
-                // already retains its selected geometry in the job metadata.
-                records: &s.records[range],
-                shape: s.shape,
-                cached: None,
-            }),
+            Self::Prepared(s) => Self::Prepared(s.slice(range)),
         }
     }
 }

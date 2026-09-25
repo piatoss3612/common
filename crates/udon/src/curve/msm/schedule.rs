@@ -331,9 +331,7 @@ pub(super) fn job<C: PastaCurve>(
             }
         },
     );
-    let cached = retained
-        .and_then(|s| s.cached)
-        .is_some_and(|c| c.geometry == geometry);
+    let cached = retained.is_some_and(|s| s.cached_digits(geometry).is_some());
     layout::<C>(
         input.len(),
         geometry,

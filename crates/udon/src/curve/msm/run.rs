@@ -380,10 +380,7 @@ impl<C: PastaCurve> MsmPlan<C> {
             return None;
         }
         match input.scalars {
-            Scalars::Prepared(s) => s
-                .cached
-                .filter(|c| c.geometry == geometry)
-                .map(|c| c.digits),
+            Scalars::Prepared(s) => s.cached_digits(geometry),
             _ => None,
         }
     }
@@ -895,7 +892,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
             && range != (0..input.len())
             && let Scalars::Prepared(ref mut prepared) = input.scalars
         {
-            prepared.cached = None;
+            *prepared = prepared.without_cache();
         }
         assert!(
             plan.accepts(input),
@@ -1249,7 +1246,7 @@ impl<'a, 'i, C: PastaCurve> MsmRun<'a, 'i, C> {
             && range != (0..input.len())
             && let Scalars::Prepared(ref mut prepared) = input.scalars
         {
-            prepared.cached = None;
+            *prepared = prepared.without_cache();
         }
         assert!(plan.accepts(input), "input preparation must match the plan");
         self.frontier

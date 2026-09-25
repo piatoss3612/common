@@ -84,11 +84,7 @@ impl<'a, C: PastaCurve> Selection<'a, C> {
                 output += 1;
             }
         }
-        Ok(Selection {
-            bases: self.bases,
-            indices: Some(&indices[..live]),
-        }
-        .with_scalars(&scalars[..live]))
+        Ok(Selection::from_validated(self.bases, &indices[..live]).with_scalars(&scalars[..live]))
     }
 }
 

@@ -13,7 +13,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         self.scratch_fields
     }
 
-    pub(crate) fn scratch_fields_with(&self, max_tasks: NonZeroUsize) -> usize {
+    pub(in crate::fft) fn scratch_fields_with(&self, max_tasks: NonZeroUsize) -> usize {
         // Retained fields per residue are bounded by the base domain, so the
         // combined scratch fits within the validated extended domain.
         self.snapshot_fields() * self.residues().min(max_tasks.get())
@@ -87,7 +87,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         clippy::too_many_arguments,
         reason = "Internal driver receives disjoint buffers and a task allowance."
     )]
-    pub(crate) fn execute_with<'c, E: Executor>(
+    pub(in crate::fft) fn execute_with<'c, E: Executor>(
         self,
         input: &[PastaField<M>],
         output: &mut [PastaField<M>],
@@ -221,7 +221,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         )
     }
 
-    pub(crate) fn execute_disposable_with<'c, E: Executor>(
+    pub(in crate::fft) fn execute_disposable_with<'c, E: Executor>(
         self,
         input: &'c mut [PastaField<M>],
         output: &mut [PastaField<M>],

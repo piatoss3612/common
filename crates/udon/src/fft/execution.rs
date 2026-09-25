@@ -21,7 +21,7 @@ pub(super) struct Strategy {
 }
 
 impl Strategy {
-    pub(crate) const fn select(
+    pub(super) const fn select(
         size: usize,
         options: crate::exec::ExecutionOptions,
         available: usize,
@@ -42,7 +42,7 @@ impl Strategy {
         }
     }
 
-    pub(crate) const fn columns(
+    pub(super) const fn columns(
         tile: usize,
         tiles: usize,
         options: crate::exec::ExecutionOptions,
@@ -78,7 +78,7 @@ impl Strategy {
         max_tasks: 1,
     };
 
-    pub(super) const fn validate(self) -> Result<(), FftError> {
+    const fn validate(self) -> Result<(), FftError> {
         if !self.tile_len.is_power_of_two() || self.columns_per_task == 0 || self.max_tasks == 0 {
             Err(FftError::InvalidExecution)
         } else {
@@ -86,7 +86,7 @@ impl Strategy {
         }
     }
 
-    pub(super) const fn geometry(self, size: usize) -> Geometry {
+    const fn geometry(self, size: usize) -> Geometry {
         let tile_len = min(self.tile_len, size);
         let columns = min(self.columns_per_task, tile_len);
         Geometry {
@@ -109,7 +109,7 @@ impl Strategy {
     /// [`FftError::InvalidExecution`] for invalid settings, or
     /// [`FftError::SizeOverflow`] if the scratch count overflows `usize` or its
     /// field slice would exceed `isize::MAX` bytes.
-    pub const fn requirements(self, size: usize) -> Result<usize, FftError> {
+    pub(super) const fn requirements(self, size: usize) -> Result<usize, FftError> {
         if let Err(error) = self.validate() {
             return Err(error);
         }
@@ -153,8 +153,8 @@ pub(super) fn check_scratch(required: usize, provided: usize) {
 }
 
 pub(super) struct Geometry {
-    pub tile_len: usize,
-    pub tiles: usize,
-    pub columns: usize,
-    pub jobs: usize,
+    pub(super) tile_len: usize,
+    pub(super) tiles: usize,
+    pub(super) columns: usize,
+    pub(super) jobs: usize,
 }

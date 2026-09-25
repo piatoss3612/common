@@ -161,7 +161,7 @@ pub struct Expansion<'a, M: PrimeModulus> {
     pub(super) extended: CosetDomain<M>,
     pub(super) scales: Option<&'a [PastaField<M>]>,
     pub(super) normalization: ExpansionScaleNormalization,
-    pub(super) layout: ResidueLayout,
+    layout: ResidueLayout,
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for Expansion<'_, M> {
@@ -219,12 +219,12 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// contract. Attachment does not rescan entries.
     pub fn with_scales(mut self, scales: ExpansionScales<'a, M>) -> Self {
         assert!(
-            scales.base_size == self.base.domain().size()
-                && scales.extended.same_domain(self.extended),
+            scales.base_size() == self.base.domain().size()
+                && scales.domain().same_domain(self.extended),
             "scales must match the expansion"
         );
-        self.scales = Some(scales.values);
-        self.normalization = scales.normalization;
+        self.scales = Some(scales.as_slice());
+        self.normalization = scales.normalization();
         self
     }
 
@@ -398,8 +398,8 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         Ok(())
     }
 
-    pub(super) fn residue_shift(self, residue: usize) -> super::operation::ForwardShift<M> {
-        use super::operation::ForwardShift;
+    pub(super) fn residue_shift(self, residue: usize) -> super::factors::ForwardShift<M> {
+        use super::factors::ForwardShift;
         if residue == 0 {
             ForwardShift::for_domain(self.extended)
         } else {
@@ -709,7 +709,7 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
             for (residue, output) in output.chunks_exact_mut(size).enumerate() {
                 let block = first + residue;
                 let residue = if self.order == ExpansionOrder::BitReversed {
-                    reverse(block, self.expansion.layout.residues().ilog2())
+                    reverse(block, self.expansion.layout().residues().ilog2())
                 } else {
                     block
                 };

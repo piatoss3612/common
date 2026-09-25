@@ -52,7 +52,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// [`FftError::InvalidLayout`] if `residue` is outside [`Self::layout`]'s
     /// residue count.
     pub fn residue(self, residue: usize, order: ElementOrder) -> Result<Residue<'a, M>, FftError> {
-        if residue >= self.layout.residues() {
+        if residue >= self.layout().residues() {
             return Err(FftError::InvalidLayout);
         }
         Ok(Residue {

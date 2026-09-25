@@ -113,7 +113,7 @@ fn power_oracle<M: PrimeModulus>() {
             for len in (0..=35).chain([63, 64, 65, 255, 256, 257]) {
                 let sentinel = PastaField::from_u64(19);
                 let mut values = vec![sentinel; len + 2];
-                super::super::powers::fill_powers(first, step, &mut values[1..len + 1]);
+                crate::field::fill_powers(first, step, &mut values[1..len + 1]);
                 for (i, value) in values[1..len + 1].iter().enumerate() {
                     assert_eq!(value.reduce(), first.mul(&step.pow_u64(i as u64)).reduce());
                 }

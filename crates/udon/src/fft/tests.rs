@@ -1,4 +1,6 @@
+use super::expansion::ExpansionStrategy;
 use super::*;
+use crate::exec::SerialExecutor;
 use crate::field::{Fp, PallasBase, PallasScalar, Reduced};
 use crate::test_support::field_samples;
 use bento::bytes_of_slice;

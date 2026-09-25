@@ -64,7 +64,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         let coefficient_bytes = shape.coefficient_fields() * core::mem::size_of::<PastaField<M>>();
         let mut budget = options.task_budget();
         loop {
-            let (jobs, inner) = budget.partition(expansion.layout.residues()).unwrap();
+            let (jobs, inner) = budget.partition(expansion.layout().residues()).unwrap();
             let mut inner_options = options.with_task_budget(inner);
             if let Some(limit) = options.memory_limit() {
                 let remaining =
@@ -220,7 +220,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
 
     /// Number of independently completed output residue blocks.
     pub const fn residues(&self) -> usize {
-        self.expansion.layout.residues()
+        self.expansion.layout().residues()
     }
 
     /// Fields in each residue and in a retained coefficient bank.

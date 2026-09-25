@@ -21,10 +21,10 @@ pub enum ExpansionScaleNormalization {
 /// [`Self::bind`] borrows trusted stored entries, checking dimensions and length.
 #[derive(Clone, Copy)]
 pub struct ExpansionScales<'a, M: PrimeModulus> {
-    pub(super) base_size: usize,
-    pub(super) extended: CosetDomain<M>,
-    pub(super) normalization: ExpansionScaleNormalization,
-    pub(super) values: &'a [PastaField<M>],
+    base_size: usize,
+    extended: CosetDomain<M>,
+    normalization: ExpansionScaleNormalization,
+    values: &'a [PastaField<M>],
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for ExpansionScales<'_, M> {

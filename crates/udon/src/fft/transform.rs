@@ -1,5 +1,5 @@
 use super::execution::Geometry;
-use super::finish::{Factors, InverseFinish};
+use super::factors::{Factors, InverseFinish};
 use super::{
     CoefficientView, CosetDomain, Executor, FftError, PastaField, PrimeModulus, Strategy, Tables,
     reverse,
@@ -243,7 +243,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
     }
 
     #[cfg(test)]
-    pub(super) fn check(
+    fn check(
         self,
         buffer: &'static str,
         len: usize,
@@ -514,7 +514,7 @@ impl<'a, M: PrimeModulus> Transform<'a, M> {
         self,
         coefficients: &[PastaField<M>],
         output: &mut [PastaField<M>],
-        shift: super::operation::ForwardShift<M>,
+        shift: super::factors::ForwardShift<M>,
         scales: Option<&[PastaField<M>]>,
         extra: PastaField<M>,
     ) -> usize {
@@ -629,7 +629,7 @@ pub(super) struct Run<'a, 'b, M: PrimeModulus> {
 }
 
 impl<'a, 'b, M: PrimeModulus> Run<'a, 'b, M> {
-    pub(super) fn set_first(&mut self, first: usize) {
+    fn set_first(&mut self, first: usize) {
         self.first = first;
     }
     pub(super) fn forward(first: usize) -> Self {

@@ -17,7 +17,7 @@ use core::{num::NonZeroUsize, ops::Range};
 use super::{
     Codelet, Direction, Domain, ElementOrder, FftError, InputStorage, InputSupport, InverseScale,
     PastaField, PrimeModulus, Transform, TransformRequest, TwiddleTable,
-    operation::ForwardShift,
+    factors::ForwardShift,
     reverse,
     stages::{StageKernel, twiddle_table},
 };
@@ -607,7 +607,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                         input,
                         values,
                         if plan.inverse() {
-                            ForwardShift::Domain(super::domain::Shift::Subgroup)
+                            ForwardShift::Domain(super::factors::Shift::Subgroup)
                         } else {
                             plan.shift
                         },
@@ -831,11 +831,11 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 let normalized = plan.request.inverse_scale == InverseScale::Normalized;
                 let subgroup = plan.plan.domain().is_subgroup();
                 let factors = if !inverse || subgroup {
-                    super::finish::Factors::Identity
+                    super::factors::Factors::Identity
                 } else if normalized {
-                    super::finish::Factors::normalized(plan.plan.domain())
+                    super::factors::Factors::normalized(plan.plan.domain())
                 } else {
-                    super::finish::Factors::untwist(plan.plan.domain())
+                    super::factors::Factors::untwist(plan.plan.domain())
                 };
                 for (offset, value) in values.iter_mut().enumerate() {
                     let physical = self.start + offset;
@@ -957,7 +957,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 }
             } else {
                 let powers =
-                    super::operation::BitReversedPowers::new(shift, inverse, plan.size().ilog2());
+                    super::factors::BitReversedPowers::new(shift, inverse, plan.size().ilog2());
                 let mut power = powers.at(self.start).mul(&plan.input_scale);
                 let len = values.len();
                 for (offset, value) in values.iter_mut().enumerate() {

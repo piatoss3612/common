@@ -129,7 +129,10 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
     /// sizes must equal the output tile or their smaller entire class size.
     ///
     /// `CLASSES` must be nonzero. Incompatible plans panic.
-    pub(crate) fn with_transforms(transforms: [FftPlan<'t, M>; CLASSES], consume: bool) -> Self {
+    pub(in crate::fft) fn with_transforms(
+        transforms: [FftPlan<'t, M>; CLASSES],
+        consume: bool,
+    ) -> Self {
         const {
             assert!(CLASSES > 0, "interpolation needs an output class");
         }
@@ -236,7 +239,7 @@ impl<'t, M: PrimeModulus, const CLASSES: usize> InterpolationPlan<'t, M, CLASSES
         )
     }
 
-    pub(crate) fn execute_with<E: crate::exec::Executor>(
+    pub(in crate::fft) fn execute_with<E: crate::exec::Executor>(
         self,
         mut values: [&mut [PastaField<M>]; CLASSES],
         mut scratch: [&mut [PastaField<M>]; CLASSES],

@@ -35,12 +35,14 @@ jobs:
         run: python3 ci/check-format
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - name: Clippy with the default square-root tables
-        run: cargo clippy -p zakura-udon --all-targets --locked -- -D warnings
+      - name: Clippy without optional traits or large square-root tables
+        run: cargo clippy -p zakura-udon --all-targets --no-default-features --locked -- -D warnings
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --locked --workspace --all-features --no-deps
+        run: |
+          cargo doc --locked --workspace --no-default-features --no-deps
+          cargo doc --locked --workspace --all-features --no-deps
 
   test:
     name: Arithmetic (${{ matrix.platform.arch }}, ${{ matrix.tables }})
@@ -53,8 +55,12 @@ jobs:
           - { runner: ubuntu-24.04-arm, arch: aarch64 }
         tables: [default, large]
         include:
-          - { tables: default, features: "" }
-          - { tables: large, features: "--all-features" }
+          - tables: default
+            native_features: "--no-default-features"
+            trait_features: "--no-default-features --features traits"
+          - tables: large
+            native_features: "--no-default-features --features sqrt-table-large"
+            trait_features: "--all-features"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Verify native architecture
@@ -63,10 +69,14 @@ jobs:
         run: test "$(uname -m)" = "$EXPECTED_ARCH"
       - name: Install pinned toolchain
         run: rustup toolchain install
-      - name: Run workspace release tests
-        run: cargo test --release --locked --workspace ${{ matrix.features }}
-      - name: Check Udon with debug assertions
-        run: cargo test --locked -p zakura-udon --lib ${{ matrix.features }}
+      - name: Run workspace release tests without traits
+        run: cargo test --release --locked --workspace ${{ matrix.native_features }}
+      - name: Run workspace release tests with traits
+        run: cargo test --release --locked --workspace ${{ matrix.trait_features }}
+      - name: Check Udon with debug assertions without traits
+        run: cargo test --locked -p zakura-udon --lib ${{ matrix.native_features }}
+      - name: Check Udon with debug assertions with traits
+        run: cargo test --locked -p zakura-udon --lib ${{ matrix.trait_features }}
       - name: Preserve property regressions
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -102,11 +112,11 @@ jobs:
         run: rustup toolchain install
       - name: Exercise field benchmarks
         run: |
-          cargo bench --locked -p zakura-udon --bench field -- --test
-          cargo bench --locked -p zakura-udon --bench field --features sqrt-table-large -- --test
+          cargo bench --locked -p zakura-udon --bench field --features traits -- --test
+          cargo bench --locked -p zakura-udon --bench field --features traits,sqrt-table-large -- --test
       - name: Exercise FFT benchmarks
         run: |
-          cargo bench --locked -p zakura-udon --bench fft -- --test
+          cargo bench --locked -p zakura-udon --bench fft --features traits -- --test
           cargo bench --locked -p zakura-udon --bench fft_strategies -- --test
       - name: Exercise curve benchmarks
         run: |

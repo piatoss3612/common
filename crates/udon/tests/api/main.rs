@@ -5,3 +5,4 @@
 mod harness;
 
 mod boundaries;
+mod traits;

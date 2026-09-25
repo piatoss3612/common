@@ -1,4 +1,5 @@
-use crate::field::{Loose, PastaField, PrimeModulus, ProductSum, ReductionState, batch_invert};
+use crate::field::pasta::batch_invert;
+use crate::field::{Loose, PastaField, PrimeModulus, ProductSum, ReductionState};
 
 #[cfg(test)]
 #[path = "tests/interpolation.rs"]
@@ -76,7 +77,7 @@ impl core::error::Error for InterpolationError {}
 ///
 /// Created by [`InterpolationPlan::prepare_denominators`]. This descriptor
 /// borrows only the points, so denominator buffers can share a call to
-/// [`batch_invert_groups`](crate::field::batch_invert_groups) with other
+/// [`batch_invert_groups_scaled`](crate::field::batch_invert_groups_scaled) with scale one with other
 /// operations. Keep it paired with its prepared entries. [`Self::complete`]
 /// checks length, not mathematical contents.
 #[derive(Clone, Copy)]
@@ -168,7 +169,7 @@ impl<'a, M: PrimeModulus, S: ReductionState> InterpolationPlan<'a, M, S> {
     /// Initial buffer contents are ignored; exclusive borrows keep writable
     /// storage disjoint from points and from each other.
     ///
-    /// Any inversion scratch length is accepted. [`batch_invert`] uses one
+    /// Any inversion scratch length is accepted. Batch inversion uses one
     /// inversion with at least `n` scratch fields for `n >= 2`, bounded batches
     /// with less scratch, or individual inverses with empty scratch. Empty and
     /// singleton preparations need no inversion or scratch writes.
@@ -193,14 +194,14 @@ impl<'a, M: PrimeModulus, S: ReductionState> InterpolationPlan<'a, M, S> {
     /// entries to [`InterpolationPreparation::complete`].
     ///
     /// ```
-    /// use zakura_udon::{field::{Fp, batch_invert_groups}, polynomial::InterpolationPlan};
+    /// use zakura_udon::{field::{Fp, batch_invert_groups_scaled}, polynomial::InterpolationPlan};
     /// let a = [0, 1].map(<Fp>::from_u64);
     /// let b = [2, 4, 7].map(<Fp>::from_u64);
     /// let mut wa = [Fp::ZERO; 2];
     /// let mut wb = [Fp::ZERO; 3];
     /// let pa = InterpolationPlan::prepare_denominators(&a, &mut wa)?;
     /// let pb = InterpolationPlan::prepare_denominators(&b, &mut wb)?;
-    /// batch_invert_groups(&mut [&mut wa[..], &mut wb[..]], &mut [Fp::ZERO; 5]);
+    /// batch_invert_groups_scaled(&mut [&mut wa[..], &mut wb[..]], &Fp::ONE, &mut [Fp::ZERO; 5]);
     /// let a_plan = pa.complete(&wa)?;
     /// let b_plan = pb.complete(&wb)?;
     /// let query = <Fp>::from_u64(9);

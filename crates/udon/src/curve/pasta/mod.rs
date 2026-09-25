@@ -21,7 +21,6 @@ mod projective;
 pub(crate) mod reduce;
 mod table_entry;
 
-use super::{Affine, EndomorphismAffine, EndomorphismProjective, Projective};
 pub use batch::batch_normalize;
 pub use eisenstein::{EisensteinScalar, EisensteinTable};
 pub use eisenstein_batch::EisensteinTableBatch;

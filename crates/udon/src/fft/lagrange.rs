@@ -50,7 +50,7 @@ enum Finish<M: PrimeModulus> {
 ///
 /// [`CosetDomain::prepare_lagrange`] creates this descriptor and writes its
 /// denominators into caller storage. Invert those entries with
-/// [`batch_invert_groups`](crate::field::batch_invert_groups), optionally sharing
+/// [`batch_invert_groups_scaled`](crate::field::batch_invert_groups_scaled) with scale one, optionally sharing
 /// the batch with other queries or arithmetic, then call [`Self::complete`].
 /// The descriptor retains only a field scale or node position and an element
 /// count; it borrows no buffer and allocates nothing. Keep it paired with its
@@ -182,14 +182,14 @@ impl<M: PrimeModulus> CosetDomain<M> {
     /// variable-time, with no allocation or retained tables.
     ///
     /// ```
-    /// use zakura_udon::{fft::Domain, field::{Fp, batch_invert_groups}};
+    /// use zakura_udon::{fft::Domain, field::{Fp, batch_invert_groups_scaled}};
     /// let domain = Domain::new(2)?.subgroup();
     /// let mut first = [Fp::ZERO; 2];
     /// let mut second = [Fp::ZERO; 2];
     /// let a = domain.prepare_lagrange(&<Fp>::ZERO, 0..2, &mut first)?;
     /// let b = domain.prepare_lagrange(&<Fp>::ONE, 0..2, &mut second)?;
-    /// batch_invert_groups(&mut [&mut first[..], &mut second[..]],
-    ///                     &mut [Fp::ZERO; 4]);
+    /// batch_invert_groups_scaled(&mut [&mut first[..], &mut second[..]],
+    ///                            &Fp::ONE, &mut [Fp::ZERO; 4]);
     /// a.complete(&mut first)?;
     /// b.complete(&mut second)?;
     /// assert_eq!(first.map(Fp::reduce), [domain.domain().size_inverse().reduce(); 2]);

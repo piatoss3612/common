@@ -1,6 +1,6 @@
 //! Square roots and power-of-two roots of unity from compile-time field tables.
 
-use super::{PastaField, PrimeModulus, Reduced, ReductionState, parameters::TWO_ADICITY};
+use super::{PastaField, PrimeModulus, Reduced, ReductionState, TWO_ADICITY};
 
 #[cfg(feature = "sqrt-table-large")]
 mod large;

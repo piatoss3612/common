@@ -14,20 +14,23 @@ is variable-time, with no constant-time guarantee for secret inputs; see the
 ## Domains and transform order
 
 [`Domain`](../crates/udon/src/fft/domain.rs) constructs a subgroup with the
-canonical root for its size. It is generic over the field type, so
-`Domain::<Fp>::new(k)` gives `2^k` elements and `Domain::for_size(n)` an element
-count; code written against `FftField` constructs domains the same way. The
-constructor documents supported orders and target address-space limits. Size
-one is supported. `elements()` iterates the subgroup in natural order,
-`vanishing(x)` and `contains(x)` evaluate `x^n - 1`, and
-`lagrange_evaluations` writes the Lagrange basis at a point into a caller
-slice with one shared inversion. `bit_reverse` maps between natural and
-bit-reversed positions.
+canonical root for its size. `Domain::<Fp>::new(k)` gives `2^k` elements and
+`Domain::for_size(n)` an element count. These constructors work for both Pasta
+fields without features. The constructor documents supported orders and target
+address-space limits; size one is supported. `bit_reverse` maps between natural
+and bit-reversed positions.
 
-`Domain::transform` and `Domain::inverse_transform` dispatch field elements
-through the required `FftField::fft` and `FftField::ifft` methods. Pasta fields
-use `Transform` with serial execution, computed twiddles, and no auxiliary
-buffers. These conveniences allocate nothing. Call `Transform` directly to
+The unstable `traits` feature extends this same descriptor to consumer
+`FftField` implementations and adds generic domain operations. `elements()`
+iterates the subgroup in natural order, `vanishing(x)` and `contains(x)` evaluate
+`x^n - 1`, and `lagrange_evaluations` writes the Lagrange basis at a point into a
+caller slice with one shared inversion.
+
+With `traits` enabled, `Domain::transform` and `Domain::inverse_transform`
+dispatch field elements directly through the required `FftField::fft` and
+`FftField::ifft` methods. Pasta fields use `Transform` with serial execution,
+computed twiddles, and no auxiliary buffers. These conveniences allocate nothing.
+Call `Transform` directly to
 reuse tables and scratch or select an executor.
 
 `domain.subgroup()` selects shift one; `domain.coset()` selects the field's
@@ -65,16 +68,17 @@ operations require matching domains and layouts, including the field type,
 canonical root, size, and shift. Binding checks dimensions and declared
 semantics; it cannot establish which polynomial produced the evaluations.
 
-The [`reference` module](../crates/udon/src/fft/reference.rs) retains a simple
+The [`reference` module](../crates/udon/src/fft/reference.rs) provides a separate
 generic transform through `Twiddle` and `Butterfly`. It takes explicit roots;
-its inverse also takes the inverse size. Every `Field` is its own twiddle
-domain and butterfly value. `Domain` dispatches through `Butterfly::fft` and
-`Butterfly::ifft`: fields select their `FftField` implementations, while
-projective points and downstream butterfly values default to the reference
-schedule. Direct calls to `reference::transform` and
-`reference::inverse_transform` always use the reference schedule, providing an
-independent check of the field kernels. The trait contracts define the algebraic
-laws that a custom implementation must satisfy.
+its inverse also takes the inverse size. Pasta fields are their own twiddle
+domains and butterfly values, and projective points transform over their
+curve's scalar field. Other types implement these two contracts explicitly.
+Their algebraic laws are documented with the traits.
+
+Call `reference::transform` or `reference::inverse_transform` for group-valued
+transforms, artifact generation, or an independent check of the field kernels.
+These functions always use the reference schedule and do not depend on the
+`traits` feature. Generic `Domain` field transforms use `FftField` directly.
 
 ## Transform plans and task budgets
 

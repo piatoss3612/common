@@ -22,11 +22,15 @@ mod stored_form;
 mod uint;
 pub(crate) mod word;
 
-pub(crate) use batch::invert_nonzero;
+#[cfg(test)]
+pub(crate) use batch::batch_invert_groups;
+#[cfg(feature = "traits")]
+pub(crate) use batch::invert_groups;
 pub use batch::{
     BatchInversionError, batch_invert_groups_scaled, batch_invert_scaled, try_batch_invert_by,
     try_batch_invert_scaled_by,
 };
+pub(crate) use batch::{NonzeroInversionLanes, batch_invert, invert_nonzero};
 pub use constant_prefix::{ConstantPrefix, ConstantPrefixError};
 pub use fractions::{FractionPrefixError, fraction_prefixes, fraction_prefixes_in_place};
 #[cfg(test)]
@@ -37,8 +41,7 @@ pub use products::ProductSum;
 pub use representation::{Loose, Reduced, ReductionState};
 pub use stored_form::STORED_FORM;
 pub use uint::CanonicalUint;
-
-use super::{CubeRootField, DeferredField, FftField, Field, PrimeField, batch_invert_groups};
+pub(crate) const TWO_ADICITY: u32 = parameters::TWO_ADICITY;
 
 use montgomery::{montgomery_multiply, montgomery_square, reduce_once};
 use word::{adc, subtract_limbs};
@@ -66,7 +69,8 @@ const ENCODED_SIZE: usize = 32;
 /// take operands in the same state and return loose values; assignment
 /// operators apply to loose values. Iterator sums and products accept owned
 /// or borrowed elements in either state and return loose values; empty
-/// iterators return zero and one, respectively. [`Field`] and its companions
+/// iterators return zero and one, respectively. With the unstable `traits`
+/// feature, `field::Field` and its companions
 /// expose the same operations to generic code.
 ///
 /// Implements [`bento::Pod`] so a constructed value can be written as bytes

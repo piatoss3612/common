@@ -61,6 +61,7 @@ publish = false
 
 [features]
 sqrt-table-large = ["{alias}/sqrt-table-large"]
+traits = ["{alias}/traits"]
 {extra_features}
 [dependencies]
 {dependencies}

@@ -102,7 +102,12 @@ fn exercise<C: PastaCurve>() {
                     .collect();
                 assert_eq!(input, original);
                 let mut actual = input.clone();
-                transform(&mut actual, &loose(domain.root()));
+                assert_eq!(
+                    reference::count_transforms(|| {
+                        reference::transform(&mut actual, &loose(domain.root()))
+                    }),
+                    1
+                );
                 assert_eq!(actual, forward, "forward log={log_size} shape={shape}");
                 inverse_transform(
                     &mut actual,

@@ -188,7 +188,11 @@ fn field<M: PrimeModulus>() {
     let completion: LagrangeCompletion<M> =
         domain.prepare_lagrange(&two, 0..4, &mut basis).unwrap();
     assert_eq!(completion.value_count(), 4);
-    arithmetic::field::batch_invert_groups(&mut [&mut basis[..]], &mut [PastaField::ZERO; 4]);
+    arithmetic::field::batch_invert_groups_scaled(
+        &mut [&mut basis[..]],
+        &PastaField::ONE,
+        &mut [PastaField::ZERO; 4],
+    );
     completion.complete(&mut basis).unwrap();
     let mut reconstructed = PastaField::ZERO;
     let mut node = domain.shift();

@@ -1,22 +1,20 @@
 //! Radix-2 evaluation domains and their coset shifts.
 
-use super::{FftError, check_element_count, factors::Shift, reference::Butterfly};
-use crate::field::{FftField, PastaField, PrimeModulus, batch_invert};
+use super::{FftError, check_element_count, factors::Shift};
+use crate::field::{PastaField, PrimeModulus};
 
 /// A radix-2 subgroup with its canonical root of unity and the scalars
 /// transforms over it need.
 ///
-/// For size `n`, the subgroup consists of `root^j` for `0 <= j < n`. Roots
-/// come from [`FftField::root_of_unity`]; if `small` and `large` are domains
-/// in the same field, `large.root()^(large.size()/small.size())` equals
-/// `small.root()` whenever `small.size() <= large.size()`.
+/// For size `n`, the subgroup consists of `root^j` for `0 <= j < n`.
+/// Pasta roots are compatible across sizes: the larger domain's root raised
+/// to the size ratio is the smaller domain's root.
 /// Domains in the same field compare equal exactly when their sizes match.
 ///
-/// Field transforms dispatch through [`FftField`] to the field's implementation.
-/// Pasta fields use [`super::Transform`] with serial execution and no auxiliary
-/// buffers. [`Self::subgroup`] and [`Self::coset`] configure transforms with
-/// caller-owned tables, scratch, and execution. Other [`Butterfly`] values use
-/// their transform implementations, which default to [`super::reference`].
+/// [`Self::subgroup`] and [`Self::coset`] configure native Pasta transforms with
+/// caller-owned tables, scratch, and execution. The unstable `traits` feature
+/// also supports consumer field implementations and adds generic evaluation
+/// and transform methods to this same descriptor.
 #[derive(Clone, Copy, Debug)]
 pub struct Domain<F> {
     log_size: u32,
@@ -26,26 +24,38 @@ pub struct Domain<F> {
     size_inverse: F,
 }
 
-impl<F: FftField> PartialEq for Domain<F> {
+impl<F> PartialEq for Domain<F> {
     fn eq(&self, other: &Self) -> bool {
         // Construction fixes every field parameter from the validated size.
         self.size == other.size
     }
 }
 
-impl<F: FftField> Eq for Domain<F> {}
+impl<F> Eq for Domain<F> {}
 
-impl<F: FftField> Domain<F> {
-    /// Constructs a domain of `2^log_size` field elements.
+#[cfg(not(feature = "traits"))]
+impl<M: PrimeModulus> Domain<PastaField<M>> {
+    /// Constructs a Pasta domain of `2^log_size` elements.
     ///
-    /// `log_size = 0` gives the singleton subgroup containing one. Returns
-    /// [`FftError::InvalidSize`] above the field's two-adicity (32 for both
-    /// Pasta fields), or [`FftError::SizeOverflow`] if the element count does
-    /// not fit `usize` or a slice of that length would exceed `isize::MAX`
-    /// bytes.
+    /// Returns [`FftError::InvalidSize`] above the field's two-adicity, or
+    /// [`FftError::SizeOverflow`] if its slice would exceed addressable memory.
     pub fn new(log_size: u32) -> Result<Self, FftError> {
-        let root = F::root_of_unity(log_size).ok_or(FftError::InvalidSize)?;
-        let inverse_root = F::root_of_unity_inverse(log_size).ok_or(FftError::InvalidSize)?;
+        Self::pasta(log_size)
+    }
+
+    /// Constructs a domain from its nonzero power-of-two element count.
+    pub fn for_size(size: usize) -> Result<Self, FftError> {
+        Self::pasta_for_size(size)
+    }
+}
+
+impl<F: Copy> Domain<F> {
+    pub(super) fn from_roots(
+        log_size: u32,
+        root: F,
+        inverse_root: F,
+        size_inverse: impl FnOnce() -> F,
+    ) -> Result<Self, FftError> {
         let size = 1usize.checked_shl(log_size).ok_or(FftError::SizeOverflow)?;
         check_element_count::<F>(size)?;
         Ok(Self {
@@ -53,19 +63,8 @@ impl<F: FftField> Domain<F> {
             size,
             root,
             inverse_root,
-            size_inverse: F::power_of_two_inverse(log_size),
+            size_inverse: size_inverse(),
         })
-    }
-
-    /// Constructs a domain from its nonzero power-of-two element count.
-    ///
-    /// Returns [`FftError::InvalidSize`] for zero or a non-power-of-two length;
-    /// other size limits and errors are those of [`Self::new`].
-    pub fn for_size(size: usize) -> Result<Self, FftError> {
-        if !size.is_power_of_two() {
-            return Err(FftError::InvalidSize);
-        }
-        Self::new(size.ilog2())
     }
 
     /// The base-two logarithm of the size.
@@ -88,144 +87,26 @@ impl<F: FftField> Domain<F> {
     pub const fn size_inverse(self) -> F {
         self.size_inverse
     }
-
-    /// Returns the elements `1, root, root^2, ...` in natural order.
-    ///
-    /// Each element is one multiplication from its predecessor, so the
-    /// iterator only runs front to back.
-    pub fn elements(self) -> impl ExactSizeIterator<Item = F> {
-        let mut current = F::ONE;
-        (0..self.size).map(move |_| {
-            let element = current;
-            current *= self.root;
-            element
-        })
-    }
-
-    /// Returns `x^size` by `log_size` squarings.
-    fn power_of_size(self, x: F) -> F {
-        (0..self.log_size).fold(x, |power, _| power.square())
-    }
-
-    /// Evaluates the vanishing polynomial `X^size - 1` of the domain at `x`.
-    pub fn vanishing(self, x: F) -> F {
-        self.power_of_size(x) - F::ONE
-    }
-
-    /// Returns whether `x` is an element of the domain.
-    pub fn contains(self, x: F) -> bool {
-        self.vanishing(x).is_zero()
-    }
-
-    /// Replaces coefficients with evaluations at the elements, in natural order.
-    ///
-    /// Field elements dispatch to [`FftField::fft`]. Other [`Butterfly`] values
-    /// use their transform implementation, which defaults to the reference FFT.
-    ///
-    /// # Panics
-    ///
-    /// Panics before mutation if `values.len()` is not the domain size.
-    pub fn transform<V: Butterfly<F>>(self, values: &mut [V]) {
-        assert_eq!(values.len(), self.size, "transform input length");
-        V::fft(self, values);
-    }
-
-    /// Replaces natural-order evaluations with normalized coefficients.
-    ///
-    /// Field elements dispatch to [`FftField::ifft`]. Other [`Butterfly`] values
-    /// use their transform implementation, which defaults to the reference IFFT.
-    ///
-    /// # Panics
-    ///
-    /// Panics before mutation if `values.len()` is not the domain size.
-    pub fn inverse_transform<V: Butterfly<F>>(self, values: &mut [V]) {
-        assert_eq!(values.len(), self.size, "transform input length");
-        V::ifft(self, values);
-    }
-
-    /// Evaluates the first `evaluations.len()` Lagrange basis polynomials at `x`.
-    ///
-    /// Writes `l_i(x)` to `evaluations[i]`, where `l_i` is one at `root^i` and
-    /// zero at every other element. With `v(X) = X^size - 1`,
-    /// `l_i(x) = v(x) * root^i / (size * (x - root^i))`, and the divisions
-    /// share one inversion through `scratch`, which needs one element per
-    /// evaluation. Its initial contents do not matter.
-    ///
-    /// If `x` is the element `root^i`, the evaluations are one at `i` and zero
-    /// elsewhere. They are written directly and `Some(i)` is returned so a
-    /// caller can recognize the case; `i` may lie beyond the written prefix.
-    /// Otherwise the result is `None`.
-    ///
-    /// # Panics
-    ///
-    /// Panics before mutation if `evaluations` is longer than the domain or
-    /// `scratch` is shorter than `evaluations`.
-    pub fn lagrange_evaluations(
-        self,
-        x: F,
-        evaluations: &mut [F],
-        scratch: &mut [F],
-    ) -> Option<usize> {
-        assert!(
-            evaluations.len() <= self.size,
-            "Lagrange evaluations exceed the domain size"
-        );
-        assert!(
-            scratch.len() >= evaluations.len(),
-            "Lagrange evaluation scratch must cover every evaluation"
-        );
-
-        let vanishing = self.vanishing(x);
-        if vanishing.is_zero() {
-            let index = self.index_of(x);
-            for (position, evaluation) in evaluations.iter_mut().enumerate() {
-                *evaluation = if position == index { F::ONE } else { F::ZERO };
-            }
-            return Some(index);
-        }
-
-        // Every difference is nonzero because x is outside the domain.
-        let mut power = F::ONE;
-        for evaluation in evaluations.iter_mut() {
-            *evaluation = x - power;
-            power *= self.root;
-        }
-        batch_invert(evaluations, scratch);
-
-        let mut numerator = vanishing * self.size_inverse;
-        for evaluation in evaluations.iter_mut() {
-            *evaluation *= numerator;
-            numerator *= self.root;
-        }
-        None
-    }
-
-    /// Returns the `i` with `root^i = x` for an `x` known to be in the domain.
-    ///
-    /// The discrete logarithm is taken bit by bit: `root^(size/2)` is the
-    /// unique element of order two, so `x^(size / 2^(j+1))` is `-1` exactly
-    /// when bit `j` of the logarithm is set, once the lower bits have been
-    /// cleared. This costs `O(log_size^2)` squarings instead of a scan.
-    fn index_of(self, mut x: F) -> usize {
-        let mut index = 0;
-        // `root^-(2^j)` at iteration `j`.
-        let mut inverse_power = self.inverse_root;
-        for bit in 0..self.log_size {
-            let mut test = x;
-            for _ in 0..(self.log_size - 1 - bit) {
-                test = test.square();
-            }
-            if test != F::ONE {
-                index |= 1 << bit;
-                x *= inverse_power;
-            }
-            inverse_power = inverse_power.square();
-        }
-        index
-    }
 }
 
 impl<M: PrimeModulus> Domain<PastaField<M>> {
+    // Native setup uses inherent field operations in every feature configuration.
+    pub(super) fn pasta(log_size: u32) -> Result<Self, FftError> {
+        let root = PastaField::root_of_unity(log_size).ok_or(FftError::InvalidSize)?;
+        let inverse_root =
+            PastaField::root_of_unity_inverse(log_size).ok_or(FftError::InvalidSize)?;
+        Self::from_roots(log_size, root, inverse_root, || {
+            PastaField::power_of_two_inverse(log_size)
+        })
+    }
+
+    pub(super) fn pasta_for_size(size: usize) -> Result<Self, FftError> {
+        if !size.is_power_of_two() {
+            return Err(FftError::InvalidSize);
+        }
+        Self::pasta(size.ilog2())
+    }
+
     /// Treats the subgroup as a transform domain with shift one.
     pub fn subgroup(self) -> CosetDomain<M> {
         CosetDomain::new(self, Shift::Subgroup)

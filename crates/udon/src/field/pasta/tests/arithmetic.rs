@@ -113,7 +113,10 @@ fn arithmetic_and_ordering_match_integer_operations() {
 
 #[test]
 fn iterator_products_match_integer_products() {
-    fn generic<F: crate::field::Field>(values: &[F]) -> (F, F) {
+    fn generic<F>(values: &[F]) -> (F, F)
+    where
+        F: Copy + core::iter::Product + for<'a> core::iter::Product<&'a F>,
+    {
         (values.iter().product(), values.iter().copied().product())
     }
 

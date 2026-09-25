@@ -737,7 +737,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 } else {
                     StageKernel {
                         plan: Transform::new(
-                            Domain::for_size(tile)
+                            Domain::pasta_for_size(tile)
                                 .expect("validated tile domain")
                                 .subgroup(),
                         ),

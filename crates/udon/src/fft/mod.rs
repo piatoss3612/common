@@ -146,6 +146,7 @@
 //! # Ok::<(), zakura_udon::fft::FftError>(())
 //! ```
 
+use crate::checks::assert_length;
 use crate::exec::Executor;
 #[cfg(test)]
 use crate::exec::SerialExecutor;
@@ -249,10 +250,6 @@ impl core::fmt::Display for FftError {
 }
 
 impl core::error::Error for FftError {}
-
-fn assert_length(buffer: &str, expected: usize, actual: usize) {
-    assert_eq!(actual, expected, "{buffer} length");
-}
 
 fn check_prefix(actual: usize, min: usize, max: usize) -> Result<(), FftError> {
     if (min..=max).contains(&actual) {

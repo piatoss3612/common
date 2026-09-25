@@ -60,6 +60,7 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 
+mod checks;
 pub mod curve;
 pub mod exec;
 pub mod fft;

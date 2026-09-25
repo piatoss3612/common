@@ -32,6 +32,7 @@
 
 use core::{fmt, marker::PhantomData};
 
+use crate::checks::{assert_length, assert_scratch};
 use crate::field::{PastaField, Reduced, ReductionState};
 
 mod affine;
@@ -250,17 +251,6 @@ impl fmt::Display for CurveError {
 }
 
 impl core::error::Error for CurveError {}
-
-fn assert_length(buffer: &str, expected: usize, actual: usize) {
-    assert_eq!(actual, expected, "{buffer} length");
-}
-
-fn assert_scratch(buffer: &str, required: usize, provided: usize) {
-    assert!(
-        provided >= required,
-        "{buffer} scratch requires {required} elements, got {provided}"
-    );
-}
 
 const fn checked_count<T>(count: usize, per_item: usize) -> Result<usize, CurveError> {
     match count.checked_mul(per_item) {

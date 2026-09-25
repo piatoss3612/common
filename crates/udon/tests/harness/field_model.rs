@@ -10,7 +10,7 @@
 
 use core::{iter, ops};
 use num_bigint::BigUint;
-use zakura_udon::field::{Field, PrimeField, batch_invert_groups};
+use zakura_udon::field::{Field, PrimeField};
 
 macro_rules! binary {
     ($name:ident, $trait:ident, $method:ident, $assign:ident, $assign_method:ident, $body:expr) => {
@@ -126,7 +126,7 @@ macro_rules! reference_field {
             }
 
             fn batch_invert(values: &mut [Self], scratch: &mut [Self]) {
-                batch_invert_groups(&mut [values], scratch)
+                Self::batch_invert_groups(&mut [values], scratch)
             }
 
             fn sqrt(&self) -> Option<Self> {

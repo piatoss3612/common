@@ -30,12 +30,10 @@ tempfile = "3"
 [[bench]]
 name = "field"
 harness = false
-required-features = ["traits"]
 
 [[bench]]
 name = "fft"
 harness = false
-required-features = ["traits"]
 
 [[bench]]
 name = "fft_strategies"

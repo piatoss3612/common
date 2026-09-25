@@ -90,6 +90,16 @@ pub trait Field:
     /// allocation is performed.
     fn batch_invert(values: &mut [Self], scratch: &mut [Self]);
 
+    /// Inverts nonzero entries across disjoint slices with shared scratch.
+    ///
+    /// Applies [`Self::batch_invert`]'s scratch and zero-preservation contract
+    /// to the concatenation of `groups`, without copying or allocation. Empty
+    /// groups are allowed. Each group's `AsMut::as_mut` must expose the same
+    /// slice throughout the call.
+    fn batch_invert_groups(groups: &mut [impl AsMut<[Self]>], scratch: &mut [Self]) {
+        super::pasta::invert_groups(groups, scratch, Self::ONE, Self::is_zero, Self::invert)
+    }
+
     /// Returns a square root, or `None` for a nonsquare.
     ///
     /// Either root may be returned; zero returns `Some(ZERO)`.
@@ -317,6 +327,10 @@ impl<M: PrimeModulus> Field for PastaField<M> {
 
     fn batch_invert(values: &mut [Self], scratch: &mut [Self]) {
         super::pasta::batch_invert(values, scratch)
+    }
+
+    fn batch_invert_groups(groups: &mut [impl AsMut<[Self]>], scratch: &mut [Self]) {
+        super::pasta::batch_invert_groups(groups, scratch)
     }
 
     fn sqrt(&self) -> Option<Self> {

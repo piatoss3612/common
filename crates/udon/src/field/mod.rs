@@ -26,8 +26,6 @@
 
 // Generic contracts and helpers; concrete storage and kernels stay in Pasta.
 #[cfg(feature = "traits")]
-mod batch;
-#[cfg(feature = "traits")]
 mod encoding;
 pub(crate) mod pasta;
 #[cfg(feature = "traits")]
@@ -39,15 +37,14 @@ mod traits;
 mod tests;
 
 #[cfg(feature = "traits")]
-pub use batch::{batch_invert, batch_invert_groups, batch_invert_with_scratch};
-#[cfg(feature = "traits")]
 pub use encoding::{low_u64, random};
 pub(crate) use pasta::NonzeroInversionLanes;
 #[cfg(test)]
 pub(crate) use pasta::count_inversions;
 pub use pasta::{
     BatchInversionError, CanonicalUint, Fp, Fq, Loose, PallasBase, PallasScalar, PastaField,
-    PrimeModulus, ProductSum, Reduced, ReductionState, try_batch_invert_by,
+    PrimeModulus, ProductSum, Reduced, ReductionState, batch_invert, batch_invert_groups,
+    try_batch_invert_by,
 };
 pub(crate) use pasta::{invert_nonzero, word};
 #[cfg(feature = "traits")]

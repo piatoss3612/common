@@ -3,7 +3,7 @@ use super::field_model;
 #[test]
 fn generic_representations_support_bls_and_jubjub_fields() {
     use num_bigint::BigUint;
-    use zakura_udon::field::{PrimeField, batch_invert, low_u64, random};
+    use zakura_udon::field::{PrimeField, low_u64, random};
 
     fn check<F: PrimeField>()
     where
@@ -57,7 +57,7 @@ fn generic_representations_support_bls_and_jubjub_fields() {
             BigUint::from_bytes_le(&[0xa5; 64]) % &modulus
         );
         let mut values = [F::ZERO, F::from(2), F::from(3)];
-        batch_invert(&mut values, &mut [F::ZERO; 1]);
+        F::batch_invert(&mut values, &mut [F::ZERO; 1]);
         assert_eq!(values[0], F::ZERO);
         assert_eq!(values[1] * F::from(2), F::ONE);
         assert_eq!(values[2] * F::from(3), F::ONE);

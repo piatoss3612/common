@@ -1,7 +1,7 @@
 //! Optional generic operations over the shared FFT domain descriptor.
 
 use super::{Domain, FftError};
-use crate::field::{FftField, batch_invert};
+use crate::field::FftField;
 
 impl<F: FftField> Domain<F> {
     /// Constructs a domain of `2^log_size` field elements.
@@ -129,7 +129,7 @@ impl<F: FftField> Domain<F> {
             *evaluation = x - power;
             power *= self.root();
         }
-        batch_invert(evaluations, scratch);
+        F::batch_invert(evaluations, scratch);
 
         let mut numerator = vanishing * self.size_inverse();
         for evaluation in evaluations.iter_mut() {

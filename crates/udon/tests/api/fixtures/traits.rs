@@ -20,6 +20,12 @@ fn main() {
     assert_eq!(PallasPoint::from(lifted), PallasPoint::GENERATOR);
     assert_eq!(udon::poseidon::PALLAS_BASE.rounds(), 64);
 
+    let mut inverses = [value, Fp::ZERO];
+    udon::field::batch_invert(&mut inverses, &mut [Fp::ZERO; 2]);
+    assert_eq!(inverses, [value.invert().unwrap(), Fp::ZERO]);
+    udon::field::batch_invert_groups(&mut [&mut inverses[..]], &mut [Fp::ZERO; 1]);
+    assert_eq!(inverses, [value, Fp::ZERO]);
+
     let domain = Domain::<Fp>::new(2).unwrap();
     let input = [value, Fp::ONE, Fp::ZERO, Fp::DELTA];
     let mut expected = input;

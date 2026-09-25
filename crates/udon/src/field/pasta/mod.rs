@@ -22,15 +22,13 @@ mod stored_form;
 mod uint;
 pub(crate) mod word;
 
-#[cfg(test)]
-pub(crate) use batch::batch_invert_groups;
 #[cfg(feature = "traits")]
 pub(crate) use batch::invert_groups;
 pub use batch::{
-    BatchInversionError, batch_invert_groups_scaled, batch_invert_scaled, try_batch_invert_by,
-    try_batch_invert_scaled_by,
+    BatchInversionError, batch_invert, batch_invert_groups, batch_invert_groups_scaled,
+    batch_invert_scaled, try_batch_invert_by, try_batch_invert_scaled_by,
 };
-pub(crate) use batch::{NonzeroInversionLanes, batch_invert, invert_nonzero};
+pub(crate) use batch::{NonzeroInversionLanes, invert_nonzero};
 pub use constant_prefix::{ConstantPrefix, ConstantPrefixError};
 pub use fractions::{FractionPrefixError, fraction_prefixes, fraction_prefixes_in_place};
 #[cfg(test)]

@@ -2,10 +2,7 @@
 
 mod facade {
     #[cfg(feature = "traits")]
-    pub use arithmetic::{
-        curve::Affine,
-        field::{FftField, batch_invert_groups, batch_invert_with_scratch},
-    };
+    pub use arithmetic::{curve::Affine, field::FftField};
     pub use arithmetic::{
         curve::{AffinePoint, Pallas, PastaCurve, Vesta, glv_decompose},
         field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, Reduced},
@@ -126,12 +123,12 @@ mod consumer {
             let original = [F::ZERO, value, value.square()];
             let mut values = original;
             let mut scratch = [F::ZERO; 2];
-            batch_invert_with_scratch(&mut values, &mut scratch);
+            F::batch_invert(&mut values, &mut scratch);
             assert_eq!(values[0], F::ZERO);
             assert_eq!(values[1] * original[1], F::ONE);
             assert_eq!(values[2] * original[2], F::ONE);
             let (left, right) = values.split_at_mut(1);
-            batch_invert_groups(&mut [left, right], &mut scratch[..1]);
+            F::batch_invert_groups(&mut [left, right], &mut scratch[..1]);
             assert_eq!(values, original);
         }
         generic_batch(two);

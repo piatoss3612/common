@@ -69,16 +69,16 @@ fn check_poseidon<F: Field, P: PoseidonPermutation<F>, const T: usize>(
     assert_eq!(P::RATE, parameters.rate());
     assert_eq!(P::FULL_ROUNDS, parameters.full_rounds);
     assert_eq!(P::PARTIAL_ROUNDS, parameters.partial_rounds);
-    assert_eq!(P::ALPHA, parameters.alpha as isize);
-    let rows: Vec<&[F]> = instance.round_constants().collect();
+    assert_eq!(P::ALPHA, parameters.alpha);
+    let rows = instance.round_constants();
     assert_eq!(rows.len(), parameters.rounds());
     for (row, expected) in rows.iter().zip(parameters.round_constants) {
-        assert_eq!(*row, &expected[..]);
+        assert_eq!(row.as_ref(), &expected[..]);
     }
     let mds = instance.mds_matrix();
     assert_eq!(mds.len(), T);
-    for (row, expected) in mds.zip(parameters.mds) {
-        assert_eq!(row, &expected[..]);
+    for (row, expected) in mds.iter().zip(parameters.mds) {
+        assert_eq!(row.as_ref(), &expected[..]);
     }
 }
 

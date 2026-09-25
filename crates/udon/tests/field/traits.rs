@@ -1,7 +1,7 @@
 use super::field_model;
 
 #[test]
-fn generic_representations_support_bls_and_jubjub_fields() {
+fn generic_representations_match_the_field_modulus() {
     use num_bigint::BigUint;
     use zakura_udon::field::{PrimeField, low_u64, random};
 
@@ -16,6 +16,8 @@ fn generic_representations_support_bls_and_jubjub_fields() {
                 .flat_map(|limb| limb.to_le_bytes())
                 .collect::<Vec<_>>(),
         );
+        assert_eq!(u64::from(F::NUM_BITS), modulus.bits());
+        assert_eq!(F::CAPACITY + 1, F::NUM_BITS);
         let integers = [
             BigUint::from(0u8),
             BigUint::from(1u8),
@@ -67,6 +69,8 @@ fn generic_representations_support_bls_and_jubjub_fields() {
         );
     }
 
+    check::<zakura_udon::field::Fp>();
+    check::<zakura_udon::field::Fq>();
     check::<field_model::BlsBase>();
     check::<field_model::BlsScalar>();
     check::<field_model::JubjubScalar>();

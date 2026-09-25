@@ -75,5 +75,5 @@ mod traits;
 #[cfg(feature = "traits")]
 pub use traits::{PoseidonFp, PoseidonFq, PoseidonPermutation};
 
-#[cfg(all(test, feature = "traits"))]
+#[cfg(test)]
 mod tests;

@@ -196,3 +196,69 @@ fn invalid_shapes_preserve_buffers() {
     check_errors::<PallasBase>();
     check_errors::<PallasScalar>();
 }
+
+#[cfg(feature = "traits")]
+mod consumer {
+    use super::*;
+    use crate::field::pasta::test_support::{count_mul_adds, field_samples};
+    use crate::field::{PallasBase, PallasScalar, dot};
+    use crate::polynomial::{evaluate_iter, geometric_sum};
+
+    #[test]
+    fn iterator_evaluation_uses_native_steps_and_matches_powers() {
+        fn check<M: PrimeModulus>() {
+            for count in [0, 1, 2, 7, 31] {
+                let coefficients: Vec<_> = field_samples::<M>().take(count).collect();
+                for point in field_samples::<M>().take(5) {
+                    let mut power = PastaField::ONE;
+                    let powers: Vec<_> = (0..count)
+                        .map(|_| {
+                            let value = power;
+                            power = power.mul(&point);
+                            value
+                        })
+                        .collect();
+                    let mut actual = PastaField::ZERO;
+                    assert_eq!(
+                        count_mul_adds(|| {
+                            actual = evaluate_iter(&coefficients, point);
+                        }),
+                        count.saturating_sub(1)
+                    );
+                    assert_eq!(actual, dot(&coefficients, &powers));
+                    assert_eq!(actual, evaluate(&coefficients, &point));
+                }
+            }
+        }
+        check::<PallasBase>();
+        check::<PallasScalar>();
+    }
+    #[test]
+    fn geometric_sum_matches_the_written_out_sum() {
+        fn check<M: PrimeModulus>() {
+            for ratio in [
+                PastaField::<M>::ZERO,
+                PastaField::ONE,
+                PastaField::from_u64(3),
+                PastaField::DELTA,
+            ] {
+                for terms in 0..70 {
+                    let mut naive = PastaField::ZERO;
+                    let mut power = PastaField::ONE;
+                    for _ in 0..terms {
+                        naive = naive.add(&power);
+                        power = power.mul(&ratio);
+                    }
+                    assert_eq!(
+                        geometric_sum(ratio, terms),
+                        naive,
+                        "ratio {ratio:?}, {terms} terms"
+                    );
+                }
+            }
+        }
+
+        check::<PallasBase>();
+        check::<PallasScalar>();
+    }
+}

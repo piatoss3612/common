@@ -182,3 +182,22 @@ pub(crate) fn max_loose_limbs<M: PrimeModulus>() -> [u64; 4] {
     limbs[..digits.len()].copy_from_slice(&digits);
     limbs
 }
+
+#[cfg(feature = "traits")]
+std::thread_local! {
+    static MUL_ADD_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(feature = "traits")]
+pub(crate) fn record_mul_add() {
+    MUL_ADD_COUNT.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(feature = "traits")]
+pub(crate) fn count_mul_adds(f: impl FnOnce()) -> usize {
+    MUL_ADD_COUNT.with(|count| {
+        let before = count.get();
+        f();
+        count.get() - before
+    })
+}

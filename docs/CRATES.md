@@ -100,15 +100,14 @@ allocating workspaces, and worker runtimes belong to their downstream owners.
 | `exec/execution/` | Common incremental task, completion, and frontier protocol |
 | `cycle/` | Optional cycle contracts, borrowed generator containers, and Pasta bindings |
 | `poseidon/` | Fixed Pasta parameter sets and optional consumer trait views |
-| `poly/` | Optional polynomial operations through consumer field traits |
-| `polynomial/` | Native Pasta polynomial evaluation, interpolation, division, and folding |
+| `polynomial/` | Native Pasta polynomial arithmetic and optional generic iterator and product operations |
 
 The `field` and `curve` modules explicitly re-export their concrete types;
 callers use paths such as `field::Fp` and `curve::Pallas`.
 Their private Pasta modules keep representation-specific code separate from
 generic contracts. Each domain's `traits.rs` keeps its optional consumer
 contracts and Pasta implementations together. The unstable `traits` feature
-gates those interfaces and their generic helpers, including `poly` and `cycle`.
+gates those interfaces and their generic helpers, including polynomial iterators and `cycle`.
 Native arithmetic must not depend on the consumer contracts, even when the
 feature is enabled. Standard Rust operators stay beside the concrete types.
 Field butterfly kernels live in `field/pasta/butterfly/`;

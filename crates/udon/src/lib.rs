@@ -50,7 +50,7 @@
 //!
 //! `traits` enables unstable consumer interfaces at their domain paths:
 //! `field::Field` and its capability traits, `curve::Affine` and `Projective`,
-//! generic field and FFT helpers, `poly`, `cycle`, and the Poseidon trait views.
+//! generic field, FFT, and polynomial helpers, `cycle`, and the Poseidon trait views.
 //! Pasta implements these contracts through its native arithmetic. Native
 //! field, curve, FFT, and MSM kernels do not depend on the consumer traits.
 //! Consumers opt in explicitly; these interfaces may change without preserving
@@ -80,8 +80,6 @@ pub mod exec;
 pub mod fft;
 pub mod field;
 pub mod msm;
-#[cfg(feature = "traits")]
-pub mod poly;
 pub mod polynomial;
 pub mod poseidon;
 

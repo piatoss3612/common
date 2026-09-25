@@ -76,6 +76,15 @@ pub trait Field:
     /// Returns `self * self`.
     fn square(&self) -> Self;
 
+    /// Returns `self * multiplier + addend`.
+    ///
+    /// The default performs multiplication followed by addition. Implementations
+    /// can specialize the combined operation; Pasta forwards to its native method.
+    #[inline]
+    fn mul_add(&self, multiplier: &Self, addend: &Self) -> Self {
+        *self * multiplier + addend
+    }
+
     /// Returns `2 * self`.
     fn double(&self) -> Self;
 
@@ -249,6 +258,17 @@ pub trait FftField: PrimeField {
     /// Panics before mutation if `values.len()` differs from the domain size.
     fn ifft(domain: crate::fft::Domain<Self>, values: &mut [Self]);
 
+    /// Multiplies ascending coefficient slices without allocation.
+    ///
+    /// Implements [`crate::polynomial::multiply`]'s output-length and scratch
+    /// contracts, including validation before mutation. The default selects
+    /// schoolbook convolution or padded transforms through [`Self::fft`] and
+    /// [`Self::ifft`]. Pasta specializes the transform path with coefficient
+    /// expansion and a fused pointwise product.
+    fn multiply_polynomials(a: &[Self], b: &[Self], product: &mut [Self], scratch: &mut [Self]) {
+        crate::polynomial::multiply_default(a, b, product, scratch)
+    }
+
     /// Returns a primitive root of unity of order `2^log_size`, or `None`
     /// when `log_size` exceeds the two-adicity.
     fn root_of_unity(log_size: u32) -> Option<Self> {
@@ -315,6 +335,11 @@ impl<M: PrimeModulus> Field for PastaField<M> {
 
     fn square(&self) -> Self {
         PastaField::square(self)
+    }
+
+    #[inline]
+    fn mul_add(&self, multiplier: &Self, addend: &Self) -> Self {
+        PastaField::mul_add(self, multiplier, addend)
     }
 
     fn double(&self) -> Self {
@@ -419,6 +444,10 @@ impl<M: PrimeModulus> FftField for PastaField<M> {
                 &mut [],
             )
             .expect("a serial subgroup transform supports empty scratch");
+    }
+
+    fn multiply_polynomials(a: &[Self], b: &[Self], product: &mut [Self], scratch: &mut [Self]) {
+        crate::polynomial::multiply_pasta(a, b, product, scratch)
     }
 
     fn root_of_unity(log_size: u32) -> Option<Self> {

@@ -52,9 +52,9 @@ fn main() {
         domain.transform(&mut generic);
         assert_eq!(generic, expected);
     }
-    #[cfg(feature = "poly")]
+    #[cfg(feature = "polynomial")]
     assert_eq!(
-        udon::poly::evaluate([&Fp::ONE, &value], Fp::ONE),
+        udon::polynomial::evaluate_iter([&Fp::ONE, &value], Fp::ONE),
         value + Fp::ONE
     );
     #[cfg(feature = "cycle")]

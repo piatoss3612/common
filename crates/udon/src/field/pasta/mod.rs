@@ -363,6 +363,8 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
         multiplier: &PastaField<M, T>,
         addend: &PastaField<M, U>,
     ) -> PastaField<M> {
+        #[cfg(all(test, feature = "traits"))]
+        test_support::record_mul_add();
         self.mul(multiplier).add(addend)
     }
 

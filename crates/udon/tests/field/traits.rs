@@ -62,7 +62,7 @@ fn generic_representations_support_bls_and_jubjub_fields() {
         assert_eq!(values[1] * F::from(2), F::ONE);
         assert_eq!(values[2] * F::from(3), F::ONE);
         assert_eq!(
-            zakura_udon::poly::evaluate(&[F::from(2), F::from(3)], F::from(4)),
+            zakura_udon::polynomial::evaluate_iter(&[F::from(2), F::from(3)], F::from(4)),
             F::from(14)
         );
     }

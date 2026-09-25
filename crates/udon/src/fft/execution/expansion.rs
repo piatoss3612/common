@@ -2,6 +2,8 @@ use super::super::{Expansion, ExpansionOrder, ExpansionStorage};
 use super::*;
 
 mod driver;
+#[cfg(all(test, feature = "traits"))]
+pub(crate) use driver::count_expansions;
 
 /// Worker-independent expansion geometry and input liveness.
 ///

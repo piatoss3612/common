@@ -48,6 +48,7 @@ pub mod msm;
 mod parameters;
 mod point;
 mod projective;
+mod reduce;
 mod table_entry;
 
 pub use batch::batch_normalize;

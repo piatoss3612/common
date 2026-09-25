@@ -1,7 +1,7 @@
 //! Opt-in native controls. Counters and fixture checks are outside timed loops.
 use super::*;
 use crate::{
-    curve::{CurveTableEntry, Pallas, Vesta},
+    curve::{CurveTableEntry, Pallas, Vesta, reduce},
     exec::SerialExecutor,
     test_support::field_samples,
 };
@@ -165,7 +165,7 @@ fn phases() {
                     || {
                         level_points.copy_from_slice(&saved_points);
                         level_lens.copy_from_slice(&saved_lens);
-                        black_box(buckets::reduce_level::<C, false>(
+                        black_box(reduce::reduce_level::<C, false>(
                             &mut level_points,
                             &starts,
                             &mut level_lens,
@@ -177,7 +177,7 @@ fn phases() {
                 level_index += 1;
             }
             let mut levels = Vec::new();
-            buckets::reduce_with::<C, false>(
+            reduce::reduce_with::<C, false>(
                 &mut points[..total],
                 &starts,
                 &mut lens,
@@ -201,7 +201,7 @@ fn phases() {
                 })
                 .collect();
             timing("weighted_collapse_window_0", n, count * 64, || {
-                black_box(buckets::collapse(&survivors, &lens));
+                black_box(reduce::collapse(&survivors, &lens));
             });
             let r = input.requirements_with(options).unwrap();
             let mut affine = vec![AffinePoint::GENERATOR; r.affine()];
@@ -335,7 +335,7 @@ fn native_controls() {
                 let mut fields = vec![PastaField::ZERO; n * 3];
                 let mut writes = vec![0; n / 2];
                 let mut histogram = Vec::new();
-                buckets::reduce_with::<C, false>(
+                reduce::reduce_with::<C, false>(
                     &mut points,
                     &starts,
                     &mut lengths,
@@ -350,20 +350,17 @@ fn native_controls() {
                         points.copy_from_slice(&bases[..n]);
                         lengths.copy_from_slice(&lens);
                         match mode {
-                            0 => buckets::reduce_original(
+                            0 => reduce::reduce_original(
                                 &mut points,
                                 &starts,
                                 &mut lengths,
                                 &mut fields,
                                 &mut writes,
                             ),
-                            1 => buckets::reduce(
-                                &mut points,
-                                &starts,
-                                &mut lengths,
-                                &mut fields[..n],
-                            ),
-                            _ => buckets::reduce_with::<C, true>(
+                            1 => {
+                                reduce::reduce(&mut points, &starts, &mut lengths, &mut fields[..n])
+                            }
+                            _ => reduce::reduce_with::<C, true>(
                                 &mut points,
                                 &starts,
                                 &mut lengths,
@@ -388,20 +385,20 @@ fn native_controls() {
                             points.copy_from_slice(&bases[..n]);
                             lengths.copy_from_slice(&lens);
                             match mode {
-                                0 => buckets::reduce_original(
+                                0 => reduce::reduce_original(
                                     &mut points,
                                     &starts,
                                     &mut lengths,
                                     &mut fields,
                                     &mut writes,
                                 ),
-                                1 => buckets::reduce(
+                                1 => reduce::reduce(
                                     &mut points,
                                     &starts,
                                     &mut lengths,
                                     &mut fields[..n],
                                 ),
-                                _ => buckets::reduce_with::<C, true>(
+                                _ => reduce::reduce_with::<C, true>(
                                     &mut points,
                                     &starts,
                                     &mut lengths,

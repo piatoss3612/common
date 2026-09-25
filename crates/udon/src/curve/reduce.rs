@@ -3,16 +3,14 @@
 use crate::field::invert_nonzero;
 use core::marker::PhantomData;
 
-use crate::{
-    curve::{AffinePoint, PastaCurve, ProjectivePoint},
-    field::PastaField,
-};
+use super::{AffinePoint, PastaCurve, ProjectivePoint};
+use crate::field::PastaField;
 
 /// Sums one bounded batch, sharing inversions until the final small layer.
 ///
 /// The caller supplies at least one field per input point. Cancelled pairs
 /// disappear; no identity is ever stored as a nonidentity affine point.
-pub(in crate::curve) fn sum<C: PastaCurve>(
+pub(super) fn sum<C: PastaCurve>(
     points: &mut [AffinePoint<C>],
     fields: &mut [PastaField<C::Base>],
 ) -> ProjectivePoint<C> {
@@ -53,7 +51,7 @@ pub(super) fn reduce<C: PastaCurve>(
 /// retries [`reduce_level`] with complete formulas before changing points or
 /// lengths, so callers need not exclude doubling or cancellation.
 #[inline(always)]
-pub(super) fn reduce_fused<C: PastaCurve, const INCOMPLETE: bool>(
+fn reduce_fused<C: PastaCurve, const INCOMPLETE: bool>(
     points: &mut [AffinePoint<C>],
     starts: &[usize],
     lens: &mut [usize],
@@ -327,3 +325,7 @@ pub(super) fn collapse<C: PastaCurve>(
     }
     sum
 }
+
+#[cfg(test)]
+#[path = "tests/reduce.rs"]
+mod tests;

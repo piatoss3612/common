@@ -1,5 +1,5 @@
 use super::*;
-use crate::curve::{assert_length, checked_count, msm::buckets};
+use crate::curve::{assert_length, checked_count, reduce};
 
 impl<C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'_, C, E> {
     /// Bounds each scratch length needed to sum all selected entries together.
@@ -83,12 +83,12 @@ impl<C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'_, C, E> {
                 affine[used] = point;
                 used += 1;
                 if used == capacity {
-                    sum = sum.add(&buckets::sum(affine, field));
+                    sum = sum.add(&reduce::sum(affine, field));
                     used = 0;
                 }
             });
         }
-        sum.add(&buckets::sum(&mut affine[..used], field))
+        sum.add(&reduce::sum(&mut affine[..used], field))
     }
 }
 

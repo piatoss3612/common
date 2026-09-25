@@ -123,8 +123,7 @@ fn check<C: PastaCurve, E: CurveTableEntry<C>>() {
             let expected = points
                 .iter()
                 .fold(ProjectivePoint::IDENTITY, |sum, p| sum.add_mixed(p));
-            let result =
-                crate::curve::msm::buckets::sum(&mut points, &mut vec![PastaField::ZERO; len]);
+            let result = crate::curve::reduce::sum(&mut points, &mut vec![PastaField::ZERO; len]);
             assert_eq!(result, expected);
         }
     }

@@ -1,10 +1,11 @@
 //! Monomorphic base access and arithmetic for one complete chunk or window.
 
 use super::run::storage::Storage;
+use crate::curve::reduce::{collapse, reduce};
 use crate::exec::run::ReadView;
 
 use super::{
-    Accumulation, Bases, Input, ScalarStorage, buckets,
+    Accumulation, Bases, Input, ScalarStorage,
     recode::{self, Geometry},
 };
 use crate::{
@@ -454,14 +455,14 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
                 }
             },
         );
-        buckets::reduce(&mut points[..total], starts, lens, work.field);
+        reduce(&mut points[..total], starts, lens, work.field);
         for i in 0..buckets {
             if lens[i] != 0 {
                 survivors[i] = points[starts[i]];
             }
         }
     }
-    buckets::collapse(survivors, lens)
+    collapse(survivors, lens)
 }
 
 pub(super) fn stream<C: PastaCurve>(

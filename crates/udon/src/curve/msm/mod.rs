@@ -84,7 +84,6 @@ use crate::exec::TaskBudget;
 mod policy;
 use policy::{Accumulation, ArithmeticOptions, BatchOptions, Kernel};
 
-pub(super) mod buckets;
 mod coalesce;
 mod kernels;
 mod matrix;

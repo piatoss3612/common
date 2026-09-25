@@ -1,4 +1,4 @@
-//! Traits for code that is generic over a prime field.
+//! Traits for field arithmetic and optional representation capabilities.
 //!
 //! Generic consumers, such as evaluation domains, polynomial utilities, and
 //! proof systems parameterized over a curve cycle, name a field through
@@ -6,29 +6,30 @@
 //! implements these traits for both Pasta fields by delegating to its inherent
 //! methods and constants.
 //!
-//! The traits describe 256-bit prime fields with a 32-byte canonical
-//! encoding and, for [`FftField`], the constants a radix-2 evaluation domain
-//! and the Pasta curve endomorphism need. Randomness stays with the caller:
-//! [`random`](super::random) reduces 64 caller-supplied bytes through
-//! [`Field::from_uniform_bytes`] and depends on no particular random number
+//! [`PrimeField`] adds a modulus and field-specific encoding and bit widths.
+//! [`FftField`] supplies radix-2 transforms, while [`CubeRootField`] supplies
+//! the root used by the Pasta curve endomorphism. Randomness stays with the
+//! caller: [`random`](super::random) reduces 64 caller-supplied bytes through
+//! [`PrimeField::from_uniform_bytes`] and depends on no particular random number
 //! generator.
 //!
 //! Every operation is variable-time, like the arithmetic it delegates to.
 
 use core::{
     fmt::Debug,
-    iter::Sum,
+    iter::{Product, Sum},
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
-/// A 256-bit prime field with operator arithmetic, identities, and a
-/// canonical 32-byte encoding.
+/// A field with operator arithmetic and additive and multiplicative identities.
 ///
 /// The operator supertraits cover by-value operands and right operands by
 /// reference, which is what generic code written as `a * b`, `a * &b`, and
 /// `a *= &b` needs. Equality compares field elements, not representations.
 /// Implementations may hold redundant representations internally, as
 /// [`PastaField`](super::PastaField) does with its loose residues.
+/// Iterator sums and products accept owned or borrowed elements; empty
+/// iterators return [`ZERO`](Self::ZERO) and [`ONE`](Self::ONE), respectively.
 pub trait Field:
     Copy
     + Eq
@@ -53,6 +54,8 @@ pub trait Field:
     + for<'a> MulAssign<&'a Self>
     + Sum
     + for<'a> Sum<&'a Self>
+    + Product
+    + for<'a> Product<&'a Self>
 {
     /// The additive identity.
     const ZERO: Self;
@@ -60,21 +63,8 @@ pub trait Field:
     /// The multiplicative identity.
     const ONE: Self;
 
-    /// The modulus as ordinary little-endian 64-bit limbs.
-    const MODULUS: [u64; 4];
-
-    /// The bit length of the modulus.
-    const NUM_BITS: u32;
-
-    /// The largest bit length whose integers are all distinct field elements:
-    /// one less than [`NUM_BITS`](Self::NUM_BITS).
-    const CAPACITY: u32;
-
     /// Returns whether this is the additive identity.
     fn is_zero(&self) -> bool;
-
-    /// Returns whether the canonical integer representative is odd.
-    fn is_odd(&self) -> bool;
 
     /// Returns `self * self`.
     fn square(&self) -> Self;
@@ -85,6 +75,14 @@ pub trait Field:
     /// Returns the multiplicative inverse, or `None` for zero.
     fn invert(&self) -> Option<Self>;
 
+    /// Replaces nonzero values by their inverses, preserving zeros.
+    ///
+    /// Implements [`super::batch_invert`]'s contract: scratch bounds the batch
+    /// size, empty scratch uses individual inversions, and unused scratch is
+    /// untouched. Empty and all-zero batches perform no inversion. No
+    /// allocation is performed.
+    fn batch_invert(values: &mut [Self], scratch: &mut [Self]);
+
     /// Returns a square root, or `None` for a nonsquare.
     ///
     /// Either root may be returned; zero returns `Some(ZERO)`.
@@ -94,20 +92,6 @@ pub trait Field:
     ///
     /// The multiplication schedule depends on the exponent.
     fn pow_u64(&self, exponent: u64) -> Self;
-
-    /// Encodes the canonical integer representative as 32 little-endian bytes.
-    fn to_bytes(&self) -> [u8; 32];
-
-    /// Decodes a canonical encoding, rejecting integers at or above the
-    /// modulus.
-    fn from_bytes(bytes: [u8; 32]) -> Option<Self>;
-
-    /// Reduces 64 little-endian bytes into the field.
-    ///
-    /// Uniformly random input yields output whose distribution is
-    /// statistically indistinguishable from uniform, which is how consumers
-    /// derive elements from a random or hashed source.
-    fn from_uniform_bytes(bytes: &[u8; 64]) -> Self;
 
     /// Sums products from paired operands; an empty iterator returns zero.
     ///
@@ -125,42 +109,88 @@ pub trait Field:
         let two_to_the_64 = Self::from(1u64 << 63).double();
         Self::from((value >> 64) as u64) * two_to_the_64 + Self::from(value as u64)
     }
+}
+
+/// A prime field with canonical little-endian representations.
+///
+/// Implementations choose the widths of their limbs, bytes, and bits.
+pub trait PrimeField: Field {
+    /// The canonical little-endian byte representation.
+    ///
+    /// Its length is fixed for the field and must hold every canonical
+    /// representative. Zero encodes as all zero bytes.
+    type Repr: AsRef<[u8]> + AsMut<[u8]> + Copy + Debug + Eq + Send + Sync + 'static;
+
+    /// Ordinary little-endian 64-bit limbs, wide enough to hold the modulus.
+    type Limbs: AsRef<[u64]> + Copy + Debug + Eq + Send + Sync + 'static;
+
+    /// The canonical little-endian bits, including zero padding to the full
+    /// width of [`Repr`](Self::Repr).
+    type Bits: AsRef<[bool]> + Copy + Debug + Eq + Send + Sync + 'static;
+
+    /// The modulus as ordinary little-endian 64-bit limbs.
+    const MODULUS: Self::Limbs;
+
+    /// The bit length of the modulus.
+    const NUM_BITS: u32;
+
+    /// The largest bit length whose integers are all distinct field elements:
+    /// one less than [`NUM_BITS`](Self::NUM_BITS).
+    const CAPACITY: u32;
+
+    /// Returns whether the canonical integer representative is odd.
+    fn is_odd(&self) -> bool;
+
+    /// Encodes the canonical integer representative in little-endian bytes.
+    fn to_bytes(&self) -> Self::Repr;
+
+    /// Decodes a canonical encoding, rejecting integers at or above the
+    /// modulus.
+    fn from_bytes(bytes: Self::Repr) -> Option<Self>;
+
+    /// Reduces 64 little-endian bytes into the field.
+    ///
+    /// For a modulus of at most 384 bits, uniformly random input yields a
+    /// distribution within `2^-128` statistical distance of uniform. Larger
+    /// fields require more input entropy for the same bound; this operation
+    /// still performs reduction, but makes no such uniformity guarantee.
+    fn from_uniform_bytes(bytes: &[u8; 64]) -> Self;
 
     /// Converts ordinary little-endian limbs, returning `None` if they are at
     /// least the modulus.
     ///
     /// The default encodes the limbs as bytes for [`Self::from_bytes`].
-    fn from_limbs(limbs: [u64; 4]) -> Option<Self> {
-        let mut bytes = [0u8; 32];
-        for (chunk, limb) in bytes.chunks_exact_mut(8).zip(limbs) {
-            chunk.copy_from_slice(&limb.to_le_bytes());
+    fn from_limbs(limbs: Self::Limbs) -> Option<Self> {
+        let mut bytes = Self::ZERO.to_bytes();
+        for (index, byte) in limbs
+            .as_ref()
+            .iter()
+            .flat_map(|limb| limb.to_le_bytes())
+            .enumerate()
+        {
+            if let Some(slot) = bytes.as_mut().get_mut(index) {
+                *slot = byte;
+            } else if byte != 0 {
+                return None;
+            }
         }
         Self::from_bytes(bytes)
     }
 
     /// Returns the bits of the canonical representative, least significant
     /// first.
-    fn to_le_bits(&self) -> [bool; 256] {
-        let bytes = self.to_bytes();
-        let mut bits = [false; 256];
-        for (index, bit) in bits.iter_mut().enumerate() {
-            *bit = (bytes[index / 8] >> (index % 8)) & 1 == 1;
-        }
-        bits
-    }
+    fn to_le_bits(&self) -> Self::Bits;
 }
 
-/// A [`Field`] with the constants a radix-2 evaluation domain and the Pasta
-/// endomorphism need.
+/// A [`PrimeField`] with radix-2 transforms and evaluation-domain constants.
 ///
 /// With `g` the [`MULTIPLICATIVE_GENERATOR`](Self::MULTIPLICATIVE_GENERATOR)
 /// and `s` the [`TWO_ADICITY`](Self::TWO_ADICITY) of `p - 1`:
 /// [`ROOT_OF_UNITY`](Self::ROOT_OF_UNITY) is `g^((p - 1) / 2^s)`, of order
 /// exactly `2^s`; [`DELTA`](Self::DELTA) is `g^(2^s)`, which generates the
-/// odd-order part of the multiplicative group; and [`ZETA`](Self::ZETA) has
-/// order three. The default root lookups square down from the maximal root;
-/// implementations with tables override them.
-pub trait FftField: Field {
+/// odd-order part of the multiplicative group. The default root lookups
+/// square down from the maximal root; implementations with tables override them.
+pub trait FftField: PrimeField {
     /// `s`, the largest `s` such that `2^s` divides `p - 1`: the logarithm of
     /// the largest supported power-of-two domain.
     const TWO_ADICITY: u32;
@@ -181,9 +211,26 @@ pub trait FftField: Field {
     /// The generator raised to `2^TWO_ADICITY`.
     const DELTA: Self;
 
-    /// A primitive cube root of unity: the scalar by which the curve
-    /// endomorphism `(x, y) -> (zeta * x, y)` multiplies.
-    const ZETA: Self;
+    /// Replaces coefficients with evaluations at `domain`'s elements.
+    ///
+    /// Both sides use natural order. Implements
+    /// [`Domain::transform`](crate::fft::Domain::transform) without allocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics before mutation if `values.len()` differs from the domain size.
+    fn fft(domain: crate::fft::Domain<Self>, values: &mut [Self]);
+
+    /// Replaces evaluations at `domain`'s elements with normalized coefficients.
+    ///
+    /// Both sides use natural order. Implements
+    /// [`Domain::inverse_transform`](crate::fft::Domain::inverse_transform)
+    /// without allocation, including division by the domain size.
+    ///
+    /// # Panics
+    ///
+    /// Panics before mutation if `values.len()` differs from the domain size.
+    fn ifft(domain: crate::fft::Domain<Self>, values: &mut [Self]);
 
     /// Returns a primitive root of unity of order `2^log_size`, or `None`
     /// when `log_size` exceeds the two-adicity.
@@ -231,4 +278,13 @@ pub trait DeferredField: Field {
 
     /// Reduces the accumulated sum to a field element.
     fn reduce(accumulator: Self::Accumulator) -> Self;
+}
+
+/// A field with a chosen primitive cube root of unity.
+///
+/// This capability is independent of radix-2 FFT support. Curve
+/// implementations must choose compatible roots for their endomorphisms.
+pub trait CubeRootField: Field {
+    /// The chosen element of multiplicative order three.
+    const ZETA: Self;
 }

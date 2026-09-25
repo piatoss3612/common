@@ -3,9 +3,9 @@
 //! Polynomials are coefficient slices in ascending degree. Every function is
 //! generic over [`Field`], or over [`FftField`] where a product may route
 //! through an evaluation [`Domain`], and none allocates: results are written
-//! into caller-owned slices. The algorithms are exact reference shapes rather
-//! than tuned kernels, and they are variable-time like the arithmetic they
-//! use.
+//! into caller-owned slices. Transform-based products dispatch through the
+//! field's FFT implementation. Arithmetic is variable-time like the operations
+//! these algorithms use.
 //!
 //! ```
 //! use zakura_udon::{field::Fp, poly};
@@ -142,9 +142,9 @@ pub fn multiply<F: FftField>(a: &[F], b: &[F], product: &mut [F], scratch: &mut 
 
     let size = product_len.next_power_of_two();
     let schoolbook_cost = a.len().saturating_mul(b.len());
-    // Each reference FFT does a scaling and a twiddle update per butterfly.
-    // Count all three transforms, the pointwise products, and normalization;
-    // omitting the stage count can favor FFTs for large, thin products.
+    // Estimate all three transforms, the pointwise products, and normalization
+    // conservatively. The field chooses the actual FFT schedule; omitting the
+    // stage count here can favor FFTs for large, thin products.
     let transform_cost = size.saturating_mul(3 * size.ilog2() as usize + 2);
     let transform_scratch = size.checked_mul(2);
     if schoolbook_cost <= transform_cost

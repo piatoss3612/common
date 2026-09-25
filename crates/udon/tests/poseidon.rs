@@ -1,7 +1,7 @@
 //! Sanity checks and value pins for the Pasta Poseidon parameters.
 
 use zakura_udon::{
-    field::Field,
+    field::PrimeField,
     poseidon::{PALLAS_BASE, PALLAS_SCALAR, PoseidonParameters},
 };
 
@@ -17,7 +17,9 @@ fn fnv1a_128(bytes: impl Iterator<Item = u8>) -> u128 {
 /// Digest of every table entry as canonical little-endian bytes: the round
 /// constants row by row, then the MDS rows. Independent of the Montgomery
 /// representation the tables are stored in.
-fn digest<F: Field, const T: usize>(parameters: &PoseidonParameters<F, T>) -> u128 {
+fn digest<F: PrimeField<Repr = [u8; 32]>, const T: usize>(
+    parameters: &PoseidonParameters<F, T>,
+) -> u128 {
     fnv1a_128(
         parameters
             .round_constants
@@ -28,7 +30,9 @@ fn digest<F: Field, const T: usize>(parameters: &PoseidonParameters<F, T>) -> u1
     )
 }
 
-fn assert_well_formed<F: Field, const T: usize>(parameters: &PoseidonParameters<F, T>) {
+fn assert_well_formed<F: PrimeField<Repr = [u8; 32]>, const T: usize>(
+    parameters: &PoseidonParameters<F, T>,
+) {
     assert_eq!(parameters.width(), 5);
     assert_eq!(parameters.rate(), 4);
     assert_eq!(parameters.full_rounds, 8);

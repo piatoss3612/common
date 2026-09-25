@@ -8,10 +8,11 @@
 //! [`ProjectivePoint`] delegate the same way, running the planned multiscalar
 //! multiplication and batch normalization over bounded stack scratch.
 
-use core::ops;
+use core::{iter::Sum, ops};
 
 use super::{
-    Affine, AffinePoint, PastaCurve, Point, Projective, ProjectivePoint, batch_normalize,
+    Affine, AffinePoint, EndomorphismAffine, EndomorphismProjective, PastaCurve, Point, Projective,
+    ProjectivePoint, batch_normalize,
     msm::{Bases, Input, ScalarStorage, Scratch},
 };
 use crate::{
@@ -96,6 +97,22 @@ forward_point_operator!(Sub, sub, sub);
 forward_point_assign_operator!(AddAssign, add_assign, add);
 forward_point_assign_operator!(SubAssign, sub_assign, sub);
 
+impl<C: PastaCurve> Sum for ProjectivePoint<C> {
+    fn sum<I: Iterator<Item = Self>>(iter: I) -> Self {
+        iter.fold(Self::IDENTITY, |sum, point| {
+            ProjectivePoint::add(&sum, &point)
+        })
+    }
+}
+
+impl<'a, C: PastaCurve> Sum<&'a ProjectivePoint<C>> for ProjectivePoint<C> {
+    fn sum<I: Iterator<Item = &'a Self>>(iter: I) -> Self {
+        iter.fold(Self::IDENTITY, |sum, point| {
+            ProjectivePoint::add(&sum, point)
+        })
+    }
+}
+
 macro_rules! forward_negation {
     ($point:ident) => {
         impl<C: PastaCurve> ops::Neg for $point<C> {
@@ -170,8 +187,7 @@ impl<C: PastaCurve> Affine for Point<C> {
     type Base = PastaField<C::Base>;
     type Scalar = PastaField<C::Scalar>;
     type Projective = ProjectivePoint<C>;
-
-    const B: PastaField<C::Base> = AffinePoint::<C>::B;
+    type Repr = [u8; 32];
 
     fn identity() -> Self {
         Self::IDENTITY
@@ -199,10 +215,6 @@ impl<C: PastaCurve> Affine for Point<C> {
 
     fn negate(&self) -> Self {
         Point::neg(self)
-    }
-
-    fn endomorphism(&self) -> Self {
-        Point::endomorphism(self)
     }
 
     fn to_bytes(&self) -> [u8; 32] {
@@ -237,16 +249,11 @@ impl<C: PastaCurve> Affine for Point<C> {
             &mut indices,
         );
         let input = Input::new(Bases::Points(bases), scalars);
-        match input.execute(ExecutionOptions::default(), &SerialExecutor, scratch) {
-            Ok(sum) => sum,
-            // No planned layout fits this shape; the reference sum is exact.
-            Err(_) => scalars
-                .iter()
-                .zip(bases)
-                .fold(ProjectivePoint::IDENTITY, |sum, (scalar, base)| {
-                    sum.add(&base.mul_projective(scalar))
-                }),
-        }
+        // The capacities admit a one-term joint layout and width-four
+        // projective buckets. The planner can shrink any nonempty input to fit.
+        input
+            .execute(ExecutionOptions::default(), &SerialExecutor, scratch)
+            .expect("MSM stack scratch supports a bounded plan")
     }
 
     fn batch_to_affine(points: &[ProjectivePoint<C>], out: &mut [Self]) {
@@ -278,12 +285,29 @@ impl<C: PastaCurve> Projective for ProjectivePoint<C> {
         ProjectivePoint::double(self)
     }
 
-    fn endomorphism(&self) -> Self {
-        ProjectivePoint::endomorphism(self)
+    fn add_mixed(&self, rhs: &Point<C>) -> Self {
+        match rhs.as_affine() {
+            Some(point) => ProjectivePoint::add_mixed(self, point),
+            None => *self,
+        }
     }
 
     fn to_affine(&self) -> Point<C> {
         ProjectivePoint::to_point(self)
+    }
+}
+
+impl<C: PastaCurve> EndomorphismAffine for Point<C> {
+    const B: PastaField<C::Base> = AffinePoint::<C>::B;
+
+    fn endomorphism(&self) -> Self {
+        Point::endomorphism(self)
+    }
+}
+
+impl<C: PastaCurve> EndomorphismProjective for ProjectivePoint<C> {
+    fn endomorphism(&self) -> Self {
+        ProjectivePoint::endomorphism(self)
     }
 }
 

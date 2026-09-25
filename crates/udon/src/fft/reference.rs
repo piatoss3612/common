@@ -11,16 +11,33 @@
 //! transform over their curve's scalar field, supporting coefficient and
 //! Lagrange basis conversion in artifact generators. Group arithmetic is
 //! variable-time and needs no allocation; callers can batch-normalize outputs
-//! with [`crate::curve::batch_normalize`]. [`super::Domain`] binds these
-//! transforms to a domain's root and normalization.
+//! with [`crate::curve::batch_normalize`]. [`super::Domain`] dispatches through
+//! [`Butterfly::fft`] and [`Butterfly::ifft`]: field values use their
+//! [`FftField`] implementation, while other values default to these reference
+//! transforms. Direct calls to [`transform`] and [`inverse_transform`] always
+//! use the reference schedule.
 
 use crate::{
     curve::{PastaCurve, ProjectivePoint},
-    field::{Field, PastaField},
+    field::{FftField, Field, PastaField},
 };
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+std::thread_local! {
+    static TRANSFORM_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn count_transforms(f: impl FnOnce()) -> usize {
+    TRANSFORM_COUNT.with(|count| {
+        let before = count.get();
+        f();
+        count.get() - before
+    })
+}
 
 /// The scalar domain containing a transform's roots of unity.
 ///
@@ -55,6 +72,38 @@ pub trait Butterfly<T: Twiddle>: Clone {
     fn add(&self, rhs: &Self) -> Self;
     /// Negates this value.
     fn negated(&self) -> Self;
+
+    /// Replaces coefficients with evaluations at `domain`'s elements.
+    ///
+    /// Both sides use natural order. The default uses [`transform`]; field
+    /// values dispatch to the required [`FftField::fft`] implementation.
+    ///
+    /// # Panics
+    ///
+    /// Panics before mutation if `values.len()` differs from the domain size.
+    fn fft(domain: super::Domain<T>, values: &mut [Self])
+    where
+        T: FftField,
+    {
+        assert_eq!(values.len(), domain.size(), "transform input length");
+        transform(values, &domain.root());
+    }
+
+    /// Replaces evaluations at `domain`'s elements with normalized coefficients.
+    ///
+    /// Both sides use natural order. The default uses [`inverse_transform`];
+    /// field values dispatch to the required [`FftField::ifft`] implementation.
+    ///
+    /// # Panics
+    ///
+    /// Panics before mutation if `values.len()` differs from the domain size.
+    fn ifft(domain: super::Domain<T>, values: &mut [Self])
+    where
+        T: FftField,
+    {
+        assert_eq!(values.len(), domain.size(), "transform input length");
+        inverse_transform(values, &domain.inverse_root(), &domain.size_inverse());
+    }
 }
 
 // The field's operators forward to its kernels, so these instances add no
@@ -78,6 +127,20 @@ impl<F: Field> Butterfly<F> for F {
     }
     fn negated(&self) -> Self {
         -*self
+    }
+
+    fn fft(domain: super::Domain<F>, values: &mut [Self])
+    where
+        F: FftField,
+    {
+        <F as FftField>::fft(domain, values);
+    }
+
+    fn ifft(domain: super::Domain<F>, values: &mut [Self])
+    where
+        F: FftField,
+    {
+        <F as FftField>::ifft(domain, values);
     }
 }
 
@@ -111,6 +174,9 @@ impl<C: PastaCurve> Butterfly<PastaField<C::Scalar>> for ProjectivePoint<C> {
 /// Panics before mutation if the length is zero or not a power of two. Panics
 /// in caller-provided arithmetic or cloning may leave partial results.
 pub fn transform<T: Twiddle, V: Butterfly<T>>(values: &mut [V], root: &T) {
+    #[cfg(test)]
+    TRANSFORM_COUNT.with(|count| count.set(count.get() + 1));
+
     let size = values.len();
     assert!(
         size.is_power_of_two(),

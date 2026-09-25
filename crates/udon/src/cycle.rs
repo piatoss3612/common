@@ -42,12 +42,19 @@
 //! ```
 
 use crate::{
-    curve::{Affine, Pallas, PallasPoint, PastaCurve, Point, Projective as _, Vesta, VestaPoint},
-    field::{DeferredField, FftField, Fp, Fq},
+    curve::{
+        Affine, EndomorphismAffine, Pallas, PallasPoint, PastaCurve, Point, Projective as _, Vesta,
+        VestaPoint,
+    },
+    field::{CubeRootField, DeferredField, FftField, Fp, Fq},
     poseidon::{PoseidonFp, PoseidonFq, PoseidonPermutation},
 };
 
 /// A cycle of two curves, each defined over the other's scalar field.
+///
+/// This proof-system interface requires radix-2 FFTs, deferred products, and
+/// compatible order-three curve endomorphisms. The basic [`Affine`] and
+/// [`crate::field::Field`] traits do not require those capabilities.
 ///
 /// Implementations are zero-sized markers. Parameters that exist at runtime,
 /// such as generators, live in [`Params`](Self::Params) and are reached
@@ -56,20 +63,20 @@ pub trait Cycle: Copy + Default + Send + Sync + 'static {
     /// The field circuits are written over: the scalar field of the
     /// [`HostCurve`](Self::HostCurve) and the coordinate field of the
     /// [`NestedCurve`](Self::NestedCurve).
-    type CircuitField: FftField + DeferredField;
+    type CircuitField: FftField + DeferredField + CubeRootField;
 
     /// The scalar field of the [`NestedCurve`](Self::NestedCurve) and the
     /// coordinate field of the [`HostCurve`](Self::HostCurve).
-    type ScalarField: FftField + DeferredField;
+    type ScalarField: FftField + DeferredField + CubeRootField;
 
     /// The curve applications use for keys, signatures, and other primitives
     /// whose arithmetic circuits express over the
     /// [`CircuitField`](Self::CircuitField).
-    type NestedCurve: Affine<Scalar = Self::ScalarField, Base = Self::CircuitField>;
+    type NestedCurve: EndomorphismAffine<Scalar = Self::ScalarField, Base = Self::CircuitField>;
 
     /// The curve the proof system commits with when proving circuits over the
     /// [`CircuitField`](Self::CircuitField).
-    type HostCurve: Affine<Scalar = Self::CircuitField, Base = Self::ScalarField>;
+    type HostCurve: EndomorphismAffine<Scalar = Self::CircuitField, Base = Self::ScalarField>;
 
     /// Fixed generators of the [`NestedCurve`](Self::NestedCurve).
     type NestedGenerators: FixedGenerators<Self::NestedCurve>;

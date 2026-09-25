@@ -19,8 +19,10 @@
 //! caller-owned scratch. [`ConstantPrefix`] borrows an explicit tail after a
 //! repeated value for materialization or structured FFT and MSM operations.
 //!
-//! Operators forward to the inherent methods, and [`Field`], [`FftField`], and
-//! [`DeferredField`] describe the fields to generic code. Both Pasta fields
+//! Operators forward to the inherent methods. [`Field`] describes arithmetic,
+//! [`PrimeField`] adds canonical representations of field-specific widths,
+//! and [`FftField`], [`CubeRootField`], and [`DeferredField`] describe optional
+//! arithmetic capabilities to generic code. Both Pasta fields
 //! implement them through the same kernels.
 
 use core::{fmt, marker::PhantomData};
@@ -60,7 +62,7 @@ pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub(crate) use powers::fill_powers;
 pub use products::{ProductSum, dot};
 pub use representation::{Loose, Reduced, ReductionState};
-pub use traits::{DeferredField, FftField, Field};
+pub use traits::{CubeRootField, DeferredField, FftField, Field, PrimeField};
 pub use uint::CanonicalUint;
 
 use montgomery::{montgomery_multiply, montgomery_square, reduce_once};
@@ -85,8 +87,10 @@ const ENCODED_SIZE: usize = 32;
 ///
 /// The operator traits forward to the inherent methods. Binary operators
 /// take operands in the same state and return loose values; assignment
-/// operators apply to loose values. [`Field`] and its companions expose the
-/// same operations to generic code.
+/// operators apply to loose values. Iterator sums and products accept owned
+/// or borrowed elements in either state and return loose values; empty
+/// iterators return zero and one, respectively. [`Field`] and its companions
+/// expose the same operations to generic code.
 ///
 /// Implements [`bento::Pod`] so a constructed value can be written as bytes
 /// and embedded with its exact limbs and representation state. Stored values

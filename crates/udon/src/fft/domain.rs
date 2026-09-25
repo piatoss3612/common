@@ -1,10 +1,7 @@
 //! Radix-2 evaluation domains and their coset shifts.
 
-use super::{
-    FftError, check_element_count, factors::Shift,
-    reference::{Butterfly, inverse_transform, transform},
-};
-use crate::field::{FftField, PastaField, PrimeModulus, batch_invert_with_scratch};
+use super::{FftError, check_element_count, factors::Shift, reference::Butterfly};
+use crate::field::{FftField, PastaField, PrimeModulus, batch_invert};
 
 /// A radix-2 subgroup with its canonical root of unity and the scalars
 /// transforms over it need.
@@ -15,10 +12,11 @@ use crate::field::{FftField, PastaField, PrimeModulus, batch_invert_with_scratch
 /// `small.root()` whenever `small.size() <= large.size()`.
 /// Domains in the same field compare equal exactly when their sizes match.
 ///
-/// `Domain<PastaField<M>>` configures the Pasta transforms through
-/// [`Self::subgroup`] and [`Self::coset`]. The generic methods run the
-/// [`reference`](super::reference) transforms over any [`Butterfly`] value and
-/// evaluate the domain's vanishing and Lagrange polynomials.
+/// Field transforms dispatch through [`FftField`] to the field's implementation.
+/// Pasta fields use [`super::Transform`] with serial execution and no auxiliary
+/// buffers. [`Self::subgroup`] and [`Self::coset`] configure transforms with
+/// caller-owned tables, scratch, and execution. Other [`Butterfly`] values use
+/// their transform implementations, which default to [`super::reference`].
 #[derive(Clone, Copy, Debug)]
 pub struct Domain<F> {
     log_size: u32,
@@ -119,26 +117,30 @@ impl<F: FftField> Domain<F> {
         self.vanishing(x).is_zero()
     }
 
-    /// Replaces coefficients with evaluations at the elements, in natural
-    /// order, using the reference [`transform`].
+    /// Replaces coefficients with evaluations at the elements, in natural order.
+    ///
+    /// Field elements dispatch to [`FftField::fft`]. Other [`Butterfly`] values
+    /// use their transform implementation, which defaults to the reference FFT.
     ///
     /// # Panics
     ///
     /// Panics before mutation if `values.len()` is not the domain size.
     pub fn transform<V: Butterfly<F>>(self, values: &mut [V]) {
         assert_eq!(values.len(), self.size, "transform input length");
-        transform(values, &self.root);
+        V::fft(self, values);
     }
 
-    /// Replaces natural-order evaluations with coefficients, using the
-    /// reference [`inverse_transform`].
+    /// Replaces natural-order evaluations with normalized coefficients.
+    ///
+    /// Field elements dispatch to [`FftField::ifft`]. Other [`Butterfly`] values
+    /// use their transform implementation, which defaults to the reference IFFT.
     ///
     /// # Panics
     ///
     /// Panics before mutation if `values.len()` is not the domain size.
     pub fn inverse_transform<V: Butterfly<F>>(self, values: &mut [V]) {
         assert_eq!(values.len(), self.size, "transform input length");
-        inverse_transform(values, &self.inverse_root, &self.size_inverse);
+        V::ifft(self, values);
     }
 
     /// Evaluates the first `evaluations.len()` Lagrange basis polynomials at `x`.
@@ -188,7 +190,7 @@ impl<F: FftField> Domain<F> {
             *evaluation = x - power;
             power *= self.root;
         }
-        batch_invert_with_scratch(evaluations, scratch);
+        batch_invert(evaluations, scratch);
 
         let mut numerator = vanishing * self.size_inverse;
         for evaluation in evaluations.iter_mut() {

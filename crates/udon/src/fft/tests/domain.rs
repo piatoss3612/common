@@ -23,14 +23,20 @@ fn transforms<M: PrimeModulus>() {
             .collect();
 
         let mut values = coefficients.clone();
-        domain.transform(&mut values);
+        assert_eq!(
+            reference::count_transforms(|| domain.transform(&mut values)),
+            0
+        );
         let elements = domain.elements();
         assert_eq!(elements.len(), domain.size());
         for (value, element) in values.iter().zip(elements) {
             assert_eq!(*value, evaluate(&coefficients, element));
         }
 
-        domain.inverse_transform(&mut values);
+        assert_eq!(
+            reference::count_transforms(|| domain.inverse_transform(&mut values)),
+            0
+        );
         assert_eq!(values, coefficients);
     }
 }
@@ -39,6 +45,55 @@ fn transforms<M: PrimeModulus>() {
 fn domain_transforms_evaluate_at_every_element_and_invert() {
     transforms::<PallasBase>();
     transforms::<PallasScalar>();
+}
+
+fn large_transforms<M: PrimeModulus>() {
+    for log_size in 9..=13 {
+        let domain = Domain::<PastaField<M>>::new(log_size).unwrap();
+        let original = inputs::<M>(domain.size());
+        let mut expected = original.clone();
+        reference::transform(&mut expected, &domain.root());
+        let mut actual = original.clone();
+        assert_eq!(
+            reference::count_transforms(|| domain.transform(&mut actual)),
+            0
+        );
+        assert_eq!(actual, expected);
+
+        // Arbitrary evaluation vectors exercise the inverse independently of
+        // the forward transform, including loose representation boundaries.
+        actual.copy_from_slice(&original);
+        expected.copy_from_slice(&original);
+        reference::inverse_transform(
+            &mut expected,
+            &domain.inverse_root(),
+            &domain.size_inverse(),
+        );
+        assert_eq!(
+            reference::count_transforms(|| domain.inverse_transform(&mut actual)),
+            0
+        );
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn domain_transforms_use_field_kernels_across_plan_sizes() {
+    large_transforms::<PallasBase>();
+    large_transforms::<PallasScalar>();
+}
+
+#[test]
+fn field_transform_hooks_reject_wrong_lengths_before_writes() {
+    let domain = Domain::<Fp>::new(3).unwrap();
+    for transform in [<Fp as FftField>::fft, <Fp as FftField>::ifft] {
+        for length in [0, 3, 4, 7, 9] {
+            let mut values = vec![Fp::DELTA; length];
+            let original = values.clone();
+            assert!(catch_unwind(AssertUnwindSafe(|| transform(domain, &mut values))).is_err());
+            assert_eq!(values, original);
+        }
+    }
 }
 
 #[test]

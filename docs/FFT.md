@@ -24,6 +24,12 @@ one is supported. `elements()` iterates the subgroup in natural order,
 slice with one shared inversion. `bit_reverse` maps between natural and
 bit-reversed positions.
 
+`Domain::transform` and `Domain::inverse_transform` dispatch field elements
+through the required `FftField::fft` and `FftField::ifft` methods. Pasta fields
+use `Transform` with serial execution, computed twiddles, and no auxiliary
+buffers. These conveniences allocate nothing. Call `Transform` directly to
+reuse tables and scratch or select an executor.
+
 `domain.subgroup()` selects shift one; `domain.coset()` selects the field's
 order-three `ZETA` shift. These are the two supported transform domains.
 For size `n`, canonical `root`, and coefficients `c[i]`, natural evaluation
@@ -62,12 +68,13 @@ semantics; it cannot establish which polynomial produced the evaluations.
 The [`reference` module](../crates/udon/src/fft/reference.rs) retains a simple
 generic transform through `Twiddle` and `Butterfly`. It takes explicit roots;
 its inverse also takes the inverse size. Every `Field` is its own twiddle
-domain and butterfly value, and `Domain::transform` and
-`Domain::inverse_transform` bind these transforms to a domain's root and
-normalization for any butterfly value, including projective points over their
-scalar field. This is useful as an independent schedule or for a downstream
-value type. The trait contracts define the algebraic laws that a custom
-implementation must satisfy.
+domain and butterfly value. `Domain` dispatches through `Butterfly::fft` and
+`Butterfly::ifft`: fields select their `FftField` implementations, while
+projective points and downstream butterfly values default to the reference
+schedule. Direct calls to `reference::transform` and
+`reference::inverse_transform` always use the reference schedule, providing an
+independent check of the field kernels. The trait contracts define the algebraic
+laws that a custom implementation must satisfy.
 
 ## Transform plans and task budgets
 

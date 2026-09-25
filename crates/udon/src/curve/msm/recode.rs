@@ -6,7 +6,7 @@
 //! final chunks. [`window_rows`] can instead extract a window from GLV components
 //! without storing digits; its signed midpoint convention differs from the cache.
 
-use super::run::storage::Storage;
+use super::storage::Storage;
 
 use super::{ArithmeticOptions, CurveError, Kernel, PastaCurve, ScalarStorage, checked_count};
 use crate::curve::{digits::centered_digit, eisenstein, parameters::GlvParameters};

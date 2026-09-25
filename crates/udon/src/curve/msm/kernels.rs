@@ -1,6 +1,6 @@
 //! Monomorphic base access and arithmetic for one complete chunk or window.
 
-use super::run::storage::Storage;
+use super::storage::Storage;
 use crate::curve::reduce::{collapse, reduce};
 use crate::exec::run::ReadView;
 

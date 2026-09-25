@@ -26,7 +26,7 @@ use crate::exec::run::{
 
 mod chunks;
 mod driver;
-pub(super) mod storage;
+mod fragmented;
 #[cfg(test)]
 mod tests;
 pub use super::schedule::{BatchPlan, JobStorage, WorkerStorage};
@@ -687,7 +687,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                                 }),
                             },
                             self.terms,
-                            storage::Fragmented::new(digits, digit_len),
+                            fragmented::Fragmented::new(digits, digit_len),
                             task,
                             buckets,
                         );
@@ -697,7 +697,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                         kernels::stream_view(
                             &self.input,
                             self.terms,
-                            storage::Fragmented::new(digits, digit_len),
+                            fragmented::Fragmented::new(digits, digit_len),
                             task,
                             buckets,
                         );
@@ -720,8 +720,8 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                                     offset: self.offset,
                                 }),
                             },
-                            storage::Fragmented::new(records, self.terms),
-                            storage::Fragmented::new(digits, digit_len),
+                            fragmented::Fragmented::new(records, self.terms),
+                            fragmented::Fragmented::new(digits, digit_len),
                             task,
                             work,
                         )
@@ -735,8 +735,8 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                             }
                             _ => kernels::run_view(
                                 &self.input,
-                                storage::Fragmented::new(records, self.terms),
-                                storage::Fragmented::new(digits, digit_len),
+                                fragmented::Fragmented::new(records, self.terms),
+                                fragmented::Fragmented::new(digits, digit_len),
                                 task,
                                 work,
                             ),

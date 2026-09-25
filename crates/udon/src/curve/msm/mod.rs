@@ -90,6 +90,7 @@ mod matrix;
 mod prepared;
 mod recode;
 mod schedule;
+mod storage;
 mod suffix;
 mod sum;
 mod support;

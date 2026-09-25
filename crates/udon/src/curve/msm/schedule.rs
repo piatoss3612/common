@@ -2,77 +2,11 @@
 
 use super::{
     Accumulation, ArithmeticOptions, Bases, BatchOptions, CurveError, Input, Kernel, PastaCurve,
-    ProjectivePoint, Requirements, ScalarStorage, Scalars, Scratch, assert_length, assert_scratch,
-    checked_count, recode::Geometry,
+    ProjectivePoint, Requirements, ScalarStorage, Scalars, Scratch, add, assert_length,
+    assert_scratch, checked_count, max, min, recode::Geometry,
 };
 use crate::exec::{ExecutionOptions, Executor, TaskBudget};
 use core::num::NonZeroUsize;
-
-macro_rules! size {
-    ($e:expr) => {
-        match $e {
-            Ok(v) => v,
-            Err(e) => return Err(e),
-        }
-    };
-}
-const fn min(a: usize, b: usize) -> usize {
-    if a < b { a } else { b }
-}
-const fn max(a: usize, b: usize) -> usize {
-    if a > b { a } else { b }
-}
-const fn add(a: usize, b: usize) -> Result<usize, CurveError> {
-    match a.checked_add(b) {
-        Some(n) => Ok(n),
-        None => Err(CurveError::SizeOverflow),
-    }
-}
-const ZERO: Requirements = Requirements {
-    scalars: 0,
-    digits: 0,
-    affine: 0,
-    projective: 0,
-    field: 0,
-    indices: 0,
-};
-impl Requirements {
-    pub(super) const fn include(self, b: Self) -> Self {
-        Self {
-            scalars: max(self.scalars, b.scalars),
-            digits: max(self.digits, b.digits),
-            affine: max(self.affine, b.affine),
-            projective: max(self.projective, b.projective),
-            field: max(self.field, b.field),
-            indices: max(self.indices, b.indices),
-        }
-    }
-    pub(super) const fn plus(self, b: Self) -> Result<Self, CurveError> {
-        Ok(Self {
-            scalars: size!(add(self.scalars, b.scalars)),
-            digits: size!(add(self.digits, b.digits)),
-            affine: size!(add(self.affine, b.affine)),
-            projective: size!(add(self.projective, b.projective)),
-            field: size!(add(self.field, b.field)),
-            indices: size!(add(self.indices, b.indices)),
-        })
-    }
-    pub(super) const fn times<C: PastaCurve>(self, workers: usize) -> Result<Self, CurveError> {
-        Ok(Self {
-            scalars: size!(checked_count::<ScalarStorage<C>>(self.scalars, workers)),
-            digits: size!(checked_count::<u8>(self.digits, workers)),
-            affine: size!(checked_count::<super::AffinePoint<C>>(self.affine, workers)),
-            projective: size!(checked_count::<ProjectivePoint<C>>(
-                self.projective,
-                workers
-            )),
-            field: size!(checked_count::<crate::field::PastaField<C::Base>>(
-                self.field, workers
-            )),
-            indices: size!(checked_count::<usize>(self.indices, workers)),
-        })
-    }
-}
 
 /// Initialized opaque metadata for one input in a [`BatchPlan`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,8 +31,8 @@ impl JobStorage {
         budget: TaskBudget::SERIAL,
         streaming: false,
         accumulation: Accumulation::Affine,
-        work: ZERO,
-        requirements: ZERO,
+        work: Requirements::ZERO,
+        requirements: Requirements::ZERO,
     };
 }
 /// Initialized opaque metadata for a scheduled contiguous job range.
@@ -113,7 +47,7 @@ impl WorkerStorage {
     pub const EMPTY: Self = Self {
         begin: 0,
         end: 0,
-        requirements: ZERO,
+        requirements: Requirements::ZERO,
     };
 }
 
@@ -193,17 +127,17 @@ pub(super) const fn layout<C: PastaCurve>(
                 windows,
                 geometry.buckets()
             )),
-            ..ZERO
+            ..Requirements::ZERO
         }
     } else {
         match geometry {
             Geometry::Short(bits) => Requirements {
                 projective: if bits > 1 && cap >= 32 { 16 } else { 0 },
-                ..ZERO
+                ..Requirements::ZERO
             },
             Geometry::Joint if compact => Requirements {
                 projective: if !retained && cap >= 32 { 16 } else { 0 },
-                ..ZERO
+                ..Requirements::ZERO
             },
             Geometry::Joint => Requirements {
                 affine: size!(checked_count::<super::AffinePoint<C>>(pass, 9)),
@@ -214,14 +148,14 @@ pub(super) const fn layout<C: PastaCurve>(
                     8 * min(pass, 7),
                 ),
                 indices: pass,
-                ..ZERO
+                ..Requirements::ZERO
             },
             Geometry::Booth(_) => {
                 let buckets = geometry.buckets();
                 if matches!(accumulation, Accumulation::Projective) {
                     Requirements {
                         projective: max(buckets, 16),
-                        ..ZERO
+                        ..Requirements::ZERO
                     }
                 } else {
                     let deposits = size!(add(
@@ -237,7 +171,7 @@ pub(super) const fn layout<C: PastaCurve>(
                         },
                         field: 2 * (deposits / 2),
                         indices: 3 * buckets,
-                        ..ZERO
+                        ..Requirements::ZERO
                     }
                 }
             }
@@ -462,7 +396,7 @@ fn requirements<C: PastaCurve>(
         )?;
         a.plus(b)?.times::<C>(1)
     } else {
-        let mut r = ZERO;
+        let mut r = Requirements::ZERO;
         for input in inputs {
             r = r.include(job(input, options)?.requirements);
         }
@@ -751,7 +685,7 @@ fn fill_metadata<C: PastaCurve>(
     } else if inputs.is_empty() {
         0
     } else {
-        let mut requirements = ZERO;
+        let mut requirements = Requirements::ZERO;
         for (input, storage) in inputs.iter().zip(jobs) {
             *storage = job(input, options).unwrap();
             requirements = requirements.include(storage.requirements);
@@ -780,9 +714,9 @@ fn execute_workers<C: PastaCurve, X: Executor>(
 ) {
     if workers.len() > 1 {
         let mid = workers.len() / 2;
-        let left = workers[..mid]
-            .iter()
-            .fold(ZERO, |sum, w| sum.plus(w.requirements).unwrap());
+        let left = workers[..mid].iter().fold(Requirements::ZERO, |sum, w| {
+            sum.plus(w.requirements).unwrap()
+        });
         let (sa, sb) = split_scratch(scratch, left);
         let split = workers[mid].begin - offset;
         let (oa, ob) = output.split_at_mut(split);

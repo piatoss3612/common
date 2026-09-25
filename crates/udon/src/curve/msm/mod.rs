@@ -81,6 +81,27 @@ use core::num::NonZeroUsize;
 #[cfg(test)]
 use crate::exec::TaskBudget;
 
+macro_rules! size {
+    ($e:expr) => {
+        match $e {
+            Ok(v) => v,
+            Err(e) => return Err(e),
+        }
+    };
+}
+const fn min(a: usize, b: usize) -> usize {
+    if a < b { a } else { b }
+}
+const fn max(a: usize, b: usize) -> usize {
+    if a > b { a } else { b }
+}
+const fn add(a: usize, b: usize) -> Result<usize, CurveError> {
+    match a.checked_add(b) {
+        Some(n) => Ok(n),
+        None => Err(CurveError::SizeOverflow),
+    }
+}
+
 mod policy;
 use policy::{Accumulation, ArithmeticOptions, BatchOptions, Kernel};
 
@@ -482,6 +503,47 @@ pub struct Requirements {
     indices: usize,
 }
 impl Requirements {
+    const ZERO: Self = Self {
+        scalars: 0,
+        digits: 0,
+        affine: 0,
+        projective: 0,
+        field: 0,
+        indices: 0,
+    };
+    const fn include(self, b: Self) -> Self {
+        Self {
+            scalars: max(self.scalars, b.scalars),
+            digits: max(self.digits, b.digits),
+            affine: max(self.affine, b.affine),
+            projective: max(self.projective, b.projective),
+            field: max(self.field, b.field),
+            indices: max(self.indices, b.indices),
+        }
+    }
+    const fn plus(self, b: Self) -> Result<Self, CurveError> {
+        Ok(Self {
+            scalars: size!(add(self.scalars, b.scalars)),
+            digits: size!(add(self.digits, b.digits)),
+            affine: size!(add(self.affine, b.affine)),
+            projective: size!(add(self.projective, b.projective)),
+            field: size!(add(self.field, b.field)),
+            indices: size!(add(self.indices, b.indices)),
+        })
+    }
+    const fn times<C: PastaCurve>(self, workers: usize) -> Result<Self, CurveError> {
+        Ok(Self {
+            scalars: size!(checked_count::<ScalarStorage<C>>(self.scalars, workers)),
+            digits: size!(checked_count::<u8>(self.digits, workers)),
+            affine: size!(checked_count::<AffinePoint<C>>(self.affine, workers)),
+            projective: size!(checked_count::<ProjectivePoint<C>>(
+                self.projective,
+                workers
+            )),
+            field: size!(checked_count::<PastaField<C::Base>>(self.field, workers)),
+            indices: size!(checked_count::<usize>(self.indices, workers)),
+        })
+    }
     fn fits(self, available: Self) -> bool {
         self.scalars <= available.scalars
             && self.digits <= available.digits

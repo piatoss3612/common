@@ -1,4 +1,3 @@
-use super::expansion::ExpansionStrategy;
 use super::*;
 use crate::exec::SerialExecutor;
 use crate::field::{Fp, PallasBase, PallasScalar, Reduced};
@@ -14,11 +13,14 @@ use std::{
 mod composition;
 mod constant_prefix;
 mod contracts;
+mod expansion_engine;
 mod group;
 mod lagrange;
 mod operations;
 mod pipelines;
 mod vanishing;
+
+use expansion_engine::ExpansionStrategy;
 
 fn reduced<M: PrimeModulus>(values: &[PastaField<M>]) -> Vec<PastaField<M, Reduced>> {
     values.iter().map(|value| value.reduce()).collect()

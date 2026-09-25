@@ -2,8 +2,6 @@ use super::{
     CoefficientView, ElementOrder, Executor, Expansion, FftError, InverseScale, PastaField,
     PrimeModulus, assert_length,
 };
-#[cfg(test)]
-use super::{Strategy, check_prefix, expansion::ResidueJobs};
 use crate::exec::ExecutionOptions;
 
 /// Persistent order of a complete expansion result.
@@ -70,9 +68,9 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 /// describes its physical positions.
 #[derive(Clone, Copy)]
 pub struct Residue<'a, M: PrimeModulus> {
-    expansion: Expansion<'a, M>,
-    residue: usize,
-    order: ElementOrder,
+    pub(super) expansion: Expansion<'a, M>,
+    pub(super) residue: usize,
+    pub(super) order: ElementOrder,
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for Residue<'_, M> {
@@ -144,73 +142,6 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
         )?
         .with_residue_scales(self.expansion, self.residue, input.normalization_factor())
         .execute(Some(input.as_slice()), output, None, scratch, executor);
-        Ok(())
-    }
-
-    /// Required scratch field count for this residue's output order.
-    ///
-    /// Validates options through [`Strategy::requirements`] for the base
-    /// size, with the same errors. Natural output uses that scratch count;
-    /// bit-reversed output needs no scratch.
-    #[cfg(test)]
-    pub(super) const fn scratch_requirements_with(
-        self,
-        options: Strategy,
-    ) -> Result<usize, FftError> {
-        let required = match options.requirements(self.expansion.base.domain().size()) {
-            Ok(r) => r,
-            Err(e) => return Err(e),
-        };
-        Ok(if matches!(self.order, ElementOrder::BitReversed) {
-            0
-        } else {
-            required
-        })
-    }
-    /// Evaluates a coefficient prefix into a reusable base-sized output.
-    ///
-    /// For base size `n`, input contains `0..=n` natural-order coefficients,
-    /// with omitted coefficients treated as zero. Accepts ordinary coefficients
-    /// or a [`CoefficientView`], with scaling and table usage as in
-    /// [`Expansion::coefficients`]. Input is preserved. Output has exactly `n`
-    /// fields and uses the order selected by [`Expansion::residue`].
-    /// Scratch must meet [`Self::scratch_requirements_with`], even for empty input.
-    ///
-    /// Returns [`FftError::InvalidPrefix`] for an oversized input. Option errors
-    /// follow [`Self::scratch_requirements_with`]. Incorrect output or scratch
-    /// lengths panic before writes. The module's [working-storage rules](super)
-    /// apply.
-    #[cfg(test)]
-    pub(super) fn coefficients_with<'input, E: Executor>(
-        self,
-        input: impl Into<CoefficientView<'input, M>>,
-        output: &mut [PastaField<M>],
-        options: Strategy,
-        executor: &E,
-        scratch: &mut [PastaField<M>],
-    ) -> Result<(), FftError> {
-        let input = input.into();
-        let (normalized_coefficients, extra) = self.expansion.coefficient_input(input);
-        let input = input.as_slice();
-        check_prefix(input.len(), 0, self.expansion.base.domain().size())?;
-        assert_length("output", self.expansion.base.domain().size(), output.len());
-        let required = self.scratch_requirements_with(options)?;
-        super::check_scratch(required, scratch.len());
-        ResidueJobs {
-            expansion: self.expansion,
-            coefficients: input,
-            factor: None,
-            normalized_coefficients,
-            order: if self.order == ElementOrder::Natural {
-                ExpansionOrder::Residues
-            } else {
-                ExpansionOrder::BitReversed
-            },
-            extra,
-            options,
-            executor,
-        }
-        .residue(output, self.residue, self.residue, &mut scratch[..required]);
         Ok(())
     }
 }

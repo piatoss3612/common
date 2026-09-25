@@ -1,6 +1,8 @@
 use super::super::{Expansion, ExpansionOrder, ExpansionStorage};
 use super::*;
 
+mod driver;
+
 /// Worker-independent expansion geometry and input liveness.
 ///
 /// Use [`Self::execute`] for preserved input, [`Self::execute_disposable`] to
@@ -12,19 +14,19 @@ use super::*;
 /// incremental execution.
 #[derive(Clone, Copy, Debug)]
 pub struct ExpansionPlan<'t, M: PrimeModulus> {
-    pub(super) expansion: Expansion<'t, M>,
-    pub(super) storage: ExpansionStorage,
-    pub(super) order: ExpansionOrder,
-    pub(super) support: InputSupport,
-    pub(super) input_order: ElementOrder,
+    expansion: Expansion<'t, M>,
+    storage: ExpansionStorage,
+    order: ExpansionOrder,
+    support: InputSupport,
+    input_order: ElementOrder,
     forward: FftPlan<'t, M>,
     in_place: Option<FftPlan<'t, M>>,
     inverse: Option<FftPlan<'t, M>>,
     coefficient_scale: PastaField<M>,
     coefficient_fields: usize,
     snapshot_fields: usize,
-    pub(super) scratch_fields: usize,
-    pub(super) budget: crate::exec::TaskBudget,
+    scratch_fields: usize,
+    budget: crate::exec::TaskBudget,
     memory_limit: Option<usize>,
 }
 
@@ -257,11 +259,11 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
         }
     }
 
-    pub(super) fn inverse(&self) -> FftPlan<'t, M> {
+    fn inverse(&self) -> FftPlan<'t, M> {
         self.inverse.expect("evaluation input requires an inverse")
     }
 
-    pub(super) fn transform(&self, block: usize, in_place: bool) -> FftPlan<'t, M> {
+    fn transform(&self, block: usize, in_place: bool) -> FftPlan<'t, M> {
         let residue = if self.order == ExpansionOrder::BitReversed {
             reverse(block, self.residues().ilog2())
         } else {

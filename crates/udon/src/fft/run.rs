@@ -38,7 +38,6 @@ pub use interpolation::{
     AdditionKernel, AdditionRequest, InterpolationPlan, InterpolationPublished, InterpolationRun,
 };
 mod driver;
-mod expansion_driver;
 #[cfg(test)]
 mod tests;
 

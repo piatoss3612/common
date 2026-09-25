@@ -813,7 +813,7 @@ fn curve<C: PastaCurve>() {
     #[cfg(feature = "msm-arithmetic")]
     let _ = arithmetic::curve::msm::ArithmeticOptions::default();
     #[cfg(feature = "msm-kernel")]
-    let _ = arithmetic::curve::msm::Kernel::Auto;
+    let _ = arithmetic::curve::msm::Algorithm::Auto;
     #[cfg(feature = "msm-accumulation")]
     let _ = arithmetic::curve::msm::Accumulation::Auto;
     #[cfg(feature = "fft-codelet")]

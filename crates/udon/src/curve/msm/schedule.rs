@@ -1,7 +1,7 @@
 //! Job layout, memory adaptation, and batch requirement planning for MSM inputs.
 
 use super::{
-    Accumulation, ArithmeticOptions, Bases, BatchOptions, CurveError, Input, Kernel, PastaCurve,
+    Accumulation, Algorithm, ArithmeticOptions, Bases, BatchOptions, CurveError, Input, PastaCurve,
     ProjectivePoint, Requirements, ScalarStorage, Scalars, add, checked_count, max, min,
     recode::Geometry,
 };
@@ -232,7 +232,7 @@ pub(super) const fn smaller(mut options: Options, n: usize) -> Option<Options> {
         None => n,
     };
     if options.arithmetic.streaming() {
-        options.arithmetic.kernel = Kernel::Auto;
+        options.arithmetic.algorithm = Algorithm::Auto;
     } else if pass > 128 {
         options.arithmetic.max_terms_per_pass = NonZeroUsize::new(128);
     } else if options.task_budget.get() > 1 {
@@ -249,10 +249,10 @@ pub(super) const fn smaller(mut options: Options, n: usize) -> Option<Options> {
         options.arithmetic.chunk_size = NonZeroUsize::new(chunk);
         if chunk < super::BOOTH_MIN
             && matches!(
-                options.arithmetic.kernel,
-                Kernel::Auto
-                    | Kernel::Booth { width: None, .. }
-                    | Kernel::StreamingBooth { width: None }
+                options.arithmetic.algorithm,
+                Algorithm::Auto
+                    | Algorithm::Booth { width: None, .. }
+                    | Algorithm::StreamingBooth { width: None }
             )
         {
             options.width = Some(4);
@@ -298,7 +298,7 @@ pub(super) fn unbound<C: PastaCurve>(
     let mut requested = BatchOptions::from(options);
     requested.arithmetic.chunk_size = source_fragment;
     if terms >= 4096 && source_fragment.is_some_and(|fragment| fragment.get() < 1024) {
-        requested.arithmetic.kernel = Kernel::StreamingBooth { width: None };
+        requested.arithmetic.algorithm = Algorithm::StreamingBooth { width: None };
     }
     let mut options = Options::new(requested);
     loop {

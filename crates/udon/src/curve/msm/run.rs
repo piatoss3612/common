@@ -664,7 +664,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                     }
                     if let Some(input) = self.produced {
                         kernels::stream_selected(
-                            &kernels::Selection {
+                            &kernels::BaseView {
                                 bases: input.bases,
                                 indices: input.indexed.then_some(kernels::Indices::Fragment {
                                     view: source.indices,
@@ -698,7 +698,7 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                     };
                     output[0] = if let Some(input) = self.produced {
                         kernels::run_selected(
-                            &kernels::Selection {
+                            &kernels::BaseView {
                                 bases: input.bases,
                                 indices: input.indexed.then_some(kernels::Indices::Fragment {
                                     view: source.indices,

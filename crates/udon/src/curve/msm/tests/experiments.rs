@@ -89,7 +89,7 @@ fn phases() {
             });
             let options = BatchOptions::new(
                 ArithmeticOptions::DEFAULT
-                    .with_kernel(Kernel::Booth {
+                    .with_algorithm(Algorithm::Booth {
                         width: Some(8),
                         accumulation: Accumulation::Auto,
                     })
@@ -484,7 +484,7 @@ fn native_controls() {
                     let o = BatchOptions::new(
                         options
                             .arithmetic()
-                            .with_kernel(Kernel::Booth {
+                            .with_algorithm(Algorithm::Booth {
                                 width: Some(u32::from(width)),
                                 accumulation: Accumulation::Projective,
                             })

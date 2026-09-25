@@ -98,18 +98,18 @@ const fn add(a: usize, b: usize) -> Result<usize, CurveError> {
 }
 
 mod policy;
-use policy::{Accumulation, ArithmeticOptions, BatchOptions, Kernel};
+use policy::{Accumulation, Algorithm, ArithmeticOptions, BatchOptions};
 
 mod coalesce;
 mod kernels;
 mod matrix;
+mod nonzero;
 mod prepared;
 mod recode;
 mod schedule;
 mod storage;
 mod suffix;
 mod sum;
-mod support;
 
 pub mod run;
 pub use coalesce::{CoalescingKey, CoalescingPlan, IndexedCoalescingPlan};

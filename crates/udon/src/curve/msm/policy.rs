@@ -11,7 +11,7 @@ pub(super) enum Accumulation {
     Hybrid,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Kernel {
+pub(super) enum Algorithm {
     Auto,
     #[cfg_attr(
         not(test),
@@ -35,13 +35,13 @@ pub(super) enum Kernel {
 pub(super) struct ArithmeticOptions {
     pub(super) max_terms_per_pass: Option<NonZeroUsize>,
     pub(super) chunk_size: Option<NonZeroUsize>,
-    pub(super) kernel: Kernel,
+    pub(super) algorithm: Algorithm,
 }
 impl ArithmeticOptions {
     pub(super) const DEFAULT: Self = Self {
         max_terms_per_pass: None,
         chunk_size: None,
-        kernel: Kernel::Auto,
+        algorithm: Algorithm::Auto,
     };
     #[cfg(test)]
     pub(super) const fn with_max_terms_per_pass(mut self, cap: Option<NonZeroUsize>) -> Self {
@@ -54,25 +54,28 @@ impl ArithmeticOptions {
         self
     }
     #[cfg(test)]
-    pub(super) const fn with_kernel(mut self, kernel: Kernel) -> Result<Self, InvalidWindow> {
-        if let Kernel::Booth {
+    pub(super) const fn with_algorithm(
+        mut self,
+        algorithm: Algorithm,
+    ) -> Result<Self, InvalidWindow> {
+        if let Algorithm::Booth {
             width: Some(bits), ..
         }
-        | Kernel::StreamingBooth { width: Some(bits) } = kernel
+        | Algorithm::StreamingBooth { width: Some(bits) } = algorithm
             && (bits < 4 || bits > 12)
         {
             return Err(InvalidWindow { bits });
         }
-        self.kernel = kernel;
+        self.algorithm = algorithm;
         Ok(self)
     }
     pub(super) const fn streaming(self) -> bool {
-        matches!(self.kernel, Kernel::StreamingBooth { .. })
+        matches!(self.algorithm, Algorithm::StreamingBooth { .. })
     }
     pub(super) const fn accumulation(self) -> Accumulation {
-        match self.kernel {
-            Kernel::Booth { accumulation, .. } => accumulation,
-            Kernel::StreamingBooth { .. } => Accumulation::Projective,
+        match self.algorithm {
+            Algorithm::Booth { accumulation, .. } => accumulation,
+            Algorithm::StreamingBooth { .. } => Accumulation::Projective,
             _ => Accumulation::Auto,
         }
     }

@@ -8,7 +8,7 @@
 
 use super::storage::Storage;
 
-use super::{ArithmeticOptions, CurveError, Kernel, PastaCurve, ScalarStorage, checked_count};
+use super::{Algorithm, ArithmeticOptions, CurveError, PastaCurve, ScalarStorage, checked_count};
 use crate::curve::{digits::centered_digit, eisenstein, parameters::GlvParameters};
 #[cfg(test)]
 use crate::exec::{Executor, TaskBudget, for_each_chunk_mut};
@@ -25,16 +25,16 @@ pub(super) enum Geometry {
 
 impl Geometry {
     const fn for_len(n: usize, options: ArithmeticOptions) -> Self {
-        match options.kernel {
-            Kernel::Joint => return Self::Joint,
-            Kernel::Booth {
+        match options.algorithm {
+            Algorithm::Joint => return Self::Joint,
+            Algorithm::Booth {
                 width: Some(width), ..
             }
-            | Kernel::StreamingBooth { width: Some(width) } => return Self::Booth(width as u8),
-            Kernel::StreamingBooth { width: None } => return Self::Booth(8),
+            | Algorithm::StreamingBooth { width: Some(width) } => return Self::Booth(width as u8),
+            Algorithm::StreamingBooth { width: None } => return Self::Booth(8),
             _ => {}
         }
-        if matches!(options.kernel, Kernel::Auto) && n < super::BOOTH_MIN {
+        if matches!(options.algorithm, Algorithm::Auto) && n < super::BOOTH_MIN {
             Self::Joint
         } else {
             // Larger windows reduce recoding work but enlarge each bucket
@@ -65,8 +65,8 @@ impl Geometry {
             && budget.get() > 1
             && matches!(geometry, Self::Booth(_))
             && matches!(
-                options.kernel,
-                Kernel::Auto | Kernel::Booth { width: None, .. }
+                options.algorithm,
+                Algorithm::Auto | Algorithm::Booth { width: None, .. }
             )
         {
             Self::Booth(11)
@@ -77,7 +77,7 @@ impl Geometry {
 
     pub(super) const fn for_shape(n: usize, shape: Shape, options: ArithmeticOptions) -> Self {
         let Shape { bits, weight } = shape;
-        if !matches!(options.kernel, Kernel::Auto) || bits == 255 {
+        if !matches!(options.algorithm, Algorithm::Auto) || bits == 255 {
             return Self::for_len(n, options);
         }
         // Dense bounded rows eventually favor Booth buckets too. Keep sparse

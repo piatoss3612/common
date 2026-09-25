@@ -737,7 +737,7 @@ fn forced_kernels_chunks_and_incompatible_caches() {
         let prepared =
             PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
         let cached_options = ArithmeticOptions::DEFAULT
-            .with_kernel(Kernel::Booth {
+            .with_algorithm(Algorithm::Booth {
                 width: Some(8),
                 accumulation: Accumulation::Auto,
             })
@@ -770,7 +770,7 @@ fn forced_kernels_chunks_and_incompatible_caches() {
                     }
                     let options = BatchOptions::new(
                         ArithmeticOptions::DEFAULT
-                            .with_kernel(Kernel::Booth {
+                            .with_algorithm(Algorithm::Booth {
                                 width: Some(width),
                                 accumulation,
                             })
@@ -850,7 +850,7 @@ fn typed_sources_validate_bounds_and_signed_extremes() {
                 let options = width.map_or(BatchOptions::default(), |w| {
                     BatchOptions::new(
                         ArithmeticOptions::DEFAULT
-                            .with_kernel(Kernel::Booth {
+                            .with_algorithm(Algorithm::Booth {
                                 width: Some(w),
                                 accumulation: Accumulation::Auto,
                             })
@@ -1211,7 +1211,7 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
             for chunk in [1, 2, 17, 256, 513] {
                 let options = BatchOptions::new(
                     ArithmeticOptions::DEFAULT
-                        .with_kernel(Kernel::StreamingBooth { width: Some(width) })
+                        .with_algorithm(Algorithm::StreamingBooth { width: Some(width) })
                         .unwrap()
                         .with_chunk_size(NonZeroUsize::new(chunk).unwrap()),
                 );
@@ -1232,7 +1232,7 @@ fn streaming_buckets_match_complete_chunks_and_reuse() {
         }
         let o = BatchOptions::new(
             ArithmeticOptions::DEFAULT
-                .with_kernel(Kernel::StreamingBooth { width: Some(4) })
+                .with_algorithm(Algorithm::StreamingBooth { width: Some(4) })
                 .unwrap(),
         )
         .with_memory_limit(32768);

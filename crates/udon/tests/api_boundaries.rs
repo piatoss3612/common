@@ -171,7 +171,7 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
                 "Montgomery limbs exceed the representation bound",
             ),
             ("msm-arithmetic", "struct `ArithmeticOptions` is private"),
-            ("msm-kernel", "enum `Kernel` is private"),
+            ("msm-kernel", "enum `Algorithm` is private"),
             ("msm-accumulation", "enum `Accumulation` is private"),
             (
                 "matrix-bases-mutation",

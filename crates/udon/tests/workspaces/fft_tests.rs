@@ -44,14 +44,8 @@ fn geometry(budget: TaskBudget) -> ExecutionOptions {
 
 fn pipeline<M: PrimeModulus>() {
     let base = OwnedTables::<M>::new(Domain::for_size(N).unwrap().subgroup());
-    let classes: [_; 4] = core::array::from_fn(|i| {
-        OwnedTables::<M>::new(
-            Domain::for_size(N << i)
-                .unwrap()
-                .coset(PastaField::ZETA)
-                .unwrap(),
-        )
-    });
+    let classes: [_; 4] =
+        core::array::from_fn(|i| OwnedTables::<M>::new(Domain::for_size(N << i).unwrap().coset()));
     let plans = classes.each_ref().map(OwnedTables::plan);
     let base_plan = base.plan();
     let expansion = Expansion::new(base_plan, plans[3].domain(), None).unwrap();
@@ -121,12 +115,10 @@ fn pipeline<M: PrimeModulus>() {
             geometry(inner).with_memory_limit(0),
         )
         .unwrap();
-        let scratch = retained.scratch_fields().max(forward.scratch_fields()).max(
-            plans[3]
-                .scratch_requirements(geometry(inner))
-                .unwrap()
-                .field_elements,
-        );
+        let scratch = retained
+            .scratch_fields()
+            .max(forward.scratch_fields())
+            .max(plans[3].scratch_requirements(geometry(inner)).unwrap());
         assert_eq!(retained.coefficient_fields(), N);
         let mut workspaces: [_; 2] = core::array::from_fn(|_| {
             FftWorkspace::<M>::new(N, output_size, class_sizes.iter().sum(), scratch)

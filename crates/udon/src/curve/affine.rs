@@ -89,29 +89,23 @@ impl<C: PastaCurve> AffinePoint<C> {
         ProjectivePoint::from_affine(self)
     }
 
-    /// Multiplies by a scalar using variable-time doubling and mixed addition.
+    /// Multiplies by a scalar without inversion.
     ///
     /// Processes the full canonical scalar; zero returns identity. The scalar
-    /// uses the loose field representation. Uses bounded
-    /// internal stack storage, with no caller table, scratch, or allocation.
-    ///
-    /// The current implementation uses an inversion-free binary ladder for
-    /// scalars below `2^64`. Larger scalars prepare eight cached affine entries
-    /// on the stack, using one field inversion per call, then run a GLV/Eisenstein
-    /// ladder. The strategy is selected internally; stack frame sizes depend on
-    /// the compiler and target.
+    /// uses the loose field representation. Execution is variable-time and uses
+    /// bounded internal stack storage, with no caller table, scratch, or
+    /// allocation.
     ///
     /// Use [`EisensteinTable`](super::EisensteinTable) or
-    /// [`FixedBaseTable`](super::FixedBaseTable) to retain
-    /// preparation for repeated multiplication of the same base.
+    /// [`FixedBaseTable`](super::FixedBaseTable) to retain preparation for repeated
+    /// multiplication of the same base.
     pub fn mul_projective(&self, scalar: &PastaField<C::Scalar>) -> ProjectivePoint<C> {
         // Short scalars use the binary ladder without paying for table setup.
         let scalar = scalar.to_canonical_uint();
         if scalar.highest_set_bit().is_none_or(|high| high < 64) {
             super::scalar::multiply_canonical(scalar, |point| point.add_mixed(self))
         } else {
-            let points = super::eisenstein::representatives_affine(self);
-            super::eisenstein::multiply_once(&points, scalar)
+            super::effective::multiply(&self.to_projective(), scalar)
         }
     }
 

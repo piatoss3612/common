@@ -42,17 +42,17 @@ impl<'a, M: PrimeModulus> Work for Job<'a, M> {
 fn check<M: PrimeModulus>() {
     const CLASSES: usize = 7;
     let sizes = [64, 8, 64, 32, 64, 32, 8];
-    let shifts = [7, 11, 7, 13, 7, 13, 11];
+    let cosets = [true, false, true, true, true, true, false];
     for consume in [false, true] {
         for tile in [8, 64] {
             for flip in [false, true] {
                 let plans = core::array::from_fn::<_, CLASSES, _>(|i| {
-                    Transform::new(
-                        Domain::<M>::for_size(sizes[i])
-                            .unwrap()
-                            .coset(PastaField::from_u64(shifts[i]))
-                            .unwrap(),
-                    )
+                    let domain = Domain::<M>::for_size(sizes[i]).unwrap();
+                    Transform::new(if cosets[i] {
+                        domain.coset()
+                    } else {
+                        domain.subgroup()
+                    })
                 });
                 let orders = core::array::from_fn::<_, CLASSES, _>(|i| {
                     if (i % 2 == 0) == flip {

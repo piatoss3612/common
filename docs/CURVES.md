@@ -76,15 +76,12 @@ use [`try_batch_invert_by`](../crates/udon/src/field/batch.rs) on the returned
 points' `z` coordinates to recover slopes and affine coordinates together.
 The method's docs define the rejected inputs and show slope recovery.
 
-Ordinary scalar multiplication needs no caller preparation or scratch and uses
-bounded internal stack storage. The current implementation uses an inversion-free
-binary ladder for scalars below `2^64`. For larger scalars and nonidentity bases,
-each call prepares eight cached entries with one field inversion before running
-the GLV/Eisenstein ladder. The API selects the strategy internally.
-Scalars use the [field type's](../crates/udon/src/field/mod.rs) loose
-representation, including when read from POD storage. The
-[performance report](CURVE_PERFORMANCE.md#ordinary-multiplication) describes
-the current algorithm and its measured costs.
+Use [`AffinePoint::mul_projective`](../crates/udon/src/curve/affine.rs) or
+[`ProjectivePoint::mul`](../crates/udon/src/curve/projective.rs) for one-shot
+multiplication without caller preparation or scratch. Their rustdoc defines
+scalar representations and resource costs. For repeated multiplication of the
+same base, compare retained tables using the
+[performance report](CURVE_PERFORMANCE.md#ordinary-multiplication).
 
 ### GLV decomposition and the endomorphism
 
@@ -257,6 +254,11 @@ To cache endomorphism coordinates, initialize `entries` with
 `FixedBaseTable::<Pallas, PreparedAffinePoint<Pallas>>` instead. Preparation uses the
 same scratch lengths for either entry type.
 
+When several retained expanded tables contribute to one result, use
+[`FixedBaseTable::sum`](../crates/udon/src/curve/fixed_base/sum.rs) with caller-owned
+affine and field scratch. Its scratch contract is independent of MSM planning;
+include the retained tables and their preparation when comparing it with an MSM.
+
 ### Preparation, binding, and stored formats
 
 Compact and expanded tables, including compact batches, return views borrowing
@@ -324,6 +326,21 @@ Resolve `MsmPlan::for_input` with the cached handle to size workspace without
 duplicating the retained cache; caching does not change an existing plan's counts.
 `retained_bytes()` counts the borrowed records and optional cache. This storage
 is separate from execution scratch and is not a POD serialization format.
+
+When one prepared scalar row acts on several base rows, use
+[`SharedScalarInput`](../crates/udon/src/curve/msm/matrix.rs) to share recoding
+across outputs. Its strides borrow row-major or term-major bases without a
+matrix copy. Query its requirements for the combined operation and execute
+under one task budget and workspace ceiling. Independent scalar rows instead
+use the [grouped-job workflow](#grouped-jobs-and-other-work).
+
+For a constant region with sparse changes,
+[`BasisSum`](../crates/udon/src/curve/msm/sum.rs) combines a retained sum of bases
+with a correction MSM. Its `tail_corrections` accepts the same `ConstantPrefix`
+used by [structured FFT operations](FFT.md#constant-prefixes-and-explicit-tails):
+the tail contains actual values, which it converts to differences from the
+constant. Add the executed corrections to `basis.sum() * row.constant()` and
+include any additional application terms explicitly.
 
 ### Sizing and reusing scratch
 

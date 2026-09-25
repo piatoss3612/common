@@ -14,16 +14,23 @@
 //! Protocol bytes and [`CanonicalUint`] instead represent `x` itself.
 //! Arithmetic is variable-time; this module provides no constant-time guarantee
 //! for secret inputs.
+//!
+//! [`fraction_prefixes`] computes running products of ordered fractions with
+//! caller-owned scratch. [`ConstantPrefix`] borrows an explicit tail after a
+//! repeated value for materialization or structured FFT and MSM operations.
 
 use core::{fmt, marker::PhantomData};
 
 mod algorithms;
 mod batch;
+mod constant_prefix;
 mod encoding;
 pub(crate) mod fft;
+mod fractions;
 mod inversion;
 mod montgomery;
 mod parameters;
+mod powers;
 mod products;
 mod representation;
 mod safegcd;
@@ -31,11 +38,17 @@ mod sqrt;
 mod uint;
 pub(crate) mod word;
 
-pub use batch::{BatchInversionError, batch_invert, batch_invert_groups, try_batch_invert_by};
+pub use batch::{
+    BatchInversionError, batch_invert, batch_invert_groups, batch_invert_groups_scaled,
+    batch_invert_scaled, try_batch_invert_by, try_batch_invert_scaled_by,
+};
 pub(crate) use batch::{NonzeroInversionLanes, invert_nonzero};
+pub use constant_prefix::{ConstantPrefix, ConstantPrefixError};
+pub use fractions::{FractionPrefixError, fraction_prefixes, fraction_prefixes_in_place};
 #[cfg(test)]
 pub(crate) use inversion::count_inversions;
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
+pub(crate) use powers::fill_powers;
 pub use products::ProductSum;
 pub use representation::{Loose, Reduced, ReductionState};
 pub use uint::CanonicalUint;

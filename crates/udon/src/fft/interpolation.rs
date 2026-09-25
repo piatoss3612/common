@@ -1,7 +1,6 @@
 use super::transform::Run;
 use super::{
-    ElementOrder, Executor, FftError, PastaField, PrimeModulus, ScratchRequirements, Strategy,
-    Transform, assert_length,
+    ElementOrder, Executor, FftError, PastaField, PrimeModulus, Strategy, Transform, assert_length,
 };
 
 /// Meaning of an interpolation class's current working storage.
@@ -71,7 +70,7 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
         if self.order == ElementOrder::Natural {
             self.plan.permute(self.values);
         }
-        let required = self.plan.scratch_requirements_with(options)?.field_elements;
+        let required = self.plan.scratch_requirements_with(options)?;
         self.plan.run(
             self.values,
             options,
@@ -87,15 +86,15 @@ impl<'a, M: PrimeModulus> Class<'a, M> {
 
 const fn include_lift(
     options: Strategy,
-    required: ScratchRequirements,
+    required: usize,
     output_size: usize,
     lift_size: usize,
-) -> Result<ScratchRequirements, FftError> {
+) -> Result<usize, FftError> {
     if lift_size > output_size {
         return Err(FftError::InvalidClass);
     }
     match options.requirements(lift_size) {
-        Ok(lift) if lift.field_elements > required.field_elements => Ok(lift),
+        Ok(lift) if lift > required => Ok(lift),
         Ok(_) => Ok(required),
         Err(error) => Err(error),
     }
@@ -105,7 +104,7 @@ pub const fn interpolation_scratch<M: PrimeModulus>(
     output: &Class<'_, M>,
     lifts: &[Class<'_, M>],
     options: Strategy,
-) -> Result<ScratchRequirements, FftError> {
+) -> Result<usize, FftError> {
     if let Err(error) = output.check_evaluations() {
         return Err(error);
     }
@@ -139,7 +138,10 @@ pub fn interpolate_classes<M: PrimeModulus, E: Executor>(
     executor: &E,
     scratch: &mut [PastaField<M>],
 ) -> Result<(), FftError> {
-    interpolation_scratch(output, lifts, options)?.check(scratch.len());
+    super::check_scratch(
+        interpolation_scratch(output, lifts, options)?,
+        scratch.len(),
+    );
     for lift in lifts.iter_mut() {
         lift.inverse(&[], options, executor, scratch)?;
     }

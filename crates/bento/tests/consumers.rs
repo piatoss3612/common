@@ -164,7 +164,7 @@ macros = {{ package = "zakura-bento-macros", path = {macros:?} }}
     );
     assert!(output.status.success(), "{}", diagnostics(&output));
 
-    let output = cargo(root, &["check", "-p", "missing-support"]);
+    let output = cargo(root, &["check", "--release", "-p", "missing-support"]);
     let diagnostic = diagnostics(&output);
     assert!(
         !output.status.success(),

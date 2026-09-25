@@ -8,8 +8,15 @@ fn nz(value: usize) -> NonZeroUsize {
 
 fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary: &[PastaField<M>]) {
     for size in [ordinary.len(), ordinary.len() * 4] {
-        for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
-            let domain = Domain::<M>::for_size(size).unwrap().coset(shift).unwrap();
+        for coset in [false, true] {
+            let domain = {
+                let subgroup = Domain::<M>::for_size(size).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
             let plan = Transform::new(domain);
             let expected = direct(ordinary, domain);
             let mut output = vec![PastaField::ONE; size];
@@ -33,8 +40,6 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                 .unwrap();
                 assert_eq!(reduced(&output), reduced(&expected));
             }
-            let mut scales = vec![PastaField::ZERO; size];
-            let scales = PowerTable::prepare(PastaField::ONE, shift, &mut scales);
             for columns in [false, true] {
                 for scatter in [false, true] {
                     for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
@@ -67,41 +72,46 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                         } else {
                             EvaluationLayout::BitReversed
                         };
-                        for operation in [operation, operation.with_forward_scales(scales)] {
-                            let mut scratch =
-                                vec![PastaField::ONE; operation.retained_fields() + 1];
-                            for factor in [None, Some(factor_values.as_slice())] {
-                                operation.execute_with(
-                                    Some(view.as_slice()),
-                                    &mut output,
-                                    factor,
-                                    &mut scratch,
-                                    nz(3),
-                                    &SerialExecutor,
-                                );
-                                let result = EvaluationView::bind(&output, domain, layout);
-                                for (row, value) in expected.iter().enumerate() {
-                                    let expected = if factor.is_some() {
-                                        value.mul(&factor_values[0])
-                                    } else {
-                                        *value
-                                    };
-                                    assert_eq!(
-                                        (result.get(row)).map(|value| value.reduce()),
-                                        (Some(&expected)).map(|value| value.reduce())
-                                    );
-                                }
+
+                        let mut scratch = vec![PastaField::ONE; operation.retained_fields() + 1];
+                        for factor in [None, Some(factor_values.as_slice())] {
+                            operation.execute_with(
+                                Some(view.as_slice()),
+                                &mut output,
+                                factor,
+                                &mut scratch,
+                                nz(3),
+                                &SerialExecutor,
+                            );
+                            let result = EvaluationView::bind(&output, domain, layout);
+                            for (row, value) in expected.iter().enumerate() {
+                                let expected = if factor.is_some() {
+                                    value.mul(&factor_values[0])
+                                } else {
+                                    *value
+                                };
                                 assert_eq!(
-                                    (scratch.last()).map(|value| value.reduce()),
-                                    (Some(&PastaField::<_>::ONE)).map(|value| value.reduce())
+                                    (result.get(row)).map(|value| value.reduce()),
+                                    (Some(&expected)).map(|value| value.reduce())
                                 );
                             }
+                            assert_eq!(
+                                (scratch.last()).map(|value| value.reduce()),
+                                (Some(&PastaField::<_>::ONE)).map(|value| value.reduce())
+                            );
                         }
                     }
                 }
             }
 
-            let extended = Domain::for_size(size * 2).unwrap().coset(shift).unwrap();
+            let extended = {
+                let subgroup = Domain::for_size(size * 2).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
             let base = Transform::new(domain.domain().subgroup());
             let expected = direct(ordinary, extended);
             let mut output = vec![PastaField::ONE; extended.size()];
@@ -309,7 +319,7 @@ fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
         }))
         .is_err()
     );
-    let other = domain.domain().coset(PastaField::from_u64(7)).unwrap();
+    let other = domain.domain().coset();
     let factor = EvaluationView::bind(&coefficients, other, EvaluationLayout::Natural);
     let expansion = Expansion::new(plan, domain, None).unwrap();
     assert!(

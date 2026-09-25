@@ -45,6 +45,7 @@ fn check_products<M: PrimeModulus>() {
         let mut expected = BigUint::from(0u8);
         let mut mixed_expected = BigUint::from(0u8);
         let mut mixed = ProductSum::<M>::new();
+        let mut partials = [const { ProductSum::<M>::new() }; 3];
         let mut lhs = Vec::new();
         let mut rhs = Vec::new();
         for index in 0..length {
@@ -53,13 +54,19 @@ fn check_products<M: PrimeModulus>() {
             lhs.push(*a);
             rhs.push(*b);
             expected += x * y;
-            if index % 3 == 0 {
-                mixed.add_term(a);
-                mixed_expected += x;
-            } else {
-                mixed.add_product(a, b);
-                mixed_expected += x * y;
+            for sum in [&mut mixed, &mut partials[index % 3]] {
+                match index % 4 {
+                    0 => sum.add_term(a),
+                    1 => sum.add_square(a),
+                    2 => sum.add_square(&a.reduce()),
+                    _ => sum.add_product(a, b),
+                }
             }
+            mixed_expected += match index % 4 {
+                0 => x.clone(),
+                1 | 2 => x * x,
+                _ => x * y,
+            };
         }
         assert_value(
             PastaField::<M>::sum_of_products_slice(&lhs, &rhs),
@@ -70,6 +77,17 @@ fn check_products<M: PrimeModulus>() {
             &expected,
         );
         assert_value(mixed.finish(), &mixed_expected);
+        for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {
+            let mut merged = ProductSum::new();
+            for index in order {
+                merged.merge(&partials[index]);
+            }
+            assert_value(merged.finish(), &mixed_expected);
+        }
+        let [mut first, second, mut third] = partials;
+        third.merge(&second);
+        first.merge(&third);
+        assert_value(first.finish(), &mixed_expected);
         let maximal = PastaField::<M>::from_montgomery_limbs(limbs(&(&p * 2u8 - 1u8)));
         let maximal_integer = BigUint::from_bytes_le(&maximal.to_bytes());
         let repeated = vec![maximal; length];
@@ -122,6 +140,54 @@ fn check_products<M: PrimeModulus>() {
 fn product_differences_and_sums_match_integer_arithmetic() {
     check_products::<PallasBase>();
     check_products::<PallasScalar>();
+}
+
+fn check_squares<M: PrimeModulus>() {
+    let p = modulus::<M>();
+    let inverse_r = (BigUint::from(1u8) << 256usize).modinv(&p).unwrap();
+    let mut values = samples::<M>(64);
+    for bits in [64usize, 128, 192, 254, 255] {
+        let boundary = BigUint::from(1u8) << bits;
+        for raw in [&boundary - 1u8, boundary.clone(), &boundary + 1u8] {
+            values.push((
+                PastaField::from_montgomery_limbs(limbs(&raw)),
+                raw * &inverse_r % &p,
+            ));
+        }
+    }
+    let mut sum = ProductSum::<M>::new();
+    let mut reduced_sum = ProductSum::<M>::new();
+    let mut expected = BigUint::from(0u8);
+    for (value, integer) in values {
+        let square = &integer * &integer;
+        let mut singleton = ProductSum::new();
+        singleton.add_square(&value);
+        assert_value(singleton.finish(), &square);
+        let mut singleton = ProductSum::new();
+        singleton.add_square(&value.reduce());
+        assert_value(singleton.finish(), &square);
+        sum.add_square(&value);
+        reduced_sum.add_square(&value.reduce());
+        expected += square;
+    }
+    assert_value(sum.finish(), &expected);
+    assert_value(reduced_sum.finish(), &expected);
+
+    let maximum = PastaField::<M>::from_montgomery_limbs(limbs(&(&p * 2u8 - 1u8)));
+    let integer = (&p * 2u8 - 1u8) * inverse_r % &p;
+    for length in [0usize, 1, 2, 3, 4, 31, 32, 33, 64, 65, 257, 4096] {
+        let mut sum = ProductSum::new();
+        for _ in 0..length {
+            sum.add_square(&maximum);
+        }
+        assert_value(sum.finish(), &(&integer * &integer * length));
+    }
+}
+
+#[test]
+fn deferred_squares_match_integer_arithmetic() {
+    check_squares::<PallasBase>();
+    check_squares::<PallasScalar>();
 }
 
 fn check_difference<M: PrimeModulus>(
@@ -184,6 +250,24 @@ fn check_overflow<M: PrimeModulus>() {
     };
     let term = PastaField::<M>::from_montgomery_limbs(limbs(&(&p * 2u8 - 1u8)));
     let stored = integer(&term.montgomery_limbs());
+    for (value, _) in samples::<M>(8) {
+        let raw = integer(&value.montgomery_limbs());
+        let square = &raw * &raw;
+        let mut starts = vec![maximum.clone(), &maximum - &square];
+        if square != BigUint::from(0u8) {
+            starts.push(&maximum - &square + 1u8);
+        }
+        for start in starts {
+            let raw = limbs::<9>(&start);
+            let mut sum = ProductSum::<M> {
+                wide: raw[..8].try_into().unwrap(),
+                carry: raw[8],
+                marker: PhantomData,
+            };
+            sum.add_square(&value);
+            assert_value(sum.finish(), &((&start + &square) * &inverse_r_squared));
+        }
+    }
     let mut sum = full();
     sum.add_product(&term, &term);
     assert_value(
@@ -199,10 +283,11 @@ fn check_overflow<M: PrimeModulus>() {
     let mut sum = full();
     sum.merge(&full());
     sum.add_product(&term, &term);
+    sum.add_square(&term);
     sum.add_term(&term);
     assert_value(
         sum.finish(),
-        &((&maximum * 2u8 + &stored * &stored + &stored * &radix) * &inverse_r_squared),
+        &((&maximum * 2u8 + &stored * &stored * 2u8 + &stored * &radix) * &inverse_r_squared),
     );
     assert_value(full().finish(), &(&maximum * &inverse_r_squared));
     assert_value(ProductSum::<M>::default().finish(), &BigUint::from(0u8));

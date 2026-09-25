@@ -5,7 +5,7 @@ use super::{Codelet, InverseScale, Strategy, check_domain_size, check_field_coun
 use super::{
     CosetDomain, EvaluationLayout, EvaluationView, Executor, ExpansionOrder,
     ExpansionScaleNormalization, ExpansionScales, FftError, PastaField, PrimeModulus,
-    ResidueLayout, ScratchRequirements, Transform, assert_length, check_prefix,
+    ResidueLayout, Transform, assert_length, check_prefix,
 };
 use super::{ElementOrder, ExpansionStorage, InputSupport, StorageLayout, run::ExpansionPlan};
 use crate::exec::ExecutionOptions;
@@ -41,7 +41,7 @@ impl ExpansionStrategy {
         transform: Strategy::SERIAL,
     };
 
-    /// Scratch for coefficient expansion or a short product, given domain sizes.
+    /// Scratch field count for coefficient expansion or a short product.
     ///
     /// Applies to both Pasta fields, with or without prepared tables and residue
     /// scales. Whole-transform tiles need no scratch. Other counts follow the
@@ -56,11 +56,11 @@ impl ExpansionStrategy {
         self,
         base_size: usize,
         extended_size: usize,
-    ) -> Result<ScratchRequirements, FftError> {
+    ) -> Result<usize, FftError> {
         self.requirements(base_size, extended_size, false)
     }
 
-    /// Scratch for expansion from base evaluations, given domain sizes.
+    /// Scratch field count for expansion from base evaluations.
     ///
     /// Output also stores the coefficients, so no separate coefficient buffer
     /// is needed. Accepted sizes and errors are those of
@@ -69,7 +69,7 @@ impl ExpansionStrategy {
         self,
         base_size: usize,
         extended_size: usize,
-    ) -> Result<ScratchRequirements, FftError> {
+    ) -> Result<usize, FftError> {
         self.requirements(base_size, extended_size, true)
     }
 
@@ -78,12 +78,12 @@ impl ExpansionStrategy {
         base_size: usize,
         extended_size: usize,
         from_evaluations: bool,
-    ) -> Result<ScratchRequirements, FftError> {
+    ) -> Result<usize, FftError> {
         if self.max_residue_tasks == 0 {
             return Err(FftError::InvalidExecution);
         }
         let fields = match self.transform.requirements(base_size) {
-            Ok(required) => required.field_elements,
+            Ok(required) => required,
             Err(error) => return Err(error),
         };
         if let Err(error) = check_domain_size(extended_size) {
@@ -102,10 +102,7 @@ impl ExpansionStrategy {
             Some(fields) => fields,
             None => return Err(FftError::SizeOverflow),
         };
-        match check_field_count(fields) {
-            Ok(field_elements) => Ok(ScratchRequirements { field_elements }),
-            Err(error) => Err(error),
-        }
+        check_field_count(fields)
     }
 }
 
@@ -140,7 +137,7 @@ impl Default for ExpansionStrategy {
 /// };
 ///
 /// let base = Transform::new(Domain::new(1).unwrap().subgroup());
-/// let extended = Domain::new(3).unwrap().coset(Fp::from_u64(7)).unwrap();
+/// let extended = Domain::new(3).unwrap().coset();
 /// let expansion = Expansion::new(base, extended, None).unwrap();
 /// let coefficients = [Fp::from_u64(3), Fp::from_u64(2)]; // 3 + 2*x
 /// let mut output = [Fp::ZERO; 8];
@@ -192,9 +189,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         extended: CosetDomain<M>,
         scales: Option<ExpansionScales<'a, M>>,
     ) -> Result<Self, FftError> {
-        if base.domain().shift().reduce() != PastaField::<M>::ONE.reduce()
-            || base.domain().size() > extended.size()
-        {
+        if !base.domain().is_subgroup() || base.domain().size() > extended.size() {
             return Err(FftError::InvalidLayout);
         }
         let expansion = Self {
@@ -253,54 +248,28 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             EvaluationLayout::Residues(self.layout),
         )
     }
-    /// Number of field elements in the optional residue-scaling table.
-    pub const fn scale_count(self) -> usize {
-        self.extended.size()
-    }
-
-    /// Prepares residue scales into caller storage after checking its exact length.
-    ///
-    /// Entries use [`ExpansionScaleNormalization::Coefficients`], regardless of any
-    /// already borrowed scales. Use [`ExpansionScales::prepare`] to select another
-    /// normalization. Panics before writing if `output.len()` differs from
-    /// [`Self::scale_count`].
-    pub fn prepare_scales(self, output: &mut [PastaField<M>]) -> ExpansionScales<'_, M> {
-        assert_length("output", self.scale_count(), output.len());
-        ExpansionScales::prepare(
-            self.base.domain().size(),
-            self.extended,
-            ExpansionScaleNormalization::Coefficients,
-            output,
-        )
-        .expect("validated expansion domains")
-    }
-
     fn check(self, coefficients: usize, min: usize, output: usize) -> Result<(), FftError> {
         assert_length("output", self.extended.size(), output);
         check_prefix(coefficients, min, self.base.domain().size())
     }
 
-    /// Scratch selected for coefficient expansion and short products.
+    /// Preferred scratch field count for coefficient expansion and short products.
     ///
-    /// Resolves full natural-order coefficients through [`ExpansionPlan::new`] and
-    /// [`ExpansionPlan::scratch_fields`], with their planning errors. Direct execution
-    /// can adapt to smaller or empty scratch.
-    pub fn coefficient_scratch(
-        self,
-        options: ExecutionOptions,
-    ) -> Result<ScratchRequirements, FftError> {
+    /// Counts initialized field elements. Builds [`ExpansionPlan::new`] for full
+    /// natural-order coefficients and returns [`ExpansionPlan::scratch_fields`],
+    /// with planning errors from construction. Direct execution can adapt to
+    /// smaller or empty scratch.
+    pub fn coefficient_scratch(self, options: ExecutionOptions) -> Result<usize, FftError> {
         self.scratch(ExpansionStorage::Coefficients, options)
     }
 
-    /// Scratch selected for expansion from base evaluations.
+    /// Preferred scratch field count for expansion from base evaluations.
     ///
-    /// Resolves [`ExpansionStorage::ReuseOutput`] through [`ExpansionPlan::new`] and
+    /// Counts initialized field elements. Builds [`ExpansionPlan::new`] with
+    /// [`ExpansionStorage::ReuseOutput`] and returns the plan's
     /// [`ExpansionPlan::scratch_fields`], with planning errors from construction.
     /// Direct execution can adapt to smaller or empty scratch.
-    pub fn evaluation_scratch(
-        self,
-        options: ExecutionOptions,
-    ) -> Result<ScratchRequirements, FftError> {
+    pub fn evaluation_scratch(self, options: ExecutionOptions) -> Result<usize, FftError> {
         self.scratch(ExpansionStorage::ReuseOutput, options)
     }
 
@@ -308,12 +277,10 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         self,
         storage: ExpansionStorage,
         options: ExecutionOptions,
-    ) -> Result<ScratchRequirements, FftError> {
-        Ok(ScratchRequirements {
-            field_elements: self
-                .plan(storage, InputSupport::Full, options)?
-                .scratch_fields(),
-        })
+    ) -> Result<usize, FftError> {
+        Ok(self
+            .plan(storage, InputSupport::Full, options)?
+            .scratch_fields())
     }
 
     fn plan(
@@ -431,20 +398,28 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         Ok(())
     }
 
-    pub(super) fn residue_base(self, residue: usize) -> Transform<'a, M> {
-        let mut base = self.base;
-        base.domain = self
-            .residue(residue, ElementOrder::Natural)
-            .unwrap()
-            .domain();
-        // Root powers and permutations still apply to this shifted domain;
-        // inverse scales and finishes encode the original domain's shift.
-        base.tables.inverse_scales = None;
-        base.tables.inverse_finish = None;
-        base
+    pub(super) fn residue_shift(self, residue: usize) -> super::operation::ForwardShift<M> {
+        use super::operation::ForwardShift;
+        if residue == 0 {
+            ForwardShift::for_domain(self.extended)
+        } else {
+            ForwardShift::Residue {
+                shift: self
+                    .extended
+                    .shift()
+                    .mul(&self.extended.domain().root().pow_u64(residue as u64)),
+                inverse: self.extended.inverse_shift().mul(
+                    &self
+                        .extended
+                        .domain()
+                        .inverse_root()
+                        .pow_u64(residue as u64),
+                ),
+            }
+        }
     }
 
-    /// Scratch needed by [`Self::coefficients`] and [`Self::short_product`].
+    /// Required scratch field count for [`Self::coefficients_with`].
     ///
     /// Delegates to [`ExpansionStrategy::coefficient_requirements`] with the
     /// base and extended sizes. That const query also sizes arrays without
@@ -457,7 +432,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     pub(crate) const fn coefficient_scratch_with(
         self,
         options: ExpansionStrategy,
-    ) -> Result<ScratchRequirements, FftError> {
+    ) -> Result<usize, FftError> {
         options.coefficient_requirements(self.base.domain().size(), self.extended.size())
     }
 
@@ -469,12 +444,12 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// during initialization, with table usage as
     /// described by [`Self::with_scales`]. Input is preserved. Execution uses
     /// [`ExpansionStrategy`] across and within residues; scratch must meet
-    /// [`Self::coefficient_scratch`].
+    /// [`Self::coefficient_scratch_with`].
     ///
     /// Returns [`FftError::InvalidPrefix`] if the prefix exceeds the base size. Panics
     /// before writes unless output has the extended size and scratch meets the
     /// requirement. Options and storage limits have the errors of
-    /// [`Self::coefficient_scratch`].
+    /// [`Self::coefficient_scratch_with`].
     #[cfg(test)]
     pub(crate) fn coefficients_with<'input, E: Executor>(
         self,
@@ -489,7 +464,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         let coefficients = coefficients.as_slice();
         self.check(coefficients.len(), 0, output.len())?;
         let required = self.coefficient_scratch_with(options)?;
-        required.check(scratch.len());
+        super::check_scratch(required, scratch.len());
         if coefficients.len() <= 1 {
             output.fill(coefficients.first().copied().unwrap_or(PastaField::ZERO));
             return Ok(());
@@ -508,29 +483,30 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             output,
             0,
             options.max_residue_tasks.min(self.layout.residues()),
-            &mut scratch[..required.field_elements],
+            &mut scratch[..required],
         );
         Ok(())
     }
 
-    /// Scratch needed by [`Self::evaluations`].
+    /// Required scratch field count for [`Self::evaluations_with`].
     ///
     /// Delegates to [`ExpansionStrategy::evaluation_requirements`] with the
-    /// base and extended sizes. Errors are those of [`Self::coefficient_scratch`].
+    /// base and extended sizes. Errors follow [`Self::coefficient_scratch_with`].
     #[cfg(test)]
     pub(crate) const fn evaluation_scratch_with(
         self,
         options: ExpansionStrategy,
-    ) -> Result<ScratchRequirements, FftError> {
+    ) -> Result<usize, FftError> {
         options.evaluation_requirements(self.base.domain().size(), self.extended.size())
     }
 
     /// Preserves base-subgroup evaluations and expands them into the coset.
     ///
-    /// Input must contain exactly the base size in natural evaluation order; output
-    /// must contain exactly the extended size and uses residue order. Scratch must meet
-    /// [`Self::evaluation_scratch`]. Incorrect buffer lengths panic before writes;
-    /// options and storage limits have the errors described by that query.
+    /// Input must contain exactly the base size in natural evaluation order;
+    /// output must contain exactly the extended size and uses residue order.
+    /// Scratch must meet [`Self::evaluation_scratch_with`]. Incorrect buffer
+    /// lengths panic before writes; options and storage limits have the errors
+    /// described by that query.
     ///
     /// `options.transform` controls the inverse base transform and every
     /// residue transform. After the inverse, at most `options.max_residue_tasks`
@@ -548,18 +524,13 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
         assert_length("evaluations", self.base.domain().size(), evaluations.len());
         assert_length("output", self.extended.size(), output.len());
         let required = self.evaluation_scratch_with(options)?;
-        required.check(scratch.len());
-        if self.extended.shift().reduce() == PastaField::<M>::ONE.reduce()
-            && output.len() == evaluations.len()
-        {
+        super::check_scratch(required, scratch.len());
+        if self.extended.is_subgroup() && output.len() == evaluations.len() {
             output.copy_from_slice(evaluations);
             return Ok(());
         }
-        let scratch = &mut scratch[..required.field_elements];
-        let transform_scratch = self
-            .base
-            .scratch_requirements_with(options.transform)?
-            .field_elements;
+        let scratch = &mut scratch[..required];
+        let transform_scratch = self.base.scratch_requirements_with(options.transform)?;
         // Reuse the first residue as a coefficient buffer. Ordinary tables need
         // a normalized inverse; pre-normalized tables already include division
         // by the base size. Without tables, absorb division into the coefficient
@@ -590,16 +561,12 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             options.max_residue_tasks.min(self.layout.residues() - 1),
             scratch,
         );
-        if self.extended.shift().reduce() == PastaField::<M>::ONE.reduce() {
+        if self.extended.is_subgroup() {
             first.copy_from_slice(evaluations);
             return Ok(());
         }
         let first_plan = Transform {
-            domain: CosetDomain::with_inverse(
-                self.base.domain().domain(),
-                self.extended.shift(),
-                self.extended.inverse_shift(),
-            ),
+            domain: self.base.domain().domain().coset(),
             tables: self.base.tables,
         };
         if let Some(scales) = self.scales {
@@ -669,7 +636,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             "factors must match the expansion domain and layout"
         );
         let required = self.coefficient_scratch_with(options)?;
-        required.check(scratch.len());
+        super::check_scratch(required, scratch.len());
         ResidueJobs {
             expansion: self,
             coefficients: short,
@@ -684,7 +651,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
             output,
             0,
             options.max_residue_tasks.min(self.layout.residues()),
-            &mut scratch[..required.field_elements],
+            &mut scratch[..required],
         );
         Ok(())
     }
@@ -790,14 +757,7 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
                     || expansion.normalization == ExpansionScaleNormalization::Coefficients
             })
             .map(|scales| &scales[residue * size..(residue + 1) * size]);
-        let shift = if scales.is_some() {
-            PastaField::ONE
-        } else {
-            expansion
-                .extended
-                .shift()
-                .mul(&expansion.extended.domain().root().pow_u64(residue as u64))
-        };
+        let shift = expansion.residue_shift(residue);
         let factor = self
             .factor
             .map(|factor| &factor[block * size..(block + 1) * size]);
@@ -846,7 +806,7 @@ impl<M: PrimeModulus, E: Executor> ResidueJobs<'_, '_, M, E> {
                 let mut power = self.extra;
                 for (output, value) in prefix.iter_mut().zip(self.coefficients) {
                     *output = value.mul(&power);
-                    power = power.mul(&shift);
+                    power = power.mul(&shift.shift());
                 }
             }
             super::stages::StageKernel {

@@ -323,17 +323,13 @@ impl<C: PastaCurve> ProjectivePoint<C> {
         self.add(&rhs.neg())
     }
 
-    /// Multiplies by a scalar using variable-time doubling and addition.
+    /// Multiplies by a scalar without inversion.
     ///
     /// Processes the full canonical scalar; zero returns identity. The scalar
-    /// may use either reduced or loose residues. Uses bounded
-    /// internal stack storage, with no caller table, scratch, or allocation.
+    /// may use either reduced or loose residues. Execution is variable-time and
+    /// uses bounded internal stack storage, with no caller table, scratch, or
+    /// allocation.
     ///
-    /// The current implementation uses an inversion-free binary ladder for
-    /// scalars below `2^64`. Larger scalars with a nonidentity base prepare eight
-    /// cached affine entries on the stack, using one field inversion per call,
-    /// then run a GLV/Eisenstein ladder. Identity skips preparation. The strategy
-    /// is selected internally; stack frame sizes depend on the compiler and target.
     /// Use [`EisensteinTable`](super::EisensteinTable) or
     /// [`FixedBaseTable`](super::FixedBaseTable) to retain preparation for repeated
     /// multiplication of the same base.
@@ -346,10 +342,7 @@ impl<C: PastaCurve> ProjectivePoint<C> {
         if scalar.highest_set_bit().is_some_and(|high| high < 64) {
             super::scalar::multiply_canonical(scalar, |point| point.add(self))
         } else {
-            // Preserve the input's projective scaling until the representatives
-            // share an inversion; normalizing the base would add an inversion.
-            let points = super::eisenstein::representatives(self);
-            super::eisenstein::multiply_once(&points, scalar)
+            super::effective::multiply(self, scalar)
         }
     }
 }

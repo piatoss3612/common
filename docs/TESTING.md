@@ -101,7 +101,15 @@ reduction, inversion, roots, product sums, and integer helpers in both fields.
 Corpora span all limbs and distinguish dependent and independent products,
 variable-time exponent shapes, and lengths around dispatch boundaries.
 `ProductSum` cases populate fresh accumulators outside timing; formatting reuses
-an allocated buffer. Preparation and allocation are outside ordinary execution.
+an allocated buffer. Ordinary arithmetic excludes input preparation and allocation.
+
+Polynomial comparisons distinguish retained preparation from `prepare_*` cases
+that include it. The weighted-fold `powers_and` cases include challenge-power
+generation. Per-call validation and result writes are timed; buffer allocation,
+input restoration, and fixture checks are excluded. Polynomial `bind` cases
+borrow trusted powers or weights with constant work, as specified by the
+[evaluation](../crates/udon/src/polynomial/evaluation.rs) and
+[interpolation](../crates/udon/src/polynomial/interpolation.rs) contracts.
 
 ```console
 cargo bench --locked -p zakura-udon --bench field
@@ -120,8 +128,8 @@ straddle short/full-width boundaries; table cases distinguish affine and cached
 entries, preparation, binding, and multiplication.
 Compare the same 32-scalar corpus at equal width or similar storage budgets.
 Preparation fills allocated buffers; binding borrows existing entries; table
-multiplication includes recoding. Invalid table entries at the beginning and
-end distinguish early rejection from full scans.
+multiplication includes recoding. Table binding checks dimensions and
+configuration but trusts the stored entries; it does not time an entry scan.
 Expanded preparation compares one-window, four-window, and full-table scratch
 allowances at an explicitly selected width.
 
@@ -150,10 +158,19 @@ preparation; `reused` retains the prepared handle and sizes its execution scratc
 accordingly. Compact `mul_prepared` and `mul_same_scalar` prepare scalar digits
 before timing; `mul` prepares them for each table inside timing.
 
-Fixture checks use independent scalar inner products over known generator
-multiples. Allocation, pool entry, and input length/index validation are outside
-timing. Execution scratch checks, recoding, initialization, scheduling, and
-arithmetic are inside. Compact preparation takes constructed affine bases.
+The dense, indexed, corpus, and grouped MSM cases use independent scalar inner
+products over known generator multiples for fixture checks. These cases exclude
+allocation, pool entry, and input length/index validation from timing. Execution
+scratch checks, recoding, initialization, scheduling, and arithmetic are inside.
+Compact preparation takes constructed affine bases.
+
+Structured-row comparisons distinguish retained preparation, preparation plus
+execution, and caller-known support. Per-row conversion, aggregation, and
+validation are timed; known-support cases exclude support discovery, while
+`scan_execute` includes scanning and compaction. Independent binary
+ladders check these results before timing. Retained preparation and compacted
+inputs are outside the execution workspace ceiling. The `shared_scalars` cases
+compare matrix execution with separate MSMs that also reuse prepared scalars.
 
 ```console
 cargo bench --locked -p zakura-udon --bench msm
@@ -190,8 +207,17 @@ equivalent coefficient prefixes and factors. `native` retains each output
 layout; compare natural-order methods with `residues/natural` when the consumer
 needs natural order, including its timed conversion.
 
+The `constant_prefix` FFT controls include dense input materialization and, for
+extension, conversion from residue order to natural order. Retained-sample cases
+exclude preparation; `prepare_and_extend` includes it. The `vanishing` cases
+compare forward-transform finishing with pointwise division and interpolation
+into the same coefficient pieces; `finish` alone excludes the transform.
+The `group_fft` cases include root powers and scalar preparation on each call;
+`basis_conversion` also includes output normalization. Their buffer allocation,
+input restoration, and fixture checks precede timing.
+
 The [strategy suite](../crates/udon/benches/fft_strategies.rs) compares task budgets,
-workspace ceilings, output orders, retained twiddles/powers, expansion
+workspace ceilings, output orders, retained twiddles and expansion scales,
 storage/normalization, batches, and class interpolation. Udon selects the
 implementation under those constraints. Interpolation plans are bound outside
 timing. Both suites measure table preparation into allocated buffers separately.
@@ -203,8 +229,8 @@ executor storage. Callers supply the executor; Rayon is a development dependency
 
 ```console
 cargo bench --locked -p zakura-udon --bench fft -- Fp/fft/16384
-cargo bench --locked -p zakura-udon --bench fft -- Fp/expansion/16384/generic_7
-cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/strategies/2048/generic_7/tasks_1
+cargo bench --locked -p zakura-udon --bench fft -- Fp/expansion/16384/zeta
+cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/strategies/2048/zeta/tasks_1
 cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/expansion_prefixes/tasks_1
 cargo test --release --locked -p zakura-udon compare_fft_butterfly_candidates -- --ignored --nocapture
 ```

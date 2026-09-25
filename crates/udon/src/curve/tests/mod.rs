@@ -9,11 +9,13 @@ mod contracts;
 mod eisenstein;
 mod eisenstein_batch;
 mod fixed_base;
+mod fixed_base_sum;
 mod glv;
 mod incomplete;
 pub(crate) mod reference;
+mod single_mul;
 
-fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {
+pub(super) fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {
     let mut values = vec![
         PastaField::<_>::ZERO,
         PastaField::<_>::ONE,
@@ -35,7 +37,7 @@ fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {
     values
 }
 
-fn scaled<C: PastaCurve>(point: &Point<C>, scale: u64) -> ProjectivePoint<C> {
+pub(super) fn scaled<C: PastaCurve>(point: &Point<C>, scale: u64) -> ProjectivePoint<C> {
     let Some(point) = point.as_affine() else {
         // All z = 0 representations must compare equal, even with nonzero x/y.
         return ProjectivePoint {

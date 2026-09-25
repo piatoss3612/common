@@ -79,6 +79,9 @@ The [workspace guide](docs/WORKSPACES.md) explains how callers can own reusable
 arithmetic buffers and compose operations on a selected worker pool.
 The [execution guide](docs/EXECUTION.md) describes incremental MSM, FFT, and
 application tasks sharing typed scratch under one capacity ceiling.
+The [algebra reference](docs/ALGEBRA.md) explains when to use each Udon API
+and how identities, input structure, and changes of representation let
+applications compose them.
 
 ## Testing
 

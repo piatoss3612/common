@@ -39,8 +39,15 @@ fn expansions<M: PrimeModulus>() {
         let coefficients = inputs(base.domain().size());
         let evaluations = direct(&coefficients, base.domain());
         for extra in [0, 1, 3] {
-            for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
-                let domain = Domain::new(log + extra).unwrap().coset(shift).unwrap();
+            for coset in [false, true] {
+                let domain = {
+                    let subgroup = Domain::new(log + extra).unwrap();
+                    if coset {
+                        subgroup.coset()
+                    } else {
+                        subgroup.subgroup()
+                    }
+                };
                 let expansion = Expansion::new(base, domain, None).unwrap();
                 let expected = direct(&coefficients, domain);
                 for normalization in [
@@ -207,13 +214,11 @@ fn expansions<M: PrimeModulus>() {
                         for index in 0..expansion.layout().residues() {
                             let residue = expansion.residue(index, order).unwrap();
                             let options = OPTIONS;
-                            let mut scratch = vec![
-                                PastaField::ONE;
-                                residue
-                                    .scratch_requirements_with(options)
-                                    .unwrap()
-                                    .field_elements
-                            ];
+                            let mut scratch =
+                                vec![
+                                    PastaField::ONE;
+                                    residue.scratch_requirements_with(options).unwrap()
+                                ];
                             residue
                                 .coefficients_with(
                                     &coefficients,
@@ -223,17 +228,15 @@ fn expansions<M: PrimeModulus>() {
                                     &mut scratch,
                                 )
                                 .unwrap();
-                            let layout = if order == ElementOrder::Natural {
-                                EvaluationLayout::Natural
-                            } else {
-                                EvaluationLayout::BitReversed
-                            };
-                            let view = EvaluationView::bind(&output, residue.domain(), layout);
                             for row in 0..base.domain().size() {
+                                let physical = if order == ElementOrder::Natural {
+                                    row
+                                } else {
+                                    reverse(row, base.domain().domain().log_size())
+                                };
                                 assert_eq!(
-                                    (view.get(row)).map(|value| value.reduce()),
-                                    (Some(&expected[index + expansion.layout().residues() * row]))
-                                        .map(|value| value.reduce())
+                                    output[physical].reduce(),
+                                    expected[index + expansion.layout().residues() * row].reduce()
                                 );
                             }
                         }
@@ -251,39 +254,140 @@ fn expansion_storage_normalization_streaming_and_direct_bridge() {
 }
 
 #[test]
-fn residue_domains_retain_inverse_shifts_and_extended_rows() {
+fn fragmented_expansion_and_four_class_interpolation_need_no_workspace() {
+    fn check<M: PrimeModulus>() {
+        let options = crate::exec::ExecutionOptions::default()
+            .with_task_budget(crate::exec::TaskBudget::new(3).unwrap())
+            .with_memory_limit(0);
+        let layout = StorageLayout::Fragments {
+            length: nz(8),
+            whole_bank: false,
+        };
+        let base_domain = Domain::<M>::for_size(8).unwrap().subgroup();
+        let base_tables = Prepared::new(base_domain);
+        let base = base_tables.tables().bind(base_domain);
+        let domains = [6, 5, 4, 3].map(|log| Domain::new(log).unwrap().coset());
+        let tables = domains.map(Prepared::new);
+        let transforms = core::array::from_fn::<_, 4, _>(|i| tables[i].tables().bind(domains[i]));
+        let coefficients = inputs(8);
+        let mut scale_values = vec![PastaField::ZERO; domains[0].size()];
+        let scales = ExpansionScales::prepare(
+            8,
+            domains[0],
+            ExpansionScaleNormalization::Coefficients,
+            &mut scale_values,
+        )
+        .unwrap();
+        let expansion = Expansion::new(base, domains[0], Some(scales)).unwrap();
+        let plan = ExpansionPlan::new(
+            expansion,
+            ExpansionStorage::DisposableInput {
+                scale: InverseScale::Normalized,
+            },
+            ExpansionOrder::Residues,
+            InputSupport::Full,
+            ElementOrder::Natural,
+            layout,
+            options,
+        )
+        .unwrap();
+        assert_eq!(plan.coefficient_fields(), 0);
+        assert_eq!(plan.snapshot_fields(), 0);
+        assert_eq!(plan.scratch_fields(), 0);
+        let mut input = direct(&coefficients, base_domain);
+        let mut expanded = vec![PastaField::ZERO; domains[0].size()];
+        let retained =
+            plan.execute_disposable(&mut input, &mut expanded, None, &mut [], &SerialExecutor);
+        check_coefficients(retained, &coefficients, InverseScale::Normalized);
+        let expanded = EvaluationView::bind(
+            &expanded,
+            domains[0],
+            EvaluationLayout::Residues(expansion.layout()),
+        );
+        let expected_expansion = direct(&coefficients, domains[0]);
+        for (row, expected) in expected_expansion.iter().enumerate() {
+            assert_eq!(expanded.get(row).unwrap().reduce(), expected.reduce());
+        }
+
+        let mut expected_sum = vec![PastaField::ZERO; domains[0].size()];
+        expected_sum[..coefficients.len()].copy_from_slice(&coefficients);
+        let mut values: [_; 4] = core::array::from_fn(|i| {
+            if i == 0 {
+                (0..domains[0].size())
+                    .map(|row| *expanded.get(reverse(row, 6)).unwrap())
+                    .collect::<Vec<_>>()
+            } else {
+                let coefficients = inputs(domains[i].size());
+                for (sum, value) in expected_sum.iter_mut().zip(&coefficients) {
+                    *sum = sum.add(value);
+                }
+                let evaluations = direct(&coefficients, domains[i]);
+                (0..domains[i].size())
+                    .map(|row| evaluations[reverse(row, domains[i].domain().log_size())])
+                    .collect()
+            }
+        });
+        let plan = InterpolationPlan::new(
+            transforms.map(|transform| (transform, ElementOrder::BitReversed)),
+            true,
+            layout,
+            options,
+        )
+        .unwrap();
+        for class in 0..4 {
+            assert_eq!(plan.snapshot_fields(class), Some(0));
+        }
+        plan.execute(
+            values.each_mut().map(Vec::as_mut_slice),
+            core::array::from_fn(|_| &mut [][..]),
+            &SerialExecutor,
+        );
+        assert_eq!(reduced(&values[0]), reduced(&expected_sum));
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
+#[test]
+fn residue_transforms_match_extended_rows() {
     fn check<M: PrimeModulus>() {
         for log in [0, 1, 5] {
             let base = Transform::new(Domain::<M>::new(log).unwrap().subgroup());
+            let coefficients = inputs(base.domain().size());
             for extra in [0, 1, 4] {
-                for shift in [PastaField::ONE, PastaField::ZETA, PastaField::from_u64(7)] {
-                    let extended = Domain::new(log + extra).unwrap().coset(shift).unwrap();
+                for coset in [false, true] {
+                    let domain = Domain::new(log + extra).unwrap();
+                    let extended = if coset {
+                        domain.coset()
+                    } else {
+                        domain.subgroup()
+                    };
                     let expansion = Expansion::new(base, extended, None).unwrap();
-                    for residue in 0..expansion.layout().residues() {
-                        let domain = expansion
-                            .residue(residue, ElementOrder::Natural)
-                            .unwrap()
-                            .domain();
-                        assert_eq!(
-                            domain.inverse_shift().reduce(),
-                            domain.shift().invert().unwrap().reduce()
-                        );
-                        for row in 0..base.domain().size() {
-                            let extended_row = residue + expansion.layout().residues() * row;
-                            let expected =
-                                shift.mul(&extended.domain().root().pow_u64(extended_row as u64));
-                            let actual = domain
-                                .shift()
-                                .mul(&domain.domain().root().pow_u64(row as u64));
-                            assert_eq!(actual.reduce(), expected.reduce());
-                            assert_eq!(
-                                domain.inverse_scale(row).reduce(),
-                                base.domain()
-                                    .domain()
-                                    .size_inverse()
-                                    .mul(&domain.shift().pow_u64(row as u64).invert().unwrap())
-                                    .reduce()
-                            );
+                    let expected = direct(&coefficients, extended);
+                    for index in 0..expansion.layout().residues() {
+                        for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                            let residue = expansion.residue(index, order).unwrap();
+                            let mut output = vec![PastaField::ZERO; base.domain().size()];
+                            residue
+                                .coefficients_with(
+                                    &coefficients,
+                                    &mut output,
+                                    Strategy::SERIAL,
+                                    &SerialExecutor,
+                                    &mut [],
+                                )
+                                .unwrap();
+                            for row in 0..base.domain().size() {
+                                let physical = if order == ElementOrder::Natural {
+                                    row
+                                } else {
+                                    reverse(row, log)
+                                };
+                                assert_eq!(
+                                    output[physical].reduce(),
+                                    expected[index + expansion.layout().residues() * row].reduce()
+                                );
+                            }
                         }
                     }
                 }
@@ -308,10 +412,7 @@ fn resolved_expansion_counts_cover_all_storage_modes_under_memory_limits() {
 
     fn check<M: PrimeModulus>() {
         let base = Transform::new(Domain::<M>::new(5).unwrap().subgroup());
-        let domain = Domain::new(8)
-            .unwrap()
-            .coset(PastaField::from_u64(7))
-            .unwrap();
+        let domain = Domain::new(8).unwrap().coset();
         let expansion = Expansion::new(base, domain, None).unwrap();
         let coefficients = inputs(base.domain().size());
         let expected = direct(&coefficients, domain);
@@ -420,10 +521,7 @@ fn resolved_expansion_counts_cover_all_storage_modes_under_memory_limits() {
 fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
     for log in [0, 4, 8, 11] {
         let subgroup = Domain::<M>::new(log).unwrap().subgroup();
-        let domain = Domain::new(log + 3)
-            .unwrap()
-            .coset(PastaField::ZETA)
-            .unwrap();
+        let domain = Domain::new(log + 3).unwrap().coset();
         let prepared = Prepared::new(subgroup);
         let mut coefficients = inputs(subgroup.size());
         coefficients[0] = PastaField::from_u64(9);
@@ -556,30 +654,22 @@ fn short_bit_reversed_products_match_reference_at_pruning_boundary() {
 #[test]
 fn short_bit_reversed_residues_preserve_loose_bounds_on_panic() {
     let base = Transform::new(Domain::<PallasBase>::new(8).unwrap().subgroup());
-    let domain = Domain::new(11).unwrap().coset(Fp::ZETA).unwrap();
+    let domain = Domain::new(11).unwrap().coset();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let residue = expansion.residue(5, ElementOrder::BitReversed).unwrap();
     let input = inputs(10);
-    let expected = direct(&input, residue.domain());
+    let expected = direct(&input, domain);
     let options = OPTIONS;
     let mut output = vec![Fp::ONE; base.domain().size()];
-    let mut scratch = vec![
-        Fp::ONE;
-        residue
-            .scratch_requirements_with(options)
-            .unwrap()
-            .field_elements
-            + 1
-    ];
+    let mut scratch = vec![Fp::ONE; residue.scratch_requirements_with(options).unwrap() + 1];
     let joins = CountJoins::default();
     residue
         .coefficients_with(&input, &mut output, options, &joins, &mut scratch)
         .unwrap();
-    let view = EvaluationView::bind(&output, residue.domain(), EvaluationLayout::BitReversed);
-    for (row, expected) in expected.iter().enumerate() {
+    for row in 0..base.domain().size() {
         assert_eq!(
-            (view.get(row)).map(|value| value.reduce()),
-            (Some(expected)).map(|value| value.reduce())
+            output[reverse(row, base.domain().domain().log_size())].reduce(),
+            expected[5 + expansion.layout().residues() * row].reduce()
         );
     }
     let count = joins.take();
@@ -607,7 +697,7 @@ fn short_bit_reversed_residues_preserve_loose_bounds_on_panic() {
 #[test]
 fn expansion_metadata_storage_errors_and_panics() {
     let base = Transform::new(Domain::<PallasBase>::new(5).unwrap().subgroup());
-    let domain = Domain::new(7).unwrap().coset(Fp::from_u64(7)).unwrap();
+    let domain = Domain::new(7).unwrap().coset();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let coefficients = inputs(base.domain().size());
     let evaluations = direct(&coefficients, base.domain());
@@ -811,7 +901,7 @@ fn expansion_metadata_storage_errors_and_panics() {
 #[test]
 fn interpolation_checks_lengths_before_mutation_and_preserves_loose_bounds_on_panic() {
     let domain = Domain::<PallasBase>::new(7).unwrap().subgroup();
-    let other = domain.domain().coset(Fp::from_u64(7)).unwrap();
+    let other = domain.domain().coset();
     let original = inputs(domain.size());
     for consume in [false, true] {
         let transforms = [domain, domain, other].map(|domain| {
@@ -889,10 +979,7 @@ fn interpolation_checks_lengths_before_mutation_and_preserves_loose_bounds_on_pa
 
 fn interpolation<M: PrimeModulus>() {
     for log in [0, 3, 7] {
-        let output_domain = Domain::<M>::new(log)
-            .unwrap()
-            .coset(PastaField::from_u64(7))
-            .unwrap();
+        let output_domain = Domain::<M>::new(log).unwrap().coset();
         let coefficients = inputs(output_domain.size());
         // Include equal-sized domains, different orders, and a pair of equal
         // smaller domains that the destructive path can combine separately.

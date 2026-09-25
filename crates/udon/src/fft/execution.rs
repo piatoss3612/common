@@ -97,7 +97,7 @@ impl Strategy {
         }
     }
 
-    /// Required temporary field storage for a transform of `size` elements.
+    /// Required scratch field count for a transform of `size` elements.
     ///
     /// This const query needs no domain or plan and applies to both Pasta
     /// fields, with or without tables and any coset shift. Use its result to
@@ -109,7 +109,7 @@ impl Strategy {
     /// [`FftError::InvalidExecution`] for invalid settings, or
     /// [`FftError::SizeOverflow`] if the scratch count overflows `usize` or its
     /// field slice would exceed `isize::MAX` bytes.
-    pub const fn requirements(self, size: usize) -> Result<ScratchRequirements, FftError> {
+    pub const fn requirements(self, size: usize) -> Result<usize, FftError> {
         if let Err(error) = self.validate() {
             return Err(error);
         }
@@ -131,10 +131,7 @@ impl Strategy {
                 None => return Err(FftError::SizeOverflow),
             }
         };
-        match check_field_count(fields) {
-            Ok(field_elements) => Ok(ScratchRequirements { field_elements }),
-            Err(error) => Err(error),
-        }
+        check_field_count(fields)
     }
 }
 
@@ -148,25 +145,11 @@ impl Default for Strategy {
     }
 }
 
-/// Exact temporary field storage for a particular operation and configuration.
-///
-/// Inputs, outputs, immutable tables, and caller-owned class descriptors are
-/// separate. No additional dynamically sized storage is used by Udon.
-/// Scratch contents are disposable; see the [working-storage contract](super).
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct ScratchRequirements {
-    /// Number of initialized field elements to lend as mutable scratch.
-    pub field_elements: usize,
-}
-
-impl ScratchRequirements {
-    pub(super) fn check(self, provided: usize) {
-        assert!(
-            provided >= self.field_elements,
-            "scratch requires {} fields, got {provided}",
-            self.field_elements
-        );
-    }
+pub(super) fn check_scratch(required: usize, provided: usize) {
+    assert!(
+        provided >= required,
+        "scratch requires {required} fields, got {provided}"
+    );
 }
 
 pub(super) struct Geometry {

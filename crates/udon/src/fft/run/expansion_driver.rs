@@ -1,4 +1,4 @@
-use super::super::{ExpansionOrder, ExpansionStorage, ScratchRequirements, assert_length};
+use super::super::{ExpansionOrder, ExpansionStorage, assert_length};
 use super::expansion::ExpansionPlan;
 use super::*;
 use crate::exec::Executor;
@@ -40,10 +40,7 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
         if let Some(factor) = factor {
             assert_length("factor", output, factor.len());
         }
-        ScratchRequirements {
-            field_elements: self.scratch_fields_with(max_tasks),
-        }
-        .check(scratch)
+        super::super::check_scratch(self.scratch_fields_with(max_tasks), scratch)
     }
 
     /// Expands preserved input into contiguous residue blocks.

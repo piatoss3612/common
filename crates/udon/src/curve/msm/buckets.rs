@@ -8,6 +8,28 @@ use crate::{
     field::PastaField,
 };
 
+/// Sums one bounded batch, sharing inversions until the final small layer.
+///
+/// The caller supplies at least one field per input point. Cancelled pairs
+/// disappear; no identity is ever stored as a nonidentity affine point.
+pub(in crate::curve) fn sum<C: PastaCurve>(
+    points: &mut [AffinePoint<C>],
+    fields: &mut [PastaField<C::Base>],
+) -> ProjectivePoint<C> {
+    let mut lens = [points.len()];
+    // Small layers cannot amortize another inversion. Finish projectively
+    // without imposing a normalization inversion on the returned sum.
+    while lens[0] > 16 {
+        let count = lens[0];
+        reduce_fused::<C, true>(&mut points[..count], &[0], &mut lens, fields);
+    }
+    let mut sum = ProjectivePoint::IDENTITY;
+    for point in &points[..lens[0]] {
+        sum = sum.add_mixed(point);
+    }
+    sum
+}
+
 /// Reduces disjoint buckets to zero or one affine point, updating their lengths.
 ///
 /// Bucket `i` occupies `points[starts[i]..starts[i] + lens[i]]`. The caller

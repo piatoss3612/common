@@ -34,17 +34,17 @@ cargo bench --locked -p zakura-udon --bench curve -- 'fixed_base(_cached)?/w(4|8
 
 ## Ordinary multiplication
 
-GLV uses an eight-entry cached table on the stack, normalizes its representatives
-with one inversion, and runs a joint Eisenstein doubling ladder over two signed
-halves. Preparing from projective coordinates avoids a separate base inversion.
-Scalars fitting `u64` retain the binary ladder.
+One-shot multiplication avoids caller-owned tables and preparation buffers.
+The [`AffinePoint::mul_projective`](../crates/udon/src/curve/affine.rs) and
+[`ProjectivePoint::mul`](../crates/udon/src/curve/projective.rs) contracts define
+its arithmetic and storage costs. Actual stack usage depends on the compiler
+and target.
 
-The current setup's local arrays hold eight projective points (768 bytes), eight
-cached affine entries (768 bytes), and eight field scratch elements (256 bytes).
-These capacities total 1,792 bytes before other locals, temporaries, and called
-functions; they are not a stack usage bound. Compiler inlining, register allocation,
-and the target determine the actual stack requirement. Neither one-shot method
-offers a strategy override or an inversion-free path for large scalars.
+Retained tables trade storage and setup for reuse across multiplications of
+the same base. Compare `scalar_mul/corpus` with the retained-table cases above
+using the application's expected reuse count, including preparation when it
+falls within that lifecycle. The historical retained-table measurements below
+do not establish a current crossover with one-shot multiplication.
 
 ## Retained tables
 
@@ -225,9 +225,11 @@ retained preparation, and metadata outside one operation's ceiling.
 
 Retaining scalar records or digits moves preparation outside execution; it does
 not make their storage free. Compare one-shot, prepare-and-execute, and repeated
-execution lifecycles separately. For repeated indices, caller-side coalescing
-may reduce arithmetic, but a fair comparison includes sorting, gathering, and
-scalar summation. Neither reuse nor coalescing benefits every workload.
+execution lifecycles separately.
+[`IndexedCoalescingPlan`](../crates/udon/src/curve/msm/coalesce.rs) can reduce
+arithmetic for repeated indices while preserving the original base storage.
+Include sorting when measuring preparation, and scalar aggregation for every
+row. Neither reuse nor coalescing benefits every workload.
 
 Run selected current cases with:
 

@@ -6,7 +6,6 @@ use std::{env, fs, path::PathBuf};
 use udon::{
     STORED_FORM,
     fft::{Domain, ExpansionScaleNormalization, ExpansionScales, TwiddleTable},
-    field::{Fp, Fq},
 };
 
 #[path = "src/record.rs"]
@@ -19,12 +18,9 @@ fn main() {
     let damage = env::var("FFT_ARTIFACT_DAMAGE").unwrap_or_default();
     let directory = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     macro_rules! generate {
-        ($name:literal, $record:ty, $field:ty) => {{
+        ($name:literal, $record:ty) => {{
             let domain = Domain::for_size(record::SIZE).unwrap().subgroup();
-            let extended = Domain::for_size(record::EXTENDED_SIZE)
-                .unwrap()
-                .coset(<$field>::ZETA)
-                .unwrap();
+            let extended = Domain::for_size(record::EXTENDED_SIZE).unwrap().coset();
             let mut record = <$record>::empty();
             record.destinations().prepare(domain);
             TwiddleTable::prepare(record::TWIDDLES, &mut record.packed).unwrap();
@@ -46,6 +42,6 @@ fn main() {
             .unwrap();
         }};
     }
-    generate!("fp-fft", record::FpTables, Fp);
-    generate!("fq-fft", record::FqTables, Fq);
+    generate!("fp-fft", record::FpTables);
+    generate!("fq-fft", record::FqTables);
 }

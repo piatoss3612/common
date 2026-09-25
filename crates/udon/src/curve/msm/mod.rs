@@ -3,10 +3,20 @@
 //! [`run::BatchPlan`] plans and executes contiguous inputs, retaining scheduling
 //! metadata for repeated execution of the same immutable scalar rows and bases.
 //! [`Selection`] retains validated base mappings across scalar rows. For
-//! prepared MSM, cache each base
+//! explicit zero removal, [`Selection::with_nonzero_scalars`] compacts a row
+//! into caller-owned indices and scalars while retaining the original bases.
+//! For prepared MSM, cache each base
 //! with [`PreparedAffinePoint::from_affine`] and select [`Bases::Prepared`].
 //! [`PreparedScalars`] retains classification and GLV data for one scalar row
-//! across base sets and execution policies.
+//! across base sets and execution policies. [`SharedScalarInput`] multiplies a
+//! strided base matrix by that row, sharing recoding and bounded scratch across
+//! its output sums.
+//! [`SuffixBasis`] prepares ordered suffix sums for MSMs over explicit
+//! coefficient differences, reusing ordinary execution for structured rows.
+//! [`BasisSum`] retains one region sum for a constant coefficient plus sparse
+//! additive corrections, including [`crate::field::ConstantPrefix`] rows.
+//! [`CoalescingPlan`] groups equal and opposite points across scalar rows;
+//! [`IndexedCoalescingPlan`] groups repeated indices without encoding points.
 //! [`Bases::Compact`] consumes ordinary embedded or prepared compact tables.
 //! For incremental task scheduling, [`run::MsmPlan`] retains geometry without
 //! borrowing inputs. Reuse it across [`run::MsmRun`] invocations, each of which
@@ -74,16 +84,25 @@ use crate::exec::TaskBudget;
 mod policy;
 pub(crate) use policy::{Accumulation, ArithmeticOptions, BatchOptions, Kernel};
 
-mod buckets;
+pub(super) mod buckets;
+mod coalesce;
 mod kernels;
+mod matrix;
 mod prepared;
 mod recode;
 mod schedule;
+mod suffix;
+mod sum;
+mod support;
 
 pub mod run;
+pub use coalesce::{CoalescingKey, CoalescingPlan, IndexedCoalescingPlan};
+pub use matrix::SharedScalarInput;
 pub use prepared::{PreparedScalars, ScalarStorage};
 #[cfg(test)]
 use run::{BatchPlan, JobStorage, WorkerStorage};
+pub use suffix::SuffixBasis;
+pub use sum::BasisSum;
 const BOOTH_MIN: usize = 128;
 #[cfg(test)]
 mod tests;

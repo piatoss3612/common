@@ -26,15 +26,14 @@ The [`Executor` contract](../crates/udon/src/exec.rs) defines completion and
 panic handling; its tests check that successful results are dropped when another
 branch panics.
 
-Independent operations with separate scratch can each use the full task budget
-on a bounded, cooperative pool. The example `with_side_work` passes that budget
-to both an MSM batch and fixed-base side work; with one task, it runs both
+Use [`Executor::join`](../crates/udon/src/exec.rs) for independent operations
+with separate scratch. Each operation can use the full task budget on a bounded,
+cooperative pool. The example `with_side_work` passes that budget to both an
+MSM batch and fixed-base side work; with one task, it runs both
 branches through `SerialExecutor`. The pool bounds executing workers, while
 each operation plans its own scratch. Account for the combined storage of all
 simultaneous operations.
 
-Use [`for_each_task_mut`](../crates/udon/src/exec.rs) to expose independent buffer
-owners or borrowed tiles as separate jobs without dividing their nested budgets.
 When simultaneous operations must fit one combined task allowance, split it
 with `TaskBudget::split_at` or use `for_each_mut`. The polynomial example passes
 the inner allowance supplied by `for_each_mut` into each FFT operation. See

@@ -2,6 +2,15 @@ use core::fmt;
 
 use super::{PastaField, PrimeModulus};
 
+fn inverse_seed<M: PrimeModulus>(
+    value: &PastaField<M>,
+    scale: Option<&PastaField<M>>,
+) -> Option<PastaField<M>> {
+    value
+        .invert()
+        .map(|inverse| scale.map_or(inverse, |scale| inverse.mul(scale)))
+}
+
 /// Two product chains sharing one inversion.
 ///
 /// Push nonzero factors in index order, invert the lane products, then pop in
@@ -18,12 +27,11 @@ impl<M: PrimeModulus> InversionLanes<M> {
         prefix
     }
 
-    pub(crate) fn invert(self) -> Self {
+    fn invert(self, scale: Option<&PastaField<M>>) -> Self {
         // For lane products a and b, multiplying (a*b)^-1 by the opposite
         // product recovers each lane's inverse with one field inversion.
-        let inverse = self.0[0]
-            .mul(&self.0[1])
-            .invert()
+        // Applying the scale to this seed carries it into both recovery lanes.
+        let inverse = inverse_seed(&self.0[0].mul(&self.0[1]), scale)
             .expect("a product of nonzero field elements is nonzero");
         Self([inverse.mul(&self.0[1]), inverse.mul(&self.0[0])])
     }
@@ -77,17 +85,22 @@ impl<M: PrimeModulus> NonzeroInversionLanes<M> {
         }
     }
 
-    pub(crate) fn invert(mut self) -> Option<Self> {
+    pub(crate) fn invert(self) -> Option<Self> {
+        self.invert_scaled(None)
+    }
+
+    fn invert_scaled(mut self, scale: Option<&PastaField<M>>) -> Option<Self> {
         let lane = match self.first {
             [None, None] => return None,
             [Some(_), Some(_)] => {
-                self.products = self.products.invert();
+                self.products = self.products.invert(scale);
                 return Some(self);
             }
             [Some(_), None] => 0,
             [None, Some(_)] => 1,
         };
-        self.products.0[lane] = self.products.0[lane].invert().expect("nonzero product");
+        self.products.0[lane] =
+            inverse_seed(&self.products.0[lane], scale).expect("nonzero product");
         Some(self)
     }
 
@@ -131,7 +144,7 @@ pub(crate) fn invert_nonzero<M: PrimeModulus>(
     for (i, (value, prefix)) in values.iter().zip(prefix.iter_mut()).enumerate().skip(2) {
         *prefix = products.push(i, value);
     }
-    let mut inverses = products.invert();
+    let mut inverses = products.invert(None);
     for (i, (value, prefix)) in values
         .iter_mut()
         .zip(prefix.iter())
@@ -183,6 +196,29 @@ pub fn batch_invert<M: PrimeModulus>(values: &mut [PastaField<M>], scratch: &mut
     batch_invert_groups(&mut [values], scratch)
 }
 
+/// Replaces each nonzero value `x` by `scale / x`, preserving zeros.
+///
+/// The scale may be zero. Scratch sizing, untouched scratch tails, allocation,
+/// and variable-time behavior are the same as [`batch_invert`]. Scaling the
+/// shared inverse seed costs one extra multiplication per nonzero batch,
+/// including when scratch is empty and each value forms its own batch.
+/// Empty or all-zero inputs perform no inversion.
+///
+/// ```
+/// use zakura_udon::field::{Fp, batch_invert_scaled};
+/// let mut values = [Fp::from_u64(2), Fp::ZERO, Fp::from_u64(3)];
+/// batch_invert_scaled(&mut values, &Fp::from_u64(6), &mut [Fp::ZERO; 3]);
+/// assert_eq!(values.map(|value| value.reduce()),
+///            [Fp::from_u64(3), Fp::ZERO, Fp::from_u64(2)]);
+/// ```
+pub fn batch_invert_scaled<M: PrimeModulus>(
+    values: &mut [PastaField<M>],
+    scale: &PastaField<M>,
+    scratch: &mut [PastaField<M>],
+) {
+    batch_invert_groups_scaled(&mut [values], scale, scratch)
+}
+
 /// Inverts nonzero values across disjoint slices with shared inversions.
 ///
 /// This is [`batch_invert`] over the concatenation of `groups`, without
@@ -201,10 +237,34 @@ pub fn batch_invert_groups<M: PrimeModulus>(
     groups: &mut [impl AsMut<[PastaField<M>]>],
     scratch: &mut [PastaField<M>],
 ) {
+    batch_invert_groups_inner(groups, None, scratch)
+}
+
+/// Replaces nonzero values across disjoint slices by `scale / x`.
+///
+/// This is [`batch_invert_scaled`] over the concatenation of `groups`, without
+/// flattening or copying their contents. Zeros stay zero, and the scale may be
+/// zero. Scratch sizing, inversion counts, untouched scratch tails, and the
+/// requirement for stable [`AsMut::as_mut`] views are the same as
+/// [`batch_invert_groups`]. No allocation is performed; arithmetic is
+/// variable-time. Each nonzero batch scales its shared inverse seed once.
+pub fn batch_invert_groups_scaled<M: PrimeModulus>(
+    groups: &mut [impl AsMut<[PastaField<M>]>],
+    scale: &PastaField<M>,
+    scratch: &mut [PastaField<M>],
+) {
+    batch_invert_groups_inner(groups, Some(scale), scratch)
+}
+
+fn batch_invert_groups_inner<M: PrimeModulus>(
+    groups: &mut [impl AsMut<[PastaField<M>]>],
+    scale: Option<&PastaField<M>>,
+    scratch: &mut [PastaField<M>],
+) {
     if scratch.is_empty() {
         for group in groups {
             for value in group.as_mut() {
-                *value = value.invert().unwrap_or(PastaField::ZERO);
+                *value = inverse_seed(value, scale).unwrap_or(PastaField::ZERO);
             }
         }
         return;
@@ -234,7 +294,7 @@ pub fn batch_invert_groups<M: PrimeModulus>(
                 end = (end.0 + 1, 0);
             }
         }
-        let Some(mut inverses) = products.invert() else {
+        let Some(mut inverses) = products.invert_scaled(scale) else {
             continue;
         };
 
@@ -292,6 +352,36 @@ pub fn try_batch_invert_by<R, M: PrimeModulus, E: From<BatchInversionError>>(
     records: &[R],
     denominator: impl Fn(&R) -> PastaField<M>,
     scratch: &mut [PastaField<M>],
+    visit: impl FnMut(usize, &R, PastaField<M>) -> Result<(), E>,
+) -> Result<(), E> {
+    try_batch_invert_by_inner(records, denominator, None, scratch, visit)
+}
+
+/// Visits `scale / denominator(record)` for each immutable record.
+///
+/// This is [`try_batch_invert_by`] with a shared scale applied to each batch's
+/// inverse seed. The scale may be zero, but every denominator must still be
+/// nonzero: validation finishes before any scratch writes or visitor calls.
+/// The denominator must remain stable across repeated calls. `visit` receives
+/// the original index, record, and scaled inverse. Empty input does nothing.
+/// Scratch sizing, untouched tails, unspecified visit order, and partial
+/// progress on visitor errors or panics follow [`try_batch_invert_by`].
+/// No allocation or record copying occurs; arithmetic is variable-time.
+pub fn try_batch_invert_scaled_by<R, M: PrimeModulus, E: From<BatchInversionError>>(
+    records: &[R],
+    denominator: impl Fn(&R) -> PastaField<M>,
+    scale: &PastaField<M>,
+    scratch: &mut [PastaField<M>],
+    visit: impl FnMut(usize, &R, PastaField<M>) -> Result<(), E>,
+) -> Result<(), E> {
+    try_batch_invert_by_inner(records, denominator, Some(scale), scratch, visit)
+}
+
+fn try_batch_invert_by_inner<R, M: PrimeModulus, E: From<BatchInversionError>>(
+    records: &[R],
+    denominator: impl Fn(&R) -> PastaField<M>,
+    scale: Option<&PastaField<M>>,
+    scratch: &mut [PastaField<M>],
     mut visit: impl FnMut(usize, &R, PastaField<M>) -> Result<(), E>,
 ) -> Result<(), E> {
     for (index, record) in records.iter().enumerate() {
@@ -304,9 +394,7 @@ pub fn try_batch_invert_by<R, M: PrimeModulus, E: From<BatchInversionError>>(
             visit(
                 index,
                 record,
-                denominator(record)
-                    .invert()
-                    .expect("stable nonzero denominator"),
+                inverse_seed(&denominator(record), scale).expect("stable nonzero denominator"),
             )?;
         }
         return Ok(());
@@ -318,7 +406,9 @@ pub fn try_batch_invert_by<R, M: PrimeModulus, E: From<BatchInversionError>>(
                 *prefix = product;
             }
         }
-        let mut inverses = products.invert().expect("nonempty nonzero batch");
+        let mut inverses = products
+            .invert_scaled(scale)
+            .expect("nonempty nonzero batch");
         for (index, record) in records.iter().enumerate().rev() {
             let inverse = inverses.pop(index, &denominator(record), &scratch[index]);
             visit(chunk * scratch.len() + index, record, inverse)?;

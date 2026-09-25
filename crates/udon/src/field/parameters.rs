@@ -76,6 +76,12 @@ mod sealed {
             value: &PastaField<M, Reduced>,
             w: PastaField<M>,
         ) -> Option<PastaField<M, Reduced>>;
+
+        /// Corrects `x` with `x^2 = a * t` for nonzero `a` and order-2^32
+        /// subgroup element `t`. Returns a root of `a`, or of `a * ROOTS[32]`
+        /// with a false flag when `a` is nonsquare.
+        #[cfg(feature = "sqrt-table-large")]
+        fn sqrt_finish_large(x: PastaField<M>, t: PastaField<M>) -> (bool, PastaField<M, Reduced>);
     }
 }
 
@@ -193,6 +199,12 @@ macro_rules! pasta_field_parameters {
             #[cfg(feature = "sqrt-table-large")]
             fn sqrt_large(value: &PastaField<Self, Reduced>, w: PastaField<Self>) -> Option<PastaField<Self, Reduced>> {
                 Self::SQRT_TABLE.sqrt(value, w, $hash)
+            }
+
+            #[cfg(feature = "sqrt-table-large")]
+            fn sqrt_finish_large(x: PastaField<Self>, t: PastaField<Self>) -> (bool, PastaField<Self, Reduced>) {
+                let (is_square, root) = Self::SQRT_TABLE.finish(x, t, $hash);
+                (is_square, root.reduce())
             }
         }
 

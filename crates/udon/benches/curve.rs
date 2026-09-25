@@ -15,6 +15,9 @@ use zakura_udon::{
 
 const CORPUS_SIZE: usize = 32;
 
+#[path = "support/expanded_products.rs"]
+mod expanded_products;
+
 // Full-limb deterministic inputs, kept below both moduli and prepared before timing.
 fn values<M: PrimeModulus>() -> [PastaField<M>; CORPUS_SIZE] {
     let mut seed = 0x243f_6a88_85a3_08d3_u64;
@@ -820,6 +823,14 @@ fn compact<C: PastaCurve, E: CurveTableEntry<C> + bento::Pod>(
 fn benchmarks(criterion: &mut Criterion) {
     curve::<Pallas>(criterion, "Pallas");
     curve::<Vesta>(criterion, "Vesta");
+    expanded_products::benchmarks::<Pallas, AffinePoint<Pallas>>(criterion, "Pallas", "affine");
+    expanded_products::benchmarks::<Pallas, PreparedAffinePoint<Pallas>>(
+        criterion, "Pallas", "cached",
+    );
+    expanded_products::benchmarks::<Vesta, AffinePoint<Vesta>>(criterion, "Vesta", "affine");
+    expanded_products::benchmarks::<Vesta, PreparedAffinePoint<Vesta>>(
+        criterion, "Vesta", "cached",
+    );
 }
 
 criterion_group!(benches, benchmarks);

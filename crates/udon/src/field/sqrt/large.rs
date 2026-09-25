@@ -92,6 +92,20 @@ impl<M: PrimeModulus> LargeSqrtTable<PastaField<M, Reduced>> {
         w: PastaField<M>,
         multiplier: u32,
     ) -> Option<PastaField<M, Reduced>> {
+        let x = value.mul(&w);
+        let (_, candidate) = self.finish(x, x.mul(&w), multiplier);
+        (candidate.square().reduce() == *value).then(|| candidate.reduce())
+    }
+
+    /// Corrects `x` with `x^2 = a * t` for nonzero `a` and order-2^32
+    /// subgroup element `t`, using the construction's hash multiplier.
+    /// An odd inverse exponent returns a root of `a * r` and a false flag.
+    pub(in crate::field) fn finish(
+        &self,
+        x: PastaField<M>,
+        t: PastaField<M>,
+        multiplier: u32,
+    ) -> (bool, PastaField<M>) {
         let inverse = |x: PastaField<M>| {
             self.inverse[hash(x.reduce().montgomery_limbs()[0] as u32, multiplier)] as u32
         };
@@ -103,8 +117,7 @@ impl<M: PrimeModulus> LargeSqrtTable<PastaField<M, Reduced>> {
                 None,
             ))
         };
-        let uv = value.mul(&w);
-        let x3 = uv.mul(&w);
+        let x3 = t;
         let x2 = square_eight(x3);
         let x1 = square_eight(x2);
         let x0 = square_eight(x1);
@@ -124,15 +137,14 @@ impl<M: PrimeModulus> LargeSqrtTable<PastaField<M, Reduced>> {
             .mul(&self.g2[(e >> 16) as usize]);
         e |= inverse(alpha) << 24;
 
+        let is_square = e & 1 == 0;
         let e = half_exponent(e);
-        let candidate = uv
+        let candidate = x
             .mul(&self.g0[(e & 255) as usize])
             .mul(&self.g1[((e >> 8) & 255) as usize])
             .mul(&self.g2[((e >> 16) & 255) as usize])
             .mul(&self.g3[(e >> 24) as usize]);
-        // Reject candidates formed by rounding an odd inverse exponent; their
-        // square is value * r rather than value.
-        (candidate.square().reduce() == *value).then(|| candidate.reduce())
+        (is_square, candidate)
     }
 }
 

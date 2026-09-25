@@ -51,6 +51,10 @@ impl<C: PastaCurve> Base<C> for Point<C> {
 #[derive(Clone, Copy)]
 pub(super) enum Indices<'a> {
     Slice(&'a [u32]),
+    Strided {
+        offset: usize,
+        stride: usize,
+    },
     Fragment {
         view: &'a dyn ReadView<u32>,
         offset: usize,
@@ -58,11 +62,12 @@ pub(super) enum Indices<'a> {
 }
 impl Indices<'_> {
     #[inline]
-    fn get(self, index: usize) -> u32 {
+    fn get(self, index: usize) -> usize {
         match self {
-            Self::Slice(values) => values[index],
+            Self::Slice(values) => values[index] as usize,
+            Self::Strided { offset, stride } => offset + index * stride,
             Self::Fragment { view, offset } => {
-                *view.get(index - offset).expect("validated index fragment")
+                *view.get(index - offset).expect("validated index fragment") as usize
             }
         }
     }
@@ -81,11 +86,7 @@ impl<B: Copy, const INDEXED: bool> View<'_, B, INDEXED> {
     #[inline]
     fn index(&self, term: usize) -> usize {
         let i = self.offset + term;
-        if INDEXED {
-            self.indices.get(i) as usize
-        } else {
-            i
-        }
+        if INDEXED { self.indices.get(i) } else { i }
     }
     #[inline]
     fn at(&self, term: usize) -> B {
@@ -160,9 +161,9 @@ fn compact<C: PastaCurve, B: Base<C> + CurveTableEntry<C>>(
         for (i, row) in digits.chunks_exact(recode::JOINT_STRIDE).enumerate() {
             let code = row.get(column);
             if code != 0 {
-                let j = input.indices.map_or(task.offset + i, |indices| {
-                    indices.get(task.offset + i) as usize
-                });
+                let j = input
+                    .indices
+                    .map_or(task.offset + i, |indices| indices.get(task.offset + i));
                 sum = sum.add_mixed(&eisenstein::digit_point(&bases[8 * j..8 * j + 8], code));
             }
         }
@@ -555,6 +556,136 @@ pub(super) fn stream_selected<C: PastaCurve>(
         };
     }
     match input.bases {
+        Bases::Affine(b) => access!(b, 1),
+        Bases::Prepared(b) => access!(b, 1),
+        Bases::Points(b) => access!(b, 1),
+        Bases::Compact(b) => access!(b.as_slice(), 8),
+        Bases::CompactPrepared(b) => access!(b.as_slice(), 8),
+    }
+}
+
+/// Visits short scalar digits across adjacent output lanes; full-width tiles
+/// reuse the selected single-output kernel.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "A checked matrix supplies two strides and a bounded output tile."
+)]
+pub(super) fn shared<C: PastaCurve>(
+    bases: Bases<'_, C>,
+    output_offset: usize,
+    output_stride: usize,
+    term_stride: usize,
+    records: &[ScalarStorage<C>],
+    digits: &[u8],
+    task: Task,
+    work: &mut Work<'_, C>,
+    output: &mut [ProjectivePoint<C>],
+) {
+    if output.len() == 1 {
+        output[0] = run_selected(
+            &Selection {
+                bases,
+                indices: Some(Indices::Strided {
+                    offset: output_offset,
+                    stride: term_stride,
+                }),
+            },
+            records,
+            digits,
+            task,
+            work,
+        );
+        return;
+    }
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Monomorphic matrix access preserves the borrowed base layout."
+    )]
+    fn interleaved<C: PastaCurve, B: Base<C>>(
+        bases: &[B],
+        entry_stride: usize,
+        output_offset: usize,
+        output_stride: usize,
+        term_stride: usize,
+        records: &[ScalarStorage<C>],
+        task: Task,
+        work: &mut Work<'_, C>,
+        output: &mut [ProjectivePoint<C>],
+    ) {
+        let lanes = output.len();
+        let point = |term: usize, lane: usize, rotation: usize| {
+            bases[(output_offset + lane * output_stride + (task.offset + term) * term_stride)
+                * entry_stride]
+                .point(rotation)
+        };
+        output.fill(ProjectivePoint::IDENTITY);
+        if let Geometry::Short(bits) = task.geometry {
+            if bits <= 1 || records.len() < 32 {
+                for bit in (0..bits).rev() {
+                    for sum in output.iter_mut() {
+                        *sum = sum.double();
+                    }
+                    for (term, record) in records.iter().enumerate() {
+                        if record.magnitude & (1 << bit) != 0 {
+                            for (lane, sum) in output.iter_mut().enumerate() {
+                                if let Some(p) = point(term, lane, 0) {
+                                    *sum =
+                                        sum.add_mixed(&if record.negative { p.neg() } else { p });
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                let buckets = &mut work.projective[..16 * lanes];
+                for window in (0..usize::from(bits).div_ceil(4)).rev() {
+                    for sum in output.iter_mut() {
+                        for _ in 0..4 {
+                            *sum = sum.double();
+                        }
+                    }
+                    buckets.fill(ProjectivePoint::IDENTITY);
+                    for (term, record) in records.iter().enumerate() {
+                        let digit = ((record.magnitude >> (4 * window)) & 15) as usize;
+                        if digit != 0 {
+                            for lane in 0..lanes {
+                                if let Some(p) = point(term, lane, 0) {
+                                    let sum = &mut buckets[digit * lanes + lane];
+                                    *sum =
+                                        sum.add_mixed(&if record.negative { p.neg() } else { p });
+                                }
+                            }
+                        }
+                    }
+                    for (lane, sum) in output.iter_mut().enumerate() {
+                        let mut running = ProjectivePoint::IDENTITY;
+                        for bucket in (1..16).rev() {
+                            running = running.add(&buckets[bucket * lanes + lane]);
+                            *sum = sum.add(&running);
+                        }
+                    }
+                }
+            }
+        } else {
+            unreachable!("multiple output lanes require short scalars");
+        }
+    }
+    macro_rules! access {
+        ($bases:expr, $stride:expr) => {
+            interleaved(
+                $bases,
+                $stride,
+                output_offset,
+                output_stride,
+                term_stride,
+                records,
+                task,
+                work,
+                output,
+            )
+        };
+    }
+    match bases {
         Bases::Affine(b) => access!(b, 1),
         Bases::Prepared(b) => access!(b, 1),
         Bases::Points(b) => access!(b, 1),

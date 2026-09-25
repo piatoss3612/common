@@ -153,7 +153,7 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
     /// size, with the same errors. Natural output uses that scratch count;
     /// bit-reversed output needs no scratch.
     #[cfg(test)]
-    pub(crate) const fn scratch_requirements_with(
+    pub(super) const fn scratch_requirements_with(
         self,
         options: Strategy,
     ) -> Result<usize, FftError> {
@@ -181,7 +181,7 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
     /// lengths panic before writes. The module's [working-storage rules](super)
     /// apply.
     #[cfg(test)]
-    pub(crate) fn coefficients_with<'input, E: Executor>(
+    pub(super) fn coefficients_with<'input, E: Executor>(
         self,
         input: impl Into<CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],

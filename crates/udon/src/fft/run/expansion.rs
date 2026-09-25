@@ -102,7 +102,7 @@ impl<'t, M: PrimeModulus> ExpansionPlan<'t, M> {
     /// Validation of support and tile geometry follows [`FftPlan::new`]; a
     /// prefix for evaluation input returns
     /// [`FftError::InvalidExecution`]. The expansion's tables remain borrowed.
-    pub(crate) fn with_strategy(
+    pub(in crate::fft) fn with_strategy(
         expansion: Expansion<'t, M>,
         storage: ExpansionStorage,
         order: ExpansionOrder,

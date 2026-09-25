@@ -125,7 +125,7 @@ impl<C: PastaCurve> MsmPlan<C> {
         self.requirements_with(NonZeroUsize::new(self.job.budget.get()).unwrap())
     }
 
-    pub(crate) fn requirements_with(&self, leases: NonZeroUsize) -> Requirements {
+    pub(super) fn requirements_with(&self, leases: NonZeroUsize) -> Requirements {
         let count = self.output_slots().min(leases.get()).min(32);
         let r = self
             .retained
@@ -164,7 +164,7 @@ impl<C: PastaCurve> MsmPlan<C> {
         )
     }
 
-    pub(crate) fn execute_with<E: Executor>(
+    pub(super) fn execute_with<E: Executor>(
         self,
         input: Input<'_, C>,
         leases: NonZeroUsize,

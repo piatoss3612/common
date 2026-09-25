@@ -82,7 +82,7 @@ use core::num::NonZeroUsize;
 use crate::exec::TaskBudget;
 
 mod policy;
-pub(crate) use policy::{Accumulation, ArithmeticOptions, BatchOptions, Kernel};
+use policy::{Accumulation, ArithmeticOptions, BatchOptions, Kernel};
 
 pub(super) mod buckets;
 mod coalesce;
@@ -426,7 +426,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     /// [`CurveError::MemoryLimit`] under the
     /// [memory policy](BatchOptions::with_memory_limit).
     #[cfg(test)]
-    pub(crate) const fn requirements_for_len(
+    const fn requirements_for_len(
         terms: usize,
         options: BatchOptions,
     ) -> Result<Requirements, CurveError> {
@@ -436,10 +436,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     ///
     /// Errors and memory accounting match [`batch_requirements`].
     #[cfg(test)]
-    pub(crate) fn requirements_with(
-        &self,
-        options: BatchOptions,
-    ) -> Result<Requirements, CurveError> {
+    fn requirements_with(&self, options: BatchOptions) -> Result<Requirements, CurveError> {
         batch_requirements(core::slice::from_ref(self), options)
     }
     /// Computes the sum with caller-owned scratch and execution resources.
@@ -453,7 +450,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
     /// An executor panic may leave scratch partially written; scoped work must
     /// finish unwinding before reuse, as required by [`Executor`].
     #[cfg(test)]
-    pub(crate) fn execute_with<X: Executor>(
+    fn execute_with<X: Executor>(
         &self,
         options: BatchOptions,
         executor: &X,
@@ -660,7 +657,7 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
 /// Reusable plan metadata is excluded; size a retained plan with
 /// [`run::BatchPlan::requirements`] instead.
 #[cfg(test)]
-pub(crate) fn batch_requirements<C: PastaCurve>(
+fn batch_requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],
     options: BatchOptions,
 ) -> Result<Requirements, CurveError> {
@@ -674,7 +671,7 @@ pub(crate) fn batch_requirements<C: PastaCurve>(
 /// executor panic may partially write output and scratch; reuse after unwinding follows
 /// [`Input::execute`].
 #[cfg(test)]
-pub(crate) fn execute_batch<C: PastaCurve, X: Executor>(
+fn execute_batch<C: PastaCurve, X: Executor>(
     inputs: &[Input<'_, C>],
     output: &mut [ProjectivePoint<C>],
     options: BatchOptions,

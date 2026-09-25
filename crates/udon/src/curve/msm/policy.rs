@@ -6,14 +6,14 @@ use crate::exec::TaskBudget;
 use core::num::NonZeroUsize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Accumulation {
+pub(super) enum Accumulation {
     Auto,
     Affine,
     Projective,
     Hybrid,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Kernel {
+pub(super) enum Kernel {
     Auto,
     #[cfg_attr(
         not(test),
@@ -34,29 +34,29 @@ pub(crate) enum Kernel {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ArithmeticOptions {
+pub(super) struct ArithmeticOptions {
     pub(super) max_terms_per_pass: Option<NonZeroUsize>,
     pub(super) chunk_size: Option<NonZeroUsize>,
     pub(super) kernel: Kernel,
 }
 impl ArithmeticOptions {
-    pub(crate) const DEFAULT: Self = Self {
+    pub(super) const DEFAULT: Self = Self {
         max_terms_per_pass: None,
         chunk_size: None,
         kernel: Kernel::Auto,
     };
     #[cfg(test)]
-    pub(crate) const fn with_max_terms_per_pass(mut self, cap: Option<NonZeroUsize>) -> Self {
+    pub(super) const fn with_max_terms_per_pass(mut self, cap: Option<NonZeroUsize>) -> Self {
         self.max_terms_per_pass = cap;
         self
     }
     #[cfg(test)]
-    pub(crate) const fn with_chunk_size(mut self, terms: NonZeroUsize) -> Self {
+    pub(super) const fn with_chunk_size(mut self, terms: NonZeroUsize) -> Self {
         self.chunk_size = Some(terms);
         self
     }
     #[cfg(test)]
-    pub(crate) const fn with_kernel(mut self, kernel: Kernel) -> Result<Self, CurveError> {
+    pub(super) const fn with_kernel(mut self, kernel: Kernel) -> Result<Self, CurveError> {
         if let Kernel::Booth {
             width: Some(bits), ..
         }
@@ -93,38 +93,38 @@ impl Default for ArithmeticOptions {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct BatchOptions {
+pub(super) struct BatchOptions {
     pub(super) arithmetic: ArithmeticOptions,
     pub(super) task_budget: TaskBudget,
     pub(super) memory_limit: Option<usize>,
 }
 impl BatchOptions {
-    pub(crate) const fn new(arithmetic: ArithmeticOptions) -> Self {
+    pub(super) const fn new(arithmetic: ArithmeticOptions) -> Self {
         Self {
             arithmetic,
             task_budget: TaskBudget::SERIAL,
             memory_limit: None,
         }
     }
-    pub(crate) const fn with_task_budget(mut self, budget: TaskBudget) -> Self {
+    pub(super) const fn with_task_budget(mut self, budget: TaskBudget) -> Self {
         self.task_budget = budget;
         self
     }
     #[cfg(test)]
-    pub(crate) const fn with_memory_limit(mut self, bytes: usize) -> Self {
+    pub(super) const fn with_memory_limit(mut self, bytes: usize) -> Self {
         self.memory_limit = Some(bytes);
         self
     }
     #[cfg(test)]
-    pub(crate) const fn arithmetic(&self) -> ArithmeticOptions {
+    pub(super) const fn arithmetic(&self) -> ArithmeticOptions {
         self.arithmetic
     }
     #[cfg(test)]
-    pub(crate) const fn task_budget(&self) -> TaskBudget {
+    pub(super) const fn task_budget(&self) -> TaskBudget {
         self.task_budget
     }
     #[cfg(test)]
-    pub(crate) const fn memory_limit(&self) -> Option<usize> {
+    pub(super) const fn memory_limit(&self) -> Option<usize> {
         self.memory_limit
     }
 }

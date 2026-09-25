@@ -14,7 +14,7 @@ use zakura_udon::{
     field::PastaField,
 };
 
-pub struct Work<C: PastaCurve> {
+pub(crate) struct Work<C: PastaCurve> {
     affine: Vec<AffinePoint<C>>,
     projective: Vec<ProjectivePoint<C>>,
     field: Vec<PastaField<C::Base>>,
@@ -22,7 +22,7 @@ pub struct Work<C: PastaCurve> {
 }
 
 impl<C: PastaCurve> Work<C> {
-    pub fn new(requirements: impl Iterator<Item = Requirements>) -> Self {
+    pub(crate) fn new(requirements: impl Iterator<Item = Requirements>) -> Self {
         let mut counts = [0; 4];
         for r in requirements {
             for (max, n) in
@@ -41,7 +41,7 @@ impl<C: PastaCurve> Work<C> {
         }
     }
 
-    pub fn bytes(&self) -> usize {
+    pub(crate) fn bytes(&self) -> usize {
         size_of::<Self>()
             + self.affine.capacity() * size_of::<AffinePoint<C>>()
             + self.projective.capacity() * size_of::<ProjectivePoint<C>>()
@@ -50,7 +50,7 @@ impl<C: PastaCurve> Work<C> {
     }
 }
 
-pub struct Arena<C: PastaCurve> {
+pub(crate) struct Arena<C: PastaCurve> {
     records: Vec<RwLock<Vec<ScalarStorage<C>>>>,
     digits: Vec<RwLock<Vec<u8>>>,
     partials: Vec<RwLock<[ProjectivePoint<C>; 1]>>,
@@ -58,11 +58,11 @@ pub struct Arena<C: PastaCurve> {
 }
 
 impl<C: PastaCurve> Arena<C> {
-    pub fn new(plan: MsmPlan<C>) -> Self {
+    pub(crate) fn new(plan: MsmPlan<C>) -> Self {
         Self::for_plans(core::iter::once(plan))
     }
 
-    pub fn for_plans(plans: impl Iterator<Item = MsmPlan<C>>) -> Self {
+    pub(crate) fn for_plans(plans: impl Iterator<Item = MsmPlan<C>>) -> Self {
         let mut scalars = 0;
         let mut digits = 0;
         let mut windows = 0;
@@ -95,7 +95,7 @@ impl<C: PastaCurve> Arena<C> {
         }
     }
 
-    pub fn bytes(&self) -> usize {
+    pub(crate) fn bytes(&self) -> usize {
         size_of::<Self>()
             + self.records.capacity() * size_of::<RwLock<Vec<ScalarStorage<C>>>>()
             + self
@@ -118,7 +118,7 @@ impl<C: PastaCurve> Arena<C> {
                 .sum::<usize>()
     }
 
-    pub fn acquire<'a>(
+    pub(crate) fn acquire<'a>(
         &'a self,
         request: Request<'_>,
         work: &'a [RwLock<Work<C>>],
@@ -253,7 +253,7 @@ impl<C: PastaCurve> ReadView<ProjectivePoint<C>> for Partials<'_, C> {
     }
 }
 
-pub struct Lease<'a, C: PastaCurve> {
+pub(crate) struct Lease<'a, C: PastaCurve> {
     scalars: usize,
     digit_len: usize,
     records: Reads<'a, ScalarStorage<C>>,
@@ -267,7 +267,7 @@ pub struct Lease<'a, C: PastaCurve> {
 }
 
 impl<C: PastaCurve> Lease<'_, C> {
-    pub fn preparation(&self) -> (&[ScalarStorage<C>], &[u8]) {
+    pub(crate) fn preparation(&self) -> (&[ScalarStorage<C>], &[u8]) {
         (
             self.write_records
                 .as_ref()

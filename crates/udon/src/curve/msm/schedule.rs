@@ -629,7 +629,7 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
             BatchOptions::new(ArithmeticOptions::DEFAULT).with_task_budget(options.task_budget()),
         )
     }
-    pub(crate) const fn storage_len_with(
+    pub(super) const fn storage_len_with(
         inputs: usize,
         options: BatchOptions,
     ) -> Result<(usize, usize), CurveError> {
@@ -657,7 +657,7 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     ) -> Result<Self, CurveError> {
         Self::new_with(inputs, options.into(), jobs, workers)
     }
-    pub(crate) fn new_with(
+    pub(super) fn new_with(
         inputs: &'a [Input<'i, C>],
         options: BatchOptions,
         jobs: &'a mut [JobStorage],
@@ -696,7 +696,7 @@ impl<'a, 'i, C: PastaCurve> BatchPlan<'a, 'i, C> {
     /// A range may share scoped tasks across jobs or use tasks within each job.
     /// This count does not measure task concurrency or executor threads.
     #[cfg(test)]
-    pub(crate) const fn worker_ranges(&self) -> usize {
+    pub(super) const fn worker_ranges(&self) -> usize {
         self.workers.len()
     }
     /// Executes the retained plan, writing one result per input in input order.

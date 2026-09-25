@@ -37,3 +37,12 @@ pub(crate) fn integer(limbs: &[u64]) -> BigUint {
 pub(crate) fn modulus<M: PrimeModulus>() -> BigUint {
     integer(&M::MODULUS)
 }
+
+pub(crate) mod admission;
+#[path = "../../tests/support/fft_pipeline.rs"]
+pub(crate) mod fft_pipeline;
+pub(crate) mod fft_run;
+#[path = "../../tests/support/msm_run.rs"]
+pub(crate) mod msm_run;
+#[path = "../../tests/support/run_pool.rs"]
+pub(crate) mod run_pool;

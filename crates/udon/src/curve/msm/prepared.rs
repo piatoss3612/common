@@ -283,7 +283,7 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// and scalar record storage. Returns [`CurveError::SizeOverflow`] if the
     /// byte slice would be too large. See [`Self::cache`] for reuse conditions.
     #[cfg(test)]
-    pub(crate) fn cache_len_with(
+    pub(super) fn cache_len_with(
         &self,
         options: super::ArithmeticOptions,
     ) -> Result<usize, CurveError> {
@@ -300,7 +300,7 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// Returns [`CurveError::SizeOverflow`] if sizing fails. Insufficient storage
     /// panics before writes. Bytes beyond the required prefix remain untouched.
     #[cfg(test)]
-    pub(crate) fn cache_with(
+    pub(super) fn cache_with(
         &self,
         options: super::ArithmeticOptions,
         storage: &'a mut [u8],

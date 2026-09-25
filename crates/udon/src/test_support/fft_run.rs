@@ -1,22 +1,22 @@
 //! Movable guards for fragmented FFT storage. Acquisition never waits.
 
-use core::ops::Range;
-use spin::{RwLock, RwLockReadGuard as Read, RwLockWriteGuard as Write};
-use std::{vec, vec::Vec};
-use zakura_udon::{
+use crate::{
     exec::run::ReadView,
     fft::run::{Bank, Buffers, FftPlan, Request, Resources},
     field::{PastaField, PrimeModulus},
 };
+use core::ops::Range;
+use spin::{RwLock, RwLockReadGuard as Read, RwLockWriteGuard as Write};
+use std::{vec, vec::Vec};
 
-pub struct Arena<M: PrimeModulus> {
-    pub values: Vec<RwLock<Vec<PastaField<M>>>>,
+pub(crate) struct Arena<M: PrimeModulus> {
+    pub(crate) values: Vec<RwLock<Vec<PastaField<M>>>>,
     snapshot: RwLock<Vec<PastaField<M>>>,
     tile: usize,
 }
 
 impl<M: PrimeModulus> Arena<M> {
-    pub fn new(plan: FftPlan<'_, M>) -> Self {
+    pub(crate) fn new(plan: FftPlan<'_, M>) -> Self {
         Self {
             values: (0..plan.fragments())
                 .map(|_| RwLock::new(vec![PastaField::ZERO; plan.tile()]))
@@ -26,13 +26,13 @@ impl<M: PrimeModulus> Arena<M> {
         }
     }
 
-    pub fn write(&self, input: &[PastaField<M>]) {
+    pub(crate) fn write(&self, input: &[PastaField<M>]) {
         for (slot, chunk) in self.values.iter().zip(input.chunks(self.tile)) {
             slot.write()[..chunk.len()].copy_from_slice(chunk);
         }
     }
 
-    pub fn bytes(&self) -> usize {
+    pub(crate) fn bytes(&self) -> usize {
         size_of::<Self>()
             + self.values.capacity() * size_of::<RwLock<Vec<PastaField<M>>>>()
             + (self
@@ -44,7 +44,7 @@ impl<M: PrimeModulus> Arena<M> {
                 * size_of::<PastaField<M>>()
     }
 
-    pub fn acquire<'a>(
+    pub(crate) fn acquire<'a>(
         &'a self,
         request: &Request<'_>,
         input: &'a [PastaField<M>],
@@ -153,7 +153,7 @@ impl<M: PrimeModulus> ReadView<PastaField<M>> for Source<'_, M> {
     }
 }
 
-pub struct Lease<'a, M: PrimeModulus> {
+pub(crate) struct Lease<'a, M: PrimeModulus> {
     values: Write<'a, Vec<PastaField<M>>>,
     range: Range<usize>,
     pair: Option<Write<'a, Vec<PastaField<M>>>>,

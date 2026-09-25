@@ -11,7 +11,7 @@ use std::{
 };
 use zakura_udon::exec::run::{Completion, Kernel, Task};
 
-pub trait Work {
+pub(crate) trait Work {
     type Completion;
     fn execute(&mut self);
     // Must not panic. Kernel panics have already been caught with self retained.
@@ -53,19 +53,19 @@ struct Shared<T: Work> {
     workers: usize,
 }
 
-pub struct Pool<'a, T: Work> {
+pub(crate) struct Pool<'a, T: Work> {
     shared: &'a Shared<T>,
 }
 
 impl<T: Work> Pool<'_, T> {
-    pub fn available(&self) -> bool {
+    pub(crate) fn available(&self) -> bool {
         self.shared.queues.lock().unwrap().outstanding < self.shared.capacity
     }
 
     // Capacity represents task envelopes in every state, including the receipt.
     // Check available before acquiring a bundle; the single coordinator is the
     // only dispatcher, so that credit cannot be taken concurrently.
-    pub fn submit(&mut self, task: T) -> Result<(), T> {
+    pub(crate) fn submit(&mut self, task: T) -> Result<(), T> {
         let mut queues = self.shared.queues.lock().unwrap();
         if queues.outstanding == self.shared.capacity {
             return Err(task);
@@ -76,7 +76,7 @@ impl<T: Work> Pool<'_, T> {
         Ok(())
     }
 
-    pub fn receive(&mut self) -> Option<T::Completion> {
+    pub(crate) fn receive(&mut self) -> Option<T::Completion> {
         let mut queues = self.shared.queues.lock().unwrap();
         loop {
             if let Some(completion) = queues.complete.pop_front() {
@@ -90,7 +90,7 @@ impl<T: Work> Pool<'_, T> {
         }
     }
 
-    pub fn queue_bytes(&self) -> usize {
+    pub(crate) fn queue_bytes(&self) -> usize {
         let queues = self.shared.queues.lock().unwrap();
         size_of::<Shared<T>>() + size_of::<Self>()
             + queues.ready.capacity() * size_of::<T>()
@@ -109,7 +109,7 @@ impl<T: Work> Drop for Pool<'_, T> {
     }
 }
 
-pub fn scoped<T: Work + Send, O>(
+pub(crate) fn scoped<T: Work + Send, O>(
     workers: usize,
     capacity: usize,
     coordinator: impl FnOnce(&mut Pool<'_, T>) -> O,

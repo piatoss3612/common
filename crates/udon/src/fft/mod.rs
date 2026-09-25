@@ -173,7 +173,7 @@ mod vanishing;
 
 pub use constant_prefix::ConstantPrefixExpansion;
 pub use domain::{CosetDomain, Domain};
-pub(crate) use execution::Strategy;
+use execution::Strategy;
 use execution::check_scratch;
 pub use expansion::Expansion;
 #[cfg(test)]
@@ -187,7 +187,7 @@ pub use lagrange::{LagrangeCompletion, LagrangeError};
 pub use layout::{
     CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, InverseScale, ResidueLayout,
 };
-pub(crate) use operation::Codelet;
+use operation::Codelet;
 pub use operation::{Direction, InputStorage, InputSupport, StorageLayout, TransformRequest};
 pub use powers::{TwiddleDescription, TwiddleStorage, TwiddleTable};
 pub use tables::{TableRequirements, Tables, TablesMut};

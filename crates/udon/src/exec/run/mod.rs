@@ -17,9 +17,11 @@
 //! return its failed completion. An in-place failed result must be refilled
 //! before reuse. No destructor is responsible for establishing memory safety.
 //!
-pub(crate) mod frontier;
+mod frontier;
 mod structured;
 mod task;
+#[cfg(test)]
+mod tests;
 pub(crate) use structured::dispatch;
 pub(crate) use task::Reserved;
 

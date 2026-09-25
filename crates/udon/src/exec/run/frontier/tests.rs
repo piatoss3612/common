@@ -1,10 +1,8 @@
-use super::{admission, run_pool};
-use crate::exec::run::frontier::ReadyRange;
-use admission::*;
-use std::vec::Vec;
-
+use super::{Frontier, Identity, ReadyRange, TaskStorage};
+use crate::exec::run::{Kernel, Outcome, TaskError};
+use crate::test_support::{admission::*, run_pool};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use zakura_udon::exec::run::{Frontier, Identity, Kernel, Outcome, TaskError, TaskStorage};
+use std::vec::Vec;
 
 struct Add {
     value: u64,

@@ -9,12 +9,9 @@
 //! all actual guards and an admission permit. There is no per-operation worker
 //! allowance, queue growth, or blocking acquisition in the coordinator.
 
-use super::{admission::*, fft_run, msm_run, run_pool};
-use crate::exec::run::frontier::ReadyRange;
-use spin::{RwLock, RwLockWriteGuard};
-use std::num::NonZeroUsize;
-use std::{vec, vec::Vec};
-use zakura_udon::{
+use super::super::frontier::ReadyRange;
+use crate::test_support::{admission::*, fft_run, msm_run, run_pool};
+use crate::{
     curve::{
         AffinePoint, Pallas, ProjectivePoint,
         msm::{
@@ -35,6 +32,9 @@ use zakura_udon::{
     },
     field::{CanonicalUint, Fp, Fq, PallasBase},
 };
+use spin::{RwLock, RwLockWriteGuard};
+use std::num::NonZeroUsize;
+use std::{vec, vec::Vec};
 
 const CLASSES: usize = 7;
 const RETAINED: Resources<CLASSES> = Resources([1, 1, 1, 1, 0, 1, 0]);
@@ -42,9 +42,9 @@ const TEMPORARY: Resources<CLASSES> = Resources([0, 0, 0, 0, 1, 0, 1]);
 const ZERO: Resources<CLASSES> = Resources::ZERO;
 const FRONTIER: usize = 32;
 const APP_CHUNKS: usize = 8;
-pub const CEILING: usize = 16 * 1024 * 1024;
+pub(super) const CEILING: usize = 16 * 1024 * 1024;
 
-pub struct Fixture {
+pub(super) struct Fixture {
     bases: Vec<AffinePoint<Pallas>>,
     scalars: Vec<Fq>,
     coefficients: Vec<Fp>,
@@ -58,7 +58,7 @@ pub struct Fixture {
 }
 
 impl Fixture {
-    pub fn new(terms: usize, scratch_slots: usize) -> Self {
+    pub(super) fn new(terms: usize, scratch_slots: usize) -> Self {
         Self::build(terms, scratch_slots)
     }
 
@@ -236,30 +236,19 @@ impl<'a, 'i> run_pool::Work for Work<'a, 'i> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Stats {
-    pub bytes: usize,
-    pub peak: Resources<CLASSES>,
-    pub tasks: usize,
-    pub early_consumers: usize,
-    pub rounds: usize,
-    pub results: [ProjectivePoint<Pallas>; 2],
+pub(super) struct Stats {
+    pub(super) bytes: usize,
+    pub(super) peak: Resources<CLASSES>,
+    pub(super) tasks: usize,
+    pub(super) early_consumers: usize,
+    pub(super) rounds: usize,
+    pub(super) results: [ProjectivePoint<Pallas>; 2],
 }
 
 /// Calls `use_driver` after all allocations and worker creation. The supplied
-/// closure repeats the same shrinking workload using that pool and arena.
-#[allow(dead_code)] // The benchmark omits the independent arithmetic oracle.
-pub fn scoped<O>(
-    fixture: &Fixture,
-    workers: usize,
-    queue: usize,
-    use_driver: impl FnOnce(&mut dyn FnMut() -> Stats) -> O,
-) -> O {
-    scoped_impl::<false, O>(fixture, workers, queue, use_driver)
-}
-
-/// Checks every round against a scalar ladder and sampled polynomial evaluation.
-/// Kept separate from the measured driver so oracles never enter timings.
-pub fn scoped_checked<O>(
+/// closure repeats the same shrinking workload using that pool and arena and
+/// checks every round against a scalar ladder and sampled polynomial evaluation.
+pub(super) fn scoped_checked<O>(
     fixture: &Fixture,
     workers: usize,
     queue: usize,
@@ -312,8 +301,8 @@ fn scoped_impl<const CHECK: bool, O>(
             + size_of_val(&segments)
             + size_of::<Admission<'_, CLASSES>>()
             + size_of::<Stats>()
-            + size_of::<[Option<zakura_udon::curve::msm::run::Request<'_>>; FRONTIER]>()
-            + size_of::<[Option<zakura_udon::fft::run::Request<'_>>; FRONTIER]>()
+            + size_of::<[Option<crate::curve::msm::run::Request<'_>>; FRONTIER]>()
+            + size_of::<[Option<crate::fft::run::Request<'_>>; FRONTIER]>()
             + size_of::<ReadyRange<'_>>()
             + size_of::<Option<Segment<'_>>>()
             + size_of_val(fixture)

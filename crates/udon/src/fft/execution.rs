@@ -11,7 +11,7 @@ use super::{FftError, check_domain_size, check_field_count, min};
 /// concurrency when the transform exceeds one tile. Use [`Self::SERIAL`] for a
 /// single whole-transform tile with no scratch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct Strategy {
+pub(super) struct Strategy {
     /// Number of consecutive elements processed by each local tile transform.
     pub tile_len: usize,
     /// Maximum columns in each cross-tile scratch partition, clamped to a tile.
@@ -72,7 +72,7 @@ impl Strategy {
     /// Increasing only [`Self::max_tasks`] retains the whole-transform tile.
     /// Start from [`Self::default`] or also set [`Self::tile_len`] to enable
     /// tiled execution.
-    pub const SERIAL: Self = Self {
+    pub(super) const SERIAL: Self = Self {
         tile_len: 1usize << (usize::BITS - 1),
         columns_per_task: 1,
         max_tasks: 1,

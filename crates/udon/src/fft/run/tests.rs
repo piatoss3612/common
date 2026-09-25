@@ -1,18 +1,16 @@
-use super::{fft_run::Arena, run_pool};
+use super::{FftPlan, FftRun, WorkKind};
+use crate::exec::{
+    SerialExecutor,
+    run::{Identity, TaskStorage},
+};
+use crate::fft::{
+    Codelet, Direction, Domain, ElementOrder, InputStorage, InputSupport, InverseScale, Strategy,
+    Transform, TransformRequest,
+};
+use crate::field::{PallasBase, PallasScalar, PastaField, PrimeModulus};
+use crate::test_support::{fft_pipeline::Banks, fft_run::Arena, run_pool};
 use std::num::NonZeroUsize;
 use std::{vec, vec::Vec};
-use zakura_udon::{
-    exec::{
-        SerialExecutor,
-        run::{Identity, TaskStorage},
-    },
-    fft::{
-        Codelet, Direction, Domain, ElementOrder, InputSupport, InverseScale, Transform,
-        TransformRequest,
-        run::{FftPlan, FftRun},
-    },
-    field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
-};
 
 // Compare fragmented execution with the contiguous production path. Independent
 // direct-sum oracles live in the FFT unit tests.
@@ -36,7 +34,7 @@ fn reference_transform<M: PrimeModulus>(
     if request.input_order == ElementOrder::BitReversed {
         permute(output);
     }
-    let options = zakura_udon::fft::Strategy::SERIAL;
+    let options = Strategy::SERIAL;
     match request.direction {
         Direction::Forward => plan
             .forward_with(output, options, &SerialExecutor, &mut [])
@@ -107,11 +105,11 @@ fn check<M: PrimeModulus>() {
                         }
                         let arithmetic = FftPlan::with_strategy(
                             plan,
-                            zakura_udon::fft::TransformRequest {
+                            TransformRequest {
                                 input_storage: if separate {
-                                    zakura_udon::fft::InputStorage::Preserve
+                                    InputStorage::Preserve
                                 } else {
-                                    zakura_udon::fft::InputStorage::InPlace
+                                    InputStorage::InPlace
                                 },
                                 ..request
                             },
@@ -177,7 +175,7 @@ fn fragmented_orders_prefixes_cosets_products_and_codelets_match_contiguous() {
 }
 
 fn fused_scales<M: PrimeModulus>() {
-    use zakura_udon::{exec::run::ReadView, fft::run::Buffers};
+    use crate::{exec::run::ReadView, fft::run::Buffers};
 
     struct Source<'a, M: PrimeModulus>(&'a [PastaField<M>], bool);
     impl<M: PrimeModulus> ReadView<PastaField<M>> for Source<'_, M> {
@@ -205,8 +203,8 @@ fn fused_scales<M: PrimeModulus>() {
 
             let arithmetic = FftPlan::with_strategy(
                 plan,
-                zakura_udon::fft::TransformRequest {
-                    input_storage: zakura_udon::fft::InputStorage::Preserve,
+                TransformRequest {
+                    input_storage: InputStorage::Preserve,
                     ..request
                 },
                 NonZeroUsize::new(size).unwrap(),
@@ -258,7 +256,6 @@ fn fused_full_inputs_apply_coset_factors_and_input_scale_once() {
 }
 
 fn blocked<M: PrimeModulus>() {
-    use super::fft_pipeline::Banks;
     for (size, tile) in [(64, 8), (1024, 32)] {
         let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
         let original: Vec<_> = (0..size)
@@ -398,7 +395,7 @@ fn bounded_column_bands_and_structured_driver_match_stage_transforms() {
 }
 
 fn sparse_tables<M: PrimeModulus>() {
-    use zakura_udon::fft::{TwiddleDescription, TwiddleStorage, TwiddleTable};
+    use crate::fft::{TwiddleDescription, TwiddleStorage, TwiddleTable};
     let nz = |n| NonZeroUsize::new(n).unwrap();
     let size = 64;
     let plan = Transform::new(Domain::<M>::for_size(size).unwrap().coset());
@@ -429,8 +426,8 @@ fn sparse_tables<M: PrimeModulus>() {
                         for (tile, columns) in [(8, 3), (8, 9), (64, 3)] {
                             let arithmetic = FftPlan::with_strategy(
                                 plan,
-                                zakura_udon::fft::TransformRequest {
-                                    input_storage: zakura_udon::fft::InputStorage::Preserve,
+                                TransformRequest {
+                                    input_storage: InputStorage::Preserve,
                                     ..request
                                 },
                                 nz(tile),
@@ -477,12 +474,12 @@ fn sparse_initialization_and_partial_panels_share_forward_twiddles() {
 
 #[test]
 fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
-    use core::cell::RefCell;
-    use zakura_udon::{
+    use crate::{
         exec::run::ReadView,
-        fft::run::{Bank, Buffers, WorkKind},
+        fft::run::{Bank, Buffers},
         field::Fp,
     };
+    use core::cell::RefCell;
 
     struct Source {
         values: [Fp; 64],
@@ -505,8 +502,8 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
     let request = TransformRequest::new(Direction::Inverse);
     let arithmetic = FftPlan::with_strategy(
         plan,
-        zakura_udon::fft::TransformRequest {
-            input_storage: zakura_udon::fft::InputStorage::Preserve,
+        TransformRequest {
+            input_storage: InputStorage::Preserve,
             ..request
         },
         NonZeroUsize::new(8).unwrap(),
@@ -562,8 +559,8 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
                 for tile in [8, 64] {
                     FftPlan::with_strategy(
                         plan,
-                        zakura_udon::fft::TransformRequest {
-                            input_storage: zakura_udon::fft::InputStorage::Preserve,
+                        TransformRequest {
+                            input_storage: InputStorage::Preserve,
                             ..request
                         },
                         NonZeroUsize::new(tile).unwrap(),
@@ -598,12 +595,12 @@ fn scatter_initialization_reads_bounded_consecutive_input_tiles() {
 
 #[test]
 fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
-    use std::panic::{AssertUnwindSafe, catch_unwind};
-    use zakura_udon::{
+    use crate::{
         exec::run::{Outcome, ReadView, TaskError},
         fft::run::{Buffers, Resources},
         field::Fp,
     };
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     struct Source([Fp; 64]);
     impl ReadView<Fp> for Source {
@@ -633,8 +630,8 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
     let plan = Transform::new(Domain::for_size(64).unwrap().subgroup());
     let arithmetic = FftPlan::with_strategy(
         plan,
-        zakura_udon::fft::TransformRequest {
-            input_storage: zakura_udon::fft::InputStorage::Preserve,
+        TransformRequest {
+            input_storage: InputStorage::Preserve,
             ..TransformRequest::new(Direction::Forward)
         },
         NonZeroUsize::new(8).unwrap(),
@@ -724,7 +721,7 @@ fn failed_and_cancelled_fft_tasks_drain_before_banks_are_reused() {
 
 #[test]
 fn batch_planning_orders_panels_and_validation() {
-    use zakura_udon::{fft::InputStorage, field::Fp};
+    use crate::field::Fp;
     let nz = |n| NonZeroUsize::new(n).unwrap();
     let base = Transform::new(Domain::for_size(64).unwrap().coset());
     for direction in [Direction::Forward, Direction::Inverse] {
@@ -813,9 +810,9 @@ fn batch_planning_orders_panels_and_validation() {
 
 #[test]
 fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
-    use zakura_udon::{
+    use crate::{
         exec::run::{Outcome, TaskError},
-        fft::{InputStorage, run::Buffers},
+        fft::run::Buffers,
         field::Fp,
     };
     let nz = |n| NonZeroUsize::new(n).unwrap();

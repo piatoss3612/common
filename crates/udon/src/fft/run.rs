@@ -39,6 +39,8 @@ pub use interpolation::{
 };
 mod driver;
 mod expansion_driver;
+#[cfg(test)]
+mod tests;
 
 /// Worker-independent tile geometry and transform semantics.
 ///
@@ -146,7 +148,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// unscaled forward transform, or non-power-of-two tile returns
     /// [`FftError::InvalidExecution`]. No storage is bound or modified. Tables in
     /// `plan` remain borrowed across runs.
-    pub(crate) fn with_strategy(
+    pub(in crate::fft) fn with_strategy(
         plan: Transform<'t, M>,
         request: TransformRequest,
         tile: NonZeroUsize,
@@ -247,7 +249,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Returns [`FftError::SizeOverflow`] if the retained field count overflows
     /// `usize` or its field slice would exceed `isize::MAX` bytes.
     /// A single-fragment transform keeps its local kernel without panels.
-    pub(crate) fn with_columns(
+    pub(in crate::fft) fn with_columns(
         mut self,
         columns: NonZeroUsize,
         panels: NonZeroUsize,
@@ -270,7 +272,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// Each task leases the whole values bank exclusively. This avoids a full
     /// retained snapshot, at the cost of serializing permutation tasks for this run.
     /// Other phases still use bounded fragment leases.
-    pub(crate) fn with_contiguous_permutation(mut self) -> Self {
+    pub(in crate::fft) fn with_contiguous_permutation(mut self) -> Self {
         self.contiguous_permutation = true;
         self
     }
@@ -284,7 +286,7 @@ impl<'t, M: PrimeModulus> FftPlan<'t, M> {
     /// execution is unchanged. Without this option, tasks gather into disjoint
     /// destination tiles.
     #[cfg(test)]
-    pub(crate) fn with_scatter_initialization(mut self) -> Self {
+    pub(in crate::fft) fn with_scatter_initialization(mut self) -> Self {
         self.scatter_input = true;
         self
     }
@@ -454,7 +456,7 @@ pub enum Bank {
 
 /// A bounded FFT kernel family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkKind {
+enum WorkKind {
     /// Complete a transform that fits one local tile, fusing its phases.
     Fused,
     /// Initialize a destination tile, zeroing unsupported input positions.
@@ -487,7 +489,7 @@ pub struct Request<'a> {
     /// Nonforgeable claim identity.
     pub key: TaskKey<'a>,
     #[cfg(test)]
-    pub(crate) kind: WorkKind,
+    kind: WorkKind,
     /// Bank and global range of the first exclusive output fragment.
     pub write: (Bank, Range<usize>),
     /// Second exclusive fragment for a butterfly pair.

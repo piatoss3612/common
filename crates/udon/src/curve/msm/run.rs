@@ -27,6 +27,8 @@ use crate::exec::run::{
 mod chunks;
 mod driver;
 pub(super) mod storage;
+#[cfg(test)]
+mod tests;
 pub use super::schedule::{BatchPlan, JobStorage, WorkerStorage};
 pub use chunks::{ChunkRequest, ParallelMsmRun};
 
@@ -190,7 +192,7 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// Returns [`CurveError::SizeOverflow`] for unrepresentable storage counts
     /// or bytes, before binding or writing any storage.
     #[cfg(test)]
-    pub(crate) fn new_with(
+    fn new_with(
         terms: usize,
         mut options: ArithmeticOptions,
         grain: NonZeroUsize,
@@ -345,7 +347,7 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// slack without implicitly selecting a different recoder. Extra window
     /// collapses and retained slots still belong in the caller's cost model.
     #[cfg(test)]
-    pub(crate) fn with_grain(mut self, grain: NonZeroUsize) -> Result<Self, CurveError> {
+    fn with_grain(mut self, grain: NonZeroUsize) -> Result<Self, CurveError> {
         self.cap = self.cap.min(grain.get());
         self.options.chunk_size = NonZeroUsize::new(self.cap.max(1));
         self.job = schedule::layout::<C>(
@@ -430,7 +432,7 @@ impl<C: PastaCurve> MsmPlan<C> {
 
 /// Work kind with distinct storage lifetime requirements.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorkKind {
+enum WorkKind {
     /// Writes one retained scalar and recoding chunk.
     Prepare,
     /// Reads a prepared chunk and computes or deposits one window.
@@ -447,7 +449,7 @@ pub struct Request<'a> {
     /// Claim identity, valid only for this run and dependency epoch.
     pub key: TaskKey<'a>,
     #[cfg(test)]
-    pub(crate) kind: WorkKind,
+    kind: WorkKind,
     /// First input term processed by this task.
     pub offset: usize,
     /// Terms in this chunk.

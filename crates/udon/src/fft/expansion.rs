@@ -26,7 +26,7 @@ use crate::exec::ExecutionOptions;
 /// The default is [`Self::SERIAL`].
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ExpansionStrategy {
+pub(super) struct ExpansionStrategy {
     /// Maximum number of concurrently executing residue transforms.
     pub max_residue_tasks: usize,
     /// Scheduling and scratch bounds within every base-size transform.
@@ -429,7 +429,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// or [`FftError::SizeOverflow`] if the combined scratch slice would exceed
     /// `isize::MAX` bytes or its element count overflows `usize`.
     #[cfg(test)]
-    pub(crate) const fn coefficient_scratch_with(
+    pub(super) const fn coefficient_scratch_with(
         self,
         options: ExpansionStrategy,
     ) -> Result<usize, FftError> {
@@ -451,7 +451,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// requirement. Options and storage limits have the errors of
     /// [`Self::coefficient_scratch_with`].
     #[cfg(test)]
-    pub(crate) fn coefficients_with<'input, E: Executor>(
+    pub(super) fn coefficients_with<'input, E: Executor>(
         self,
         coefficients: impl Into<super::CoefficientView<'input, M>>,
         output: &mut [PastaField<M>],
@@ -493,7 +493,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// Delegates to [`ExpansionStrategy::evaluation_requirements`] with the
     /// base and extended sizes. Errors follow [`Self::coefficient_scratch_with`].
     #[cfg(test)]
-    pub(crate) const fn evaluation_scratch_with(
+    pub(super) const fn evaluation_scratch_with(
         self,
         options: ExpansionStrategy,
     ) -> Result<usize, FftError> {
@@ -513,7 +513,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// of the remaining residues run concurrently. The first residue holds
     /// their coefficient input and is completed after they finish reading it.
     #[cfg(test)]
-    pub(crate) fn evaluations_with<E: Executor>(
+    pub(super) fn evaluations_with<E: Executor>(
         self,
         evaluations: &[PastaField<M>],
         output: &mut [PastaField<M>],
@@ -617,7 +617,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// panics before writes. Recovering the full product by interpolation additionally
     /// requires its degree to be below the extended domain size.
     #[cfg(test)]
-    pub(crate) fn short_product_with<'input, E: Executor>(
+    pub(super) fn short_product_with<'input, E: Executor>(
         self,
         short: impl Into<super::CoefficientView<'input, M>>,
         factor: EvaluationView<'_, M>,

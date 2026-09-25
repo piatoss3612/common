@@ -88,7 +88,7 @@ pub enum StorageLayout {
 
 /// Small straight-line radix schedules, including differential-test candidates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum Codelet {
+pub(super) enum Codelet {
     /// Individual radix-2 rounds.
     Radix2,
     /// Four-value local schedules.

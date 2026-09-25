@@ -1,33 +1,29 @@
 use super::{
-    msm_run::{Arena, Work},
-    run_pool,
+    BatchPlan, Buffers, JobStorage, MsmPlan, MsmRun, ParallelMsmRun, ProducedInput, Resources,
+    SourceBuffers, WorkKind, WorkerStorage,
 };
-use spin::RwLock;
-use std::num::NonZeroUsize;
-use std::{string::ToString, vec, vec::Vec};
-use zakura_udon::{
+use crate::{
     curve::{
         AffinePoint, CurveError, EisensteinTableBatch, Pallas, PastaCurve, Point,
         PreparedAffinePoint, ProjectivePoint, Vesta,
         msm::{
             Accumulation, ArithmeticOptions, Bases, BatchOptions, Input, Kernel, PreparedScalars,
             Requirements, ScalarStorage, Scratch, Selection,
-            run::{
-                BatchPlan, JobStorage, MsmPlan, MsmRun, ParallelMsmRun, WorkKind, WorkerStorage,
-            },
         },
     },
     exec::{
         SerialExecutor, TaskBudget,
-        run::{Identity, Outcome, TaskStorage},
+        run::{Identity, Outcome, ReadView, TaskError, TaskStorage},
     },
     field::{CanonicalUint, PastaField},
+    test_support::{
+        msm_run::{Arena, Lease, Work},
+        run_pool,
+    },
 };
-
-use zakura_udon::{
-    curve::msm::run::{Buffers, ProducedInput, Resources, SourceBuffers},
-    exec::run::{ReadView, TaskError},
-};
+use spin::RwLock;
+use std::num::NonZeroUsize;
+use std::{string::ToString, vec, vec::Vec};
 
 struct Fragments<'a, T>(&'a [T]);
 impl<T> ReadView<T> for Fragments<'_, T> {
@@ -47,7 +43,7 @@ impl<T> ReadView<T> for Fragments<'_, T> {
     }
 }
 struct ProducedLease<'a, C: PastaCurve> {
-    arithmetic: super::msm_run::Lease<'a, C>,
+    arithmetic: Lease<'a, C>,
     scalars: Fragments<'a, PastaField<C::Scalar>>,
     indices: Fragments<'a, u32>,
 }

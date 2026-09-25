@@ -329,21 +329,6 @@ pub(super) fn prepare_inner<
 // the small nonzero Eisenstein coefficient differences or sums vanish. Their
 // norms are far below either prime group order. No exceptional-point branches
 // or projective intermediates are needed for these nonidentity inputs.
-fn chord<C: PastaCurve>(
-    p: AffinePoint<C>,
-    q: AffinePoint<C>,
-    inverse: PastaField<C::Base>,
-) -> AffinePoint<C> {
-    let slope = q.y.sub(&p.y).mul(&inverse);
-    let x = slope.square().sub(&p.x).sub(&q.x);
-    let y = slope.mul(&p.x.sub(&x)).sub(&p.y);
-    AffinePoint {
-        x: x.reduce(),
-        y: y.reduce(),
-        marker: PhantomData,
-    }
-}
-
 fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     bases: &[B],
     entries: &mut [E],
@@ -359,14 +344,14 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     invert_nonzero(&mut denom[..n], prefix);
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
         let p = group[0].affine();
-        let d = chord(p, group[0].rotated(1).neg(), denom[i]);
+        let d = p.chord_with_inverse(&group[0].rotated(1).neg(), &denom[i]);
         group[1] = E::from_affine(&d);
         denom[i] = group[1].rotated(1).x.sub(&d.x);
     }
     invert_nonzero(&mut denom[..n], prefix);
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
         let d = group[1].affine();
-        let b = chord(d, group[1].rotated(1).neg(), denom[i]);
+        let b = d.chord_with_inverse(&group[1].rotated(1).neg(), &denom[i]);
         let minus_three = b.rotated(2);
         group[4] = E::from_affine(&minus_three.neg());
     }
@@ -383,14 +368,17 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
         let phi = group[0].rotated(1);
         let minus_three = group[4].affine().neg();
         let b_phi = group[4].rotated(2).neg();
-        group[5] = E::from_affine(&chord(phi, minus_three, denom[2 * i]).neg());
+        group[5] = E::from_affine(&phi.chord_with_inverse(&minus_three, &denom[2 * i]).neg());
         group[3] = E::from_affine(
-            &chord(phi, minus_three.neg(), denom[2 * i])
+            &phi.chord_with_inverse(&minus_three.neg(), &denom[2 * i])
                 .endomorphism()
                 .neg(),
         );
-        group[2] = E::from_affine(&chord(phi, b_phi.neg(), denom[2 * i + 1]).endomorphism());
-        let four_b = chord(phi, b_phi, denom[2 * i + 1]);
+        group[2] = E::from_affine(
+            &phi.chord_with_inverse(&b_phi.neg(), &denom[2 * i + 1])
+                .endomorphism(),
+        );
+        let four_b = phi.chord_with_inverse(&b_phi, &denom[2 * i + 1]);
         group[6] = E::from_affine(&four_b.rotated(2));
     }
     for (i, group) in entries.chunks_exact(8).enumerate() {
@@ -398,7 +386,9 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     }
     invert_nonzero(&mut denom[..n], prefix);
     for (i, group) in entries.chunks_exact_mut(8).enumerate() {
-        let p = chord(group[0].rotated(1), group[6].rotated(1), denom[i]);
+        let p = group[0]
+            .rotated(1)
+            .chord_with_inverse(&group[6].rotated(1), &denom[i]);
         group[7] = E::from_affine(&p.rotated(2));
     }
 }

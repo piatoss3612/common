@@ -7,42 +7,6 @@ fn nz(n: usize) -> NonZeroUsize {
     NonZeroUsize::new(n).unwrap()
 }
 
-fn ordered<M: PrimeModulus>(values: &[PastaField<M>], order: ElementOrder) -> Vec<PastaField<M>> {
-    (0..values.len())
-        .map(|i| {
-            values[if order == ElementOrder::Natural {
-                i
-            } else {
-                reverse(i, values.len().ilog2())
-            }]
-        })
-        .collect()
-}
-
-fn inverse_direct<M: PrimeModulus>(
-    evaluations: &[PastaField<M>],
-    domain: CosetDomain<M>,
-    normalized: bool,
-) -> Vec<PastaField<M>> {
-    (0..domain.size())
-        .map(|degree| {
-            let step = domain.domain().inverse_root().pow_u64(degree as u64);
-            let mut power = PastaField::ONE;
-            let mut sum = PastaField::ZERO;
-            for value in evaluations {
-                sum = sum.add(&value.mul(&power));
-                power = power.mul(&step);
-            }
-            sum = sum.mul(&domain.inverse_shift().pow_u64(degree as u64));
-            if normalized {
-                sum.mul(&domain.domain().size_inverse())
-            } else {
-                sum
-            }
-        })
-        .collect()
-}
-
 fn operations<M: PrimeModulus>() {
     for log in 0..=6 {
         for coset in [false, true] {
@@ -127,66 +91,6 @@ fn operations<M: PrimeModulus>() {
 fn schedules_and_orders_match_independent_transforms() {
     operations::<PallasBase>();
     operations::<PallasScalar>();
-}
-
-fn interpreted_codelets<M: PrimeModulus>() {
-    use super::super::stages::{RADIX4, RADIX8};
-    for steps in [&RADIX4[..], &RADIX8[..]] {
-        let size = if steps.len() == 4 { 4 } else { 8 };
-        let domain = Domain::<M>::for_size(size).unwrap().subgroup();
-        let input = inputs(size);
-        for inverse in [false, true] {
-            for dif in [false, true] {
-                let mut interpreted = if dif {
-                    input.clone()
-                } else {
-                    ordered(&input, ElementOrder::BitReversed)
-                };
-                for index in 0..steps.len() {
-                    let step = steps[if dif { steps.len() - 1 - index } else { index }];
-                    assert_eq!(step.right - step.left, step.block / 2);
-                    assert!(step.exponent < step.block / 2 && step.right < size);
-                    let root = if inverse {
-                        domain.domain().inverse_root()
-                    } else {
-                        domain.domain().root()
-                    };
-                    let power = root.pow_u64((size / step.block * step.exponent) as u64);
-                    let left = interpreted[step.left];
-                    let right = interpreted[step.right];
-                    if dif {
-                        interpreted[step.left] = left.add(&right);
-                        interpreted[step.right] = left.sub(&right).mul(&power);
-                    } else {
-                        let product = right.mul(&power);
-                        interpreted[step.left] = left.add(&product);
-                        interpreted[step.right] = left.sub(&product);
-                    }
-                }
-                let expected = if inverse {
-                    inverse_direct(&input, domain, false)
-                } else {
-                    direct(&input, domain)
-                };
-                assert_eq!(
-                    reduced(&interpreted),
-                    reduced(
-                        &(if dif {
-                            ordered(&expected, ElementOrder::BitReversed)
-                        } else {
-                            expected
-                        })
-                    )
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn generated_codelet_schedule_interpreter_matches_direct_sums() {
-    interpreted_codelets::<PallasBase>();
-    interpreted_codelets::<PallasScalar>();
 }
 
 fn prefixes_and_products<M: PrimeModulus>() {

@@ -11,6 +11,9 @@ use super::{
 use crate::exec::{TaskBudget, for_each_chunk_mut};
 use crate::field::butterfly::{butterfly, butterfly_dif, divide_by_power_of_two, scale};
 
+#[cfg(test)]
+mod tests;
+
 /// Small straight-line radix schedules, including differential-test candidates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Codelet {
@@ -687,11 +690,11 @@ fn paired<
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct Step {
-    pub left: usize,
-    pub right: usize,
-    pub block: usize,
-    pub exponent: usize,
+struct Step {
+    left: usize,
+    right: usize,
+    block: usize,
+    exponent: usize,
 }
 
 const fn schedule<const N: usize>(radix: usize) -> [Step; N] {
@@ -726,5 +729,5 @@ const fn schedule<const N: usize>(radix: usize) -> [Step; N] {
     }
     result
 }
-pub(super) const RADIX4: [Step; 4] = schedule(4);
-pub(super) const RADIX8: [Step; 12] = schedule(8);
+const RADIX4: [Step; 4] = schedule(4);
+const RADIX8: [Step; 12] = schedule(8);

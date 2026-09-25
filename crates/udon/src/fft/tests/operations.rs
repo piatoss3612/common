@@ -1,6 +1,6 @@
 use super::*;
 use crate::fft::execution::FftPlan;
-use crate::test_support::max_loose_limbs;
+use crate::field::pasta::test_support::max_loose_limbs;
 use core::num::NonZeroUsize;
 
 fn nz(n: usize) -> NonZeroUsize {

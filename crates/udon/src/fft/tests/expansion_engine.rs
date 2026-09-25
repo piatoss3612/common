@@ -10,8 +10,8 @@ use crate::exec::Executor;
 use crate::fft::{
     Codelet, CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, Expansion,
     ExpansionOrder, ExpansionScaleNormalization, FftError, InverseScale, PastaField, PrimeModulus,
-    Residue, Strategy, Transform, assert_length, check_domain_size, check_field_count,
-    check_prefix, check_scratch, min, bit_reverse, stages::StageKernel, transform::Run,
+    Residue, Strategy, Transform, assert_length, bit_reverse, check_domain_size, check_field_count,
+    check_prefix, check_scratch, min, stages::StageKernel, transform::Run,
 };
 
 /// Caller-selected concurrency across residues and within each base transform.

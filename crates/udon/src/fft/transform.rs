@@ -1,5 +1,5 @@
-use super::planning::Geometry;
 use super::factors::{Factors, InverseFinish};
+use super::planning::Geometry;
 use super::{
     CoefficientView, CosetDomain, Executor, FftError, PastaField, PrimeModulus, Strategy, Tables,
     bit_reverse,
@@ -7,7 +7,7 @@ use super::{
 #[cfg(test)]
 use super::{assert_length, check_prefix};
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-use crate::field::butterfly::{butterfly, divide_by_power_of_two, scale as scale_loose};
+use crate::field::pasta::butterfly::{butterfly, divide_by_power_of_two, scale as scale_loose};
 
 /// Reusable transform metadata borrowing caller-prepared tables.
 ///

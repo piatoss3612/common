@@ -15,8 +15,10 @@ metadata = json.loads(subprocess.check_output(
     cwd=root,
 ))
 for package in metadata["packages"]:
-    fixtures = Path(package["manifest_path"]).parent / "tests" / "fixtures"
-    for source in sorted(fixtures.rglob("*.rs")):
+    tests = Path(package["manifest_path"]).parent / "tests"
+    for source in sorted(tests.rglob("*.rs")):
+        if "fixtures" not in source.relative_to(tests).parts:
+            continue
         # stdin avoids resolving modules that the consumer harness assembles.
         original = source.read_text()
         result = subprocess.run(

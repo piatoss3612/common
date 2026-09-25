@@ -4,14 +4,29 @@ on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROPTEST_CASES: "32"
+  RUST_BACKTRACE: "1"
+
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned toolchain
@@ -28,26 +43,63 @@ jobs:
         run: cargo doc --locked --workspace --all-features --no-deps
 
   test:
-    name: Public test suite
-    runs-on: ubuntu-latest
+    name: Arithmetic (${{ matrix.platform.arch }}, ${{ matrix.tables }})
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-24.04, arch: x86_64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64 }
+        tables: [default, large]
+        include:
+          - { tables: default, features: "" }
+          - { tables: large, features: "--all-features" }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Verify native architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.platform.arch }}
+        run: test "$(uname -m)" = "$EXPECTED_ARCH"
+      - name: Install pinned toolchain
+        run: rustup toolchain install
+      - name: Run workspace release tests
+        run: cargo test --release --locked --workspace ${{ matrix.features }}
+      - name: Check Udon with debug assertions
+        run: cargo test --locked -p zakura-udon --lib ${{ matrix.features }}
+      - name: Preserve property regressions
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: regressions-${{ matrix.platform.arch }}-${{ matrix.tables }}
+          path: crates/udon/src/**/*.regressions
+          if-no-files-found: ignore
+
+  consumers:
+    name: Compiler and artifact consumers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned toolchain
         run: rustup toolchain install
-      - name: Run test suite (all workspace crates, all features)
-        run: cargo test --release --locked --workspace --all-features
-      - name: Check Udon with the default square-root tables
-        run: cargo test --release --locked -p zakura-udon
-      - name: Run Udon compiler and artifact consumers (slow)
+      - name: Run Udon compiler and artifact consumers
         # Each consumer selects its own dependency feature matrix.
-        run: >-
-          cargo test --release --locked -p zakura-udon
-          --test embedding --test fft_embedding
-          --test curve_constants --test curve_embedding --test api_boundaries -- --ignored
-      - name: Check arithmetic and FFTs with debug assertions
         run: |
-          cargo test --locked -p zakura-udon --lib
-          cargo test --locked -p zakura-udon --lib --all-features
+          cargo test --release --locked -p zakura-udon \
+            --test api --test field --test curve --test fft -- --ignored | tee "$RUNNER_TEMP/consumers.log"
+          # Require a completed nonempty run, and reject any empty target.
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/consumers.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/consumers.log"
+
+  benchmarks:
+    name: Benchmark smoke tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install pinned toolchain
+        run: rustup toolchain install
       - name: Exercise field benchmarks
         run: |
           cargo bench --locked -p zakura-udon --bench field -- --test
@@ -66,7 +118,8 @@ jobs:
 
   miri:
     name: Unsafe storage checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
     env:
       MIRI_TOOLCHAIN: nightly-2026-09-06
     steps:
@@ -75,15 +128,24 @@ jobs:
         run: rustup toolchain install "$MIRI_TOOLCHAIN" --profile minimal --component miri,rust-src
       - name: Check core storage
         run: |
-          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib pod::
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib pod:: | tee "$RUNNER_TEMP/core.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/core.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/core.log"
       - name: Check public storage API
-        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod
+        run: |
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod storage:: | tee "$RUNNER_TEMP/pod.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/pod.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/pod.log"
       - name: Check field and affine point storage
-        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --test pod
+        run: |
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --test field --test curve pod:: | tee "$RUNNER_TEMP/udon-pod.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/udon-pod.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/udon-pod.log"
 
   portability:
     name: Target portability contracts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install pinned toolchain
@@ -91,4 +153,25 @@ jobs:
       - name: Install target libraries
         run: rustup target add thumbv7em-none-eabi s390x-unknown-linux-gnu
       - name: Build portable libraries and check unsupported layouts
-        run: cargo test --release --locked -p zakura-bento --test portability -- --ignored
+        run: |
+          cargo test --release --locked -p zakura-bento --test api portability:: -- --ignored | tee "$RUNNER_TEMP/portability.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/portability.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/portability.log"
+
+  ci-required:
+    name: ci-required
+    if: always()
+    needs: [lint, test, consumers, benchmarks, miri, portability]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every mandatory job to succeed
+        env:
+          ALL_SUCCEEDED: >-
+            ${{ needs.lint.result == 'success' &&
+                needs.test.result == 'success' &&
+                needs.consumers.result == 'success' &&
+                needs.benchmarks.result == 'success' &&
+                needs.miri.result == 'success' &&
+                needs.portability.result == 'success' }}
+        run: test "$ALL_SUCCEEDED" = true

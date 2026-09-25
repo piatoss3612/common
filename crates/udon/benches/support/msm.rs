@@ -1,13 +1,11 @@
 //! Benchmark-owned metadata for short batches; planning remains in timed calls.
 use zakura_udon::{
-    curve::{
-        CurveError, PastaCurve, ProjectivePoint,
-        msm::{
-            Input, Requirements, Scratch,
-            run::{BatchPlan, JobStorage, WorkerStorage},
-        },
-    },
+    curve::{CurveError, PastaCurve, ProjectivePoint},
     exec::{ExecutionOptions, Executor},
+    msm::{
+        Input, Requirements, Scratch,
+        execution::{BatchPlan, JobStorage, WorkerStorage},
+    },
 };
 
 fn planned<C: PastaCurve, T>(

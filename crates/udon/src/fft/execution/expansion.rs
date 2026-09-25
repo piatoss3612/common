@@ -489,7 +489,7 @@ impl<'a, 't, M: PrimeModulus, const SLOTS: usize> ExpansionRun<'a, 't, M, SLOTS>
         &mut self,
         slot: usize,
         receipt: Completion<'a, R, ()>,
-    ) -> Result<ExpansionPublished<R>, crate::exec::run::PublishError<'a, R, ()>> {
+    ) -> Result<ExpansionPublished<R>, crate::exec::execution::PublishError<'a, R, ()>> {
         let Some(run) = self.runs.get_mut(slot) else {
             return Err((TaskError::Stale, receipt));
         };

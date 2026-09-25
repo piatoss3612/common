@@ -5,7 +5,7 @@ workspace can retain allocations across operations while lending the slices
 each operation needs. Keep immutable tables separate from mutable buffers so
 independent workspaces can share them.
 
-The [workspace tests](../crates/udon/tests/workspaces/main.rs) demonstrate these
+The [workspace tests](../crates/udon/tests/execution/main.rs) demonstrate these
 relationships with ordinary `Vec` storage and a caller-selected Rayon pool.
 The examples use deterministic inputs to check arithmetic and capacity reuse;
 allocation policy and application-wide resource limits belong to the caller.
@@ -18,15 +18,15 @@ their explicit nested budget and disjoint-buffer policies.
 
 ## Scoped execution
 
-The [Rayon adapter](../crates/udon/tests/support/workspaces/executor.rs) borrows
+The [Rayon adapter](../crates/udon/tests/harness/executor.rs) borrows
 a pool and enters it with `ThreadPool::install` before each `rayon::join`.
 This selects the intended pool even when a call originates on another pool's
 worker. The adapter supports borrowed results and nested joins with one worker.
-The [`Executor` contract](../crates/udon/src/exec.rs) defines completion and
+The [`Executor` contract](../crates/udon/src/exec/mod.rs) defines completion and
 panic handling; its tests check that successful results are dropped when another
 branch panics.
 
-Use [`Executor::join`](../crates/udon/src/exec.rs) for independent operations
+Use [`Executor::join`](../crates/udon/src/exec/mod.rs) for independent operations
 with separate scratch. Each operation can use the full task budget on a bounded,
 cooperative pool. The example `with_side_work` passes that budget to both an
 MSM batch and fixed-base side work; with one task, it runs both
@@ -46,9 +46,9 @@ budget divides work within an operation; it does not cap all concurrent requests
 
 ## Owning an MSM workspace
 
-The [MSM workspace](../crates/udon/tests/support/workspaces/msm.rs) holds
+The [MSM workspace](../crates/udon/tests/msm/buffers.rs) holds
 initialized scratch and plan metadata. Its `prepare` method accepts
-`exec::ExecutionOptions`, sizes metadata, and constructs a `msm::run::BatchPlan`,
+`exec::ExecutionOptions`, sizes metadata, and constructs a `msm::execution::BatchPlan`,
 then grows scratch to that plan's requirements. The ceiling covers the used
 arithmetic workspace; metadata and excess workspace capacity are separate. The
 [grouped-job guide](CURVES.md#grouped-jobs-and-other-work) explains planning and
@@ -71,7 +71,7 @@ storage the planner accounts for.
 
 ## Polynomial storage and liveness
 
-The [FFT workspace](../crates/udon/tests/support/workspaces/fft.rs) retains
+The [FFT workspace](../crates/udon/tests/fft/buffers.rs) retains
 coefficients between expansion and product operations. Table owners lend plans
 after preparation, and sequential operations reuse one scratch buffer sized by
 the maximum of their requirement queries. Simultaneous workspaces need disjoint
@@ -79,7 +79,7 @@ mutable storage.
 
 The example expands a base domain of `N = 2048` rows to `8N` rows with the
 order-three coset shift
-[`PastaField::ZETA`](../crates/udon/src/field/parameters.rs). Its storage choices
+[`PastaField::ZETA`](../crates/udon/src/field/pasta/parameters.rs). Its storage choices
 are:
 
 | Buffer | Fields | Lifetime and copies |
@@ -118,7 +118,7 @@ inverse lengths, then batch-normalize the projective outputs into caller-owned
 storage. The [reference transform](../crates/udon/src/fft/reference.rs) defines
 root and ordering requirements.
 
-The [curve artifact consumer](../crates/udon/tests/fixtures/curve_embedding/)
+The [curve artifact consumer](../crates/udon/tests/curve/fixtures/embedding/)
 generates a small structured reference string (SRS) for both curves and embeds
 coefficient and Lagrange bases as `PreparedAffinePoint` arrays. The fixture uses
 known generator multiples solely as deterministic test data. Its consumer

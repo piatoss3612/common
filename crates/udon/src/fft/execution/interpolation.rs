@@ -651,7 +651,7 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
         &mut self,
         class: usize,
         receipt: Completion<'a, R, ()>,
-    ) -> Result<InterpolationPublished<R>, crate::exec::run::PublishError<'a, R, ()>> {
+    ) -> Result<InterpolationPublished<R>, crate::exec::execution::PublishError<'a, R, ()>> {
         let Some(run) = self.runs.get_mut(class) else {
             return Err((TaskError::Stale, receipt));
         };
@@ -674,7 +674,7 @@ impl<'a, 't, M: PrimeModulus, const CLASSES: usize> InterpolationRun<'a, 't, M, 
         &mut self,
         class: usize,
         receipt: Completion<'a, R, ()>,
-    ) -> Result<InterpolationPublished<R>, crate::exec::run::PublishError<'a, R, ()>> {
+    ) -> Result<InterpolationPublished<R>, crate::exec::execution::PublishError<'a, R, ()>> {
         let Some(frontier) = self.additions.get_mut(class) else {
             return Err((TaskError::Stale, receipt));
         };

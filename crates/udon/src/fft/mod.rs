@@ -157,6 +157,9 @@ use crate::field::{PastaField, PrimeModulus};
 mod constant_prefix;
 mod domain;
 pub mod execution;
+
+/// Compatibility name for the execution module.
+pub use execution as run;
 mod expansion;
 mod expansion_operation;
 mod expansion_scales;
@@ -164,10 +167,10 @@ mod factors;
 mod interpolation;
 mod lagrange;
 mod layout;
-mod operation;
 mod planning;
 mod powers;
 pub mod reference;
+mod request;
 mod stages;
 mod tables;
 mod transform;
@@ -184,10 +187,10 @@ pub use lagrange::{LagrangeCompletion, LagrangeError};
 pub use layout::{
     CoefficientView, ElementOrder, EvaluationLayout, EvaluationView, InverseScale, ResidueLayout,
 };
-pub use operation::{Direction, InputStorage, InputSupport, StorageLayout, TransformRequest};
 use planning::Strategy;
 use planning::check_scratch;
 pub use powers::{TwiddleDescription, TwiddleStorage, TwiddleTable};
+pub use request::{Direction, InputStorage, InputSupport, StorageLayout, TransformRequest};
 use stages::Codelet;
 pub use tables::{TableRequirements, Tables, TablesMut};
 pub use transform::Transform;

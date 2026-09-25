@@ -1,8 +1,8 @@
 //! Isolated timing of prefix power generation and task coset scaling.
 use super::*;
 use crate::{
-    exec::run::ReadView,
-    fft::{factors::ForwardShift, bit_reverse, run::FftKernel},
+    exec::execution::ReadView,
+    fft::{bit_reverse, factors::ForwardShift, run::FftKernel},
 };
 use std::{
     hint::black_box,
@@ -113,7 +113,7 @@ fn compare<M: PrimeModulus>(name: &str) {
     let domain = Domain::<PastaField<M>>::for_size(size).unwrap();
     let shift = PastaField::<M>::from_u64(7);
     for prefix in [10, 128, 256, 1024] {
-        let source: Vec<_> = crate::test_support::field_samples::<M>()
+        let source: Vec<_> = crate::field::pasta::test_support::field_samples::<M>()
             .take(prefix)
             .collect();
         for residue in [false, true] {
@@ -188,7 +188,7 @@ fn compare<M: PrimeModulus>(name: &str) {
         band: 0,
     };
     for order in [ElementOrder::Natural, ElementOrder::BitReversed] {
-        let mut values: Vec<_> = crate::test_support::field_samples::<M>()
+        let mut values: Vec<_> = crate::field::pasta::test_support::field_samples::<M>()
             .take(size)
             .collect();
         let mut expected = values.clone();

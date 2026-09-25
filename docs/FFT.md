@@ -9,7 +9,7 @@ A plan borrows tables and keeps the domain constants needed for execution.
 Table preparation writes into caller storage; Udon's FFT setup and execution
 do not allocate. An executor's resource use belongs to the caller. Arithmetic
 is variable-time, with no constant-time guarantee for secret inputs; see the
-[field contract](../crates/udon/src/field/mod.rs).
+[field contract](../crates/udon/src/field/pasta/mod.rs).
 
 ## Domains and transform order
 
@@ -80,7 +80,7 @@ laws that a custom implementation must satisfy.
 
 [`execution::FftPlan`](../crates/udon/src/fft/execution/mod.rs) resolves a `TransformRequest`
 from a domain/table `Transform`, `StorageLayout`, and shared
-[`ExecutionOptions`](../crates/udon/src/exec.rs). The options supply a total task
+[`ExecutionOptions`](../crates/udon/src/exec/mod.rs). The options supply a total task
 budget and optional workspace byte ceiling. The default is serial execution
 with no extra ceiling. Udon selects local arithmetic, permutations, and column
 panels; the caller does not configure those implementation choices.
@@ -162,15 +162,15 @@ also use the explicit twiddle provider.
 
 Callers can prepare table arrays at runtime and lend their slices, or prepare
 them in a downstream build script and embed them through [Bento POD](POD.md).
-The executable [FFT embedding consumer](../crates/udon/tests/fixtures/fft_embedding)
+The executable [FFT embedding consumer](../crates/udon/tests/fft/fixtures/embedding)
 shows the complete build-to-runtime path for both fields:
 
-1. Its [record schema](../crates/udon/tests/fixtures/fft_embedding/src/record.rs)
+1. Its [record schema](../crates/udon/tests/fft/fixtures/embedding/src/record.rs)
    owns concrete POD arrays for a chosen domain and expansion ratio.
-2. Its [build script](../crates/udon/tests/fixtures/fft_embedding/build.rs) prepares
+2. Its [build script](../crates/udon/tests/fft/fixtures/embedding/build.rs) prepares
    the arrays with Udon, writes `bento::bytes_of(&record)`, and names the file
    using `STORED_FORM`.
-3. Its [consumer library](../crates/udon/tests/fixtures/fft_embedding/src/lib.rs)
+3. Its [consumer library](../crates/udon/tests/fft/fixtures/embedding/src/lib.rs)
    uses `bento::embed_struct!` with `udon::stored_form!()`, borrows tables directly
    from the embedded record, and executes with stack-owned buffers.
 
@@ -190,7 +190,7 @@ but do not execute them.
 
 ## Scratch and execution
 
-[`ExecutionOptions`](../crates/udon/src/exec.rs) is shared by FFTs and MSMs.
+[`ExecutionOptions`](../crates/udon/src/exec/mod.rs) is shared by FFTs and MSMs.
 `with_task_budget` provides the allowance for an entire operation, including
 nested transforms. `with_memory_limit` bounds used arithmetic scratch and
 retained intermediates. Inputs, outputs, persistent tables, metadata, unused
@@ -208,10 +208,10 @@ Scratch arrays filled with `Fp::ZERO` or `Fq::ZERO` suffice. Unused tails remain
 untouched. The [module contract](../crates/udon/src/fft/mod.rs) defines scratch
 reuse, validation boundaries, and recovery on unwind.
 
-The [benchmarks](TESTING.md#fft-benchmarks) include coefficient scaling when
+The [benchmarks](BENCHMARKING.md#fft-benchmarks) include coefficient scaling when
 comparing subgroup transforms and the order-three `ZETA` coset.
 
-FFTs use [`exec::Executor`](../crates/udon/src/exec.rs) for scoped joins. Its trait
+FFTs use [`exec::Executor`](../crates/udon/src/exec/mod.rs) for scoped joins. Its trait
 documentation defines completion, panic handling, and progress during nested
 calls. `SerialExecutor` can also exercise tiled transforms with the queried
 scratch requirement.
@@ -221,7 +221,7 @@ For concurrency across polynomials or separately owned tiles, use
 callback receives a `TaskBudget` for its nested work. Pass it through
 `ExecutionOptions::with_task_budget`, and give concurrent transforms disjoint
 scratch. The
-[execution module's example](../crates/udon/src/exec.rs) demonstrates this with
+[execution module's example](../crates/udon/src/exec/mod.rs) demonstrates this with
 separate tiles. Divide budgets between simultaneous application operations;
 copying a budget does not reserve or limit threads.
 
@@ -357,7 +357,7 @@ contiguous output, so choose storage according to the consumer's access pattern.
 
 ## Constant prefixes and explicit tails
 
-[`ConstantPrefix`](../crates/udon/src/field/constant_prefix.rs) represents
+[`ConstantPrefix`](../crates/udon/src/field/pasta/constant_prefix.rs) represents
 natural-order evaluations with a repeated prefix and a short explicit tail of
 actual values. Use `CosetDomain::interpolate_constant_prefix` to recover
 coefficients directly, or
@@ -415,7 +415,7 @@ starts at natural row `s + r*k` and advances by `r`. A subdomain smaller by `d`
 contains extended rows divisible by `d`. When `d` divides `r` and `s`, its window
 starts at `s/d + (r/d)*k` with stride `r/d`. Map each resulting index into the
 selected element order before writing. The
-[workspace fixture](../crates/udon/tests/support/workspaces/fft.rs) checks producer
+[workspace fixture](../crates/udon/tests/fft/buffers.rs) checks producer
 completion before exposing its buffers to interpolation.
 
 Validation precedes mutation. A panic can leave partial results; refill affected

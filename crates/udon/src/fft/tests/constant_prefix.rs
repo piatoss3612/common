@@ -1,6 +1,6 @@
 use super::*;
+use crate::field::pasta::test_support::{integer, modulus};
 use crate::field::{ConstantPrefix, ReductionState, count_inversions};
-use crate::test_support::{integer, modulus};
 use num_bigint::BigUint;
 
 fn canonical<M: PrimeModulus, S: ReductionState>(value: &PastaField<M, S>) -> BigUint {

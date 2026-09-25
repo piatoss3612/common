@@ -1,6 +1,6 @@
 # Pasta curve arithmetic
 
-Udon's [`curve` module](../crates/udon/src/curve/mod.rs) provides Pallas and
+Udon's [`curve` module](../crates/udon/src/curve/pasta/mod.rs) provides Pallas and
 Vesta arithmetic. Both have equation `y² = x³ + 5`, generator `(-1, 2)`, and
 prime order. The sealed `PastaCurve` trait associates each curve with its
 coordinate field and scalar field; the scalar modulus is the group order:
@@ -90,15 +90,15 @@ assert_eq!(result, base.mul_projective(&Fq::from_u64(8)));
 assert!(result.sub(&result).is_identity());
 ```
 
-[`ProjectivePoint::incomplete_double_and_add`](../crates/udon/src/curve/projective.rs)
+[`ProjectivePoint::incomplete_double_and_add`](../crates/udon/src/curve/pasta/projective.rs)
 fuses `A + B` and `A + (A + B)` for projective `A` and affine `B`. It returns
 the resulting point and both slope numerators without inversion. Callers can
-use [`try_batch_invert_by`](../crates/udon/src/field/batch.rs) on the returned
+use [`try_batch_invert_by`](../crates/udon/src/field/pasta/batch.rs) on the returned
 points' `z` coordinates to recover slopes and affine coordinates together.
 The method's docs define the rejected inputs and show slope recovery.
 
-Use [`AffinePoint::mul_projective`](../crates/udon/src/curve/affine.rs) or
-[`ProjectivePoint::mul`](../crates/udon/src/curve/projective.rs) for one-shot
+Use [`AffinePoint::mul_projective`](../crates/udon/src/curve/pasta/affine.rs) or
+[`ProjectivePoint::mul`](../crates/udon/src/curve/pasta/projective.rs) for one-shot
 multiplication without caller preparation or scratch. Their rustdoc defines
 scalar representations and resource costs. For repeated multiplication of the
 same base, compare retained tables using the
@@ -107,14 +107,14 @@ same base, compare retained tables using the
 ### GLV decomposition and the endomorphism
 
 All three point representations provide
-[`endomorphism()`](../crates/udon/src/curve/affine.rs): it maps `(x, y)` to
+[`endomorphism()`](../crates/udon/src/curve/pasta/affine.rs): it maps `(x, y)` to
 `(zeta * x, y)` using the coordinate field's
-[`ZETA`](../crates/udon/src/field/parameters.rs) constant and preserves identity.
+[`ZETA`](../crates/udon/src/field/pasta/parameters.rs) constant and preserves identity.
 On projective points it multiplies `X` by `zeta`, leaving `Y` and `Z` unchanged.
 This equals multiplication by the scalar field's `ZETA`, denoted `lambda` below.
 
 GLV decomposition writes one scalar as two smaller signed integers using this
-endomorphism. [`glv_decompose::<C>(&scalar)`](../crates/udon/src/curve/glv.rs)
+endomorphism. [`glv_decompose::<C>(&scalar)`](../crates/udon/src/curve/pasta/glv.rs)
 returns `(a, b)` satisfying `scalar = a + lambda * b` modulo the group order,
 with both magnitudes strictly below `2^127`. Write `[k] P` for multiplication of
 point `P` by integer `k`; then `[scalar] P = [a] P + [b] P.endomorphism()`.
@@ -124,13 +124,13 @@ The function's docs include an executable reconstruction example.
 
 Use `to_bytes()` and `from_bytes()` to exchange canonical 32-byte compressed
 points. `Point` supports identity; `AffinePoint::from_bytes()` rejects it.
-The [encoding methods](../crates/udon/src/curve/encoding.rs) define the byte
+The [encoding methods](../crates/udon/src/curve/pasta/encoding.rs) define the byte
 format and rejection rules. These prime-order groups need no additional
 subgroup check after decoding.
 
 For direct embedded storage,
-[`AffinePoint<C>`](../crates/udon/src/curve/mod.rs) and
-[`PreparedAffinePoint<C>`](../crates/udon/src/curve/table_entry.rs) implement
+[`AffinePoint<C>`](../crates/udon/src/curve/pasta/mod.rs) and
+[`PreparedAffinePoint<C>`](../crates/udon/src/curve/pasta/table_entry.rs) implement
 `bento::Pod`. Their type docs define the Montgomery layouts and mathematical
 invariants. Cached entries accelerate endomorphism lookups at the cost of
 additional storage. Point construction establishes reduced coordinates on the
@@ -141,7 +141,7 @@ generator and consumer workflow.
 
 ## Batch normalization
 
-Use [`batch_normalize`](../crates/udon/src/curve/batch.rs) when several
+Use [`batch_normalize`](../crates/udon/src/curve/pasta/batch.rs) when several
 projective results need affine coordinates. It shares one inversion across
 points whose `z` is neither zero nor one, preserving input order and identity
 positions. Batches containing only identity or already-affine points need no
@@ -172,7 +172,7 @@ and return projective products without allocation or caller scratch. Their
 sealed `CurveTableEntry<C>` parameter accepts `AffinePoint<C>` (the default)
 or `PreparedAffinePoint<C>` (cached endomorphism coordinates).
 Generic code initializes entry buffers through `CurveTableEntry::from_affine`;
-the [trait docs](../crates/udon/src/curve/table_entry.rs) define its construction,
+the [trait docs](../crates/udon/src/curve/pasta/table_entry.rs) define its construction,
 coordinate access, and rotation methods. Both table kinds report
 entry and scratch lengths through `CurveTableRequirements`.
 
@@ -183,7 +183,7 @@ entries or 768 bytes with cached entries. Signed endomorphism rotations supply
 48 possible joint digits; multiplication uses a doubling ladder over the two
 GLV halves. Here a rotation applies the endomorphism zero, one, or two times;
 each rotation can have either sign. The
-[API docs](../crates/udon/src/curve/eisenstein.rs) specify the representative
+[API docs](../crates/udon/src/curve/pasta/eisenstein.rs) specify the representative
 order and show preparation with cached entries.
 
 `EisensteinTable::<C, E>::REQUIREMENTS` reports eight entries and eight elements
@@ -199,7 +199,7 @@ use their own width-specific recoding and take the field scalar directly.
 
 ### Compact table batches and same-scalar products
 
-[`EisensteinTableBatch<C, E>`](../crates/udon/src/curve/eisenstein_batch.rs)
+[`EisensteinTableBatch<C, E>`](../crates/udon/src/curve/pasta/eisenstein_batch.rs)
 borrows a flat slice of consecutive eight-entry tables. Its const
 `requirements(number_of_bases)` reports the exact entry count and minimum
 projective and field scratch counts. `prepare` accepts either nonidentity base
@@ -242,7 +242,7 @@ only the used entry prefix, and `description()` identifies the stored layout.
 halves share `ceil(128 / w)` windows, each storing `2^(w - 1)` shifted multiples
 of the base. Only width 2 needs an additional entry for the final carry from
 signed-digit recoding; the second half applies the endomorphism to its lookups.
-The [description docs](../crates/udon/src/curve/fixed_base.rs)
+The [description docs](../crates/udon/src/curve/pasta/fixed_base.rs)
 define the entry order and multiples required for binding stored tables.
 
 The const query `description.requirements()` reports the exact stored entry
@@ -266,7 +266,7 @@ reduces preparation from 32 inversions to one; at width 8, increasing it from
 16,384 to 262,144 bytes reduces 16 inversions to one. Larger windows trade
 additional stored multiples for fewer additions during execution.
 
-The executable [preparation example](../crates/udon/src/curve/fixed_base.rs)
+The executable [preparation example](../crates/udon/src/curve/pasta/fixed_base.rs)
 shows multiplication and rebinding with the selected description and entries.
 
 To cache endomorphism coordinates, initialize `entries` with
@@ -275,7 +275,7 @@ To cache endomorphism coordinates, initialize `entries` with
 same scratch lengths for either entry type.
 
 When several retained expanded tables contribute to one result, use
-[`FixedBaseTable::sum`](../crates/udon/src/curve/fixed_base/sum.rs) with caller-owned
+[`FixedBaseTable::sum`](../crates/udon/src/curve/pasta/fixed_base/sum.rs) with caller-owned
 affine and field scratch. Its scratch contract is independent of MSM planning;
 include the retained tables and their preparation when comparing it with an MSM.
 
@@ -290,8 +290,8 @@ untouched. Preparation errors leave all buffers unchanged.
 The const `bind` operations attach trusted entries to their base and table
 description. They assert lengths and check configuration without inspecting
 points, cached coordinates, or multiples. Preparation constructs the entries
-according to the [expanded](../crates/udon/src/curve/fixed_base.rs) or
-[compact table contract](../crates/udon/src/curve/eisenstein.rs); storing and
+according to the [expanded](../crates/udon/src/curve/pasta/fixed_base.rs) or
+[compact table contract](../crates/udon/src/curve/pasta/eisenstein.rs); storing and
 embedding them preserves those values exactly.
 
 Artifact schemas, curve identification, table kind, entry representation, window
@@ -301,7 +301,7 @@ contract and a complete generator and consumer example.
 
 ## Multiscalar multiplication
 
-[`curve::msm`](../crates/udon/src/curve/msm/mod.rs) computes sums of scalar/base
+[`msm`](../crates/udon/src/msm/mod.rs) computes sums of scalar/base
 products, returning projective results. Choose the input view to match the
 data already owned by the caller:
 
@@ -345,21 +345,21 @@ MSM's budget; both scalar preparation and caching accept `TaskBudget::SERIAL`
 with `SerialExecutor`. A plan that needs no cache or cannot reuse a whole-row
 cache reports zero bytes and leaves the handle unchanged, including any
 existing cache. Storage and failure contracts, with an executable example, are
-documented on [`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs).
+documented on [`PreparedScalars::cache`](../crates/udon/src/msm/prepared.rs).
 Resolve `MsmPlan::for_input` with the cached handle to size workspace without
 duplicating the retained cache; caching does not change an existing plan's counts.
 `retained_bytes()` counts the borrowed records and optional cache. This storage
 is separate from execution scratch and is not a POD serialization format.
 
 When one prepared scalar row acts on several base rows, use
-[`SharedScalarInput`](../crates/udon/src/curve/msm/matrix.rs) to share recoding
+[`SharedScalarInput`](../crates/udon/src/msm/matrix.rs) to share recoding
 across outputs. Its strides borrow row-major or term-major bases without a
 matrix copy. Query its requirements for the combined operation and execute
 under one task budget and workspace ceiling. Independent scalar rows instead
 use the [grouped-job workflow](#grouped-jobs-and-other-work).
 
 For a constant region with sparse changes,
-[`BasisSum`](../crates/udon/src/curve/msm/sum.rs) combines a retained sum of bases
+[`BasisSum`](../crates/udon/src/msm/sum.rs) combines a retained sum of bases
 with a correction MSM. Its `tail_corrections` accepts the same `ConstantPrefix`
 used by [structured FFT operations](FFT.md#constant-prefixes-and-explicit-tails):
 the tail contains actual values, which it converts to differences from the
@@ -368,7 +368,7 @@ include any additional application terms explicitly.
 
 ### Sizing and reusing scratch
 
-[`ExecutionOptions`](../crates/udon/src/exec.rs) provides the same resource contract
+[`ExecutionOptions`](../crates/udon/src/exec/mod.rs) provides the same resource contract
 for MSMs and FFTs: a total task budget and an optional workspace byte ceiling.
 The default is serial execution without an additional ceiling. Udon chooses
 recoding, window width, accumulation, and chunking from those limits and the
@@ -379,7 +379,7 @@ scratch. `input.execute(options, executor, scratch)` can select a smaller layout
 when actual buffer capacities require it. For reusable or incremental work,
 `MsmPlan::for_input(&input, options)` resolves an opaque plan and its fixed
 requirements. Reuse requires compatible scalar preparation and base storage,
-as specified by the [plan contract](../crates/udon/src/curve/msm/run.rs).
+as specified by the [plan contract](../crates/udon/src/msm/execution/mod.rs).
 `MsmPlan::new(terms, options)` is conservative when inputs are not yet available.
 `MsmPlan::for_produced` additionally takes the maximum source
 fragment the provider can lease; Udon chooses the arithmetic subdivisions.
@@ -396,7 +396,7 @@ ceiling. The application still accounts for total simultaneous operations,
 metadata, queues, alignment, and unused capacity. See the
 [run admission protocol](EXECUTION.md#admission-with-a-progress-reservation).
 
-`msm::run::BatchPlan::requirements()` returns counts for six private `Scratch`
+`msm::execution::BatchPlan::requirements()` returns counts for six private `Scratch`
 slices: `scalars()`, `digits()`, `affine()`, `projective()`, `field()`, and
 `indices()`. `Requirements::bytes::<C>()` computes their total with checked
 arithmetic. Planning uses the actual inputs, so retained scalar records,
@@ -408,16 +408,16 @@ indices)`. Initialize records with `ScalarStorage::ZERO`, affine entries with
 the generator, and other entries with zero or identity. Buffers can be reused
 without clearing through `scratch.reborrow()`. Execution overwrites every value
 it uses and leaves tails beyond the required prefixes untouched. The
-[module example](../crates/udon/src/curve/msm/mod.rs) executes two signed scalar
+[module example](../crates/udon/src/msm/mod.rs) executes two signed scalar
 rows with cached bases and one validated selection. The
 [workspace example](WORKSPACES.md#owning-an-msm-workspace) retains scratch across
 changing inputs, and the
-[embedding fixture](../crates/udon/tests/fixtures/curve_embedding) uses fixed
+[embedding fixture](../crates/udon/tests/curve/fixtures/embedding) uses fixed
 arrays without allocation.
 
 ### Grouped jobs and other work
 
-Use `msm::run::BatchPlan` for one or more borrowed `Input` handles on the same
+Use `msm::execution::BatchPlan` for one or more borrowed `Input` handles on the same
 curve. Its `storage_len(input_count, options)` returns job and worker metadata
 counts; initialize those slices with `JobStorage::EMPTY` and
 `WorkerStorage::EMPTY`, then call `BatchPlan::new`. Planning validates resource
@@ -434,7 +434,7 @@ and retained scalar preparation remain independent capabilities. The
 caller-selected concurrency policies.
 
 Compose fixed-base products or other work with
-[`Executor::join`](../crates/udon/src/exec.rs). Choose per-operation budgets and
+[`Executor::join`](../crates/udon/src/exec/mod.rs). Choose per-operation budgets and
 account for simultaneous scratch as described under
 [scoped execution](WORKSPACES.md#scoped-execution), then pass the MSM branch's
 budget to its `ExecutionOptions`. Ordinary fixed-base products need no executor.
@@ -444,6 +444,6 @@ existing pool, including a one-thread pool.
 ## Validation and performance
 
 See the [testing guide](TESTING.md) for independent arithmetic checks and
-[curve benchmarks](TESTING.md#curve-benchmarks) separating setup, binding, and
+[curve benchmarks](BENCHMARKING.md#curve-benchmarks) separating setup, binding, and
 repeated multiplication. The [performance report](CURVE_PERFORMANCE.md) records
 measured latency and storage tradeoffs.

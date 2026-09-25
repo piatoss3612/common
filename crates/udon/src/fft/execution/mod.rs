@@ -16,9 +16,8 @@ use core::{num::NonZeroUsize, ops::Range};
 
 use super::{
     Codelet, Direction, Domain, ElementOrder, FftError, InputStorage, InputSupport, InverseScale,
-    PastaField, PrimeModulus, Transform, TransformRequest, TwiddleTable,
+    PastaField, PrimeModulus, Transform, TransformRequest, TwiddleTable, bit_reverse,
     factors::ForwardShift,
-    bit_reverse,
     stages::{StageKernel, twiddle_table},
 };
 use crate::exec::{
@@ -38,8 +37,6 @@ pub use interpolation::{
     AdditionKernel, AdditionRequest, InterpolationPlan, InterpolationPublished, InterpolationRun,
 };
 mod driver;
-#[cfg(test)]
-mod tests;
 
 /// Worker-independent tile geometry and transform semantics.
 ///
@@ -846,7 +843,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     if inverse {
                         if normalized {
                             *value = if subgroup {
-                                crate::field::butterfly::divide_by_power_of_two(
+                                crate::field::pasta::butterfly::divide_by_power_of_two(
                                     *value,
                                     plan.size().ilog2(),
                                 )
@@ -1263,7 +1260,7 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
     pub fn complete<R>(
         &mut self,
         receipt: Completion<'a, R, ()>,
-    ) -> Result<Published<R>, crate::exec::run::PublishError<'a, R, ()>> {
+    ) -> Result<Published<R>, crate::exec::execution::PublishError<'a, R, ()>> {
         let completed = self.frontier.complete(receipt)?;
         let mut error = None;
         self.failed |= completed.outcome != Outcome::Success;
@@ -1390,3 +1387,12 @@ impl<'a, 't, M: PrimeModulus> FftRun<'a, 't, M> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
+pub(crate) mod test_buffers;
+
+#[cfg(test)]
+pub(crate) mod test_pipeline;

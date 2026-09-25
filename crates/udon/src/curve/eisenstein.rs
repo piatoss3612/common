@@ -219,8 +219,8 @@ pub(super) fn representatives_affine<C: PastaCurve>(
 /// The entry count is encoded in the borrowed array type.
 #[derive(Clone, Copy)]
 pub struct EisensteinTable<'a, C: PastaCurve, E: CurveTableEntry<C> = AffinePoint<C>> {
-    pub(super) base: AffinePoint<C>,
-    pub(super) entries: &'a [E; 8],
+    base: AffinePoint<C>,
+    entries: &'a [E; 8],
 }
 
 impl<C: PastaCurve, E: CurveTableEntry<C>> core::fmt::Debug for EisensteinTable<'_, C, E> {

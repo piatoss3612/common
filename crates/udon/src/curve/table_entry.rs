@@ -78,7 +78,7 @@ impl<C: PastaCurve> PreparedAffinePoint<C> {
     }
 }
 
-pub(super) mod sealed {
+mod sealed {
     pub trait Entry {}
 }
 

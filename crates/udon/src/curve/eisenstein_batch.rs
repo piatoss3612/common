@@ -194,10 +194,10 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
             return None;
         }
         let entries = &self.entries[index * 8..(index + 1) * 8];
-        Some(EisensteinTable {
-            base: entries[0].affine(),
-            entries: entries.try_into().expect("one complete table"),
-        })
+        Some(EisensteinTable::bind(
+            &entries[0].affine(),
+            entries.try_into().expect("one complete table"),
+        ))
     }
 
     /// Returns the field capacity for a single batch multiplication pass.

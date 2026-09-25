@@ -74,7 +74,8 @@ jobs:
       - name: Install Miri toolchain
         run: rustup toolchain install "$MIRI_TOOLCHAIN" --profile minimal --component miri,rust-src
       - name: Check core storage
-        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib pod::
+        run: |
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib pod::
       - name: Check public storage API
         run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod
       - name: Check field and affine point storage

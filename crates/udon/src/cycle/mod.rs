@@ -12,7 +12,8 @@
 //! static slices. Construction rejects identity points and a blinding
 //! generator that repeats a vector generator; [`Generators::are_distinct`]
 //! additionally checks the vector generators against each other. Poseidon
-//! instances come from [`crate::poseidon`].
+//! instances come from [`crate::poseidon`]. The consuming protocol combines
+//! these generators and scalars into its commitments using curve arithmetic.
 //!
 //! This example uses known multiples to demonstrate the parameter API and
 //! arithmetic. These generator choices are insecure for cryptographic
@@ -20,7 +21,7 @@
 //!
 //! ```
 //! use zakura_udon::{
-//!     curve::{Affine as _, PallasPoint, VestaPoint},
+//!     curve::{PallasPoint, VestaPoint},
 //!     cycle::{Cycle, FixedGenerators, Generators, Pasta, PastaParams},
 //!     field::{Fp, Fq},
 //! };
@@ -37,7 +38,8 @@
 //! let generators = Pasta::nested_generators(&params);
 //! assert!(generators.are_distinct());
 //! // g[0] * 2 + h * 3 = 2G + 9G
-//! let commitment = generators.short_commit(Fq::from_u64(2), Fq::from_u64(3));
+//! let commitment =
+//!     (generators.g()[0] * Fq::from_u64(2) + *generators.h() * Fq::from_u64(3)).to_point();
 //! assert_eq!(commitment, multiple(11));
 //! ```
 

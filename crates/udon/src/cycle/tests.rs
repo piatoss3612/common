@@ -3,10 +3,7 @@ use std::vec::Vec;
 
 use super::*;
 use crate::{
-    curve::{
-        Pallas, PallasPoint, PallasProjective, PastaCurve, Point, ProjectivePoint, Vesta,
-        VestaPoint,
-    },
+    curve::{Pallas, PallasPoint, PallasProjective, PastaCurve, Point, Vesta, VestaPoint},
     field::{Field, Fp, Fq},
     poseidon::{PALLAS_BASE, PALLAS_SCALAR, PoseidonFp, PoseidonParameters},
 };
@@ -43,21 +40,6 @@ fn pasta_generators_are_reached_through_the_cycle() {
     assert!(pallas.g().iter().all(|point| !point.is_identity()));
     assert!(!pallas.h().is_identity());
 
-    for (value, blind) in [(2u64, 3u64), (0, 5), (7, 0), (11, 13)] {
-        let (value, blind) = (Fq::from_u64(value), Fq::from_u64(blind));
-        let expected = pallas.g()[0]
-            .mul_projective(&value)
-            .add(&pallas.h().mul_projective(&blind))
-            .to_point();
-        assert_eq!(pallas.short_commit(value, blind), expected);
-        let expected: ProjectivePoint<Vesta> = vesta.g()[0]
-            .mul_projective(&Fp::from_u64(3))
-            .add(&vesta.h().mul_projective(&Fp::from_u64(4)));
-        assert_eq!(
-            vesta.short_commit(Fp::from_u64(3), Fp::from_u64(4)),
-            expected.to_point()
-        );
-    }
     let _: PallasProjective = pallas.g()[0] * Fq::from_u64(2);
 }
 
@@ -93,7 +75,8 @@ fn pasta_poseidon_instances_are_the_parameter_constants() {
 #[test]
 fn cycle_is_usable_through_generic_bounds() {
     fn commit<C: Cycle>(params: &C::Params, value: C::CircuitField) -> C::HostCurve {
-        C::host_generators(params).short_commit(value, C::CircuitField::ONE)
+        let generators = C::host_generators(params);
+        (generators.g()[0] * value + *generators.h() * C::CircuitField::ONE).to_affine()
     }
     fn width<C: Cycle>() -> usize {
         C::CircuitPoseidon::T + C::ScalarPoseidon::RATE

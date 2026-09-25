@@ -118,6 +118,8 @@ cargo bench --locked -p zakura-udon --bench field -- Fp/inner_product
 
 The [field report](FIELD_PERFORMANCE.md) explains measured choices, including
 the larger square-root tables and their storage/build-time tradeoffs.
+The [specialization report](OPTIMIZATION_PERFORMANCE.md) covers targeted field,
+FFT, addition-chain, and retained MSM cache comparisons and their reproduction.
 
 ## Curve benchmarks
 

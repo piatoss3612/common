@@ -34,6 +34,7 @@ mod powers;
 mod products;
 mod representation;
 mod safegcd;
+mod small;
 mod sqrt;
 mod uint;
 pub(crate) mod word;
@@ -328,19 +329,19 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Returns `3 * self`.
     #[inline]
     pub fn triple(&self) -> PastaField<M> {
-        self.double().add(self)
+        small::multiply::<M, 3>(self.limbs)
     }
 
     /// Returns `4 * self`.
     #[inline]
     pub fn mul_by_4(&self) -> PastaField<M> {
-        self.double().double()
+        small::multiply::<M, 4>(self.limbs)
     }
 
     /// Returns `8 * self`.
     #[inline]
     pub fn mul_by_8(&self) -> PastaField<M> {
-        self.double().double().double()
+        small::multiply::<M, 8>(self.limbs)
     }
 
     /// Returns `self * multiplier + addend`.

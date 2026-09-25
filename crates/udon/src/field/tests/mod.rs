@@ -18,6 +18,7 @@ mod inversion;
 mod kernels;
 mod parameters;
 mod products;
+mod specialization;
 mod sqrt_ratios;
 mod uint;
 

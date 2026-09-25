@@ -139,6 +139,26 @@ pub(crate) fn butterfly_dif<M: PrimeModulus>(
     }
 }
 
+/// Two independent butterflies, scheduling their products together.
+#[inline]
+pub(crate) fn butterfly_pair<M: PrimeModulus, const DIF: bool>(
+    left: &mut [PastaField<M>; 2],
+    right: &mut [PastaField<M>; 2],
+    twiddles: [Option<&PastaField<M>>; 2],
+) {
+    if DIF {
+        butterfly(&mut left[0], &mut right[0], None);
+        butterfly(&mut left[1], &mut right[1], None);
+    }
+    let first = twiddles[0].map_or(right[0], |twiddle| scale(right[0], twiddle));
+    let second = twiddles[1].map_or(right[1], |twiddle| scale(right[1], twiddle));
+    *right = [first, second];
+    if !DIF {
+        butterfly(&mut left[0], &mut right[0], None);
+        butterfly(&mut left[1], &mut right[1], None);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +234,37 @@ mod tests {
                         |twiddle| (&difference * integer(twiddle.limbs) * &inverse_r) % &p,
                     );
                     assert_eq!(integer(high.limbs) % &p, expected);
+                    for dif in [false, true] {
+                        let mut lows = [field::<M>(left); 2];
+                        let mut highs = [field::<M>(right); 2];
+                        let twiddles = [twiddle.as_ref(), None];
+                        if dif {
+                            butterfly_pair::<M, true>(&mut lows, &mut highs, twiddles);
+                        } else {
+                            butterfly_pair::<M, false>(&mut lows, &mut highs, twiddles);
+                        }
+                        for i in 0..2 {
+                            let product = if i == 0 { product.clone() } else { right % &p };
+                            let sum = if dif {
+                                (left + right) % &p
+                            } else {
+                                (left + &product) % &p
+                            };
+                            let difference = if dif {
+                                if i == 0 {
+                                    expected.clone()
+                                } else {
+                                    (left + &twice - right) % &p
+                                }
+                            } else {
+                                (left + &twice - &product) % &p
+                            };
+                            assert!(integer(lows[i].limbs) < twice);
+                            assert!(integer(highs[i].limbs) < twice);
+                            assert_eq!(integer(lows[i].limbs) % &p, sum);
+                            assert_eq!(integer(highs[i].limbs) % &p, difference);
+                        }
+                    }
                 }
             }
         }

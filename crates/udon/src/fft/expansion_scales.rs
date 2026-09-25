@@ -105,9 +105,14 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
                 Domain::<M>::for_size(base_size)?.size_inverse()
             }
         };
-        visit_scales(base_size, extended, first, |index, power| {
-            values[index] = power;
-        });
+        let mut step = extended.shift();
+        let residues = values.len() / base_size;
+        for (residue, row) in values.chunks_exact_mut(base_size).enumerate() {
+            crate::field::fill_powers(first, step, row);
+            if residue + 1 < residues {
+                step = step.mul(&extended.domain().root());
+            }
+        }
         Ok(Self {
             base_size,
             extended,
@@ -131,27 +136,5 @@ impl<'a, M: PrimeModulus> ExpansionScales<'a, M> {
     /// Borrowed entries in naturally numbered residue blocks.
     pub const fn as_slice(self) -> &'a [PastaField<M>] {
         self.values
-    }
-}
-
-fn visit_scales<M: PrimeModulus>(
-    base_size: usize,
-    extended: CosetDomain<M>,
-    first: PastaField<M>,
-    mut visit: impl FnMut(usize, PastaField<M>),
-) {
-    let mut step = extended.shift();
-    let residues = extended.size() / base_size;
-    for residue in 0..residues {
-        let mut power = first;
-        for column in 0..base_size {
-            visit(residue * base_size + column, power);
-            if column + 1 < base_size {
-                power = power.mul(&step);
-            }
-        }
-        if residue + 1 < residues {
-            step = step.mul(&extended.domain().root());
-        }
     }
 }

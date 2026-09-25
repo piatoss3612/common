@@ -5,7 +5,7 @@ use core::{marker::PhantomData, ops::Range};
 use super::{CurveError, PastaCurve, Scalars, assert_scratch, checked_count};
 use crate::{
     curve::{glv::decompose_canonical, parameters::GlvParameters},
-    exec::{Executor, TaskBudget, for_each_chunk_mut},
+    exec::{Executor, SerialExecutor, TaskBudget, for_each_chunk_mut},
     field::{CanonicalUint, PastaField, PrimeModulus, word::subtract_limbs},
 };
 
@@ -259,6 +259,23 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     ///
     /// Insufficient storage panics before writes. Unused storage tails are untouched.
     pub fn cache(&self, plan: &super::run::MsmPlan<C>, storage: &'a mut [u8]) -> Self {
+        self.cache_parallel(plan, storage, TaskBudget::SERIAL, &SerialExecutor)
+    }
+
+    /// Retains the plan's recoding using a caller-owned executor and task budget.
+    ///
+    /// Storage sizing, cache reuse, and panic contracts follow [`Self::cache`].
+    /// The executor completes all writes before this returns. Small rows and a
+    /// serial budget use the serial writer without submitting executor work.
+    /// An executor panic may partially write the required prefix. Storage can
+    /// be reused after all scoped jobs finish unwinding, as required by [`Executor`].
+    pub fn cache_parallel<X: Executor>(
+        &self,
+        plan: &super::run::MsmPlan<C>,
+        storage: &'a mut [u8],
+        budget: TaskBudget,
+        executor: &X,
+    ) -> Self {
         let Some(geometry) = plan.cache_geometry(self.len()) else {
             return *self;
         };
@@ -267,7 +284,7 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
             .expect("bounded plan geometry");
         assert_scratch("digits", len, storage.len());
         let digits = &mut storage[..len];
-        super::recode::write(self.records, geometry, digits);
+        super::recode::write_parallel(self.records, geometry, digits, budget, executor);
         Self {
             records: self.records,
             shape: self.shape,

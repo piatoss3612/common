@@ -79,7 +79,8 @@ fn msm<C: PastaCurve>() {
                 assert_eq!(length, 0);
             }
             let mut digits = vec![0xa5; length + 1];
-            let cached = prepared.cache(&plan, &mut digits);
+            let cached =
+                prepared.cache_parallel(&plan, &mut digits, options.task_budget(), &SerialExecutor);
             let input = Input::new_prepared(Bases::Affine(&bases), cached);
             let cached_plan = MsmPlan::for_input(&input, options).unwrap();
             let required = cached_plan.requirements();

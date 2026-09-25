@@ -322,6 +322,8 @@ original scalar borrow. Preparation is independent of execution choices.
 selected by an `MsmPlan`. A plan that cannot reuse a whole-row cache reports
 zero cache bytes and leaves preparation unchanged. The same resolved geometry
 sizes and consumes the cache, including at algorithm boundaries.
+Use `cache_parallel(&plan, bytes, budget, executor)` to prepare a retained cache
+on the caller's executor; small rows and serial budgets use the serial writer.
 Resolve `MsmPlan::for_input` with the cached handle to size workspace without
 duplicating the retained cache; caching does not change an existing plan's counts.
 `retained_bytes()` counts the borrowed records and optional cache. This storage

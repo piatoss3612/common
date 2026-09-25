@@ -34,6 +34,62 @@ fn timing(name: &str, n: usize, bytes: usize, mut f: impl FnMut()) {
 }
 
 #[test]
+#[ignore = "targeted cache preparation timing; run alone with --nocapture"]
+fn compare_digit_cache_preparation() {
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .build()
+        .unwrap();
+    fn check<C: PastaCurve>(pool: &rayon::ThreadPool) {
+        std::println!("curve={}", core::any::type_name::<C>());
+        for n in [512, 1024, 4096, 16384] {
+            let scalars: Vec<_> = field_samples::<C::Scalar>().take(n).collect();
+            let mut records = vec![ScalarStorage::ZERO; n];
+            PreparedScalars::<C>::prepare(
+                &scalars,
+                &mut records,
+                TaskBudget::SERIAL,
+                &SerialExecutor,
+            );
+            for geometry in [recode::Geometry::Booth(8), recode::Geometry::Joint] {
+                let bytes = geometry.storage_len(n).unwrap();
+                let mut serial = vec![0; bytes];
+                let mut parallel = vec![0; bytes];
+                recode::write(&records, geometry, &mut serial);
+                pool.install(|| {
+                    recode::write_parallel(
+                        &records,
+                        geometry,
+                        &mut parallel,
+                        TaskBudget::new(4).unwrap(),
+                        &Pool,
+                    )
+                });
+                assert_eq!(serial, parallel);
+                pool.install(|| {
+                    timing(&std::format!("{geometry:?}/serial"), n, bytes, || {
+                        recode::write(black_box(&records), geometry, black_box(&mut serial));
+                        black_box(&serial);
+                    });
+                    timing(&std::format!("{geometry:?}/tasks_4"), n, bytes, || {
+                        recode::write_parallel(
+                            black_box(&records),
+                            geometry,
+                            black_box(&mut parallel),
+                            TaskBudget::new(4).unwrap(),
+                            &Pool,
+                        );
+                        black_box(&parallel);
+                    });
+                });
+            }
+        }
+    }
+    check::<Pallas>(&pool);
+    check::<Vesta>(&pool);
+}
+
+#[test]
 #[ignore = "isolated phase timings and counters; run alone with --nocapture"]
 fn phases() {
     fn check<C: PastaCurve>() {

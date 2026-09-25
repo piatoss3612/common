@@ -24,6 +24,60 @@ impl Executor for Pool {
     }
 }
 
+#[test]
+fn parallel_cache_matches_serial_and_preserves_tails() {
+    fn check<C: PastaCurve>() {
+        for n in [0, 5, 1023, 1024, 1025] {
+            let scalars: Vec<_> = field_samples::<C::Scalar>().take(n).collect();
+            let mut records = vec![ScalarStorage::ZERO; n];
+            let prepared = PreparedScalars::<C>::prepare(
+                &scalars,
+                &mut records,
+                TaskBudget::SERIAL,
+                &SerialExecutor,
+            );
+            let plan = run::MsmPlan::<C>::new(n, crate::exec::ExecutionOptions::default()).unwrap();
+            let len = prepared.cache_len(&plan);
+            let mut serial = vec![73; len + 1];
+            let expected = prepared
+                .cache(&plan, &mut serial)
+                .cached
+                .map(|c| c.digits.to_vec());
+            for workers in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap();
+                let mut bytes = vec![73; len + 1];
+                let cached = pool.install(|| {
+                    prepared.cache_parallel(&plan, &mut bytes, TaskBudget::new(4).unwrap(), &Pool)
+                });
+                assert!(cached.records == prepared.records);
+                assert_eq!(cached.cached.map(|c| c.digits), expected.as_deref());
+                assert_eq!(bytes, serial);
+                if len != 0 {
+                    let mut short = vec![73; len - 1];
+                    assert!(
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            prepared.cache_parallel(
+                                &plan,
+                                &mut short,
+                                TaskBudget::new(4).unwrap(),
+                                &Pool,
+                            );
+                        }))
+                        .is_err()
+                    );
+                    assert!(short.iter().all(|&byte| byte == 73));
+                }
+            }
+            assert_eq!(serial[len], 73);
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
 fn reference<C: PastaCurve>(input: &Input<'_, C>) -> ProjectivePoint<C> {
     let mut sum = ProjectivePoint::IDENTITY;
     let Scalars::Raw(scalars) = input.scalars else {

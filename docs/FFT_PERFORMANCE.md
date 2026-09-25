@@ -134,8 +134,11 @@ candidates across distributions. The measured assembly showed an unrolled interl
 pair, a loop in the sequential pair, and out-of-line masked corrections; the
 timing includes those compiler decisions. The compiler generated conditional
 branches inside the masked correction itself, so source masks do not establish
-branchless machine code. These candidates remain test-only and do not change
-the production range correction or claim a whole-transform speedup.
+branchless machine code. These measurements alone did not establish a
+whole-transform speedup or change the production range correction. The
+[specialization report](OPTIMIZATION_PERFORMANCE.md#fft-execution-and-preparation)
+records the complete-transform comparisons supporting production paired
+butterflies with distinct twiddles; masked corrections remain test-only.
 
 Run the experiment and emit the benchmark assembly with:
 

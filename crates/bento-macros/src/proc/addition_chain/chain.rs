@@ -291,7 +291,7 @@ impl Chain {
                 #(#[allow(dead_code)] fn #shields() {})*
                 fn #helper<__BentoValue: #support>(#input: __BentoValue) -> __BentoValue {
                     #(#statements)*
-                    <__BentoValue as ::core::clone::Clone>::clone(&#result)
+                    #result
                 }
                 #helper
             })(#value)

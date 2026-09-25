@@ -12,7 +12,7 @@
 //!
 //! For even `e`, the square root is `a * w * r^(e / 2)`. An odd `e` means
 //! `a` is a nonsquare: rounding the exponent up gives a candidate whose square
-//! is `a * r`. The final square check distinguishes these cases.
+//! is `a * r`. The recovered exponent parity distinguishes these cases.
 
 use super::{PastaField, PrimeModulus, Reduced, field_elements};
 
@@ -93,8 +93,8 @@ impl<M: PrimeModulus> LargeSqrtTable<PastaField<M, Reduced>> {
         multiplier: u32,
     ) -> Option<PastaField<M, Reduced>> {
         let x = value.mul(&w);
-        let (_, candidate) = self.finish(x, x.mul(&w), multiplier);
-        (candidate.square().reduce() == *value).then(|| candidate.reduce())
+        let (is_square, candidate) = self.finish(x, x.mul(&w), multiplier);
+        is_square.then(|| candidate.reduce())
     }
 
     /// Corrects `x` with `x^2 = a * t` for nonzero `a` and order-2^32
@@ -258,5 +258,60 @@ mod tests {
         ] {
             assert_eq!(half_exponent(e), half);
         }
+    }
+
+    #[test]
+    #[ignore = "targeted timing experiment; run alone with --nocapture"]
+    fn compare_sqrt_success_flag() {
+        use std::{hint::black_box, time::Instant, vec::Vec};
+        fn compare<M: PrimeModulus>(
+            name: &str,
+            table: &LargeSqrtTable<PastaField<M, Reduced>>,
+            multiplier: u32,
+        ) {
+            let inputs: Vec<_> = crate::test_support::field_samples::<M>()
+                .filter(|value| !value.is_zero())
+                .take(128)
+                .map(|value| (value.reduce(), M::pow_sqrt_exponent(&value)))
+                .collect();
+            let old = |value: &PastaField<M, Reduced>, w: PastaField<M>| {
+                let x = value.mul(&w);
+                let (_, candidate) = table.finish(x, x.mul(&w), multiplier);
+                (candidate.square().reduce() == *value).then(|| candidate.reduce())
+            };
+            for (value, w) in &inputs {
+                assert_eq!(old(value, *w), table.sqrt(value, *w, multiplier));
+            }
+            let mut times = [[0.0f64; 2]; 15];
+            for (pass, sample) in times.iter_mut().enumerate() {
+                for method in [pass % 2, 1 - pass % 2] {
+                    let start = Instant::now();
+                    for _ in 0..256 {
+                        for (value, w) in black_box(&inputs) {
+                            black_box(if method == 0 {
+                                old(value, *w)
+                            } else {
+                                table.sqrt(value, *w, multiplier)
+                            });
+                        }
+                    }
+                    sample[method] =
+                        start.elapsed().as_nanos() as f64 / (256 * inputs.len()) as f64;
+                }
+            }
+            let mut medians = [0.0; 2];
+            for (method, median) in medians.iter_mut().enumerate() {
+                let mut samples = times.map(|sample| sample[method]);
+                samples.sort_by(f64::total_cmp);
+                *median = samples[7];
+            }
+            std::println!(
+                "{name}/sqrt_after_exponentiation: square-check {:.2}, flag {:.2} ns/value",
+                medians[0],
+                medians[1]
+            );
+        }
+        compare::<PallasBase>("Fp", PallasBase::SQRT_TABLE, 0x54c1_1db5);
+        compare::<PallasScalar>("Fq", PallasScalar::SQRT_TABLE, 0x4b7f_dd31);
     }
 }

@@ -185,7 +185,7 @@ fn multiplication_interpretation_matches_reference_exponentiation() {
 }
 
 #[test]
-fn evaluates_once_clones_once_and_dispatches_only_to_the_trait() {
+fn evaluates_once_moves_result_and_dispatches_only_to_the_trait() {
     #[derive(Default)]
     struct Counts {
         evaluations: Cell<usize>,
@@ -252,16 +252,65 @@ fn evaluates_once_clones_once_and_dispatches_only_to_the_trait() {
     let result = bento::addition_chain!(make_value(), 0xb5);
     assert_eq!(result.value, 1267);
     assert_eq!(counts.evaluations.get(), 1);
-    assert_eq!(counts.clones.get(), 1);
+    assert_eq!(counts.clones.get(), 0);
     assert_eq!(counts.doubles.get(), 6);
     assert_eq!(counts.adds.get(), 4);
 
     let result = bento::addition_chain!(make_value(), 1);
     assert_eq!(result.value, 7);
     assert_eq!(counts.evaluations.get(), 2);
-    assert_eq!(counts.clones.get(), 2);
+    assert_eq!(counts.clones.get(), 0);
     assert_eq!(counts.doubles.get(), 6);
     assert_eq!(counts.adds.get(), 4);
+}
+
+#[test]
+#[ignore = "owned-result timing experiment; run alone with --nocapture"]
+fn owned_result_timing() {
+    use std::{hint::black_box, time::Instant};
+    #[derive(Clone)]
+    struct Row(Vec<u64>);
+    impl bento::addchain::AdditionChain for Row {
+        fn double(&self) -> Self {
+            Self(self.0.iter().map(|x| x.wrapping_mul(2)).collect())
+        }
+        fn add(&self, rhs: &Self) -> Self {
+            Self(
+                self.0
+                    .iter()
+                    .zip(&rhs.0)
+                    .map(|(a, b)| a.wrapping_add(*b))
+                    .collect(),
+            )
+        }
+    }
+    fn time(size: usize, operation: impl Fn(Row) -> Row) -> f64 {
+        let mut samples = [0.0f64; 9];
+        for sample in &mut samples {
+            let inputs: Vec<_> = (0..1024).map(|i| Row(vec![i; size])).collect();
+            let start = Instant::now();
+            for row in inputs {
+                black_box(operation(black_box(row)));
+            }
+            *sample = start.elapsed().as_nanos() as f64 / 1024.0;
+        }
+        samples.sort_by(f64::total_cmp);
+        samples[4]
+    }
+    for size in [64, 1024] {
+        for scalar in [1, 181] {
+            let operation = |row| match scalar {
+                1 => bento::addition_chain!(row, 1),
+                _ => bento::addition_chain!(row, 181),
+            };
+            // Reproduce the old emitter's final clone after the same chain.
+            let cloned = time(size, |row| black_box(operation(row)).clone());
+            let moved = time(size, operation);
+            std::println!(
+                "words={size}, scalar={scalar}: clone {cloned:.1}, move {moved:.1} ns/row"
+            );
+        }
+    }
 }
 
 #[test]

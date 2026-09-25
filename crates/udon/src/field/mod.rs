@@ -23,9 +23,9 @@ use core::{fmt, marker::PhantomData};
 
 mod algorithms;
 mod batch;
+pub(crate) mod butterfly;
 mod constant_prefix;
 mod encoding;
-pub(crate) mod fft;
 mod fractions;
 mod inversion;
 mod montgomery;

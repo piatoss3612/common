@@ -12,10 +12,6 @@ use crate::field::safegcd::{
 };
 
 #[cfg(test)]
-#[path = "tests/inversion.rs"]
-mod tests;
-
-#[cfg(test)]
 std::thread_local! {
     static INVERSION_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
@@ -147,5 +143,51 @@ impl<M: PrimeModulus> PastaField<M, Reduced> {
         let (r3, overflow) = adc(limbs[4], multiplier >> 2, carry);
         debug_assert_eq!(overflow, 0);
         Self::from_montgomery(reduce_once::<M>([r0, r1, r2, r3]))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::field::tests::{assert_value, samples, signed_mod};
+    use crate::field::{PallasBase, PallasScalar};
+    use crate::test_support::{integer, modulus};
+    use num_bigint::{BigInt, BigUint};
+
+    fn check_bezout_rows<M: PrimeModulus>() {
+        let p = modulus::<M>();
+        let inverse_radix = (BigUint::from(1u8) << 64usize).modpow(&(&p - 2u8), &p);
+        let bound = 1i64 << 62;
+        let rows = [
+            (bound, 0),
+            (-bound, 0),
+            (0, bound),
+            (0, -bound),
+            (bound / 2, -bound / 2),
+            (-1, 1),
+        ];
+        let values = samples::<M>(16);
+        for (a, x) in &values {
+            for (b, y) in &values {
+                for (u, v) in rows {
+                    let expected = signed_mod(
+                        BigInt::from(x.clone()) * u + BigInt::from(y.clone()) * v,
+                        &p,
+                    ) * &inverse_radix
+                        % &p;
+                    assert_value(
+                        PastaField::<M, Reduced>::bezout_row_update(u, &a.reduce(), v, &b.reduce()),
+                        &expected,
+                    );
+                }
+            }
+        }
+        assert_eq!(integer(&bezout_offset(&M::MODULUS)), &p << 63usize);
+    }
+
+    #[test]
+    fn signed_bezout_rows_cover_extreme_coefficients() {
+        check_bezout_rows::<PallasBase>();
+        check_bezout_rows::<PallasScalar>();
     }
 }

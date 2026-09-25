@@ -1,5 +1,5 @@
 use super::*;
-use crate::field::inversion::count_inversions;
+use crate::field::count_inversions;
 use crate::field::{
     BatchInversionError, batch_invert, batch_invert_groups, batch_invert_groups_scaled,
     batch_invert_scaled, try_batch_invert_by, try_batch_invert_scaled_by,

@@ -37,6 +37,7 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
             "foreign-modulus",
             "foreign-curve",
             "foreign-reduction",
+            "foreign-reduction-flag",
             "loose-equality",
             "loose-order",
             "loose-sqrt",
@@ -117,8 +118,9 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
         // conceal a later member that is still reachable.
         for (feature, member) in constants {
             let diagnostic = if member == "SQRT_EXPONENT" {
-                // The ordinary exponent is only retained for internal tests;
-                // production uses its generated multiplication schedule.
+                // The ordinary exponent is not a field parameter: production
+                // uses its generated multiplication schedule, and the parameter
+                // tests derive the exponent independently.
                 format!("no associated item named `{member}`")
             } else {
                 format!("associated constant `{member}` is private")
@@ -155,6 +157,10 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
             ("foreign-modulus", "Sealed` is not satisfied"),
             ("foreign-curve", "Sealed` is not satisfied"),
             ("foreign-reduction", "Sealed` is not satisfied"),
+            (
+                "foreign-reduction-flag",
+                "associated constant `REDUCED` is private",
+            ),
             ("loose-equality", "binary operation `==` cannot be applied"),
             ("loose-order", "PastaField<M>: Ord` is not satisfied"),
             ("loose-sqrt", "no method named `sqrt`"),

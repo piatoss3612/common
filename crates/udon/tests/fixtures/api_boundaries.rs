@@ -835,6 +835,13 @@ enum Foreign {}
 #[cfg(feature = "foreign-reduction")]
 impl arithmetic::field::ReductionState for Foreign {}
 
+// The representation bound is selected by the sealed supertrait, not exposed
+// through the public marker trait.
+fn reduction_flag<S: arithmetic::field::ReductionState>() {
+    #[cfg(feature = "foreign-reduction-flag")]
+    let _ = S::REDUCED;
+}
+
 #[cfg(feature = "foreign-modulus")]
 impl PrimeModulus for Foreign {
     const MODULUS: [u64; 4] = [97, 0, 0, 0];
@@ -860,6 +867,7 @@ fn main() {
     );
     field::<PallasBase>(FP_PARAMETERS);
     field::<PallasScalar>(FQ_PARAMETERS);
+    reduction_flag::<Reduced>();
     curve::<Pallas>();
     curve::<Vesta>();
 }

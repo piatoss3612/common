@@ -9,7 +9,7 @@ use super::{
     TwiddleStorage, TwiddleTable, reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-use crate::field::fft::{butterfly, butterfly_dif, divide_by_power_of_two, scale};
+use crate::field::butterfly::{butterfly, butterfly_dif, divide_by_power_of_two, scale};
 
 /// Small straight-line radix schedules, including differential-test candidates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

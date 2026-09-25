@@ -25,7 +25,7 @@ mod sealed {
 
     pub trait Sealed {}
 
-    pub(crate) trait Parameters<M: super::PrimeModulus>: Sized {
+    pub(in crate::field) trait Parameters<M: super::PrimeModulus>: Sized {
         /// Field values for [`PastaField::root_of_unity`], indexed by `log_size`.
         const ROOTS: &'static [PastaField<M, Reduced>; INVERSE_POWER_TABLE_LEN];
         /// Inverses of the corresponding forward roots.
@@ -42,9 +42,6 @@ mod sealed {
         const R3: [u64; 4];
         /// `2^448 mod p`, used to fold the upper limb of a product sum.
         const B448: [u64; 4];
-        /// The ordinary exponent `(t - 1) / 2`, where `p - 1 = t * 2^32`.
-        #[cfg(test)]
-        const SQRT_EXPONENT: [u64; 4];
         /// The Montgomery representation of `2^-1`.
         const TWO_INVERSE: [u64; 4];
         /// The Montgomery representation of `5^(2^32)`.
@@ -177,11 +174,6 @@ macro_rules! pasta_field_parameters {
             const R2: [u64; 4] = m255::r2!(&Self::MODULUS);
             const R3: [u64; 4] = m255::mul!(&Self::MODULUS, &Self::R2, &Self::R2);
             const B448: [u64; 4] = m255::from_u256!(&Self::MODULUS, &[0, 0, 0, 1]);
-            // Runtime exponentiation uses the generated schedule below; only
-            // the independent parameter tests need the ordinary exponent.
-            #[cfg(test)]
-            const SQRT_EXPONENT: [u64; 4] =
-                u256::tonelli_shanks_exponent!(&Self::MODULUS, TWO_ADICITY);
             const TWO_INVERSE: [u64; 4] = Self::POWER_OF_TWO_INVERSES[1];
             const DELTA: [u64; 4] = m255::odd_order_generator!(&Self::MODULUS, GENERATOR, TWO_ADICITY);
             const MODULUS_SIGNED62: [i64; 5] = to_signed62(&Self::MODULUS);

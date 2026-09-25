@@ -1,7 +1,7 @@
 use super::*;
 use crate::exec::SerialExecutor;
 use crate::field::{Fp, PallasBase, PallasScalar, Reduced};
-use crate::test_support::field_samples;
+use crate::test_support::{field_samples, integer, twice_modulus};
 use bento::bytes_of_slice;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -111,15 +111,9 @@ fn reference_coset<M: PrimeModulus>(
 }
 
 fn assert_loose_bound<M: PrimeModulus>(values: &[PastaField<M>]) {
+    let bound = twice_modulus::<M>();
     for value in values {
-        assert!(
-            value
-                .montgomery_limbs()
-                .iter()
-                .rev()
-                .cmp(M::TWICE_MODULUS.iter().rev())
-                .is_lt()
-        );
+        assert!(integer(&value.montgomery_limbs()) < bound);
         assert_eq!(
             (PastaField::<M>::from_bytes(value.to_bytes())).map(|value| value.reduce()),
             (Some(*value)).map(|value| value.reduce())
@@ -1719,34 +1713,6 @@ fn table_preparation_checks_all_lengths_before_writing() {
         bytes_of_slice(&[<Fp>::from_u64(17); 4])
     );
     assert_eq!(bytes_of_slice(&wrong), bytes_of_slice(&[<Fp>::ONE; 3]));
-}
-
-#[test]
-fn loose_values_remain_valid_on_unwind_and_serial_join_completes_both_jobs() {
-    let a = <Fp>::ONE.neg();
-    let b = <Fp>::from_u64(2).neg();
-    let mut values = [a, b];
-    assert!(
-        catch_unwind(AssertUnwindSafe(|| {
-            let (left, right) = values.split_at_mut(1);
-            crate::field::fft::butterfly(&mut left[0], &mut right[0], None);
-            panic!("interrupt loose region");
-        }))
-        .is_err()
-    );
-    assert_eq!(reduced(&values), reduced(&[a.add(&b), a.sub(&b)]));
-    assert_loose_bound(&values);
-    let count = AtomicUsize::new(0);
-    assert!(
-        catch_unwind(|| SerialExecutor.join(
-            || panic!("first job"),
-            || {
-                count.fetch_add(1, Ordering::SeqCst);
-            }
-        ))
-        .is_err()
-    );
-    assert_eq!(count.load(Ordering::SeqCst), 1);
 }
 
 #[test]

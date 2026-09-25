@@ -113,7 +113,7 @@ not establish that every backend or butterfly is branch-free, or that all
 intermediates remain in registers. An order-four Pasta root still requires real
 field multiplication.
 
-The [isolated kernel experiment](../crates/udon/src/field/fft/experiments.rs)
+The [isolated kernel experiment](../crates/udon/src/field/butterfly/experiments.rs)
 compares two independent butterflies in the existing four-limb `[0,2p)` range.
 Here `p` is the field modulus. It reports the median of five passes over 1,024
 input pairs repeated 256 times, in nanoseconds per pair. A repeated run after

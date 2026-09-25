@@ -846,7 +846,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     if inverse {
                         if normalized {
                             *value = if subgroup {
-                                crate::field::fft::divide_by_power_of_two(
+                                crate::field::butterfly::divide_by_power_of_two(
                                     *value,
                                     plan.size().ilog2(),
                                 )

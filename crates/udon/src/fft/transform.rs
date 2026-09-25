@@ -7,7 +7,7 @@ use super::{
 #[cfg(test)]
 use super::{assert_length, check_prefix};
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-use crate::field::fft::{butterfly, divide_by_power_of_two, scale as scale_loose};
+use crate::field::butterfly::{butterfly, divide_by_power_of_two, scale as scale_loose};
 
 /// Reusable transform metadata borrowing caller-prepared tables.
 ///

@@ -12,7 +12,7 @@ pub enum Loose {}
 pub enum Reduced {}
 
 mod sealed {
-    pub trait Sealed {
+    pub(in crate::field) trait Sealed {
         const REDUCED: bool;
     }
 }
@@ -21,6 +21,10 @@ mod sealed {
 ///
 /// Only [`Loose`] and [`Reduced`] implement this sealed trait. Both have the
 /// same four-limb storage layout; the bound is known at compile time.
+#[expect(
+    private_bounds,
+    reason = "the reduction flag is an implementation parameter"
+)]
 pub trait ReductionState: sealed::Sealed + Copy + Eq + Send + Sync + 'static {}
 
 impl sealed::Sealed for Loose {

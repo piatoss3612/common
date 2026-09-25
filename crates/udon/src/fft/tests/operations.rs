@@ -1,5 +1,6 @@
 use super::*;
 use crate::fft::run::FftPlan;
+use crate::test_support::max_loose_limbs;
 use core::num::NonZeroUsize;
 
 fn nz(n: usize) -> NonZeroUsize {
@@ -398,11 +399,9 @@ fn bound_plan_table_directions_and_inverse_finishes_match_direct_sums() {
 }
 
 fn periodic_inverse<M: PrimeModulus>() {
-    let mut largest = M::TWICE_MODULUS;
-    largest[0] -= 1;
     let boundary = [
         PastaField::from_montgomery_limbs(M::MODULUS),
-        PastaField::from_montgomery_limbs(largest),
+        PastaField::from_montgomery_limbs(max_loose_limbs::<M>()),
         PastaField::ZERO,
         PastaField::<M>::ONE.neg(),
     ];

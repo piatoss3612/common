@@ -20,7 +20,7 @@ use super::{PastaField, PrimeModulus, Reduced, field_elements};
 ///
 /// Each `gi[j]` stores `r^(j * 256^i)` in reduced Montgomery form. The inverse
 /// table maps all 256 powers `r^(j * 256^3)` to `-j mod 256` through [`hash`].
-pub(crate) struct LargeSqrtTable<F> {
+pub(in crate::field) struct LargeSqrtTable<F> {
     g0: [F; 256],
     g1: [F; 256],
     g2: [F; 256],

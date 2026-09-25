@@ -114,7 +114,7 @@ impl<M: PrimeModulus> Factors<M> {
         // Phase zero has no shift correction. The other phases combine size
         // division and untwisting into one multiplication of a loose value.
         if degree.is_multiple_of(3) {
-            crate::field::fft::divide_by_power_of_two(value, log_size)
+            crate::field::butterfly::divide_by_power_of_two(value, log_size)
         } else {
             value.mul(&self.at(degree))
         }

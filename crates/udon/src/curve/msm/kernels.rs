@@ -18,18 +18,18 @@ use crate::{
 };
 
 pub(super) struct Work<'a, C: PastaCurve> {
-    pub affine: &'a mut [AffinePoint<C>],
-    pub projective: &'a mut [ProjectivePoint<C>],
-    pub field: &'a mut [PastaField<C::Base>],
-    pub indices: &'a mut [usize],
+    pub(super) affine: &'a mut [AffinePoint<C>],
+    pub(super) projective: &'a mut [ProjectivePoint<C>],
+    pub(super) field: &'a mut [PastaField<C::Base>],
+    pub(super) indices: &'a mut [usize],
 }
 #[derive(Clone, Copy)]
 pub(super) struct Task {
-    pub offset: usize,
-    pub window: usize,
-    pub pass: usize,
-    pub geometry: Geometry,
-    pub accumulation: Accumulation,
+    pub(super) offset: usize,
+    pub(super) window: usize,
+    pub(super) pass: usize,
+    pub(super) geometry: Geometry,
+    pub(super) accumulation: Accumulation,
 }
 trait Base<C: PastaCurve>: Copy + Sync {
     fn point(self, rotation: usize) -> Option<AffinePoint<C>>;
@@ -74,8 +74,8 @@ impl Indices<'_> {
     }
 }
 pub(super) struct Selection<'a, C: PastaCurve> {
-    pub bases: Bases<'a, C>,
-    pub indices: Option<Indices<'a>>,
+    pub(super) bases: Bases<'a, C>,
+    pub(super) indices: Option<Indices<'a>>,
 }
 struct View<'a, B, const INDEXED: bool> {
     bases: &'a [B],

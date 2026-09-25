@@ -379,7 +379,7 @@ pub(super) fn validate_canonical<C: PastaCurve>(
     Ok(())
 }
 
-pub(super) fn prepare<C: PastaCurve, X: Executor>(
+fn prepare<C: PastaCurve, X: Executor>(
     source: Scalars<'_, C>,
     records: &mut [ScalarStorage<C>],
     budget: TaskBudget,

@@ -97,8 +97,8 @@ fn phases() {
             );
             let input = Input::new(Bases::Affine(&bases), &scalars);
             let mut records = vec![ScalarStorage::ZERO; n];
-            prepared::prepare(
-                input.scalars,
+            PreparedScalars::<C>::prepare(
+                &scalars,
                 &mut records,
                 TaskBudget::SERIAL,
                 &SerialExecutor,
@@ -273,12 +273,7 @@ fn retained_windows<C: PastaCurve>(
     let chunk_size = records.len();
     for (chunk, source) in scalars.chunks(chunk_size).enumerate() {
         let records = &mut records[..source.len()];
-        prepared::prepare(
-            Scalars::Raw(source),
-            records,
-            TaskBudget::SERIAL,
-            &SerialExecutor,
-        );
+        PreparedScalars::<C>::prepare(source, records, TaskBudget::SERIAL, &SerialExecutor);
         let digits = &mut digits[..geometry.storage_len(source.len()).unwrap()];
         recode::write(records, geometry, digits);
         for (window, buckets) in buckets.chunks_exact_mut(geometry.buckets()).enumerate() {
@@ -422,7 +417,12 @@ fn native_controls() {
             for width in [4, 6, 8] {
                 let geometry = recode::Geometry::Booth(width);
                 let mut all = vec![ScalarStorage::ZERO; n];
-                prepared::prepare(input.scalars, &mut all, TaskBudget::SERIAL, &SerialExecutor);
+                PreparedScalars::<C>::prepare(
+                    &scalars[..n],
+                    &mut all,
+                    TaskBudget::SERIAL,
+                    &SerialExecutor,
+                );
                 let mut packed = vec![0; geometry.storage_len(n).unwrap()];
                 timing(
                     &std::format!("recode_width_{width}"),

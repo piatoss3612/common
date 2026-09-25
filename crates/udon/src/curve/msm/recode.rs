@@ -54,7 +54,7 @@ impl Geometry {
         }
     }
 
-    pub const fn select(
+    pub(super) const fn select(
         n: usize,
         shape: Shape,
         options: ArithmeticOptions,
@@ -75,7 +75,7 @@ impl Geometry {
         }
     }
 
-    pub const fn for_shape(n: usize, shape: Shape, options: ArithmeticOptions) -> Self {
+    pub(super) const fn for_shape(n: usize, shape: Shape, options: ArithmeticOptions) -> Self {
         let Shape { bits, weight } = shape;
         if !matches!(options.kernel, Kernel::Auto) || bits == 255 {
             return Self::for_len(n, options);
@@ -92,29 +92,29 @@ impl Geometry {
         }
     }
 
-    pub const fn windows(self) -> usize {
+    pub(super) const fn windows(self) -> usize {
         match self {
             Self::Booth(width) => 128_usize.div_ceil(width as usize),
             _ => 1,
         }
     }
-    pub const fn width(self) -> usize {
+    pub(super) const fn width(self) -> usize {
         match self {
             Self::Booth(w) => w as usize,
             _ => 0,
         }
     }
-    pub const fn buckets(self) -> usize {
+    pub(super) const fn buckets(self) -> usize {
         1 << (self.width() - 1)
     }
-    pub const fn stride(self) -> usize {
+    pub(super) const fn stride(self) -> usize {
         match self {
             Self::Short(_) => 0,
             Self::Joint => JOINT_STRIDE,
             Self::Booth(w) => 2 * self.windows() * if w > 8 { 2 } else { 1 },
         }
     }
-    pub const fn storage_len(self, terms: usize) -> Result<usize, CurveError> {
+    pub(super) const fn storage_len(self, terms: usize) -> Result<usize, CurveError> {
         checked_count::<u8>(terms, self.stride())
     }
 }
@@ -122,13 +122,13 @@ impl Geometry {
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Shape {
     // Maximum magnitude width, or 255 if any record needs full-width arithmetic.
-    pub bits: u8,
+    pub(super) bits: u8,
     // Sum of magnitude population counts, meaningful only when bits != 255.
     // Retained chunks inherit the whole row's weight as a conservative bound.
-    pub weight: usize,
+    pub(super) weight: usize,
 }
 impl Shape {
-    pub fn of<C: PastaCurve>(records: &[ScalarStorage<C>]) -> Self {
+    pub(super) fn of<C: PastaCurve>(records: &[ScalarStorage<C>]) -> Self {
         let mut shape = Self { bits: 0, weight: 0 };
         for record in records {
             shape.bits = shape.bits.max(record.bits);
@@ -143,8 +143,8 @@ impl Shape {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Cache<'a> {
-    pub geometry: Geometry,
-    pub digits: &'a [u8],
+    pub(super) geometry: Geometry,
+    pub(super) digits: &'a [u8],
 }
 
 /// Visits both signed GLV digits for each term in `range` at one Booth window.

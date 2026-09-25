@@ -444,7 +444,7 @@ pub struct Request<'a> {
     /// First retained recoding byte written during preparation.
     pub digit_start: usize,
     /// Window index, or zero for preparation and reduction.
-    pub(crate) window: usize,
+    window: usize,
     /// Exclusive task scratch. During preparation its scalar and digit fields
     /// describe writes into retained storage, not additional temporary blocks.
     pub scratch: Requirements,

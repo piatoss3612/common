@@ -159,12 +159,6 @@ pub enum CurveError {
         /// The supplied width.
         bits: u32,
     },
-    /// An MSM Booth width is outside `4..=12`.
-    #[cfg(test)]
-    InvalidMsmWindow {
-        /// Supplied window width.
-        bits: u32,
-    },
     /// A scalar is not below its modulus, exceeds its bit bound, or has an
     /// invalid bound.
     InvalidScalar {
@@ -215,8 +209,6 @@ impl fmt::Display for CurveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidWindowBits { bits } => write!(f, "window width {bits} is outside 2..=8"),
-            #[cfg(test)]
-            Self::InvalidMsmWindow { bits } => write!(f, "MSM width {bits} is outside 4..=12"),
             Self::InvalidScalar { position } => {
                 write!(f, "invalid MSM scalar at position {position}")
             }

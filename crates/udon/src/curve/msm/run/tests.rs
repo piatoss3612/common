@@ -8,7 +8,7 @@ use crate::{
         PreparedAffinePoint, ProjectivePoint, Vesta,
         msm::{
             Accumulation, ArithmeticOptions, Bases, BatchOptions, Input, Kernel, PreparedScalars,
-            Requirements, ScalarStorage, Scratch, Selection,
+            Requirements, ScalarStorage, Scratch, Selection, policy::InvalidWindow,
         },
     },
     exec::{
@@ -1220,7 +1220,7 @@ fn kernel_selection_validates_widths_and_replaces_all_preferences() {
         ] {
             assert_eq!(
                 JOINT.with_kernel(kernel),
-                Err(CurveError::InvalidMsmWindow { bits: width })
+                Err(InvalidWindow { bits: width })
             );
         }
     }

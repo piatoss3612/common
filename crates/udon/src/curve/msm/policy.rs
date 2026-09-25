@@ -1,7 +1,5 @@
 //! Private kernel controls used by selection and arithmetic tests.
 
-#[cfg(test)]
-use super::CurveError;
 use crate::exec::TaskBudget;
 use core::num::NonZeroUsize;
 
@@ -56,14 +54,14 @@ impl ArithmeticOptions {
         self
     }
     #[cfg(test)]
-    pub(super) const fn with_kernel(mut self, kernel: Kernel) -> Result<Self, CurveError> {
+    pub(super) const fn with_kernel(mut self, kernel: Kernel) -> Result<Self, InvalidWindow> {
         if let Kernel::Booth {
             width: Some(bits), ..
         }
         | Kernel::StreamingBooth { width: Some(bits) } = kernel
             && (bits < 4 || bits > 12)
         {
-            return Err(CurveError::InvalidMsmWindow { bits });
+            return Err(InvalidWindow { bits });
         }
         self.kernel = kernel;
         Ok(self)
@@ -141,4 +139,11 @@ impl From<crate::exec::ExecutionOptions> for BatchOptions {
             memory_limit: options.memory_limit(),
         }
     }
+}
+
+/// A test-selected Booth width outside `4..=12`.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InvalidWindow {
+    pub(super) bits: u32,
 }

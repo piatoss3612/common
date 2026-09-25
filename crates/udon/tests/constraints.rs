@@ -79,8 +79,7 @@ fn msm<C: PastaCurve>() {
                 assert_eq!(length, 0);
             }
             let mut digits = vec![0xa5; length + 1];
-            let cached =
-                prepared.cache_parallel(&plan, &mut digits, options.task_budget(), &SerialExecutor);
+            let cached = prepared.cache(&plan, &mut digits, options.task_budget(), &SerialExecutor);
             let input = Input::new_prepared(Bases::Affine(&bases), cached);
             let cached_plan = MsmPlan::for_input(&input, options).unwrap();
             let required = cached_plan.requirements();
@@ -161,6 +160,68 @@ fn scalar_caches_follow_resolved_plans_and_capacities() {
     msm::<Vesta>();
 }
 
+#[test]
+fn zero_length_cache_requests_preserve_existing_preparation() {
+    fn check<C: PastaCurve>() {
+        let bases = [AffinePoint::<C>::GENERATOR; 16];
+        let mut records = [ScalarStorage::<C>::ZERO; 16];
+        let mut digits = Vec::new();
+        let options = ExecutionOptions::DEFAULT;
+        let cached = {
+            let scalars = [PastaField::<C::Scalar>::ONE; 16];
+            let prepared = PreparedScalars::prepare(
+                &scalars,
+                &mut records,
+                TaskBudget::SERIAL,
+                &SerialExecutor,
+            );
+            let plan = MsmPlan::new(scalars.len(), options).unwrap();
+            let len = prepared.cache_len(&plan);
+            assert!(len > 0);
+            digits.resize(len, 0);
+            let executor = SerialExecutor;
+            let cached = prepared.cache(&plan, &mut digits, TaskBudget::new(3).unwrap(), &executor);
+            assert_eq!(cached.retained_bytes(), prepared.retained_bytes() + len);
+            cached
+        };
+        // The handle outlives the original scalars, preparation handle, plan,
+        // and executor. Only the records and cache bytes remain borrowed.
+        let input = Input::new_prepared(Bases::Affine(&bases), cached);
+        let short = MsmPlan::for_input(&input, options).unwrap();
+        let mismatched = MsmPlan::new(bases.len() + 1, options).unwrap();
+        let fragmented = MsmPlan::for_produced(
+            ProducedInput::dense(Bases::Affine(&bases)),
+            NonZeroUsize::new(8).unwrap(),
+            options,
+        )
+        .unwrap();
+        for plan in [short, mismatched, fragmented] {
+            assert_eq!(cached.cache_len(&plan), 0);
+            let mut unused = [0xa5];
+            let reused = cached.cache(
+                &plan,
+                &mut unused,
+                TaskBudget::new(3).unwrap(),
+                &SerialExecutor,
+            );
+            assert_eq!(reused.retained_bytes(), cached.retained_bytes());
+            let plan = MsmPlan::new(bases.len(), options).unwrap();
+            let mut workspace = Workspace::new(plan.requirements());
+            assert_eq!(
+                plan.execute(
+                    Input::new_prepared(Bases::Affine(&bases), reused),
+                    &SerialExecutor,
+                    workspace.scratch(),
+                ),
+                bases[0].mul_projective(&PastaField::<C::Scalar>::from_u64(16)),
+            );
+            assert_eq!(unused, [0xa5]);
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
 fn cached_plan_slots<C: PastaCurve>() {
     let bases = [AffinePoint::<C>::GENERATOR; 16];
     let scalars = [PastaField::<C::Scalar>::TWO_INVERSE; 16];
@@ -171,7 +232,7 @@ fn cached_plan_slots<C: PastaCurve>() {
     let plan = MsmPlan::<C>::new(scalars.len(), options).unwrap();
     let mut digits = vec![0; prepared.cache_len(&plan)];
     assert!(!digits.is_empty());
-    let cached = prepared.cache(&plan, &mut digits);
+    let cached = prepared.cache(&plan, &mut digits, TaskBudget::SERIAL, &SerialExecutor);
     let input = Input::new_prepared(Bases::Affine(&bases), cached);
     let plan = MsmPlan::for_input(&input, options).unwrap();
     assert_eq!(plan.requirements().digits(), 0);

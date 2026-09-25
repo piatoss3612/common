@@ -37,7 +37,7 @@ Numbers below retain the audit's ordering. Reductions refer to elapsed time.
 | Finding | Decision | Evidence and scope |
 | --- | --- | --- |
 | 1. Field `mul_add` / `mul_sub` | Keep composed implementation | A wide product with the addend inserted before Montgomery reduction took about 11.5–11.6 ns versus 8.9–10.1 ns for the existing operations. |
-| 2. Paired FFT butterflies | Use pairs in applicable stages | Complete transforms with dense retained twiddles improved by about 7–19% at 2,048 and 16,384 elements in both fields. |
+| 2. Paired FFT butterflies | Use pairs in applicable stages | Complete transforms with dense precomputed twiddle tables improved by about 7–19% at 2,048 and 16,384 elements in both fields. |
 | 3. Large-table square-root success flag | Use the flag | The post-exponentiation step improved from 410.3 to 397.2 ns in Fp and 409.7 to 396.0 ns in Fq. Complete square roots were within measurement noise. |
 | 4. Identity factors in FFT tasks | Skip known identities | Applying a zeta twist to 4,096 values improved from 35.9 to 25.4 µs in natural order and 41.1 to 29.8 µs in bit-reversed order for Fp; Fq was similar. |
 | 5. Sparse FFT residue powers | Advance a progression for sufficiently large regions | For 4,096 destinations and a 256-coefficient prefix, arbitrary-residue initialization improved from 30.7 to 6.4 µs in Fp. Complete expansion comparisons for findings 4 and 5 improved by 2–6%. |
@@ -45,9 +45,13 @@ Numbers below retain the audit's ordering. Reductions refer to elapsed time.
 | 7. Small field multiples | Specialize 3, 4, and 8 | Direct modulus-shape folding takes about 1.5–1.6 ns, versus 3.2–5.3 ns for compositions. Complete curve doubling showed only a small change, near measurement noise. |
 | 8. Iterator product sums | Specialize short inputs | Empty/singleton sums improved by 47–69%; lengths 2–4 by 4–13%. The 1,024-term controls were unchanged. Four-lane batching was rejected. |
 | 9. Owned addition-chain result | Move the result | A 181-chain over a 64-word owned vector improved from 318.6 to 283.5 ns; 1,024-word vectors from 1,286.3 to 1,179.2 ns. No field-arithmetic speedup is claimed. |
-| 10. Retained MSM digit caches | Expose `cache_parallel` | The existing writer achieved about 3.5–3.9× speedup with four workers at 1,024–16,384 records for Booth and joint recoding. |
+| 10. Retained MSM digit caches | Use the caller's executor in `cache` | The existing writer achieved about 3.5–3.9× speedup with four workers at 1,024–16,384 records for Booth and joint recoding. |
 
 ### FFT execution and preparation
+
+Twiddles are powers of a root of unity used as FFT multipliers. The caller can
+precompute and reuse them in tables; see the
+[FFT table guide](FFT.md#optional-tables-and-downstream-storage).
 
 The paired butterfly computes two independent twiddle products before their
 DIT corrections, or after the DIF sums and differences. It accepts distinct
@@ -137,8 +141,8 @@ have its clone removed by the compiler.
 
 ### Explicit MSM cache preparation
 
-`PreparedScalars::cache_parallel` accepts the caller's executor and task budget.
-The existing `cache` method uses the same implementation with a serial budget.
+[`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs) accepts the
+caller's executor and task budget for serial or parallel construction.
 The parallel writer partitions at packed-chunk boundaries; fewer than 1,024
 records remain serial. No global pool or runtime allocation is introduced.
 
@@ -146,7 +150,7 @@ For 16,384 Pallas records, Booth width-eight writing improved from 484.0 to
 125.8 µs; joint writing from 6,890.9 to 1,778.5 µs. Vesta improved from 483.9
 to 125.4 µs and 6,898.6 to 1,789.4 µs. The 512-record controls stayed serial
 and were neutral. These timings measure internal cache writers used by the
-public methods; they exclude decomposition and MSM execution. Ordinary MSM
+public method; they exclude decomposition and MSM execution. Ordinary MSM
 task preparation already supported parallel execution.
 
 Tests exercise both curves around the dispatch boundary, one/four-worker

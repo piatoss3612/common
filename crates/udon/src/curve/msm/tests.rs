@@ -26,6 +26,8 @@ impl Executor for Pool {
 
 #[test]
 fn parallel_cache_matches_serial_and_preserves_tails() {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
     fn check<C: PastaCurve>() {
         for n in [0, 5, 1023, 1024, 1025] {
             let scalars: Vec<_> = field_samples::<C::Scalar>().take(n).collect();
@@ -40,7 +42,7 @@ fn parallel_cache_matches_serial_and_preserves_tails() {
             let len = prepared.cache_len(&plan);
             let mut serial = vec![73; len + 1];
             let expected = prepared
-                .cache(&plan, &mut serial)
+                .cache(&plan, &mut serial, TaskBudget::SERIAL, &SerialExecutor)
                 .cached
                 .map(|c| c.digits.to_vec());
             for workers in [1, 4] {
@@ -50,26 +52,33 @@ fn parallel_cache_matches_serial_and_preserves_tails() {
                     .unwrap();
                 let mut bytes = vec![73; len + 1];
                 let cached = pool.install(|| {
-                    prepared.cache_parallel(&plan, &mut bytes, TaskBudget::new(4).unwrap(), &Pool)
+                    prepared.cache(&plan, &mut bytes, TaskBudget::new(4).unwrap(), &Pool)
                 });
                 assert!(cached.records == prepared.records);
                 assert_eq!(cached.cached.map(|c| c.digits), expected.as_deref());
                 assert_eq!(bytes, serial);
-                if len != 0 {
-                    let mut short = vec![73; len - 1];
-                    assert!(
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            prepared.cache_parallel(
-                                &plan,
-                                &mut short,
-                                TaskBudget::new(4).unwrap(),
-                                &Pool,
-                            );
-                        }))
-                        .is_err()
-                    );
-                    assert!(short.iter().all(|&byte| byte == 73));
-                }
+            }
+            for tasks in [1, 2, 3, 8] {
+                let width = JoinWidth(AtomicUsize::new(1));
+                let mut bytes = vec![73; len + 1];
+                let cached =
+                    prepared.cache(&plan, &mut bytes, TaskBudget::new(tasks).unwrap(), &width);
+                assert_eq!(cached.cached.map(|c| c.digits), expected.as_deref());
+                assert_eq!(bytes, serial);
+                assert!(width.0.load(Ordering::Relaxed) <= tasks);
+            }
+            if len != 0 {
+                let width = JoinWidth(AtomicUsize::new(0));
+                let mut short = vec![73; len - 1];
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ =
+                            prepared.cache(&plan, &mut short, TaskBudget::new(4).unwrap(), &width);
+                    }))
+                    .is_err()
+                );
+                assert_eq!(width.0.load(Ordering::Relaxed), 0);
+                assert!(short.iter().all(|&byte| byte == 73));
             }
             assert_eq!(serial[len], 73);
         }
@@ -543,6 +552,37 @@ fn scratch_can_be_reused_after_executor_unwind() {
     );
     buffers.tails(r);
     assert!(*storage.last().unwrap() == ScalarStorage::ZERO);
+
+    let scalars: Vec<_> = field_samples().take(1025).collect();
+    let mut records = vec![ScalarStorage::<Pallas>::ZERO; scalars.len()];
+    let prepared =
+        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
+    let plan = run::MsmPlan::new(scalars.len(), crate::exec::ExecutionOptions::DEFAULT).unwrap();
+    let len = prepared.cache_len(&plan);
+    let mut serial = vec![73; len + 1];
+    let expected = prepared
+        .cache(&plan, &mut serial, TaskBudget::SERIAL, &SerialExecutor)
+        .cached
+        .unwrap()
+        .digits
+        .to_vec();
+    let mut bytes = vec![73; len + 1];
+    for at in [0, 2] {
+        let executor = Panics {
+            calls: AtomicUsize::new(0),
+            at,
+        };
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = prepared.cache(&plan, &mut bytes, options.task_budget, &executor);
+            }))
+            .is_err()
+        );
+        assert_eq!(bytes[len], 73);
+        let cached = prepared.cache(&plan, &mut bytes, options.task_budget, &Pool);
+        assert_eq!(cached.cached.unwrap().digits, expected);
+        assert_eq!(bytes, serial);
+    }
 }
 
 fn collisions<C: PastaCurve>() {

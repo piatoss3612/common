@@ -318,12 +318,14 @@ using `PreparedScalars::<C>::storage_len(terms)`, then call
 `PreparedScalars::prepare(scalars, storage, budget, executor)`. Preparation
 retains signed GLV components and small-integer classification and releases the
 original scalar borrow. Preparation is independent of execution choices.
-`cache_len(&plan)` and `cache(&plan, bytes)` optionally retain the recoding
-selected by an `MsmPlan`. A plan that cannot reuse a whole-row cache reports
-zero cache bytes and leaves preparation unchanged. The same resolved geometry
-sizes and consumes the cache, including at algorithm boundaries.
-Use `cache_parallel(&plan, bytes, budget, executor)` to prepare a retained cache
-on the caller's executor; small rows and serial budgets use the serial writer.
+`cache_len(&plan)` sizes an optional recoding cache selected by an `MsmPlan`.
+Use `cache(&plan, bytes, budget, executor)` and pass its returned handle to
+execution. Its budget controls cache construction independently of the later
+MSM's budget; both scalar preparation and caching accept `TaskBudget::SERIAL`
+with `SerialExecutor`. A plan that needs no cache or cannot reuse a whole-row
+cache reports zero bytes and leaves the handle unchanged, including any
+existing cache. Storage and failure contracts, with an executable example, are
+documented on [`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs).
 Resolve `MsmPlan::for_input` with the cached handle to size workspace without
 duplicating the retained cache; caching does not change an existing plan's counts.
 `retained_bytes()` counts the borrowed records and optional cache. This storage

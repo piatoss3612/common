@@ -108,6 +108,7 @@ pub use bento_macros::Pod;
 ///
 /// `addition_chain!(value_expression, scalar)` evaluates the expression once,
 /// taking ownership of its result, and returns the same type scaled by `scalar`.
+/// The final owned value is returned directly; scalar one returns the input.
 /// The scalar must be a nonzero, unsuffixed integer literal: decimal, hexadecimal,
 /// octal, and binary are accepted, with underscores and an optional trailing
 /// comma. Literals wider than 128 bits are supported. Constants, expressions,
@@ -143,10 +144,10 @@ pub use bento_macros::Pod;
 /// path, including in build scripts.
 ///
 /// The operation schedule depends on the scalar literal, not the input value.
-/// Its exact sequence and operation count are implementation details; a shortest
-/// chain is not guaranteed. A fixed schedule does not establish constant-time
-/// behavior for input values: cloning, arithmetic, and dropping values also
-/// depend on the supplied type.
+/// Its exact sequence and arithmetic, clone, and drop counts are implementation
+/// details; a shortest chain is not guaranteed. A fixed schedule does not
+/// establish constant-time behavior for input values: cloning, arithmetic, and
+/// dropping values also depend on the supplied type.
 ///
 /// # Panics
 ///

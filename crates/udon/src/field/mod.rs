@@ -68,6 +68,8 @@ const ENCODED_SIZE: usize = 32;
 /// integer: [`Loose`] permits `[0, 2p)` and [`Reduced`] permits `[0, p)`.
 /// Arithmetic returns loose values. [`reduce`](Self::reduce) produces the
 /// unique representative required by equality, ordering, and square roots.
+/// The exact loose limbs of an arithmetic result are not guaranteed; equivalent
+/// computations can produce different representatives within the bound.
 /// Ordering and debug output use the canonical field integer.
 ///
 /// Implements [`bento::Pod`] so a constructed value can be written as bytes

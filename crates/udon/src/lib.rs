@@ -59,6 +59,7 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
+#![warn(unreachable_pub)]
 
 mod checks;
 pub mod curve;

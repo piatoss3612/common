@@ -611,7 +611,7 @@ mod tests {
                 &SerialExecutor,
             );
             for (base, actual) in bases.iter().zip(output) {
-                let expected = crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(base));
+                let expected = crate::curve::tests::multiply(&scalar, |sum| sum.add_mixed(base));
                 assert_eq!(actual, expected);
             }
         }

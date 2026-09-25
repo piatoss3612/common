@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     curve::{
         AffinePoint, EisensteinTableBatch, Pallas, Point, PreparedAffinePoint, ProjectivePoint,
-        Vesta, msm::tests::Buffers, scalar,
+        Vesta, msm::tests::Buffers, tests::multiply,
     },
     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     field::{PrimeModulus, Reduced},
@@ -39,7 +39,7 @@ fn check<C: PastaCurve, S: ReductionState>(
         .enumerate()
         .fold(ProjectivePoint::IDENTITY, |sum, (i, s)| {
             let index = selection.indices.map_or(i, |indices| indices[i] as usize);
-            sum.add(&scalar::multiply(&s.into_loose(), |term| {
+            sum.add(&multiply(&s.into_loose(), |term| {
                 term.add(&points[index].to_projective())
             }))
         });
@@ -112,7 +112,7 @@ fn cases<C: PastaCurve>() {
             .skip(3)
             .take(n)
             .map(|s| {
-                scalar::multiply(&s, |sum| sum.add(&ProjectivePoint::<C>::GENERATOR))
+                multiply(&s, |sum| sum.add(&ProjectivePoint::<C>::GENERATOR))
                     .to_point()
                     .as_affine()
                     .copied()

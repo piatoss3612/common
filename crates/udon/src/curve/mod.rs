@@ -37,6 +37,7 @@ use crate::field::{PastaField, Reduced, ReductionState};
 
 mod affine;
 mod batch;
+mod digits;
 mod effective;
 mod eisenstein;
 mod eisenstein_batch;
@@ -47,7 +48,6 @@ pub mod msm;
 mod parameters;
 mod point;
 mod projective;
-mod scalar;
 mod table_entry;
 
 pub use batch::batch_normalize;

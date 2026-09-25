@@ -103,7 +103,7 @@ impl<C: PastaCurve> AffinePoint<C> {
         // Short scalars use the binary ladder without paying for table setup.
         let scalar = scalar.to_canonical_uint();
         if scalar.highest_set_bit().is_none_or(|high| high < 64) {
-            super::scalar::multiply_canonical(scalar, |point| point.add_mixed(self))
+            super::projective::multiply_canonical(scalar, |point| point.add_mixed(self))
         } else {
             super::effective::multiply(&self.to_projective(), scalar)
         }

@@ -96,14 +96,14 @@ fn tables<C: PastaCurve, E: CurveTableEntry<C>>() {
         for scalar in scalars {
             let (a, b) = glv_decompose::<C>(&scalar);
             for (rotation, half) in [a, b].into_iter().enumerate() {
-                let (_, carry) = crate::curve::fixed_base::signed_window_digits(
+                let (_, carry) = crate::curve::digits::signed_window_digits(
                     half.unsigned_abs(),
                     window_bits as usize,
                 );
                 carries[rotation][usize::from(half < 0)] |= carry;
             }
             // Keep the oracle independent of GLV decomposition and recoding.
-            let expected = crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(&base));
+            let expected = multiply(&scalar, |sum| sum.add_mixed(&base));
             assert_eq!(
                 table.mul(&scalar),
                 expected,

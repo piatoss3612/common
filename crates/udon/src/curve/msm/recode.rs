@@ -9,7 +9,7 @@
 use super::run::storage::Storage;
 
 use super::{ArithmeticOptions, CurveError, Kernel, PastaCurve, ScalarStorage, checked_count};
-use crate::curve::{eisenstein, parameters::GlvParameters, scalar::centered_digit};
+use crate::curve::{digits::centered_digit, eisenstein, parameters::GlvParameters};
 #[cfg(test)]
 use crate::exec::{Executor, TaskBudget, for_each_chunk_mut};
 

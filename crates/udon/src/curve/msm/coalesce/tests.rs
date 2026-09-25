@@ -1,6 +1,8 @@
 use super::*;
 use crate::{
-    curve::{Pallas, PreparedAffinePoint, ProjectivePoint, Vesta, msm::tests::Buffers, scalar},
+    curve::{
+        Pallas, PreparedAffinePoint, ProjectivePoint, Vesta, msm::tests::Buffers, tests::multiply,
+    },
     exec::{ExecutionOptions, SerialExecutor},
     field::{PrimeModulus, Reduced},
     test_support::{field_samples, modulus},
@@ -25,7 +27,7 @@ fn reference<C: PastaCurve>(
         .iter()
         .zip(scalars)
         .fold(ProjectivePoint::IDENTITY, |sum, (base, s)| {
-            sum.add(&scalar::multiply(s, |term| term.add(&base.to_projective())))
+            sum.add(&multiply(s, |term| term.add(&base.to_projective())))
         })
 }
 
@@ -64,7 +66,7 @@ fn rows<C: PastaCurve>(n: usize) -> Vec<Vec<PastaField<C::Scalar>>> {
 fn points<C: PastaCurve>() {
     let seed: Vec<_> = field_samples::<C::Scalar>()
         .take(33)
-        .map(|s| scalar::multiply(&s, |sum| sum.add(&ProjectivePoint::<C>::GENERATOR)).to_point())
+        .map(|s| multiply(&s, |sum| sum.add(&ProjectivePoint::<C>::GENERATOR)).to_point())
         .collect();
     let p = modulus::<C::Scalar>();
     for n in [0, 1, 2, 3, 17, 65, 257] {
@@ -145,7 +147,7 @@ fn points<C: PastaCurve>() {
 fn indexed<C: PastaCurve>() {
     let affine: Vec<_> = (1..=17)
         .map(|i| {
-            scalar::multiply::<C>(&PastaField::from_u64(i), |sum| {
+            multiply::<C>(&PastaField::from_u64(i), |sum| {
                 sum.add(&ProjectivePoint::GENERATOR)
             })
             .to_point()

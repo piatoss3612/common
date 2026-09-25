@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    curve::{Pallas, Vesta, scalar},
+    curve::{Pallas, Vesta, tests::multiply},
     exec::SerialExecutor,
     test_support::field_samples,
 };
@@ -111,7 +111,7 @@ fn reference<C: PastaCurve>(input: &Input<'_, C>) -> ProjectivePoint<C> {
             Bases::Compact(b) => b.get(j).unwrap().base().to_projective(),
             Bases::CompactPrepared(b) => b.get(j).unwrap().base().to_projective(),
         };
-        sum = sum.add(&scalar::multiply(k, |sum| sum.add(&base)));
+        sum = sum.add(&multiply(k, |sum| sum.add(&base)));
     }
     sum
 }
@@ -750,39 +750,6 @@ fn validation_precedes_writes_and_sizing_rejects_overflow() {
         );
         assert!(b.field.iter().all(|&x| x.reduce() == PastaField::ONE));
         assert!(b.indices.iter().all(|&x| x == 73));
-    }
-}
-
-#[test]
-fn packed_midpoint_carries_reconstruct_signed_extremes() {
-    use crate::curve::scalar::centered_digit;
-    use num_bigint::BigInt;
-    for width in [2, 4, 8] {
-        for negative in [false, true] {
-            for value in [0, 1, 127, 128, 129, 255, 256, u128::MAX, i128::MAX as u128] {
-                let mut carry = 0;
-                let mut magnitude = value;
-                let mut digits = Vec::new();
-                for _ in 0..128 / width {
-                    let digit = centered_digit(
-                        (magnitude & ((1 << width) - 1)) as u16,
-                        negative,
-                        &mut carry,
-                        width,
-                    );
-                    assert!((-(1 << (width - 1))..1 << (width - 1)).contains(&digit));
-                    assert_eq!(digit as i8 as i16, digit);
-                    digits.push(digit);
-                    magnitude >>= width;
-                }
-                let mut actual = BigInt::from(if negative { -carry } else { carry });
-                for d in digits.into_iter().rev() {
-                    actual = (actual << width) + d;
-                }
-                let expected = BigInt::from(value);
-                assert_eq!(actual, if negative { -expected } else { expected });
-            }
-        }
     }
 }
 

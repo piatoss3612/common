@@ -144,34 +144,6 @@ pub(super) fn recode(mut a: i128, mut b: i128) -> ([u8; MAX_DIGITS], usize) {
     (digits, len)
 }
 
-#[cfg(test)]
-pub(super) fn representatives<C: PastaCurve>(base: &ProjectivePoint<C>) -> [ProjectivePoint<C>; 8] {
-    // Write phi(P) for P.endomorphism(). For difference = base - phi(base),
-    // difference - phi(difference) = [-3] phi(base). Two endomorphisms then
-    // give [-3] base without doublings; sums with phi(base) and further
-    // rotations produce REPRESENTATIVES in the required order.
-    let phi = base.endomorphism();
-    let difference = base.sub(&phi);
-    let b = difference.sub(&difference.endomorphism());
-    let b_phi = b.endomorphism();
-    let minus_three = b_phi.endomorphism();
-    let three_a = phi.add(&minus_three);
-    let three_b = phi.sub(&minus_three);
-    let four_a = phi.sub(&b_phi);
-    let four_b = phi.add(&b_phi);
-    let nineteen = phi.add(&four_b);
-    [
-        *base,
-        difference,
-        four_a.endomorphism(),
-        three_b.endomorphism().neg(),
-        minus_three.neg(),
-        three_a.neg(),
-        four_b.endomorphism().endomorphism(),
-        nineteen.endomorphism().endomorphism(),
-    ]
-}
-
 pub(super) fn representatives_affine<C: PastaCurve>(
     base: &AffinePoint<C>,
 ) -> [ProjectivePoint<C>; 8] {

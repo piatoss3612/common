@@ -56,9 +56,7 @@ fn affine_ladder_results_normalize_without_inversion() {
         );
         let expected: Vec<_> = bases
             .iter()
-            .map(|base| {
-                crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(base)).to_point()
-            })
+            .map(|base| multiply(&scalar, |sum| sum.add_mixed(base)).to_point())
             .collect();
         let inversions = crate::field::count_inversions(|| {
             for (point, expected) in output.iter().zip(&expected) {
@@ -128,8 +126,7 @@ fn batches<C: PastaCurve, E: CurveTableEntry<C> + Eq>() {
                     (PastaField::<_>::ONE).reduce()
                 );
                 for (i, base) in bases[..n].iter().enumerate() {
-                    let expected =
-                        crate::curve::scalar::multiply(&scalar, |sum| sum.add_mixed(base));
+                    let expected = multiply(&scalar, |sum| sum.add_mixed(base));
                     assert_eq!(output[i], expected, "n={n}, tasks={tasks}, term={i}");
                     assert_eq!(tables.get(i).unwrap().mul_prepared(&prepared), expected);
                 }

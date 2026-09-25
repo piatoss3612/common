@@ -2,7 +2,7 @@
 
 use super::{
     AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, PastaCurve, ProjectivePoint,
-    assert_scratch, batch, glv_decompose,
+    assert_scratch, batch, digits::signed_window_digits, glv_decompose,
 };
 use crate::field::PastaField;
 
@@ -316,26 +316,4 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> FixedBaseTable<'a, C, E> {
             }
         }
     }
-}
-
-/// Encodes a magnitude in signed width-`w` digits and a final carry.
-///
-/// Requires `w` in `2..=8`; digits are in `[-2^(w - 1), 2^(w - 1) - 1]`.
-/// Only the first `ceil(128 / w)` digits are used; the remaining digits are zero.
-pub(super) fn signed_window_digits(mut magnitude: u128, w: usize) -> ([i16; 64], bool) {
-    // Zero-pad the last partial window. Pasta's lattice bounds are
-    // |k1| < (a + b)/2 + 1 and |k2| < (b + d)/2 + 1, where d = a + b.
-    // Only k2 at width 2 can carry, so only that layout stores a carry entry.
-    let mut digits = [0; 64];
-    let mut carry = 0;
-    for digit in &mut digits[..128_usize.div_ceil(w)] {
-        *digit = super::scalar::centered_digit(
-            (magnitude & ((1 << w) - 1)) as u16,
-            false,
-            &mut carry,
-            w as u32,
-        );
-        magnitude >>= w;
-    }
-    (digits, carry != 0)
 }

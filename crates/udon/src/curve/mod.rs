@@ -11,8 +11,8 @@
 //! available to callers implementing their own scalar algorithms.
 //! [`EisensteinScalar`] retains joint digits for compact tables, and
 //! [`EisensteinTableBatch`] prepares or multiplies several bases together.
-//! [`msm`] sums dense or indexed scalar/base terms with caller-owned scratch
-//! and execution. Operators forward to these methods. The unstable `traits`
+//! [`msm`](crate::msm) sums dense or indexed scalar/base terms with caller-owned
+//! scratch and execution. Operators forward to these methods. The unstable `traits`
 //! feature adds `Affine`, `Projective`, and their endomorphism capabilities
 //! as consumer interfaces implemented through the same native arithmetic.
 //!
@@ -46,6 +46,3 @@ pub use pasta::{
 };
 #[cfg(feature = "traits")]
 pub use traits::{Affine, EndomorphismAffine, EndomorphismProjective, Projective};
-
-/// Multiscalar multiplication; also available at [`crate::msm`].
-pub use crate::msm;

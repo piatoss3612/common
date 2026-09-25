@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     exec::execution::ReadView,
-    fft::{bit_reverse, factors::ForwardShift, run::FftKernel},
+    fft::{bit_reverse, factors::ForwardShift, execution::FftKernel},
 };
 use std::{
     hint::black_box,

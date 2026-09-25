@@ -115,8 +115,6 @@ mod sum;
 pub mod execution;
 
 pub use coalesce::{CoalescingKey, CoalescingPlan, IndexedCoalescingPlan};
-/// Compatibility name for the execution module.
-pub use execution as run;
 #[cfg(test)]
 use execution::{BatchPlan, JobStorage, WorkerStorage};
 pub use matrix::SharedScalarInput;
@@ -428,7 +426,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
         )?;
         let scratch = scratch.checked(plan.requirements);
         let mut output = [ProjectivePoint::IDENTITY];
-        run::batch::execute(
+        execution::batch::execute(
             &plan,
             core::slice::from_ref(self),
             &mut output,
@@ -758,6 +756,6 @@ fn execute_batch<C: PastaCurve, X: Executor>(
     assert_length("output", inputs.len(), output.len());
     let plan = schedule::Plan::new(inputs, options)?;
     let scratch = scratch.checked(plan.requirements);
-    run::batch::execute(&plan, inputs, output, executor, scratch);
+    execution::batch::execute(&plan, inputs, output, executor, scratch);
     Ok(())
 }

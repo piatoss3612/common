@@ -3,18 +3,16 @@ use spin::RwLock;
 use std::num::NonZeroUsize;
 use std::{vec, vec::Vec};
 use zakura_udon::{
-    curve::{
-        Pallas, PastaCurve, Point, ProjectivePoint, Vesta,
-        msm::{
-            Bases, Input,
-            execution::{MsmPlan, ParallelMsmRun, ProducedInput},
-        },
-    },
+    curve::{Pallas, PastaCurve, Point, ProjectivePoint, Vesta},
     exec::{
         ExecutionOptions, TaskBudget,
         execution::{Identity, TaskStorage},
     },
     field::{CanonicalUint, PastaField},
+    msm::{
+        Bases, Input,
+        execution::{MsmPlan, ParallelMsmRun, ProducedInput},
+    },
 };
 
 fn ladder<C: PastaCurve>(scalar: PastaField<C::Scalar>) -> ProjectivePoint<C> {

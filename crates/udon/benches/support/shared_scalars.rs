@@ -2,12 +2,10 @@ use super::{Buffers, Pool};
 use criterion::{Bencher, BenchmarkId, Criterion, Throughput};
 use std::{hint::black_box, time::Instant};
 use zakura_udon::{
-    curve::{
-        AffinePoint, PastaCurve, ProjectivePoint,
-        msm::{Bases, Input, PreparedScalars, ScalarStorage, SharedScalarInput},
-    },
+    curve::{AffinePoint, PastaCurve, ProjectivePoint},
     exec::{ExecutionOptions, Executor, SerialExecutor, TaskBudget},
     field::PastaField,
+    msm::{Bases, Input, PreparedScalars, ScalarStorage, SharedScalarInput},
 };
 
 pub(super) fn measure(

@@ -25,9 +25,10 @@ use crate::exec::{ExecutionOptions, Executor};
 ///
 /// ```
 /// use zakura_udon::{
-///     curve::{AffinePoint, Pallas, ProjectivePoint, msm::*},
+///     curve::{AffinePoint, Pallas, ProjectivePoint},
 ///     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
 ///     field::PastaField,
+///     msm::*,
 /// };
 /// let g = AffinePoint::<Pallas>::GENERATOR;
 /// let bases = [g, g, g, g.neg()];

@@ -211,7 +211,10 @@ impl Executor for Pool {
 }
 
 fn layouts<C: PastaCurve>(n: usize, limit: usize) {
-    use crate::curve::{EisensteinTableBatch, PreparedAffinePoint, msm::ScalarStorage};
+    use crate::{
+        curve::{EisensteinTableBatch, PreparedAffinePoint},
+        msm::ScalarStorage,
+    };
     let outputs = 5;
     let samples: Vec<_> = field_samples::<C::Scalar>().take(513).collect();
     let scalars: Vec<_> = (0..n).map(|i| samples[i % samples.len()]).collect();

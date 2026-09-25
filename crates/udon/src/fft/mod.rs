@@ -158,9 +158,6 @@ use crate::field::{PastaField, PrimeModulus};
 mod constant_prefix;
 mod domain;
 pub mod execution;
-
-/// Compatibility name for the execution module.
-pub use execution as run;
 mod expansion;
 mod expansion_operation;
 mod expansion_scales;

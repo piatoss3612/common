@@ -3,7 +3,7 @@ use super::{test_buffers::Arena, test_pipeline::Banks};
 use crate::exec::execution::test_pool as run_pool;
 use crate::exec::{
     SerialExecutor,
-    run::{Identity, TaskStorage},
+    execution::{Identity, TaskStorage},
 };
 use crate::fft::{
     Codelet, Direction, Domain, ElementOrder, InputStorage, InputSupport, InverseScale, Strategy,

@@ -117,13 +117,11 @@ Likewise, `curve/pasta/buckets.rs` owns the coordinate formulas used by MSM
 bucket reduction, keeping raw affine coordinates private to the curve implementation.
 
 FFT and MSM are sibling modules for bulk arithmetic over fields and curves.
-`curve::msm` also re-exports `msm` for existing callers.
 Both depend on `exec`, which supplies shared contracts
 without owning threads or allocating a pool. Within FFT, `planning` resolves
 geometry and scratch, `request` describes the requested operation, and
 `normalization` applies inverse scaling. The `fft/execution` and `msm/execution`
 modules own their plans and task kernels; `exec/execution` owns the common protocol.
-All three modules also export `run` as a compatibility name for `execution`.
 
 These are source modules within one library crate. Runtime arithmetic kernels
 stay in Udon; Bento supplies compile-time derivation and code generation.

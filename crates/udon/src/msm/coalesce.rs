@@ -52,8 +52,9 @@ impl CoalescingKey {
 ///
 /// ```
 /// use zakura_udon::{
-///     curve::{Pallas, Point, msm::{CoalescingKey, CoalescingPlan}},
+///     curve::{Pallas, Point},
 ///     field::Fq,
+///     msm::{CoalescingKey, CoalescingPlan},
 /// };
 /// let g = Point::<Pallas>::GENERATOR;
 /// let bases = [g, g.neg(), Point::IDENTITY];

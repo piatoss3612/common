@@ -17,7 +17,7 @@ use crate::{
     exec::execution::test_pool as run_pool,
     exec::{
         SerialExecutor, TaskBudget,
-        run::{Identity, Outcome, ReadView, TaskError, TaskStorage},
+        execution::{Identity, Outcome, ReadView, TaskError, TaskStorage},
     },
     field::{CanonicalUint, PastaField},
     msm::execution::test_buffers::{Arena, Lease, Work},

@@ -30,8 +30,9 @@ use crate::field::{ConstantPrefix, PastaField, ReductionState};
 ///
 /// ```
 /// use zakura_udon::{
-///     curve::{Pallas, Point, msm::BasisSum},
+///     curve::{Pallas, Point},
 ///     field::{ConstantPrefix, Fq},
+///     msm::BasisSum,
 /// };
 /// let bases = [Point::<Pallas>::GENERATOR; 4];
 /// let basis = BasisSum::prepare(&bases);

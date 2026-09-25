@@ -89,8 +89,7 @@ fn curve<C: PastaCurve>() {
     let options = ExecutionOptions::default()
         .with_task_budget(TaskBudget::new(3).unwrap())
         .with_memory_limit(8192);
-    // The compatibility path and the primary MSM path name the same plan.
-    let plan: arithmetic::msm::run::MsmPlan<C> = MsmPlan::<C>::new(1, options).unwrap();
+    let plan = MsmPlan::<C>::new(1, options).unwrap();
     assert_eq!(BatchPlan::<C>::storage_len(1, options).unwrap(), (1, 1));
     let mut records = [ScalarStorage::<C>::ZERO];
     let prepared = PreparedScalars::prepare(

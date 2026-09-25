@@ -24,8 +24,9 @@ use crate::field::PastaField;
 ///
 /// ```
 /// use zakura_udon::{
-///     curve::{Pallas, Point, ProjectivePoint, msm::SuffixBasis},
+///     curve::{Pallas, Point, ProjectivePoint},
 ///     field::Fp,
+///     msm::SuffixBasis,
 /// };
 /// let bases = [Point::<Pallas>::GENERATOR; 3];
 /// let mut sums = [Point::IDENTITY; 3];

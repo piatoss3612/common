@@ -22,7 +22,7 @@ use super::{
 };
 use crate::exec::{
     SerialExecutor,
-    run::{
+    execution::{
         Completion, Frontier, Identity, Kernel, Outcome, ReadView, Task, TaskError, TaskKey,
         TaskStorage,
     },

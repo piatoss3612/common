@@ -24,12 +24,14 @@ use crate::exec::run::{
     TaskStorage,
 };
 
+pub(super) mod batch;
 mod chunks;
 mod driver;
 mod fragmented;
 #[cfg(test)]
 mod tests;
-pub use super::schedule::{BatchPlan, JobStorage, WorkerStorage};
+pub use super::schedule::JobStorage;
+pub use batch::{BatchPlan, WorkerStorage};
 pub use chunks::{ChunkRequest, ParallelMsmRun};
 
 /// Base metadata for scalar rows supplied by producer tasks after binding.
@@ -208,14 +210,7 @@ impl<C: PastaCurve> MsmPlan<C> {
             options,
             crate::exec::TaskBudget::SERIAL,
         );
-        let job = schedule::layout::<C>(
-            cap,
-            geometry,
-            false,
-            false,
-            false,
-            schedule::Options::new(super::BatchOptions::new(options)),
-        )?;
+        let job = schedule::fixed_geometry::<C>(cap, geometry, options)?;
         let retained = Requirements {
             scalars: cap,
             digits: geometry.storage_len(cap)?,
@@ -251,7 +246,7 @@ impl<C: PastaCurve> MsmPlan<C> {
         })
     }
 
-    pub(super) fn from_job(
+    fn from_job(
         terms: usize,
         options: ArithmeticOptions,
         job: schedule::JobStorage,
@@ -350,14 +345,7 @@ impl<C: PastaCurve> MsmPlan<C> {
     fn with_grain(mut self, grain: NonZeroUsize) -> Result<Self, CurveError> {
         self.cap = self.cap.min(grain.get());
         self.options.chunk_size = NonZeroUsize::new(self.cap.max(1));
-        self.job = schedule::layout::<C>(
-            self.cap,
-            self.job.geometry,
-            false,
-            false,
-            false,
-            schedule::Options::new(super::BatchOptions::new(self.options)),
-        )?;
+        self.job = schedule::fixed_geometry::<C>(self.cap, self.job.geometry, self.options)?;
         self.retained.scalars = self.cap;
         self.retained.digits = self.job.geometry.storage_len(self.cap)?;
         self.retained_for_slots(NonZeroUsize::MIN)?;

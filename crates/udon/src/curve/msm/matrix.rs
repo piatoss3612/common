@@ -333,7 +333,7 @@ fn run_tasks<C: PastaCurve, X: Executor>(
         let left_workers = workers / 2;
         let left_tasks = (results.len() / lanes) / 2;
         let (left, right) = results.split_at_mut(left_tasks * lanes);
-        let (a, b) = schedule::split_scratch(scratch, work.times::<C>(left_workers).unwrap());
+        let (a, b) = scratch.split(work.times::<C>(left_workers).unwrap());
         executor.join(
             || {
                 run_tasks(

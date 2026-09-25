@@ -427,7 +427,7 @@ impl<'a, C: PastaCurve> Input<'a, C> {
         )?;
         let scratch = scratch.checked(plan.requirements);
         let mut output = [ProjectivePoint::IDENTITY];
-        schedule::execute(
+        run::batch::execute(
             &plan,
             core::slice::from_ref(self),
             &mut output,
@@ -683,6 +683,19 @@ impl<'a, C: PastaCurve> Scratch<'a, C> {
             indices: self.indices,
         }
     }
+    /// Splits every buffer after its first `left` elements.
+    fn split(self, left: Requirements) -> (Self, Self) {
+        let (sa, sb) = self.scalars.split_at_mut(left.scalars);
+        let (da, db) = self.digits.split_at_mut(left.digits);
+        let (aa, ab) = self.affine.split_at_mut(left.affine);
+        let (pa, pb) = self.projective.split_at_mut(left.projective);
+        let (fa, fb) = self.field.split_at_mut(left.field);
+        let (ia, ib) = self.indices.split_at_mut(left.indices);
+        (
+            Scratch::new(sa, da, aa, pa, fa, ia),
+            Scratch::new(sb, db, ab, pb, fb, ib),
+        )
+    }
     fn capacity(&self) -> Requirements {
         Requirements {
             scalars: self.scalars.len(),
@@ -744,7 +757,7 @@ fn execute_batch<C: PastaCurve, X: Executor>(
     assert_length("output", inputs.len(), output.len());
     let plan = schedule::Plan::new(inputs, options)?;
     let scratch = scratch.checked(plan.requirements);
-    schedule::execute(&plan, inputs, output, executor, scratch);
+    run::batch::execute(&plan, inputs, output, executor, scratch);
     Ok(())
 }
 

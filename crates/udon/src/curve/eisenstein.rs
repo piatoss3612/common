@@ -64,18 +64,69 @@ impl<C: PastaCurve> EisensteinScalar<C> {
     }
 
     fn certify_batch(mut self) -> Self {
-        self.batch_safe = Some(super::eisenstein_batch::ladder_safe::<C>(self.digits()));
+        self.batch_safe = Some(ladder_safe::<C>(self.digits()));
         self
     }
 
     pub(super) fn batch_safe(&self) -> bool {
         self.batch_safe
-            .unwrap_or_else(|| super::eisenstein_batch::ladder_safe::<C>(self.digits()))
+            .unwrap_or_else(|| ladder_safe::<C>(self.digits()))
     }
 
     pub(super) fn digits(&self) -> &[u8] {
         &self.digits[..self.len]
     }
+
+    /// Wraps recoded digits directly, bypassing scalar decomposition.
+    #[cfg(test)]
+    pub(super) fn from_digits(digits: &[u8]) -> Self {
+        let mut stored = [0; MAX_DIGITS];
+        stored[..digits.len()].copy_from_slice(digits);
+        Self {
+            digits: stored,
+            len: digits.len(),
+            batch_safe: None,
+            marker: PhantomData,
+        }
+    }
+}
+
+/// The scalar-field value of one nonzero digit code.
+pub(super) fn digit_scalar<C: PastaCurve>(code: u8) -> PastaField<C::Scalar> {
+    let value = usize::from(code - 1);
+    let (mut a, mut b) = REPRESENTATIVES[value / 6];
+    for _ in 0..(value % 6) / 2 {
+        (a, b) = (-b, a - b);
+    }
+    let signed = |x: i8| {
+        let f = PastaField::<C::Scalar>::from_u64(u64::from(x.unsigned_abs()));
+        if x < 0 { f.neg() } else { f }
+    };
+    let d = signed(a).add(&signed(b).mul(&PastaField::<C::Scalar>::ZETA));
+    if value & 1 == 1 { d.neg() } else { d }
+}
+
+fn ladder_safe<C: PastaCurve>(digits: &[u8]) -> bool {
+    let Some((&top, rest)) = digits.split_last() else {
+        return false;
+    };
+    let mut s = digit_scalar::<C>(top);
+    // All nonidentity bases have the same prime order. Checking the schedule
+    // in the scalar field is therefore exact for every base in the batch,
+    // including schedules whose intermediate integer coefficients wrap.
+    for &code in rest.iter().rev() {
+        let twice = s.double();
+        if code == 0 {
+            s = twice;
+        } else {
+            let d = digit_scalar::<C>(code);
+            if d.reduce() == s.reduce() || d.reduce() == twice.neg().reduce() {
+                return false;
+            }
+            s = twice.add(&d);
+        }
+    }
+    true
 }
 
 /// Coefficients `a + b*lambda`, in retained table order.

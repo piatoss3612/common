@@ -403,43 +403,6 @@ fn prepare_affine<C: PastaCurve, B: CurveTableEntry<C>, E: CurveTableEntry<C>>(
     }
 }
 
-fn digit_scalar<C: PastaCurve>(code: u8) -> PastaField<C::Scalar> {
-    let value = usize::from(code - 1);
-    let (mut a, mut b) = eisenstein::REPRESENTATIVES[value / 6];
-    for _ in 0..(value % 6) / 2 {
-        (a, b) = (-b, a - b);
-    }
-    let signed = |x: i8| {
-        let f = PastaField::<C::Scalar>::from_u64(u64::from(x.unsigned_abs()));
-        if x < 0 { f.neg() } else { f }
-    };
-    let d = signed(a).add(&signed(b).mul(&PastaField::<C::Scalar>::ZETA));
-    if value & 1 == 1 { d.neg() } else { d }
-}
-
-pub(super) fn ladder_safe<C: PastaCurve>(digits: &[u8]) -> bool {
-    let Some((&top, rest)) = digits.split_last() else {
-        return false;
-    };
-    let mut s = digit_scalar::<C>(top);
-    // All nonidentity bases have the same prime order. Checking the schedule
-    // in the scalar field is therefore exact for every base in the batch,
-    // including schedules whose intermediate integer coefficients wrap.
-    for &code in rest.iter().rev() {
-        let twice = s.double();
-        if code == 0 {
-            s = twice;
-        } else {
-            let d = digit_scalar::<C>(code);
-            if d.reduce() == s.reduce() || d.reduce() == twice.neg().reduce() {
-                return false;
-            }
-            s = twice.add(&d);
-        }
-    }
-    true
-}
-
 fn multiply_inner<C: PastaCurve, E: CurveTableEntry<C>, X: Executor>(
     entries: &[E],
     digits: &[u8],
@@ -589,12 +552,15 @@ mod tests {
             &SerialExecutor,
         );
         for (digits, safe) in cases {
-            assert_eq!(ladder_safe::<C>(digits), safe);
+            assert_eq!(
+                EisensteinScalar::<C>::from_digits(digits).batch_safe(),
+                safe
+            );
             let mut scalar = PastaField::ZERO;
             for &code in digits.iter().rev() {
                 scalar = scalar.double();
                 if code != 0 {
-                    scalar = scalar.add(&digit_scalar::<C>(code));
+                    scalar = scalar.add(&eisenstein::digit_scalar::<C>(code));
                 }
             }
             if digits.len() == len {

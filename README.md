@@ -58,7 +58,7 @@ evaluation, linear division, and geometric sums over `Field`, and the
 generators, and Poseidon instances of the Pasta cycle
 to one `Cycle` marker for proof systems generic over a curve cycle. The
 [`poseidon` module](crates/udon/src/poseidon/mod.rs) carries the fixed Pasta
-Poseidon parameters without requiring features.
+Poseidon parameters and their consumer views, also requiring `traits`.
 Fields implement `bento::Pod`, so downstream build scripts can generate them
 with Udon and embed their Montgomery representations for direct runtime use;
 see the [field storage example](docs/POD.md#storing-field-elements).

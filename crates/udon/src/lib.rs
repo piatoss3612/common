@@ -19,8 +19,8 @@
 //! shared by arithmetic and downstream workloads. [`exec::execution`] supplies bounded
 //! task claims and typed admission for application schedulers; [`msm::execution`]
 //! and [`fft::execution`] expose incremental arithmetic with exclusively leased scratch.
-//! [`poseidon`] carries the fixed Pasta Poseidon parameters. The optional
-//! `traits` feature adds the unstable generic interfaces described below.
+//! The optional `traits` feature adds the unstable generic interfaces described
+//! below and the fixed Pasta Poseidon parameters in `poseidon`.
 //!
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
@@ -50,7 +50,8 @@
 //!
 //! `traits` enables unstable consumer interfaces at their domain paths:
 //! `field::Field` and `FieldAdapter`, `curve::Affine` and `Projective`,
-//! generic field, FFT, and polynomial helpers, `cycle`, and the Poseidon trait views.
+//! generic field, FFT, and polynomial helpers, `cycle`, and `poseidon` (parameters
+//! and consumer views).
 //! `field::FieldAdapter`, `curve::AffineAdapter`, and `curve::ProjectiveAdapter`
 //! implement these contracts and Rust arithmetic operators through native methods.
 //! Native field, curve, FFT, and MSM kernels do not depend on the consumer traits.
@@ -83,6 +84,7 @@ pub mod fft;
 pub mod field;
 pub mod msm;
 pub mod polynomial;
+#[cfg(feature = "traits")]
 pub mod poseidon;
 
 pub use field::pasta::STORED_FORM;

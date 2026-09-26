@@ -54,8 +54,10 @@ parameters, cycle bindings, encoding bounds, arithmetic, resource limits,
 and the FFT/MSM execution protocols. This also applies to assertions that use
 only public methods. Pasta consumer adapter tests share `src/field/pasta/tests/`
 and `src/curve/pasta/tests/` with the native arithmetic suites; only the tests
-of optional consumer interfaces require `traits`. Sampling, canonical-integer
-access, and dot-product helpers are tested without features too.
+of optional consumer interfaces require `traits`. Poseidon parameter tests and
+cycle tests also require `traits` and run in CI's trait-enabled configurations.
+Sampling, canonical-integer access, and dot-product helpers are tested without
+features too.
 External suites check behavior that needs a separate
 consumer: macro resolution, independent trait implementations, caller-owned
 adapters, and artifact generation and embedding. They are grouped by the API

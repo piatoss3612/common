@@ -17,7 +17,6 @@ fn main() {
     );
     let lifted = udon::curve::PallasProjective::from_point(&PallasPoint::GENERATOR);
     assert_eq!(lifted.to_point(), PallasPoint::GENERATOR);
-    assert_eq!(udon::poseidon::PALLAS_BASE.rounds(), 64);
 
     assert_eq!(udon::field::low_u64(&value), 7);
     assert_eq!(
@@ -140,6 +139,13 @@ fn main() {
     }
     #[cfg(feature = "cycle")]
     cycle::<udon::cycle::Pasta>();
+    #[cfg(feature = "poseidon-parameters")]
+    {
+        let base: udon::poseidon::PoseidonParameters<Fp, 5> = udon::poseidon::PALLAS_BASE;
+        let scalar: udon::poseidon::PoseidonParameters<Fq, 5> = udon::poseidon::PALLAS_SCALAR;
+        assert_eq!(base.rounds(), 64);
+        assert_eq!(scalar.rounds(), 64);
+    }
     #[cfg(feature = "poseidon")]
     poseidon::<udon::poseidon::PoseidonFp>();
 }

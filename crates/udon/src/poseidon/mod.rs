@@ -6,8 +6,11 @@
 //! (<https://extgit.isec.tugraz.at/krypto/hadeshash>, through the
 //! `daira/pasta-hadeshash` fork). This module carries the parameters only.
 //! The permutation and the sponge built over them belong to the protocol
-//! that hashes with them. The unstable `traits` feature also exposes
-//! `PoseidonPermutation` and the `PoseidonFp` / `PoseidonFq` views.
+//! that hashes with them. This module, including its [`PoseidonPermutation`]
+//! trait and [`PoseidonFp`] / [`PoseidonFq`] views, requires the unstable `traits`
+//! feature.
+//!
+//! These protocol parameters are likely to move to a separate crate.
 
 use crate::field::{Fp, Fq};
 
@@ -70,9 +73,7 @@ pub const PALLAS_SCALAR: PoseidonParameters<Fq, 5> = PoseidonParameters {
     mds: &pallas_scalar::MDS,
 };
 
-#[cfg(feature = "traits")]
 mod traits;
-#[cfg(feature = "traits")]
 pub use traits::{PoseidonFp, PoseidonFq, PoseidonPermutation};
 
 #[cfg(test)]

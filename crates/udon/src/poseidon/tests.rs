@@ -93,7 +93,7 @@ const PALLAS_BASE_DIGEST: u128 = 0x38e9_acb9_6cdd_7395_996b_f0e8_a8f2_cacf;
 const PALLAS_SCALAR_DIGEST: u128 = 0x2cba_8835_0552_681a_0f83_ea33_ccb4_049a;
 
 /// Recomputes the digests after a verified table change:
-/// `cargo test -p zakura-udon --lib poseidon::tests::print_digests -- --ignored --nocapture`.
+/// `cargo test -p zakura-udon --features traits --lib poseidon::tests::print_digests -- --ignored --nocapture`.
 #[test]
 #[ignore = "prints the digests for pinning; run explicitly"]
 fn print_digests() {

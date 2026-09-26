@@ -11,7 +11,8 @@ fn consumer_interfaces_require_the_traits_feature() {
         ("domain", "unresolved import"),
         ("polynomial", "cannot find function `evaluate_iter`"),
         ("cycle", "could not find `cycle`"),
-        ("poseidon", "cannot find trait `PoseidonPermutation`"),
+        ("poseidon", "could not find `poseidon`"),
+        ("poseidon-parameters", "could not find `poseidon`"),
     ];
     let features: Vec<_> = cases.iter().map(|&(feature, _)| feature).collect();
     let consumer = Consumer::new(

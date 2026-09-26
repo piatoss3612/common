@@ -54,19 +54,14 @@ fn check_poseidon<M: PrimeModulus, P: PoseidonPermutation<FieldAdapter<M>>, cons
     assert_eq!(P::ALPHA, parameters.alpha);
     let rows = instance.round_constants();
     assert_eq!(rows.len(), parameters.rounds());
+    // Separate uses of a const table need not share an address.
     for (row, expected) in rows.iter().zip(parameters.round_constants) {
-        assert!(core::ptr::eq(
-            FieldAdapter::as_slice(row.as_ref()),
-            &expected[..]
-        ));
+        assert_eq!(row.as_ref(), FieldAdapter::from_slice(expected));
     }
     let mds = instance.mds_matrix();
     assert_eq!(mds.len(), T);
     for (row, expected) in mds.iter().zip(parameters.mds) {
-        assert!(core::ptr::eq(
-            FieldAdapter::as_slice(row.as_ref()),
-            &expected[..]
-        ));
+        assert_eq!(row.as_ref(), FieldAdapter::from_slice(expected));
     }
 }
 

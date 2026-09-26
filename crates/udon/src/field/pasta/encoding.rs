@@ -9,6 +9,24 @@ use super::montgomery::{montgomery_multiply, montgomery_reduce, montgomery_reduc
 use super::word::{adc, compare_limbs, multiply_wide};
 use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus, ReductionState};
 
+/// Samples a Pasta field element by reducing 64 bytes from the caller's source.
+///
+/// Calls `fill` exactly once with the entire buffer. The callback must fill it
+/// with uniformly random bytes; cryptographic use requires a cryptographically
+/// secure source. Reduction uses [`PastaField::from_wide_bytes_reduced`], without
+/// rejection sampling or additional draws. For either Pasta modulus, the
+/// statistical distance from uniform is less than `2^-128`.
+pub fn random<M: PrimeModulus>(fill: impl FnOnce(&mut [u8; 64])) -> PastaField<M> {
+    let mut bytes = [0u8; 64];
+    fill(&mut bytes);
+    PastaField::from_wide_bytes_reduced(&bytes)
+}
+
+/// Returns the low 64 bits of a Pasta value's canonical integer representative.
+pub fn low_u64<M: PrimeModulus>(value: &PastaField<M, impl ReductionState>) -> u64 {
+    value.to_canonical_uint().limbs()[0]
+}
+
 /// Constructs an [`Fp`](crate::field::Fp) constant from hexadecimal text.
 ///
 /// Requires a string literal containing a canonical `0x`-prefixed, 64-digit
@@ -237,4 +255,11 @@ fn raw_product_sum<M: PrimeModulus>(
     }
     debug_assert_eq!(carry, 0);
     montgomery_reduce_unreduced::<M>(sum)
+}
+
+impl<M: PrimeModulus, S: ReductionState> From<u64> for PastaField<M, S> {
+    #[inline]
+    fn from(value: u64) -> Self {
+        Self::from_u64(value)
+    }
 }

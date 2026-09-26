@@ -127,6 +127,26 @@ impl Affine for Edwards {
             .map(|index| Self(SmallScalar::from(index)))
             .find(|point| point.to_bytes() == bytes)
     }
+    fn msm(scalars: &[Self::Scalar], bases: &[Self]) -> Self {
+        assert_eq!(
+            scalars.len(),
+            bases.len(),
+            "msm operands must have equal length"
+        );
+        scalars
+            .iter()
+            .zip(bases)
+            .map(|(scalar, base)| *base * scalar)
+            .sum()
+    }
+    fn batch_to_affine(points: &[Self], out: &mut [Self]) {
+        assert_eq!(
+            points.len(),
+            out.len(),
+            "batch normalization operands must have equal length"
+        );
+        out.copy_from_slice(points);
+    }
 }
 
 impl Projective for Edwards {

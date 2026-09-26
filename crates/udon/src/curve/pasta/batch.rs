@@ -67,7 +67,7 @@ fn normalize_full<C: PastaCurve>(
 ) {
     // Only nontrivial denominators enter the products. Skipped scratch slots
     // need no prefix because the reverse pass also skips them.
-    let mut products = NonzeroInversionLanes::new(PastaField::ONE);
+    let mut products = NonzeroInversionLanes::new(PastaField::ONE, PastaField::mul);
     for (index, (point, prefix)) in points.iter().zip(scratch.iter_mut()).enumerate() {
         if !point.is_identity()
             && !point.z.is_one()

@@ -34,13 +34,13 @@ private and can be borrowed through `coordinates()`. Affine coordinates use
 `Point::add`, `sub`, and `double` return `ProjectivePoint` without inversion.
 The caller decides when affine coordinates are needed and normalizes explicitly.
 
-Operators forward to these methods: `+`, `-`, and their assignment forms apply
-to `ProjectivePoint`, unary `-` to every representation, and `*` by a loose
-scalar to every representation, returning a `ProjectivePoint`. These operators
-are available without features. The unstable `traits` feature adds the
-[`Affine`](../crates/udon/src/curve/traits.rs) and `Projective` interfaces, exposing
-`Point` and `ProjectivePoint` to code generic over a curve, with the base and
-scalar fields as associated types implementing `Field`.
+Native point types do not implement arithmetic operators. The unstable
+`traits` feature adds `AffineAdapter<C>` and `ProjectiveAdapter<C>`, transparent
+wrappers implementing [`Affine`](../crates/udon/src/curve/consumer/traits.rs) and
+`Projective`. These consumer types provide operators and use `FieldAdapter`
+for coordinates and scalars. `as_inner()` and `into_inner()` expose native
+points; slice views borrow native buffers without copying. Generic operations
+continue to use the same native kernels.
 Canonical point encodings use an associated `Repr` type, so their width can
 differ between curves. The basic curve traits do not require a particular curve
 equation or an endomorphism. `EndomorphismAffine` and

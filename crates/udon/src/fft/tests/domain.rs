@@ -11,8 +11,8 @@ fn domain_scalars_are_consistent() {
         let size = domain.size() as u64;
         assert_eq!(domain.log_size(), log_size);
         assert_eq!(size, 1 << log_size);
-        assert_eq!(domain.root() * domain.inverse_root(), <Fp>::ONE);
-        assert_eq!(domain.size_inverse() * <Fp>::from_u64(size), <Fp>::ONE);
+        assert_eq!(domain.root().mul(&domain.inverse_root()), <Fp>::ONE);
+        assert_eq!(domain.size_inverse().mul(&<Fp>::from_u64(size)), <Fp>::ONE);
         assert_eq!(domain.root().pow_u64(size), <Fp>::ONE);
         if log_size > 0 {
             assert_ne!(domain.root().pow_u64(size / 2), <Fp>::ONE);
@@ -28,19 +28,24 @@ fn domain_scalars_are_consistent() {
 #[cfg(feature = "traits")]
 mod consumer {
     use super::*;
-    use crate::field::Field;
+    use crate::field::{Field, FieldAdapter};
+    type Fp = FieldAdapter<PallasBase>;
+    type Fq = FieldAdapter<PallasScalar>;
 
     #[test]
     fn field_domain_factory_uses_native_parameters() {
         fn check<M: PrimeModulus>() {
             for log_size in [0, 1, 4, 8, 16, 32, 33, u32::MAX] {
                 let native = Domain::<PastaField<M>>::new(log_size);
-                let generic = <PastaField<M> as Field>::domain(log_size);
-                assert_eq!(generic, native);
+                let generic = <FieldAdapter<M> as Field>::domain(log_size);
+                assert_eq!(
+                    generic.map(|domain| domain.map(FieldAdapter::into_inner)),
+                    native
+                );
                 if let (Ok(generic), Ok(native)) = (generic, native) {
-                    assert_eq!(generic.root(), native.root());
-                    assert_eq!(generic.inverse_root(), native.inverse_root());
-                    assert_eq!(generic.size_inverse(), native.size_inverse());
+                    assert_eq!(generic.root().into_inner(), native.root());
+                    assert_eq!(generic.inverse_root().into_inner(), native.inverse_root());
+                    assert_eq!(generic.size_inverse().into_inner(), native.size_inverse());
                 }
             }
         }
@@ -50,22 +55,24 @@ mod consumer {
 
     /// Horner evaluation: the quadratic oracle the transforms are checked against.
     fn evaluate<M: PrimeModulus>(
-        coefficients: &[PastaField<M>],
-        x: PastaField<M>,
-    ) -> PastaField<M> {
-        coefficients
-            .iter()
-            .rev()
-            .fold(PastaField::ZERO, |accumulator, coefficient| {
-                accumulator.mul(&x).add(coefficient)
-            })
+        coefficients: &[FieldAdapter<M>],
+        x: FieldAdapter<M>,
+    ) -> FieldAdapter<M> {
+        FieldAdapter::new(
+            coefficients
+                .iter()
+                .rev()
+                .fold(PastaField::ZERO, |accumulator, coefficient| {
+                    accumulator.mul(x.as_inner()).add(coefficient.as_inner())
+                }),
+        )
     }
 
     fn transforms<M: PrimeModulus>() {
         for log_size in 0..=8 {
-            let domain = Domain::<PastaField<M>>::new(log_size).unwrap();
-            let coefficients: Vec<PastaField<M>> = (0..domain.size())
-                .map(|index| PastaField::<M>::DELTA.pow_u64(index as u64 + 1))
+            let domain = FieldAdapter::<M>::domain(log_size).unwrap();
+            let coefficients: Vec<FieldAdapter<M>> = (0..domain.size())
+                .map(|index| FieldAdapter::<M>::DELTA.pow_u64(index as u64 + 1))
                 .collect();
 
             let mut values = coefficients.clone();
@@ -95,10 +102,16 @@ mod consumer {
 
     fn large_transforms<M: PrimeModulus>() {
         for log_size in 9..=13 {
-            let domain = Domain::<PastaField<M>>::new(log_size).unwrap();
-            let original = inputs::<M>(domain.size());
+            let domain = FieldAdapter::<M>::domain(log_size).unwrap();
+            let original: Vec<_> = inputs::<M>(domain.size())
+                .into_iter()
+                .map(FieldAdapter::new)
+                .collect();
             let mut expected = original.clone();
-            reference::transform(&mut expected, &domain.root());
+            reference::transform(
+                FieldAdapter::as_slice_mut(&mut expected),
+                domain.root().as_inner(),
+            );
             let mut actual = original.clone();
             assert_eq!(
                 reference::count_transforms(|| domain.transform(&mut actual)),
@@ -111,9 +124,9 @@ mod consumer {
             actual.copy_from_slice(&original);
             expected.copy_from_slice(&original);
             reference::inverse_transform(
-                &mut expected,
-                &domain.inverse_root(),
-                &domain.size_inverse(),
+                FieldAdapter::as_slice_mut(&mut expected),
+                domain.inverse_root().as_inner(),
+                domain.size_inverse().as_inner(),
             );
             assert_eq!(
                 reference::count_transforms(|| domain.inverse_transform(&mut actual)),
@@ -131,7 +144,7 @@ mod consumer {
 
     #[test]
     fn field_transform_hooks_reject_wrong_lengths_before_writes() {
-        let domain = Domain::<Fp>::new(3).unwrap();
+        let domain = Fp::domain(3).unwrap();
         for transform in [<Fp as Field>::fft, <Fp as Field>::ifft] {
             for length in [0, 3, 4, 7, 9] {
                 let mut values = vec![Fp::DELTA; length];
@@ -145,7 +158,7 @@ mod consumer {
     #[test]
     fn domain_elements_are_consistent() {
         for log_size in 0..=8 {
-            let domain = Domain::<Fp>::new(log_size).unwrap();
+            let domain = Fp::domain(log_size).unwrap();
             let size = domain.size() as u64;
             assert_eq!(
                 domain.root(),
@@ -159,16 +172,16 @@ mod consumer {
                 assert!(domain.vanishing(element).is_zero());
                 power *= domain.root();
             }
-            for outsider in [<Fp>::from_u64(2), <Fp>::from_u64(3), <Fp>::DELTA] {
+            for outsider in [<Fp>::from(2), <Fp>::from(3), <Fp>::DELTA] {
                 let expected = outsider.pow_u64(size) - <Fp>::ONE;
                 assert_eq!(domain.vanishing(outsider), expected);
                 assert_eq!(domain.contains(outsider), expected.is_zero());
             }
         }
 
-        let trivial = Domain::<Fq>::new(0).unwrap();
+        let trivial = Fq::domain(0).unwrap();
         assert!(trivial.contains(<Fq>::ONE));
-        assert!(!trivial.contains(<Fq>::ONE.neg()));
+        assert!(!trivial.contains(-<Fq>::ONE));
     }
 
     /// Lagrange evaluations match the basis polynomials interpolated through the
@@ -176,7 +189,7 @@ mod consumer {
     /// a prefix without touching the scratch tail.
     #[test]
     fn lagrange_evaluations_match_the_interpolated_basis() {
-        let domain = Domain::<Fp>::new(5).unwrap();
+        let domain = Fp::domain(5).unwrap();
         let size = domain.size();
 
         let mut basis = Vec::with_capacity(size);
@@ -243,7 +256,7 @@ mod consumer {
     #[test]
     #[should_panic(expected = "exceed the domain size")]
     fn lagrange_evaluations_reject_more_than_the_domain_size() {
-        let domain = Domain::<Fp>::new(2).unwrap();
+        let domain = Fp::domain(2).unwrap();
         let _ =
             domain.lagrange_evaluations(<Fp>::DELTA, &mut [<Fp>::ZERO; 5], &mut [<Fp>::ZERO; 5]);
     }
@@ -252,36 +265,44 @@ mod consumer {
     fn lagrange_evaluations_use_native_ranges_with_bounded_scratch() {
         fn check<M: PrimeModulus>() {
             for log_size in [0, 1, 3, 5] {
-                let domain = Domain::<PastaField<M>>::new(log_size).unwrap();
+                let domain = FieldAdapter::<M>::domain(log_size).unwrap();
                 let nodes: Vec<_> = domain.elements().collect();
                 for point in nodes
                     .iter()
                     .copied()
-                    .chain([PastaField::ZERO, PastaField::DELTA])
+                    .chain([FieldAdapter::ZERO, FieldAdapter::DELTA])
                 {
                     for count in [0, 1, domain.size() / 2, domain.size()] {
-                        let mut expected = vec![PastaField::ZERO; count];
+                        let mut expected = vec![FieldAdapter::ZERO; count];
                         domain
+                            .map(FieldAdapter::into_inner)
                             .subgroup()
-                            .evaluate_lagrange(&point, 0..count, &mut expected, &mut [])
+                            .evaluate_lagrange(
+                                point.as_inner(),
+                                0..count,
+                                FieldAdapter::as_slice_mut(&mut expected),
+                                &mut [],
+                            )
                             .unwrap();
                         for capacity in [0, 1, count / 2, count, count + 2] {
-                            let mut values = vec![PastaField::DELTA; count];
-                            let mut scratch = vec![PastaField::DELTA; capacity];
+                            let mut values = vec![FieldAdapter::DELTA; count];
+                            let mut scratch = vec![FieldAdapter::DELTA; capacity];
                             assert_eq!(
                                 crate::fft::domain::count_size_powers(|| {
                                     assert_eq!(
-                                        crate::fft::generic::count_lagrange_evaluations(|| {
-                                            assert_eq!(
-                                                domain.lagrange_evaluations(
-                                                    point,
-                                                    &mut values,
-                                                    &mut scratch
-                                                ),
-                                                nodes.iter().position(|node| *node == point),
-                                            );
-                                        }),
-                                        0
+                                        crate::fft::generic::count_native_lagrange_evaluations(
+                                            || {
+                                                assert_eq!(
+                                                    domain.lagrange_evaluations(
+                                                        point,
+                                                        &mut values,
+                                                        &mut scratch
+                                                    ),
+                                                    nodes.iter().position(|node| *node == point),
+                                                );
+                                            }
+                                        ),
+                                        1
                                     );
                                 }),
                                 1
@@ -291,7 +312,7 @@ mod consumer {
                                 scratch
                                     .iter()
                                     .skip(count)
-                                    .all(|value| *value == PastaField::DELTA)
+                                    .all(|value| *value == FieldAdapter::DELTA)
                             );
                         }
                     }
@@ -304,7 +325,7 @@ mod consumer {
 
     #[test]
     fn field_lagrange_hook_rejects_long_output_before_writes() {
-        let domain = Domain::<Fp>::new(2).unwrap();
+        let domain = Fp::domain(2).unwrap();
         let mut values = [Fp::DELTA; 5];
         let mut scratch = [Fp::DELTA; 5];
         assert!(
@@ -320,7 +341,7 @@ mod consumer {
     #[test]
     #[should_panic(expected = "transform input length")]
     fn domain_transform_rejects_the_wrong_length() {
-        let domain = Domain::<Fp>::new(3).unwrap();
+        let domain = Fp::domain(3).unwrap();
         domain.transform(&mut [<Fp>::ONE; 4]);
     }
 }

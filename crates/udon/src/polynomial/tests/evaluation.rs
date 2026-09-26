@@ -200,6 +200,7 @@ fn invalid_shapes_preserve_buffers() {
 #[cfg(feature = "traits")]
 mod consumer {
     use super::*;
+    use crate::field::FieldAdapter;
     use crate::field::pasta::test_support::{count_mul_adds, field_samples};
     use crate::field::{PallasBase, PallasScalar, dot};
     use crate::polynomial::{evaluate_iter, geometric_sum};
@@ -221,7 +222,11 @@ mod consumer {
                     let mut actual = PastaField::ZERO;
                     assert_eq!(
                         count_mul_adds(|| {
-                            actual = evaluate_iter(&coefficients, point);
+                            actual = evaluate_iter(
+                                FieldAdapter::from_slice(&coefficients),
+                                FieldAdapter::new(point),
+                            )
+                            .into_inner();
                         }),
                         count.saturating_sub(1)
                     );
@@ -250,7 +255,7 @@ mod consumer {
                         power = power.mul(&ratio);
                     }
                     assert_eq!(
-                        geometric_sum(ratio, terms),
+                        geometric_sum(FieldAdapter::new(ratio), terms).into_inner(),
                         naive,
                         "ratio {ratio:?}, {terms} terms"
                     );

@@ -449,10 +449,13 @@ fn single_slice_batches<M: PrimeModulus>() {
     let methods: &[(&str, Invert<PastaField<M>>)] = &[
         ("native", batch_invert::<M>),
         #[cfg(feature = "traits")]
-        (
-            "trait",
-            <PastaField<M> as crate::field::Field>::batch_invert,
-        ),
+        ("trait", |values, scratch| {
+            use crate::field::{Field, FieldAdapter};
+            FieldAdapter::batch_invert(
+                FieldAdapter::from_slice_mut(values),
+                FieldAdapter::from_slice_mut(scratch),
+            );
+        }),
     ];
     let p = modulus::<M>();
     let samples = samples::<M>(9);

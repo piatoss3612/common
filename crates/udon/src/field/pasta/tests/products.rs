@@ -1,6 +1,9 @@
+//! Pasta product helpers and consumer dispatch to the same native kernels.
+
 use crate::field::pasta::count_slice_sums;
 use crate::field::pasta::test_support::{assert_value, limbs, modulus, samples};
-use crate::field::{Field, Fp, PallasBase, PallasScalar, PastaField, PrimeModulus, dot, dot_iter};
+use crate::field::{Fp, PallasBase, PallasScalar, PastaField, PrimeModulus, dot, dot_iter};
+
 use num_bigint::BigUint;
 use std::{vec, vec::Vec};
 
@@ -43,13 +46,28 @@ fn check_dot<M: PrimeModulus>() {
                 strided_expected += x * y;
             }
         }
-        for product in [
-            dot::<PastaField<M>>,
-            <PastaField<M> as Field>::sum_of_products_slice,
-        ] {
+        assert_eq!(
+            count_slice_sums(|| assert_value(dot(&lhs, &rhs), &expected)),
+            1
+        );
+        #[cfg(feature = "traits")]
+        {
+            use crate::field::{Field, FieldAdapter};
+            let lhs = FieldAdapter::from_slice(&lhs);
+            let rhs = FieldAdapter::from_slice(&rhs);
             assert_eq!(
-                count_slice_sums(|| assert_value(product(&lhs, &rhs), &expected)),
+                count_slice_sums(|| assert_value(
+                    FieldAdapter::<M>::sum_of_products_slice(lhs, rhs).into_inner(),
+                    &expected,
+                )),
                 1
+            );
+            assert_value(
+                FieldAdapter::<M>::sum_of_product_pairs(
+                    lhs.iter().step_by(2).zip(rhs.iter().step_by(2)),
+                )
+                .into_inner(),
+                &strided_expected,
             );
         }
         assert_eq!(
@@ -64,6 +82,23 @@ fn check_dot<M: PrimeModulus>() {
             // pairs, including the shortened sequence from step_by(2).
             usize::from((2..=3).contains(&length))
                 + usize::from((2..=3).contains(&length.div_ceil(2)))
+        );
+        let reduced_lhs: Vec<_> = lhs.iter().copied().map(PastaField::reduce).collect();
+        let reduced_rhs: Vec<_> = rhs.iter().copied().map(PastaField::reduce).collect();
+        assert_value(dot(&reduced_lhs, &rhs), &expected);
+        assert_value(dot(&lhs, &reduced_rhs), &expected);
+        assert_value(dot(&reduced_lhs, &reduced_rhs), &expected);
+        assert_value(
+            dot_iter(reduced_lhs.iter().rev(), rhs.iter().rev()),
+            &expected,
+        );
+        assert_value(
+            dot_iter(lhs.iter().rev(), reduced_rhs.iter().rev()),
+            &expected,
+        );
+        assert_value(
+            dot_iter(reduced_lhs.iter().rev(), reduced_rhs.iter().rev()),
+            &expected,
         );
         let maximal = PastaField::<M>::from_montgomery_limbs(limbs(&(&p * 2u8 - 1u8)));
         let maximal_integer = BigUint::from_bytes_le(&maximal.to_bytes());

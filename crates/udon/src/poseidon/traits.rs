@@ -1,7 +1,7 @@
 //! Consumer views of the fixed Poseidon parameter sets.
 
 use super::{PALLAS_BASE, PALLAS_SCALAR};
-use crate::field::{Field, Fp, Fq};
+use crate::field::{Field, FieldAdapter, PallasBase, PallasScalar};
 
 /// A Poseidon permutation over `F`, described to code generic over the
 /// instance.
@@ -44,11 +44,11 @@ pub trait PoseidonPermutation<F: Field>: Send + Sync + 'static {
     fn mds_matrix(&self) -> &[Self::Row];
 }
 
-/// The [`PALLAS_BASE`] instance as a [`PoseidonPermutation`] over [`Fp`].
+/// The [`PALLAS_BASE`] instance as a [`PoseidonPermutation`] over [`FieldAdapter<PallasBase>`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PoseidonFp;
 
-/// The [`PALLAS_SCALAR`] instance as a [`PoseidonPermutation`] over [`Fq`].
+/// The [`PALLAS_SCALAR`] instance as a [`PoseidonPermutation`] over [`FieldAdapter<PallasScalar>`].
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PoseidonFq;
 
@@ -64,15 +64,15 @@ macro_rules! poseidon_permutation {
             const ALPHA: u32 = $parameters.alpha;
 
             fn round_constants(&self) -> &[Self::Row] {
-                $parameters.round_constants
+                FieldAdapter::from_rows($parameters.round_constants)
             }
 
             fn mds_matrix(&self) -> &[Self::Row] {
-                $parameters.mds
+                FieldAdapter::from_rows($parameters.mds)
             }
         }
     };
 }
 
-poseidon_permutation!(PoseidonFp, Fp, PALLAS_BASE);
-poseidon_permutation!(PoseidonFq, Fq, PALLAS_SCALAR);
+poseidon_permutation!(PoseidonFp, FieldAdapter<PallasBase>, PALLAS_BASE);
+poseidon_permutation!(PoseidonFq, FieldAdapter<PallasScalar>, PALLAS_SCALAR);

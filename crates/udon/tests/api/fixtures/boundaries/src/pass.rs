@@ -2,7 +2,10 @@
 
 mod facade {
     #[cfg(feature = "traits")]
-    pub use arithmetic::{curve::Affine, field::Field};
+    pub use arithmetic::{
+        curve::{Affine, AffineAdapter, ProjectiveAdapter},
+        field::{Field, FieldAdapter},
+    };
     pub use arithmetic::{
         curve::{AffinePoint, Pallas, PastaCurve, Vesta, glv_decompose},
         field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, Reduced},
@@ -61,12 +64,14 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
     assert_eq!(reduced.mul(&two).reduce(), four.reduce());
     assert!(reduced < four.reduce());
 
-    // Loose values compare as field elements, and the operator forms are
-    // reachable through the facade for both fields.
+    // Loose values compare as field elements; arithmetic stays explicit.
     assert_eq!(two.double(), four);
     assert_ne!(two, four);
-    assert_eq!(two + two, four);
-    assert_eq!(two * PastaField::from_u64(3), PastaField::from_u64(6));
+    assert_eq!(two.add(&two), four);
+    assert_eq!(
+        two.mul(&PastaField::<M>::from_u64(3)),
+        PastaField::from_u64(6)
+    );
 }
 
 fn curve<C: PastaCurve>() {
@@ -112,14 +117,14 @@ mod consumer {
     use super::*;
 
     pub(super) fn field<M: PrimeModulus>() {
-        let two = PastaField::<M>::from_u64(2);
+        let two = FieldAdapter::<M>::from(2);
         let four = two.square();
         fn generic<F: Field>(value: F) -> F {
             value.square() * F::root_of_unity(1).unwrap() + F::ONE
         }
         assert_eq!(
             generic(two),
-            PastaField::<M>::ONE.neg() * four + PastaField::<M>::ONE
+            -FieldAdapter::<M>::ONE * four + FieldAdapter::<M>::ONE
         );
 
         // Both entry points work with only a Field bound and bounded scratch.
@@ -165,10 +170,10 @@ mod consumer {
         }
         assert_eq!(
             commit(
-                &[generator.to_point()],
-                &[PastaField::<C::Scalar>::from_u64(2)]
+                &[AffineAdapter::new(generator.to_point())],
+                &[FieldAdapter::<C::Scalar>::from(2)]
             ),
-            generator.to_projective().double(),
+            ProjectiveAdapter::new(generator.to_projective().double()),
         );
 
         fn generic_group<P: arithmetic::curve::Projective>(point: P, affine: P::Affine) {
@@ -181,7 +186,10 @@ mod consumer {
             assert_eq!(core::iter::empty::<P>().sum::<P>(), P::identity());
             assert_eq!(core::iter::empty::<&P>().sum::<P>(), P::identity());
         }
-        generic_group(generator.to_projective(), generator.to_point());
+        generic_group(
+            ProjectiveAdapter::new(generator.to_projective()),
+            AffineAdapter::new(generator.to_point()),
+        );
     }
 }
 

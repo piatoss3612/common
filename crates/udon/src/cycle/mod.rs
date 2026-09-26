@@ -21,26 +21,27 @@
 //!
 //! ```
 //! use zakura_udon::{
-//!     curve::{PallasPoint, VestaPoint},
+//!     curve::{PallasPoint, VestaPoint, Projective},
 //!     cycle::{Cycle, FixedGenerators, Generators, Pasta, PastaParams},
-//!     field::{Fp, Fq},
+//!     field::{Fp, Fq, FieldAdapter, PallasScalar},
 //! };
 //!
 //! // The parameter owner keeps derived generators alive for the program's
 //! // lifetime; a leaked vector stands in for embedded or baked points here.
-//! let multiple = |k| (PallasPoint::GENERATOR * Fq::from_u64(k)).to_point();
+//! let multiple = |k| PallasPoint::GENERATOR.mul_projective(&Fq::from_u64(k)).to_point();
 //! let pallas: &'static [PallasPoint] = Vec::leak(vec![multiple(1), multiple(2)]);
 //! static VESTA: [VestaPoint; 1] = [VestaPoint::GENERATOR];
 //! let params = PastaParams::new(
 //!     Generators::new(pallas, multiple(3)),
-//!     Generators::new(&VESTA, (VestaPoint::GENERATOR * Fp::from_u64(2)).to_point()),
+//!     Generators::new(&VESTA, VestaPoint::GENERATOR.mul_projective(&Fp::from_u64(2)).to_point()),
 //! );
 //! let generators = Pasta::nested_generators(&params);
 //! assert!(generators.are_distinct());
 //! // g[0] * 2 + h * 3 = 2G + 9G
+//! type Scalar = FieldAdapter<PallasScalar>;
 //! let commitment =
-//!     (generators.g()[0] * Fq::from_u64(2) + *generators.h() * Fq::from_u64(3)).to_point();
-//! assert_eq!(commitment, multiple(11));
+//!     (generators.g()[0] * Scalar::from(2) + *generators.h() * Scalar::from(3)).to_affine();
+//! assert_eq!(commitment.into_inner(), multiple(11));
 //! ```
 
 use crate::{curve::EndomorphismAffine, field::Field, poseidon::PoseidonPermutation};

@@ -1,10 +1,27 @@
 //! Optional generic operations over the shared FFT domain descriptor.
 
 use super::lagrange::Finish;
-use super::{CosetDomain, Domain, LagrangeError};
+use super::{CosetDomain, Domain, FftError, LagrangeError};
 use crate::field::{Field, PastaField, PrimeModulus, ReductionState};
 
 impl<F: Field> Domain<F> {
+    /// Constructs a domain using the field's canonical roots and normalization.
+    ///
+    /// This constructs the descriptor for implementations of [`Field::domain`]
+    /// without calling that method. Generic callers use `F::domain(log_size)`
+    /// to select the field's constructor; Pasta adapters wrap the native one.
+    ///
+    /// Size one is supported. Returns [`FftError::InvalidSize`] above the
+    /// field's two-adicity, or [`FftError::SizeOverflow`] if the element count
+    /// does not fit `usize` or its slice would exceed `isize::MAX` bytes.
+    pub fn from_field(log_size: u32) -> Result<Self, FftError> {
+        let root = F::root_of_unity(log_size).ok_or(FftError::InvalidSize)?;
+        let inverse_root = F::root_of_unity_inverse(log_size).ok_or(FftError::InvalidSize)?;
+        Self::from_roots(log_size, root, inverse_root, || {
+            F::power_of_two_inverse(log_size)
+        })
+    }
+
     /// Returns the elements `1, root, root^2, ...` in natural order.
     ///
     /// Each element is one multiplication from its predecessor, so the
@@ -87,14 +104,20 @@ impl<F: Field> Domain<F> {
     }
 }
 
-impl<F: Copy + Eq + core::ops::MulAssign> Domain<F> {
+impl<F: Copy + Eq> Domain<F> {
     /// Returns the `i` with `root^i = x` for an `x` known to be in the subgroup.
     ///
     /// The discrete logarithm is taken bit by bit: `root^(size/2)` is the
     /// unique element of order two, so `x^(size / 2^(j+1))` is `-1` exactly
     /// when bit `j` of the logarithm is set, once the lower bits have been
     /// cleared. This costs `O(log_size^2)` squarings instead of a scan.
-    fn index_of(self, mut x: F, one: F, square: impl Fn(&F) -> F) -> usize {
+    fn index_of(
+        self,
+        mut x: F,
+        one: F,
+        square: impl Fn(&F) -> F,
+        multiply: impl Fn(&F, &F) -> F,
+    ) -> usize {
         let mut index = 0;
         // `root^-(2^j)` at iteration `j`.
         let mut inverse_power = self.inverse_root();
@@ -105,7 +128,7 @@ impl<F: Copy + Eq + core::ops::MulAssign> Domain<F> {
             }
             if test != one {
                 index |= 1 << bit;
-                x *= inverse_power;
+                x = multiply(&x, &inverse_power);
             }
             inverse_power = square(&inverse_power);
         }
@@ -123,6 +146,8 @@ impl<M: PrimeModulus> CosetDomain<M> {
         output: &mut [PastaField<M>],
         scratch: &mut [PastaField<M>],
     ) -> Result<Option<usize>, LagrangeError> {
+        #[cfg(test)]
+        NATIVE_LAGRANGE_COUNT.with(|count| count.set(count.get() + 1));
         let completion = self.prepare_lagrange(point, 0..output.len(), output)?;
         let domain = self.domain();
         let index = if output.is_empty() || self.size() == 1 {
@@ -130,9 +155,14 @@ impl<M: PrimeModulus> CosetDomain<M> {
             // membership. A singleton basis is one even at an off-domain point.
             let relative = self.relative_point(point);
             let power = domain.power_of_size(relative, PastaField::square);
-            power
-                .is_one()
-                .then(|| domain.index_of(relative, PastaField::ONE, PastaField::square))
+            power.is_one().then(|| {
+                domain.index_of(
+                    relative,
+                    PastaField::ONE,
+                    PastaField::square,
+                    PastaField::mul,
+                )
+            })
         } else {
             match completion.finish {
                 Finish::Scale(_) => None,
@@ -141,6 +171,7 @@ impl<M: PrimeModulus> CosetDomain<M> {
                     self.relative_point(point),
                     PastaField::ONE,
                     PastaField::square,
+                    PastaField::mul,
                 )),
             }
         };
@@ -149,53 +180,14 @@ impl<M: PrimeModulus> CosetDomain<M> {
     }
 }
 
-// Generic fields may use the field-operation formula; Pasta overrides the hook
-// with its native range evaluator and scaled batch inversion.
-pub(crate) fn lagrange_evaluations<F: Field>(
-    domain: Domain<F>,
-    x: F,
-    evaluations: &mut [F],
-    scratch: &mut [F],
-) -> Option<usize> {
-    assert!(
-        evaluations.len() <= domain.size(),
-        "Lagrange evaluations exceed the domain size"
-    );
-    #[cfg(test)]
-    LAGRANGE_COUNT.with(|count| count.set(count.get() + 1));
-    let vanishing = domain.vanishing(x);
-    if vanishing.is_zero() {
-        let index = domain.index_of(x, F::ONE, F::square);
-        for (position, evaluation) in evaluations.iter_mut().enumerate() {
-            *evaluation = if position == index { F::ONE } else { F::ZERO };
-        }
-        return Some(index);
-    }
-
-    // Every difference is nonzero because x is outside the domain.
-    let mut power = F::ONE;
-    for evaluation in evaluations.iter_mut() {
-        *evaluation = x - power;
-        power *= domain.root();
-    }
-    F::batch_invert(evaluations, scratch);
-
-    let mut numerator = vanishing * domain.size_inverse();
-    for evaluation in evaluations.iter_mut() {
-        *evaluation *= numerator;
-        numerator *= domain.root();
-    }
-    None
-}
-
 #[cfg(test)]
 std::thread_local! {
-    static LAGRANGE_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+    static NATIVE_LAGRANGE_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
-pub(super) fn count_lagrange_evaluations(f: impl FnOnce()) -> usize {
-    LAGRANGE_COUNT.with(|count| {
+pub(super) fn count_native_lagrange_evaluations(f: impl FnOnce()) -> usize {
+    NATIVE_LAGRANGE_COUNT.with(|count| {
         let before = count.get();
         f();
         count.get() - before

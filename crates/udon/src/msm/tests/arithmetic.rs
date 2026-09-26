@@ -308,7 +308,8 @@ mod consumer {
     /// It must agree with the retained ladder across the streaming geometry,
     /// with identity bases and zero scalars mixed in, for both curves.
     fn affine_trait_msm<C: PastaCurve>() {
-        use crate::curve::Affine;
+        use crate::curve::{Affine, AffineAdapter};
+        use crate::field::FieldAdapter;
 
         let generator = Point::<C>::GENERATOR;
         for size in [
@@ -340,7 +341,11 @@ mod consumer {
                 expected = expected.add(&test_reference::multiply(scalar, |sum| sum.add(&base)));
             }
             let (actual, calls) = crate::msm::test_support::count_kernels(|| {
-                <Point<C> as Affine>::msm(&scalars, &bases)
+                <AffineAdapter<C> as Affine>::msm(
+                    FieldAdapter::from_slice(&scalars),
+                    AffineAdapter::from_slice(&bases),
+                )
+                .into_inner()
             });
             assert_eq!(actual, expected, "{size} terms");
             assert_eq!(

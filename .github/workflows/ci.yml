@@ -151,6 +151,11 @@ jobs:
           cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --test field --test curve pod:: | tee "$RUNNER_TEMP/udon-pod.log"
           grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/udon-pod.log"
           ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/udon-pod.log"
+      - name: Check transparent consumer views
+        run: |
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --lib --features traits transparent_views | tee "$RUNNER_TEMP/udon-views.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/udon-views.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/udon-views.log"
 
   portability:
     name: Target portability contracts

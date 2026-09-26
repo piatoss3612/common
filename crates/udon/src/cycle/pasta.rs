@@ -2,8 +2,8 @@
 
 use super::{Cycle, PallasGenerators, VestaGenerators};
 use crate::{
-    curve::{PallasPoint, VestaPoint},
-    field::{Fp, Fq},
+    curve::{AffineAdapter, Pallas, Vesta},
+    field::{FieldAdapter, PallasBase, PallasScalar},
     poseidon::{PoseidonFp, PoseidonFq},
 };
 
@@ -33,16 +33,16 @@ impl PastaParams {
     }
 }
 
-/// The Pasta cycle: Pallas over [`Fp`] with scalars in [`Fq`] as the nested
-/// curve, and Vesta over [`Fq`] with scalars in [`Fp`] as the host curve.
+/// The Pasta cycle: Pallas over [`crate::field::Fp`] with scalars in [`crate::field::Fq`] as the nested
+/// curve, and Vesta over [`crate::field::Fq`] with scalars in [`crate::field::Fp`] as the host curve.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Pasta;
 
 impl Cycle for Pasta {
-    type CircuitField = Fp;
-    type ScalarField = Fq;
-    type NestedCurve = PallasPoint;
-    type HostCurve = VestaPoint;
+    type CircuitField = FieldAdapter<PallasBase>;
+    type ScalarField = FieldAdapter<PallasScalar>;
+    type NestedCurve = AffineAdapter<Pallas>;
+    type HostCurve = AffineAdapter<Vesta>;
     type NestedGenerators = PallasGenerators;
     type HostGenerators = VestaGenerators;
     type CircuitPoseidon = PoseidonFp;

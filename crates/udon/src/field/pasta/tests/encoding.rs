@@ -147,3 +147,34 @@ fn checked_encodings_enforce_both_moduli() {
     check_encoding_boundaries::<PallasBase>();
     check_encoding_boundaries::<PallasScalar>();
 }
+
+#[test]
+fn random_uses_one_full_width_draw() {
+    fn check<M: PrimeModulus>() {
+        let mut state = 0x8f1bbcdc_b7a56463;
+        for input in [[0u8; 64], [0xff; 64], deterministic_bytes::<64>(&mut state)] {
+            let mut draws = 0;
+            let sample = crate::field::random::<M>(|bytes| {
+                draws += 1;
+                bytes.copy_from_slice(&input);
+            });
+            assert_eq!(draws, 1);
+            assert_value(sample, &BigUint::from_bytes_le(&input));
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
+#[test]
+fn low_u64_reads_the_canonical_integer() {
+    fn check<M: PrimeModulus>() {
+        for (value, integer) in samples::<M>(64) {
+            let expected = integer.to_u64_digits().first().copied().unwrap_or(0);
+            assert_eq!(crate::field::low_u64(&value), expected);
+            assert_eq!(crate::field::low_u64(&value.reduce()), expected);
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}

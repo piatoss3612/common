@@ -365,3 +365,11 @@ pub(super) fn multiply_canonical<C: PastaCurve>(
     }
     result
 }
+
+impl<C: PastaCurve> From<Point<C>> for ProjectivePoint<C> {
+    /// Lifts the point without inversion; see [`ProjectivePoint::from_point`].
+    #[inline]
+    fn from(point: Point<C>) -> Self {
+        Self::from_point(&point)
+    }
+}

@@ -90,10 +90,12 @@ allocating workspaces, and worker runtimes belong to their downstream owners.
 
 | Source module | Responsibility |
 | --- | --- |
-| `field/` | Public field exports and optional consumer traits and generic helpers |
+| `field/` | Public exports of native field APIs and optional consumer interfaces |
 | `field/pasta/` | Pasta representations, parameters, and optimized field implementations |
-| `curve/` | Public curve exports and optional consumer affine/projective contracts |
+| `field/consumer/` | Optional field trait and its operator adapter |
+| `curve/` | Public exports of native curve APIs and optional consumer interfaces |
 | `curve/pasta/` | Pasta point representations, coordinate kernels, and fixed-base tables |
+| `curve/consumer/` | Optional curve traits and their affine/projective operator adapters |
 | `fft/` | Domains, full transforms, layouts, tables, and transform plans |
 | `msm/` | Multiscalar multiplication, scalar preparation, scheduling, and task plans |
 | `exec/` | Shared executor contracts, operation budgets, and scoped work helpers |
@@ -105,11 +107,18 @@ allocating workspaces, and worker runtimes belong to their downstream owners.
 The `field` and `curve` modules explicitly re-export their concrete types;
 callers use paths such as `field::Fp` and `curve::Pallas`.
 Their private Pasta modules keep representation-specific code separate from
-generic contracts. Each domain's `traits.rs` keeps its optional consumer
-contracts and Pasta implementations together. The unstable `traits` feature
-gates those interfaces and their generic helpers, including polynomial iterators and `cycle`.
+generic contracts. Each domain's `consumer/traits.rs` defines its optional
+contracts; `consumer/adapter.rs` owns the wrappers, their operators, and their
+trait implementations. The unstable `traits` feature gates each `consumer`
+module, along with generic polynomial iterators and `cycle`.
 Native arithmetic must not depend on the consumer contracts, even when the
-feature is enabled. Standard Rust operators stay beside the concrete types.
+feature is enabled. Native types expose explicit arithmetic methods. The
+optional `field::FieldAdapter`, `curve::AffineAdapter`, and
+`curve::ProjectiveAdapter` wrappers own the operator implementations and borrow
+native buffers through transparent views without allocation or copying.
+The `random`, `low_u64`, `dot`, and `dot_iter` helpers use concrete Pasta values
+and need no feature. They live beside native encoding and product arithmetic
+under `field/pasta/` and are re-exported from `field`.
 Field butterfly kernels live in `field/pasta/butterfly/`;
 they are the small arithmetic steps used by `fft/`, not a second transform API.
 Likewise, `curve/pasta/reduce.rs` owns the coordinate formulas used by MSM
@@ -130,8 +139,9 @@ at the crate root for artifact producers and consumers.
 
 Keep arithmetic, encoding, cycle, and resource-limit assertions beside their
 implementation, including checks written entirely through public methods.
-Generic helper tests belong under `field/tests`; Pasta representation and
-kernel tests belong under `field/pasta`, beside the code they exercise.
+Keep Pasta field and curve suites under `field/pasta/tests` and
+`curve/pasta/tests`, including their consumer adapter and helper tests.
+Enable tests of the optional consumer interfaces with `traits`.
 Use separate consumers for macro resolution, independent trait implementations,
 caller-owned adapters, and generated artifacts. Group them by field, curve, FFT,
 MSM, or shared execution. Put each domain's storage tests and consumer fixtures in

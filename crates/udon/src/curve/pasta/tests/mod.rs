@@ -4,6 +4,8 @@ use crate::field::PrimeModulus;
 use crate::field::pasta::test_support::field_samples;
 use std::{vec, vec::Vec};
 
+#[cfg(feature = "traits")]
+mod adapter;
 mod arithmetic;
 mod contracts;
 mod digits;

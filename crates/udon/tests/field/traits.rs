@@ -3,7 +3,10 @@ use super::field_model;
 #[test]
 fn one_field_bound_supports_roots_transforms_and_accumulation() {
     use num_bigint::BigUint;
-    use zakura_udon::field::Field;
+    use zakura_udon::{
+        fft::{Domain, FftError},
+        field::Field,
+    };
 
     fn check<F: Field>() {
         let integer = |value: F| BigUint::from_bytes_le(value.to_bytes().as_ref());
@@ -25,6 +28,19 @@ fn one_field_bound_supports_roots_transforms_and_accumulation() {
         );
         assert_eq!(F::ZETA.pow_u64(3), F::ONE);
         assert_eq!(F::ZETA == F::ONE, &order % 3u8 != BigUint::from(0u8));
+        assert_eq!(F::root_of_unity(F::TWO_ADICITY + 1), None);
+        assert_eq!(F::root_of_unity_inverse(F::TWO_ADICITY + 1), None);
+        assert_eq!(F::domain(F::TWO_ADICITY + 1), Err(FftError::InvalidSize));
+        assert_eq!(
+            Domain::<F>::from_field(F::TWO_ADICITY + 1),
+            Err(FftError::InvalidSize)
+        );
+        for value in [0, 1, 1u128 << 64, u128::MAX] {
+            assert_eq!(
+                integer(F::from_u128(value)),
+                BigUint::from(value) % &modulus
+            );
+        }
 
         assert_eq!(F::reduce(F::Accumulator::default()), F::ZERO);
         let mut accumulator = F::Accumulator::default();
@@ -32,6 +48,10 @@ fn one_field_bound_supports_roots_transforms_and_accumulation() {
         for i in 0..65 {
             let lhs = -F::from(i * i + 1);
             let rhs = F::from(i * 7 + 3);
+            assert_eq!(
+                integer(lhs.mul_add(&rhs, &F::ONE)),
+                (integer(lhs) * integer(rhs) + 1u8) % &modulus
+            );
             F::mul_accumulate(&mut accumulator, &lhs, &rhs);
             expected += lhs * rhs;
         }
@@ -39,6 +59,16 @@ fn one_field_bound_supports_roots_transforms_and_accumulation() {
 
         for log_size in 0..=F::TWO_ADICITY.min(3) {
             let domain = F::domain(log_size).unwrap();
+            let from_field = Domain::<F>::from_field(log_size).unwrap();
+            assert_eq!(from_field, domain);
+            assert_eq!(from_field.root(), domain.root());
+            assert_eq!(from_field.inverse_root(), domain.inverse_root());
+            assert_eq!(from_field.size_inverse(), domain.size_inverse());
+            assert_eq!(domain.root() * domain.inverse_root(), F::ONE);
+            assert_eq!(
+                F::from(domain.size() as u64) * domain.size_inverse(),
+                F::ONE
+            );
             let coefficients: Vec<_> = (0..domain.size())
                 .map(|i| F::from((i * i + 7) as u64))
                 .collect();
@@ -54,11 +84,41 @@ fn one_field_bound_supports_roots_transforms_and_accumulation() {
             }
             domain.inverse_transform(&mut evaluations);
             assert_eq!(evaluations, coefficients);
+
+            let nodes: Vec<_> = domain.elements().collect();
+            for point in nodes.iter().copied().chain([F::ZERO]) {
+                // Interpolate each basis directly, independently of the
+                // evaluator's vanishing-polynomial formula.
+                let basis: Vec<_> = nodes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, node)| {
+                        nodes
+                            .iter()
+                            .enumerate()
+                            .filter(|(j, _)| *j != i)
+                            .map(|(_, other)| (point - other) * (*node - other).invert().unwrap())
+                            .product::<F>()
+                    })
+                    .collect();
+                for count in [0, 1, domain.size()] {
+                    for capacity in [0, 1, count + 1] {
+                        let mut prefix = vec![F::ONE; count];
+                        let mut scratch = vec![F::ONE; capacity];
+                        assert_eq!(
+                            domain.lagrange_evaluations(point, &mut prefix, &mut scratch),
+                            nodes.iter().position(|node| *node == point)
+                        );
+                        assert_eq!(prefix, basis[..count]);
+                        assert!(scratch.iter().skip(count).all(|value| *value == F::ONE));
+                    }
+                }
+            }
         }
     }
 
-    check::<zakura_udon::field::Fp>();
-    check::<zakura_udon::field::Fq>();
+    check::<zakura_udon::field::FieldAdapter<zakura_udon::field::PallasBase>>();
+    check::<zakura_udon::field::FieldAdapter<zakura_udon::field::PallasScalar>>();
     check::<field_model::BlsBase>();
     check::<field_model::BlsScalar>();
     check::<field_model::JubjubScalar>();
@@ -68,17 +128,17 @@ fn one_field_bound_supports_roots_transforms_and_accumulation() {
 
 #[test]
 #[should_panic(expected = "lengths must agree")]
-fn default_product_sums_reject_unequal_lengths() {
+fn reference_product_sums_reject_unequal_lengths() {
     use field_model::Small;
-    use zakura_udon::field::{Field, dot};
+    use zakura_udon::field::Field;
 
-    let _ = dot(&[Small::ONE, Small::ONE], &[Small::ONE]);
+    let _ = Small::sum_of_products_slice(&[Small::ONE, Small::ONE], &[Small::ONE]);
 }
 
 #[test]
-fn default_product_sums_match_integer_arithmetic() {
+fn reference_product_sums_match_integer_arithmetic() {
     use num_bigint::BigUint;
-    use zakura_udon::field::{Field, dot, dot_iter};
+    use zakura_udon::field::Field;
 
     fn check<F: Field>() {
         let lhs: Vec<_> = (0..65).map(|i| -F::from(i * i + 1)).collect();
@@ -92,13 +152,14 @@ fn default_product_sums_match_integer_arithmetic() {
                 .zip(rhs)
                 .map(|(lhs, rhs)| integer(*lhs) * integer(*rhs))
                 .sum();
-            assert_eq!(integer(dot(lhs, rhs)), &expected % &modulus);
             assert_eq!(
                 integer(F::sum_of_products_slice(lhs, rhs)),
                 &expected % &modulus
             );
             assert_eq!(
-                integer(dot_iter(lhs.iter().rev(), rhs.iter().rev())),
+                integer(F::sum_of_product_pairs(
+                    lhs.iter().rev().zip(rhs.iter().rev())
+                )),
                 expected % &modulus
             );
         }
@@ -113,7 +174,7 @@ fn default_product_sums_match_integer_arithmetic() {
 #[test]
 fn generic_representations_match_the_field_modulus() {
     use num_bigint::BigUint;
-    use zakura_udon::field::{Field, low_u64, random};
+    use zakura_udon::field::Field;
 
     fn check<F: Field>()
     where
@@ -151,36 +212,54 @@ fn generic_representations_match_the_field_modulus() {
             for (index, bit) in bits.as_ref().iter().enumerate() {
                 assert_eq!(*bit, integer.bit(index as u64));
             }
-            assert_eq!(low_u64(&value), digits.first().copied().unwrap_or(0));
             assert_eq!(value.square().sqrt().unwrap().square(), value.square());
             if !value.is_zero() {
                 assert_eq!(value * value.invert().unwrap(), F::ONE);
             }
         }
         assert!(F::from_limbs(F::MODULUS).is_none());
-        let mut draws = 0;
-        let sample = random::<F>(|bytes| {
-            draws += 1;
-            bytes.fill(0xa5);
-        });
-        assert_eq!(draws, 1);
-        assert_eq!(
-            BigUint::from_bytes_le(sample.to_bytes().as_ref()),
-            BigUint::from_bytes_le(&[0xa5; 64]) % &modulus
-        );
+        for input in [[0u8; 64], [0xa5; 64], [0xff; 64]] {
+            let mut draws = 0;
+            let sample = F::random(|bytes| {
+                draws += 1;
+                bytes.copy_from_slice(&input);
+            });
+            assert_eq!(draws, 1);
+            assert_eq!(sample, F::from_uniform_bytes(&input));
+            assert_eq!(
+                BigUint::from_bytes_le(sample.to_bytes().as_ref()),
+                BigUint::from_bytes_le(&input) % &modulus
+            );
+        }
         let mut values = [F::ZERO, F::from(2), F::from(3)];
         F::batch_invert(&mut values, &mut [F::ZERO; 1]);
         assert_eq!(values[0], F::ZERO);
         assert_eq!(values[1] * F::from(2), F::ONE);
         assert_eq!(values[2] * F::from(3), F::ONE);
+        let originals = [F::ZERO, F::from(2), F::ZERO, F::from(3), -F::ONE];
+        for capacity in [0, 1, 2, 5, 7] {
+            let mut values = originals;
+            let (first, second) = values.split_at_mut(2);
+            let mut scratch = vec![F::ONE; capacity];
+            F::batch_invert_groups(&mut [first, &mut [], second], &mut scratch);
+            for (original, inverse) in originals.iter().zip(values) {
+                assert_eq!(inverse, original.invert().unwrap_or(F::ZERO));
+            }
+            assert!(
+                scratch
+                    .iter()
+                    .skip(originals.len())
+                    .all(|value| *value == F::ONE)
+            );
+        }
         assert_eq!(
             zakura_udon::polynomial::evaluate_iter(&[F::from(2), F::from(3)], F::from(4)),
             F::from(14)
         );
     }
 
-    check::<zakura_udon::field::Fp>();
-    check::<zakura_udon::field::Fq>();
+    check::<zakura_udon::field::FieldAdapter<zakura_udon::field::PallasBase>>();
+    check::<zakura_udon::field::FieldAdapter<zakura_udon::field::PallasScalar>>();
     check::<field_model::BlsBase>();
     check::<field_model::BlsScalar>();
     check::<field_model::JubjubScalar>();

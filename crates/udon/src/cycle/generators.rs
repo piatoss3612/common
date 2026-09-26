@@ -1,6 +1,6 @@
 //! Borrowed commitment generators and their construction checks.
 
-use crate::curve::{Affine, Pallas, PastaCurve, Point, Vesta};
+use crate::curve::{Affine, AffineAdapter, Pallas, PastaCurve, Point, Vesta};
 
 /// Fixed generators of one curve with unknown discrete logarithm relationships
 /// to each other.
@@ -95,13 +95,13 @@ const fn same_limbs(a: &[u64; 4], b: &[u64; 4]) -> bool {
     a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]
 }
 
-impl<C: PastaCurve> FixedGenerators<Point<C>> for Generators<C> {
-    fn g(&self) -> &[Point<C>] {
-        self.g
+impl<C: PastaCurve> FixedGenerators<AffineAdapter<C>> for Generators<C> {
+    fn g(&self) -> &[AffineAdapter<C>] {
+        AffineAdapter::from_slice(self.g)
     }
 
-    fn h(&self) -> &Point<C> {
-        &self.h
+    fn h(&self) -> &AffineAdapter<C> {
+        AffineAdapter::from_ref(&self.h)
     }
 }
 

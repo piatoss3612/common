@@ -302,7 +302,8 @@ fn invalid_divisors_preserve_storage() {
 mod consumer {
     use super::*;
     use crate::field::pasta::test_support::{count_mul_adds, field_samples};
-    use crate::field::{Fp, PallasBase, PallasScalar};
+    use crate::field::{FieldAdapter, PallasBase, PallasScalar};
+    type Fp = FieldAdapter<PallasBase>;
     use crate::polynomial::{divide_linear_rev, evaluate};
 
     #[test]
@@ -316,8 +317,12 @@ mod consumer {
                     let mut descending = Vec::new();
                     assert_eq!(
                         count_mul_adds(|| {
-                            descending =
-                                divide_linear_rev(original.iter().copied(), point).collect();
+                            descending = divide_linear_rev(
+                                original.iter().copied().map(FieldAdapter::new),
+                                FieldAdapter::new(point),
+                            )
+                            .map(FieldAdapter::into_inner)
+                            .collect();
                         }),
                         count.saturating_sub(2)
                     );
@@ -343,14 +348,14 @@ mod consumer {
     #[test]
     fn descending_quotient_reads_coefficients_incrementally() {
         let reads = core::cell::Cell::new(0);
-        let values = [1, 2, 3, 4].map(Fp::from_u64);
+        let values = [1, 2, 3, 4].map(Fp::from);
         let coefficients = values.into_iter().inspect(|_| reads.set(reads.get() + 1));
-        let mut quotient = divide_linear_rev(coefficients, Fp::from_u64(2));
+        let mut quotient = divide_linear_rev(coefficients, Fp::from(2));
         assert_eq!(reads.get(), 1);
-        assert_eq!(quotient.next(), Some(Fp::from_u64(4)));
+        assert_eq!(quotient.next(), Some(Fp::from(4)));
         assert_eq!(reads.get(), 3);
-        assert_eq!(quotient.next(), Some(Fp::from_u64(11)));
-        assert_eq!(quotient.next(), Some(Fp::from_u64(24)));
+        assert_eq!(quotient.next(), Some(Fp::from(11)));
+        assert_eq!(quotient.next(), Some(Fp::from(24)));
         assert_eq!(quotient.next(), None);
         assert_eq!(reads.get(), 4);
     }

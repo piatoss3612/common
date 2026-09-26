@@ -52,7 +52,11 @@ cancel superseded runs for the same PR or branch.
 Unit tests live with the implementation they exercise, including Poseidon
 parameters, cycle bindings, encoding bounds, arithmetic, resource limits,
 and the FFT/MSM execution protocols. This also applies to assertions that use
-only public methods. External suites check behavior that needs a separate
+only public methods. Pasta consumer adapter tests share `src/field/pasta/tests/`
+and `src/curve/pasta/tests/` with the native arithmetic suites; only the tests
+of optional consumer interfaces require `traits`. Sampling, canonical-integer
+access, and dot-product helpers are tested without features too.
+External suites check behavior that needs a separate
 consumer: macro resolution, independent trait implementations, caller-owned
 adapters, and artifact generation and embedding. They are grouped by the API
 they exercise. Paths below are relative to

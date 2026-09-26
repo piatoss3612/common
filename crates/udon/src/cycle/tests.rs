@@ -1,10 +1,10 @@
-use crate::curve::Projective as _;
+use crate::curve::{Affine as _, Projective as _};
 use std::vec::Vec;
 
 use super::*;
 use crate::{
-    curve::{Pallas, PallasPoint, PallasProjective, PastaCurve, Point, Vesta, VestaPoint},
-    field::{Field, Fp, Fq},
+    curve::{Pallas, PallasPoint, PastaCurve, Point, ProjectiveAdapter, Vesta, VestaPoint},
+    field::{Field, FieldAdapter, Fp, PallasScalar, PastaField, PrimeModulus},
     poseidon::{PALLAS_BASE, PALLAS_SCALAR, PoseidonFp, PoseidonParameters},
 };
 
@@ -40,12 +40,12 @@ fn pasta_generators_are_reached_through_the_cycle() {
     assert!(pallas.g().iter().all(|point| !point.is_identity()));
     assert!(!pallas.h().is_identity());
 
-    let _: PallasProjective = pallas.g()[0] * Fq::from_u64(2);
+    let _: ProjectiveAdapter<Pallas> = pallas.g()[0] * FieldAdapter::<PallasScalar>::from(2);
 }
 
-fn check_poseidon<F: Field, P: PoseidonPermutation<F>, const T: usize>(
+fn check_poseidon<M: PrimeModulus, P: PoseidonPermutation<FieldAdapter<M>>, const T: usize>(
     instance: &P,
-    parameters: &PoseidonParameters<F, T>,
+    parameters: &PoseidonParameters<PastaField<M>, T>,
 ) {
     assert_eq!(P::T, parameters.width());
     assert_eq!(P::RATE, parameters.rate());
@@ -55,12 +55,20 @@ fn check_poseidon<F: Field, P: PoseidonPermutation<F>, const T: usize>(
     let rows = instance.round_constants();
     assert_eq!(rows.len(), parameters.rounds());
     for (row, expected) in rows.iter().zip(parameters.round_constants) {
-        assert_eq!(row.as_ref(), &expected[..]);
+        assert_eq!(FieldAdapter::as_slice(row.as_ref()), &expected[..]);
+        assert_eq!(
+            row.as_ref().as_ptr().cast::<PastaField<M>>(),
+            expected.as_ptr()
+        );
     }
     let mds = instance.mds_matrix();
     assert_eq!(mds.len(), T);
     for (row, expected) in mds.iter().zip(parameters.mds) {
-        assert_eq!(row.as_ref(), &expected[..]);
+        assert_eq!(FieldAdapter::as_slice(row.as_ref()), &expected[..]);
+        assert_eq!(
+            row.as_ref().as_ptr().cast::<PastaField<M>>(),
+            expected.as_ptr()
+        );
     }
 }
 
@@ -83,10 +91,14 @@ fn cycle_is_usable_through_generic_bounds() {
     }
     let params = params();
     let expected = params.vesta().g()[0]
+        .as_inner()
         .mul_projective(&Fp::from_u64(9))
-        .add(&params.vesta().h().to_projective())
+        .add(&params.vesta().h().as_inner().to_projective())
         .to_point();
-    assert_eq!(commit::<Pasta>(&params, Fp::from_u64(9)), expected);
+    assert_eq!(
+        commit::<Pasta>(&params, FieldAdapter::from(9)).into_inner(),
+        expected
+    );
     assert_eq!(width::<Pasta>(), 9);
 }
 

@@ -10,7 +10,10 @@
 
 use core::{iter, ops};
 use num_bigint::BigUint;
-use zakura_udon::{fft::Domain, field::Field};
+use zakura_udon::{
+    fft::{Domain, FftError},
+    field::Field,
+};
 
 macro_rules! binary {
     ($name:ident, $trait:ident, $method:ident, $assign:ident, $assign_method:ident, $body:expr) => {
@@ -122,6 +125,10 @@ macro_rules! reference_field {
                 *self * self
             }
 
+            fn mul_add(&self, multiplier: &Self, addend: &Self) -> Self {
+                Self::from_integer(self.integer() * multiplier.integer() + addend.integer())
+            }
+
             fn double(&self) -> Self {
                 *self + self
             }
@@ -134,12 +141,66 @@ macro_rules! reference_field {
                 Self::batch_invert_groups(&mut [values], scratch)
             }
 
+            fn batch_invert_groups(groups: &mut [impl AsMut<[Self]>], scratch: &mut [Self]) {
+                let length: usize = groups.iter_mut().map(|group| group.as_mut().len()).sum();
+                let batch_size = scratch.len().max(1);
+                // Exact integer division gives each cofactor independently of
+                // Udon's prefix-product algorithm. The integer model allocates;
+                // scratch only selects the number of shared inversions here.
+                for start in (0..length).step_by(batch_size) {
+                    let mut product = BigUint::from(1u8);
+                    let mut nonzero = false;
+                    for value in groups
+                        .iter_mut()
+                        .flat_map(|group| group.as_mut())
+                        .skip(start)
+                        .take(batch_size)
+                    {
+                        if !value.is_zero() {
+                            product *= value.integer();
+                            nonzero = true;
+                        }
+                    }
+                    if !nonzero {
+                        continue;
+                    }
+                    let inverse = product.modinv(&Self::modulus()).unwrap();
+                    for value in groups
+                        .iter_mut()
+                        .flat_map(|group| group.as_mut())
+                        .skip(start)
+                        .take(batch_size)
+                    {
+                        if !value.is_zero() {
+                            *value = Self::from_integer((&product / value.integer()) * &inverse);
+                        }
+                    }
+                }
+            }
+
             fn sqrt(&self) -> Option<Self> {
                 sqrt(self.integer(), Self::modulus()).map(Self::from_integer)
             }
 
             fn pow_u64(&self, exponent: u64) -> Self {
                 Self::from_integer(self.integer().modpow(&exponent.into(), &Self::modulus()))
+            }
+
+            fn sum_of_products_slice(lhs: &[Self], rhs: &[Self]) -> Self {
+                assert_eq!(lhs.len(), rhs.len(), "inner product lengths must agree");
+                Self::sum_of_product_pairs(lhs.iter().zip(rhs))
+            }
+
+            fn sum_of_product_pairs<'a>(
+                pairs: impl IntoIterator<Item = (&'a Self, &'a Self)>,
+            ) -> Self {
+                Self::from_integer(
+                    pairs.into_iter().map(|(lhs, rhs)| lhs.integer() * rhs.integer()).sum(),
+                )
+            }
+
+            fn from_u128(value: u128) -> Self {
+                Self::from_integer(value.into())
             }
 
             type Repr = [u8; $bytes];
@@ -170,6 +231,23 @@ macro_rules! reference_field {
                 Self::from_integer(BigUint::from_bytes_le(bytes))
             }
 
+            fn random(fill: impl FnOnce(&mut [u8; 64])) -> Self {
+                const {
+                    assert!(
+                        Self::NUM_BITS <= 384,
+                        "sampling requires a modulus of at most 384 bits"
+                    );
+                }
+                let mut bytes = [0u8; 64];
+                fill(&mut bytes);
+                Self::from_uniform_bytes(&bytes)
+            }
+
+            fn from_limbs(limbs: Self::Limbs) -> Option<Self> {
+                let integer = BigUint::from_bytes_le(&limbs.map(u64::to_le_bytes).concat());
+                (integer < Self::modulus()).then(|| Self::from_integer(integer))
+            }
+
             fn to_le_bits(&self) -> Self::Bits {
                 let integer = self.integer();
                 core::array::from_fn(|index| integer.bit(index as u64))
@@ -187,6 +265,10 @@ macro_rules! reference_field {
             const DELTA: Self = Self($delta);
             const ZETA: Self = Self($zeta);
 
+            fn domain(log_size: u32) -> Result<Domain<Self>, FftError> {
+                Domain::from_field(log_size)
+            }
+
             fn fft(domain: Domain<Self>, values: &mut [Self]) {
                 assert_eq!(values.len(), domain.size());
                 dft(values, domain.root(), Self::ONE);
@@ -195,6 +277,56 @@ macro_rules! reference_field {
             fn ifft(domain: Domain<Self>, values: &mut [Self]) {
                 assert_eq!(values.len(), domain.size());
                 dft(values, domain.inverse_root(), domain.size_inverse());
+            }
+
+            fn lagrange_evaluations(
+                domain: Domain<Self>,
+                point: Self,
+                evaluations: &mut [Self],
+                scratch: &mut [Self],
+            ) -> Option<usize> {
+                assert!(
+                    evaluations.len() <= domain.size(),
+                    "Lagrange evaluations exceed the domain size"
+                );
+                if let Some(index) = domain.elements().position(|node| node == point) {
+                    evaluations.fill(Self::ZERO);
+                    if let Some(value) = evaluations.get_mut(index) {
+                        *value = Self::ONE;
+                    }
+                    return Some(index);
+                }
+                for (value, node) in evaluations.iter_mut().zip(domain.elements()) {
+                    *value = point - node;
+                }
+                Self::batch_invert(evaluations, scratch);
+                let scale = domain.vanishing(point) * domain.size_inverse();
+                for (value, node) in evaluations.iter_mut().zip(domain.elements()) {
+                    *value *= scale * node;
+                }
+                None
+            }
+
+            fn root_of_unity(log_size: u32) -> Option<Self> {
+                (log_size <= Self::TWO_ADICITY).then(|| {
+                    let exponent = BigUint::from(1u8) << (Self::TWO_ADICITY - log_size) as usize;
+                    Self::from_integer(
+                        Self::ROOT_OF_UNITY.integer().modpow(&exponent, &Self::modulus()),
+                    )
+                })
+            }
+
+            fn root_of_unity_inverse(log_size: u32) -> Option<Self> {
+                (log_size <= Self::TWO_ADICITY).then(|| {
+                    let exponent = BigUint::from(1u8) << (Self::TWO_ADICITY - log_size) as usize;
+                    Self::from_integer(
+                        Self::ROOT_OF_UNITY_INVERSE.integer().modpow(&exponent, &Self::modulus()),
+                    )
+                })
+            }
+
+            fn power_of_two_inverse(log_size: u32) -> Self {
+                Self::TWO_INVERSE.pow_u64(u64::from(log_size))
             }
 
             type Accumulator = BigUint;

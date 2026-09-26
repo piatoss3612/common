@@ -1,10 +1,7 @@
 //! Pasta denominator inversion and record visitors.
 
 use super::{PastaField, PrimeModulus};
-use core::{
-    fmt,
-    ops::{Mul, MulAssign},
-};
+use core::fmt;
 
 /// Inverts a slice of nonzero field elements in place with one inversion.
 ///
@@ -28,7 +25,10 @@ pub(crate) fn invert_nonzero<M: PrimeModulus>(
     // Including the lane merge, n = values.len() needs 3*(n-1) multiplications
     // outside the inversion.
     let prefix = &mut prefix[..values.len()];
-    let mut products = InversionLanes([values[0], values[1]]);
+    let mut products = InversionLanes {
+        lanes: [values[0], values[1]],
+        multiply: PastaField::mul,
+    };
     for (i, (value, prefix)) in values.iter().zip(prefix.iter_mut()).enumerate().skip(2) {
         *prefix = products.push(i, value);
     }
@@ -42,7 +42,7 @@ pub(crate) fn invert_nonzero<M: PrimeModulus>(
     {
         *value = inverses.pop(i, value, prefix);
     }
-    values[..2].copy_from_slice(&inverses.0);
+    values[..2].copy_from_slice(&inverses.lanes);
 }
 
 /// Rejected input for batch inversion.
@@ -148,7 +148,7 @@ fn try_batch_invert_by_inner<R, M: PrimeModulus, E: From<BatchInversionError>>(
         return Ok(());
     }
     for (chunk, records) in records.chunks(scratch.len()).enumerate() {
-        let mut products = NonzeroInversionLanes::new(PastaField::ONE);
+        let mut products = NonzeroInversionLanes::new(PastaField::ONE, PastaField::mul);
         for (index, (record, prefix)) in records.iter().zip(scratch.iter_mut()).enumerate() {
             if let Some(product) = products.push(index, &denominator(record)) {
                 *prefix = product;
@@ -209,6 +209,7 @@ pub fn batch_invert_groups_scaled<M: PrimeModulus>(
         PastaField::ONE,
         PastaField::is_zero,
         |value| inverse_seed(value, Some(scale)),
+        PastaField::mul,
     )
 }
 
@@ -218,7 +219,7 @@ fn inverse_seed<M: PrimeModulus>(
 ) -> Option<PastaField<M>> {
     value
         .invert()
-        .map(|inverse| scale.map_or(inverse, |scale| inverse * scale))
+        .map(|inverse| scale.map_or(inverse, |scale| inverse.mul(scale)))
 }
 
 /// Replaces each nonzero value by its inverse, preserving zeros.
@@ -265,6 +266,7 @@ pub fn batch_invert_groups<M: PrimeModulus>(
         PastaField::ONE,
         PastaField::is_zero,
         PastaField::invert,
+        PastaField::mul,
     )
 }
 
@@ -274,33 +276,39 @@ pub fn batch_invert_groups<M: PrimeModulus>(
 /// reverse order with the saved prefixes. Separate even and odd lanes shorten
 /// multiplication dependencies. Callers can seed the lanes with their first
 /// factors to avoid multiplication by one and unused final updates.
-pub(crate) struct InversionLanes<F>(pub(crate) [F; 2]);
+pub(crate) struct InversionLanes<F, Multiply> {
+    lanes: [F; 2],
+    multiply: Multiply,
+}
 
-impl<F> InversionLanes<F>
-where
-    F: Copy + Mul<Output = F> + for<'a> Mul<&'a F, Output = F> + for<'a> MulAssign<&'a F>,
-{
+impl<F: Copy, Multiply: Fn(&F, &F) -> F + Copy> InversionLanes<F, Multiply> {
     pub(crate) fn push(&mut self, index: usize, value: &F) -> F {
-        let product = &mut self.0[index & 1];
+        let product = &mut self.lanes[index & 1];
         let prefix = *product;
-        *product *= value;
+        *product = (self.multiply)(product, value);
         prefix
     }
 
     pub(crate) fn invert(self, invert: impl FnOnce(&F) -> Option<F>) -> Self {
         // For lane products a and b, multiplying (a*b)^-1 by the opposite
         // product recovers each lane's inverse with one field inversion.
-        let inverse = invert(&(self.0[0] * self.0[1]))
+        let inverse = invert(&(self.multiply)(&self.lanes[0], &self.lanes[1]))
             .expect("a product of nonzero field elements is nonzero");
-        Self([inverse * self.0[1], inverse * self.0[0]])
+        Self {
+            lanes: [
+                (self.multiply)(&inverse, &self.lanes[1]),
+                (self.multiply)(&inverse, &self.lanes[0]),
+            ],
+            multiply: self.multiply,
+        }
     }
 
     pub(crate) fn pop(&mut self, index: usize, value: &F, prefix: &F) -> F {
-        let inverse = &mut self.0[index & 1];
+        let inverse = &mut self.lanes[index & 1];
         // The prefix cancels earlier factors; multiplying by this value then
         // removes it from the lane inverse for the next step.
-        let result = *inverse * prefix;
-        *inverse *= value;
+        let result = (self.multiply)(inverse, prefix);
+        *inverse = (self.multiply)(inverse, value);
         result
     }
 }
@@ -315,18 +323,18 @@ where
 /// A lane's first push returns `None`, and its matching pop ignores the prefix.
 /// Seeding these endpoints avoids multiplication by one; a single occupied lane
 /// also avoids the product merge needed to share an inversion across two lanes.
-pub(crate) struct NonzeroInversionLanes<F> {
-    products: InversionLanes<F>,
+pub(crate) struct NonzeroInversionLanes<F, Multiply> {
+    products: InversionLanes<F, Multiply>,
     first: [Option<usize>; 2],
 }
 
-impl<F> NonzeroInversionLanes<F>
-where
-    F: Copy + Mul<Output = F> + for<'a> Mul<&'a F, Output = F> + for<'a> MulAssign<&'a F>,
-{
-    pub(crate) fn new(one: F) -> Self {
+impl<F: Copy, Multiply: Fn(&F, &F) -> F + Copy> NonzeroInversionLanes<F, Multiply> {
+    pub(crate) fn new(one: F, multiply: Multiply) -> Self {
         Self {
-            products: InversionLanes([one; 2]),
+            products: InversionLanes {
+                lanes: [one; 2],
+                multiply,
+            },
             first: [None; 2],
         }
     }
@@ -337,7 +345,7 @@ where
             Some(self.products.push(index, value))
         } else {
             self.first[lane] = Some(index);
-            self.products.0[lane] = *value;
+            self.products.lanes[lane] = *value;
             None
         }
     }
@@ -352,13 +360,13 @@ where
             [Some(_), None] => 0,
             [None, Some(_)] => 1,
         };
-        self.products.0[lane] = invert(&self.products.0[lane]).expect("nonzero product");
+        self.products.lanes[lane] = invert(&self.products.lanes[lane]).expect("nonzero product");
         Some(self)
     }
 
     pub(crate) fn pop(&mut self, index: usize, value: &F, prefix: &F) -> F {
         if self.first[index & 1] == Some(index) {
-            self.products.0[index & 1]
+            self.products.lanes[index & 1]
         } else {
             self.products.pop(index, value, prefix)
         }
@@ -371,8 +379,9 @@ pub(crate) fn invert_groups<F>(
     one: F,
     is_zero: impl Fn(&F) -> bool,
     invert: impl Fn(&F) -> Option<F>,
+    multiply: impl Fn(&F, &F) -> F + Copy,
 ) where
-    F: Copy + Mul<Output = F> + for<'a> Mul<&'a F, Output = F> + for<'a> MulAssign<&'a F>,
+    F: Copy,
 {
     if scratch.is_empty() {
         for group in groups {
@@ -390,7 +399,7 @@ pub(crate) fn invert_groups<F>(
     while end.0 < groups.len() {
         let start = end;
         let mut used = 0;
-        let mut products = NonzeroInversionLanes::new(one);
+        let mut products = NonzeroInversionLanes::new(one, multiply);
         while end.0 < groups.len() && used < scratch.len() {
             let group = groups[end.0].as_mut();
             let count = (group.len() - end.1).min(scratch.len() - used);

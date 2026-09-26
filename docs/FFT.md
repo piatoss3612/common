@@ -22,7 +22,11 @@ and bit-reversed positions.
 
 The unstable `traits` feature extends this same descriptor to consumer
 `Field` implementations through `F::domain(k)`, and adds generic domain
-operations. Pasta's trait constructor delegates to `Domain::new`.
+operations. `FieldAdapter<M>` implements the consumer field interface; its
+constructor wraps the parameters from native `Domain::new`. The native
+`Domain<PastaField<M>>` continues to serve `Transform` and the planning APIs.
+Other field implementations can use `Domain::from_field` to construct a
+descriptor from their canonical roots and normalization inside `Field::domain`.
 `elements()` iterates the subgroup in natural order; `vanishing(x)` and
 `contains(x)` evaluate
 `x^n - 1`, and `lagrange_evaluations` writes the Lagrange basis at a point into a

@@ -1,5 +1,7 @@
 //! Pasta point representations, parameters, and optimized curve arithmetic.
 
+#![forbid(unsafe_code)]
+
 use core::{fmt, marker::PhantomData};
 
 use crate::checks::{assert_length, assert_scratch};
@@ -14,7 +16,6 @@ pub(crate) mod eisenstein_batch;
 mod encoding;
 mod fixed_base;
 pub(crate) mod glv;
-mod ops;
 pub(crate) mod parameters;
 mod point;
 mod projective;

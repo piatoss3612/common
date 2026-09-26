@@ -1,5 +1,7 @@
 //! Pasta representations, parameters, and optimized field kernels.
 
+#![forbid(unsafe_code)]
+
 use core::{fmt, marker::PhantomData};
 
 mod algorithms;
@@ -10,7 +12,6 @@ mod encoding;
 mod fractions;
 mod inversion;
 mod montgomery;
-mod ops;
 mod parameters;
 mod powers;
 mod products;
@@ -30,14 +31,15 @@ pub use batch::{
 };
 pub(crate) use batch::{NonzeroInversionLanes, invert_nonzero};
 pub use constant_prefix::{ConstantPrefix, ConstantPrefixError};
+pub use encoding::{low_u64, random};
 pub use fractions::{FractionPrefixError, fraction_prefixes, fraction_prefixes_in_place};
 #[cfg(test)]
 pub(crate) use inversion::count_inversions;
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub(crate) use powers::fill_powers;
-pub use products::ProductSum;
-#[cfg(all(test, feature = "traits"))]
+#[cfg(test)]
 pub(crate) use products::count_slice_sums;
+pub use products::{ProductSum, dot, dot_iter};
 pub use representation::{Loose, Reduced, ReductionState};
 pub use stored_form::STORED_FORM;
 pub use uint::CanonicalUint;
@@ -65,13 +67,9 @@ const ENCODED_SIZE: usize = 32;
 /// computations can produce different representatives within the bound.
 /// Ordering and debug output use the canonical field integer.
 ///
-/// The operator traits forward to the inherent methods. Binary operators
-/// take operands in the same state and return loose values; assignment
-/// operators apply to loose values. Iterator sums and products accept owned
-/// or borrowed elements in either state and return loose values; empty
-/// iterators return zero and one, respectively. With the unstable `traits`
-/// feature, `field::Field` and its companions
-/// expose the same operations to generic code.
+/// Arithmetic uses explicit methods, including when the unstable `traits`
+/// feature is enabled. Consumer code can wrap loose values in
+/// `field::FieldAdapter` to use operators and the `field::Field` interface.
 ///
 /// Implements [`bento::Pod`] so a constructed value can be written as bytes
 /// and embedded with its exact limbs and representation state. Stored values

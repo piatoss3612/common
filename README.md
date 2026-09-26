@@ -48,9 +48,10 @@ The [`bento`](crates/bento/src/lib.rs) crate is a facade over
 and product sums. These operations require no allocation. Arithmetic is
 variable-time and provides no constant-time guarantee for secret inputs.
 Field parameters and fixed exponentiation schedules use `bento` at compile time.
-Operator forms forward to the inherent arithmetic. The opt-in `traits` feature
-adds the unstable `Field` consumer interface for arithmetic, canonical encodings,
-transforms, and product accumulation through the same native kernels. With this
+Native arithmetic uses explicit methods. The opt-in `traits` feature adds the
+`FieldAdapter` wrapper with operators and the unstable `Field` consumer interface
+for arithmetic, canonical encodings, transforms, and product accumulation through
+the same native kernels. With this
 feature, the [`polynomial` module](crates/udon/src/polynomial/mod.rs) adds iterator
 evaluation, linear division, and geometric sums over `Field`, and the
 [`cycle` module](crates/udon/src/cycle/mod.rs) binds the fields, curves, borrowed
@@ -78,10 +79,10 @@ feature definitions.
 
 The [`curve` module](crates/udon/src/curve/pasta/mod.rs) provides Pallas and Vesta
 points, canonical encodings, GLV/Eisenstein scalar multiplication, batch
-normalization, and borrowed compact and expanded fixed-base tables. Operator
-forms are always available; the optional `Affine` and `Projective` traits
-expose both curves to generic code when `traits` is enabled. Scalar preparation
-can be reused across compact tables. The
+normalization, and borrowed compact and expanded fixed-base tables. With
+`traits` enabled, `AffineAdapter` and `ProjectiveAdapter` wrap native points,
+providing operators and the `Affine` and `Projective` consumer interfaces.
+Scalar preparation can be reused across compact tables. The
 [`msm` module](crates/udon/src/msm/mod.rs) sums dense or indexed inputs
 with caller-owned scratch and execution.
 Nonidentity `AffinePoint` and cached `PreparedAffinePoint` entries implement

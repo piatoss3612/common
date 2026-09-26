@@ -164,8 +164,6 @@ mod expansion_scales;
 mod factors;
 #[cfg(feature = "traits")]
 mod generic;
-#[cfg(feature = "traits")]
-pub(crate) use generic::lagrange_evaluations;
 mod interpolation;
 mod lagrange;
 mod layout;

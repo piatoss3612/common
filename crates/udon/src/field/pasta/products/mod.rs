@@ -12,18 +12,62 @@ use super::{PastaField, PrimeModulus, ReductionState};
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(test, feature = "traits"))]
+#[cfg(test)]
 std::thread_local! {
     static SLICE_SUMS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 }
 
-#[cfg(all(test, feature = "traits"))]
+#[cfg(test)]
 pub(crate) fn count_slice_sums(f: impl FnOnce()) -> usize {
     SLICE_SUMS.with(|count| {
         let before = count.get();
         f();
         count.get() - before
     })
+}
+
+/// Returns the inner product of two equal-length Pasta slices.
+///
+/// Uses [`PastaField::sum_of_products_slice`], preserving contiguous storage
+/// for the slice kernels. Use [`dot_iter`] for noncontiguous inputs, such as
+/// reversed or strided sequences. Both loose and reduced values are accepted.
+///
+/// # Panics
+///
+/// Panics if the lengths differ.
+pub fn dot<M: PrimeModulus>(
+    lhs: &[PastaField<M, impl ReductionState>],
+    rhs: &[PastaField<M, impl ReductionState>],
+) -> PastaField<M> {
+    PastaField::sum_of_products_slice(lhs, rhs)
+}
+
+/// Returns the inner product of two equal-length Pasta iterator sequences.
+///
+/// Uses [`PastaField::sum_of_product_pairs`], sharing Montgomery reduction
+/// across the sum. Both loose and reduced values are accepted.
+///
+/// # Panics
+///
+/// Panics if the lengths differ.
+pub fn dot_iter<'a, M, S, T, A, B>(lhs: A, rhs: B) -> PastaField<M>
+where
+    M: PrimeModulus,
+    S: ReductionState,
+    T: ReductionState,
+    A: IntoIterator<Item = &'a PastaField<M, S>>,
+    B: IntoIterator<Item = &'a PastaField<M, T>>,
+    A::IntoIter: ExactSizeIterator,
+    B::IntoIter: ExactSizeIterator,
+{
+    let lhs = lhs.into_iter();
+    let rhs = rhs.into_iter();
+    assert_eq!(
+        lhs.len(),
+        rhs.len(),
+        "dot product operands must have equal length"
+    );
+    PastaField::sum_of_product_pairs(lhs.zip(rhs))
 }
 
 /// A sum of field products with deferred Montgomery reduction.
@@ -409,7 +453,7 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
         rhs: &[PastaField<M, T>],
     ) -> PastaField<M> {
         assert_eq!(lhs.len(), rhs.len(), "inner product lengths must agree");
-        #[cfg(all(test, feature = "traits"))]
+        #[cfg(test)]
         SLICE_SUMS.with(|count| count.set(count.get() + 1));
         const {
             assert!(

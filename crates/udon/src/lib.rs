@@ -49,12 +49,14 @@
 //! feature flags or an allocator.
 //!
 //! `traits` enables unstable consumer interfaces at their domain paths:
-//! `field::Field` and its capability traits, `curve::Affine` and `Projective`,
+//! `field::Field` and `FieldAdapter`, `curve::Affine` and `Projective`,
 //! generic field, FFT, and polynomial helpers, `cycle`, and the Poseidon trait views.
-//! Pasta implements these contracts through its native arithmetic. Native
-//! field, curve, FFT, and MSM kernels do not depend on the consumer traits.
+//! `field::FieldAdapter`, `curve::AffineAdapter`, and `curve::ProjectiveAdapter`
+//! implement these contracts and Rust arithmetic operators through native methods.
+//! Native field, curve, FFT, and MSM kernels do not depend on the consumer traits.
 //! Consumers opt in explicitly; these interfaces may change without preserving
-//! compatibility. Standard Rust operator implementations are always available.
+//! compatibility. Native field and point types expose explicit arithmetic methods
+//! and never implement arithmetic operators, including when `traits` is enabled.
 //!
 //! By default, square roots and ratios use small tables of roots of unity.
 //! Enabling `sqrt-table-large` selects a larger table algorithm that reduces
@@ -67,7 +69,7 @@
 //! selects it for that Udon build.
 
 #![no_std]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(unreachable_pub)]

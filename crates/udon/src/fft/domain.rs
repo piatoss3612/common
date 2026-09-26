@@ -38,6 +38,19 @@ pub struct Domain<F> {
     size_inverse: F,
 }
 
+impl<F> Domain<F> {
+    #[cfg(feature = "traits")]
+    pub(crate) fn map<T>(self, convert: impl Fn(F) -> T) -> Domain<T> {
+        Domain {
+            log_size: self.log_size,
+            size: self.size,
+            root: convert(self.root),
+            inverse_root: convert(self.inverse_root),
+            size_inverse: convert(self.size_inverse),
+        }
+    }
+}
+
 impl<F> PartialEq for Domain<F> {
     fn eq(&self, other: &Self) -> bool {
         // Construction fixes every field parameter from the validated size.

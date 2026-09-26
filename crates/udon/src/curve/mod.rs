@@ -12,9 +12,10 @@
 //! [`EisensteinScalar`] retains joint digits for compact tables, and
 //! [`EisensteinTableBatch`] prepares or multiplies several bases together.
 //! [`msm`](crate::msm) sums dense or indexed scalar/base terms with caller-owned
-//! scratch and execution. Operators forward to these methods. The unstable `traits`
-//! feature adds `Affine`, `Projective`, and their endomorphism capabilities
-//! as consumer interfaces implemented through the same native arithmetic.
+//! scratch and execution. Native point arithmetic uses explicit methods. The
+//! unstable `traits` feature adds the `AffineAdapter` and `ProjectiveAdapter`
+//! wrappers with operators, implementing `Affine`, `Projective`, and their
+//! endomorphism capabilities through the same native arithmetic.
 //!
 //! Affine coordinates use [`crate::field::Reduced`] field elements;
 //! projective coordinates and scalars may use loose residues. Constructors
@@ -33,10 +34,15 @@
 //! assert_eq!(PallasPoint::from_bytes(generator.to_bytes()), Some(generator));
 //! ```
 
-pub(crate) mod pasta;
 #[cfg(feature = "traits")]
-mod traits;
+mod consumer;
+pub(crate) mod pasta;
 
+#[cfg(feature = "traits")]
+pub use consumer::{
+    Affine, AffineAdapter, EndomorphismAffine, EndomorphismProjective, Projective,
+    ProjectiveAdapter,
+};
 pub use pasta::{
     AffinePoint, CurveError, CurveTableEntry, CurveTableRequirements, EisensteinScalar,
     EisensteinTable, EisensteinTableBatch, FixedBaseDescription, FixedBaseTable,
@@ -44,5 +50,3 @@ pub use pasta::{
     PreparedAffinePoint, ProjectivePoint, Vesta, VestaAffine, VestaPoint, VestaProjective,
     batch_normalize, glv_decompose,
 };
-#[cfg(feature = "traits")]
-pub use traits::{Affine, EndomorphismAffine, EndomorphismProjective, Projective};

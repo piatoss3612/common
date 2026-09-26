@@ -19,38 +19,27 @@
 //! caller-owned scratch. [`ConstantPrefix`] borrows an explicit tail after a
 //! repeated value for materialization or structured FFT and MSM operations.
 //!
-//! Operators forward to the inherent methods. The unstable `traits` feature
-//! adds the `Field` interface for arithmetic, canonical encodings, transforms,
-//! and product accumulation, together with generic sampling, encoding, and
-//! dot-product helpers. The Pasta implementations use the same native kernels.
+//! Native arithmetic uses explicit methods. The unstable `traits` feature
+//! adds the `FieldAdapter` wrapper with operators and the `Field` interface for
+//! arithmetic, canonical encodings, transforms, and product accumulation,
+//! using the same native kernels. Sampling, canonical integer access, and
+//! dot-product helpers operate on native Pasta values without this feature.
 
-// Generic contracts and helpers; concrete storage and kernels stay in Pasta.
 #[cfg(feature = "traits")]
-mod encoding;
+mod consumer;
 pub(crate) mod pasta;
-#[cfg(feature = "traits")]
-mod products;
-#[cfg(feature = "traits")]
-mod traits;
-
-#[cfg(all(test, feature = "traits"))]
-mod tests;
 
 #[cfg(feature = "traits")]
-pub use encoding::{low_u64, random};
+pub use consumer::{Field, FieldAdapter};
 pub(crate) use pasta::NonzeroInversionLanes;
 #[cfg(test)]
 pub(crate) use pasta::count_inversions;
 pub use pasta::{
     BatchInversionError, CanonicalUint, Fp, Fq, Loose, PallasBase, PallasScalar, PastaField,
-    PrimeModulus, ProductSum, Reduced, ReductionState, batch_invert, batch_invert_groups,
-    try_batch_invert_by,
+    PrimeModulus, ProductSum, Reduced, ReductionState, batch_invert, batch_invert_groups, dot,
+    dot_iter, low_u64, random, try_batch_invert_by,
 };
 pub(crate) use pasta::{invert_nonzero, word};
-#[cfg(feature = "traits")]
-pub use products::{dot, dot_iter};
-#[cfg(feature = "traits")]
-pub use traits::Field;
 
 pub(crate) use pasta::fill_powers;
 pub use pasta::{

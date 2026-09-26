@@ -4,7 +4,8 @@ use crate::field::count_inversions;
 #[cfg(feature = "traits")]
 mod consumer {
     use super::*;
-    use crate::curve::{Affine, Projective};
+    use crate::curve::{Affine, AffineAdapter, Projective, ProjectiveAdapter};
+    use crate::field::FieldAdapter;
 
     #[test]
     fn trait_mixed_addition_matches_affine_reference_without_inversion() {
@@ -27,7 +28,11 @@ mod consumer {
                         .add(&reference::Reference::from_point(rhs), &modulus);
                     let mut actual = ProjectivePoint::IDENTITY;
                     assert_eq!(
-                        count_inversions(|| actual = generic(&scaled(lhs, i as u64 + 2), rhs)),
+                        count_inversions(|| actual = generic(
+                            &ProjectiveAdapter::new(scaled(lhs, i as u64 + 2)),
+                            AffineAdapter::from_ref(rhs)
+                        )
+                        .into_inner()),
                         0,
                     );
                     expected.assert_point(&actual.to_point());
@@ -74,12 +79,25 @@ mod consumer {
                 &num_bigint::BigUint::from_bytes_le(&exponent.to_bytes()),
                 &modulus,
             );
-            let actual = <Point<C> as Affine>::msm(&scalars, &bases);
-            expected.assert_point(&actual.to_point());
+            let actual = <AffineAdapter<C> as Affine>::msm(
+                FieldAdapter::from_slice(&scalars),
+                AffineAdapter::from_slice(&bases),
+            );
+            expected.assert_point(&actual.into_inner().to_point());
 
-            assert!(<Point<C> as Affine>::msm(&vec![PastaField::ZERO; size], &bases).is_identity());
             assert!(
-                <Point<C> as Affine>::msm(&scalars, &vec![Point::IDENTITY; size]).is_identity()
+                <AffineAdapter<C> as Affine>::msm(
+                    FieldAdapter::from_slice(&vec![PastaField::ZERO; size]),
+                    AffineAdapter::from_slice(&bases)
+                )
+                .is_identity()
+            );
+            assert!(
+                <AffineAdapter<C> as Affine>::msm(
+                    FieldAdapter::from_slice(&scalars),
+                    AffineAdapter::from_slice(&vec![Point::IDENTITY; size])
+                )
+                .is_identity()
             );
         }
     }
@@ -93,17 +111,40 @@ mod consumer {
     #[test]
     #[should_panic(expected = "msm operands must have equal length")]
     fn trait_msm_rejects_mismatched_lengths() {
-        <Point<Pallas> as Affine>::msm(&[PastaField::ONE], &[]);
+        <AffineAdapter<Pallas> as Affine>::msm(&[FieldAdapter::new(PastaField::ONE)], &[]);
     }
 }
 
 #[test]
 fn projective_iterator_sums_match_affine_reference_without_inversion() {
-    fn generic<P>(points: &[P]) -> (P, P)
-    where
-        P: Copy + core::iter::Sum + for<'a> core::iter::Sum<&'a P>,
-    {
-        (points.iter().sum(), points.iter().copied().sum())
+    fn generic<C: PastaCurve>(
+        points: &[ProjectivePoint<C>],
+    ) -> (ProjectivePoint<C>, ProjectivePoint<C>) {
+        let borrowed = points
+            .iter()
+            .fold(ProjectivePoint::IDENTITY, |a, b| a.add(b));
+        let owned = points
+            .iter()
+            .copied()
+            .fold(ProjectivePoint::IDENTITY, |a, b| a.add(&b));
+        #[cfg(feature = "traits")]
+        {
+            use crate::curve::ProjectiveAdapter;
+            let wrapped = ProjectiveAdapter::from_slice(points);
+            assert_eq!(
+                wrapped.iter().sum::<ProjectiveAdapter<C>>().into_inner(),
+                borrowed
+            );
+            assert_eq!(
+                wrapped
+                    .iter()
+                    .copied()
+                    .sum::<ProjectiveAdapter<C>>()
+                    .into_inner(),
+                owned
+            );
+        }
+        (borrowed, owned)
     }
 
     fn check<C: PastaCurve>() {

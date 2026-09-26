@@ -113,13 +113,6 @@ fn arithmetic_and_ordering_match_integer_operations() {
 
 #[test]
 fn iterator_products_match_integer_products() {
-    fn generic<F>(values: &[F]) -> (F, F)
-    where
-        F: Copy + core::iter::Product + for<'a> core::iter::Product<&'a F>,
-    {
-        (values.iter().product(), values.iter().copied().product())
-    }
-
     fn check<M: PrimeModulus>() {
         let p = modulus::<M>();
         let samples = samples::<M>(16);
@@ -135,11 +128,38 @@ fn iterator_products_match_integer_products() {
                     });
                 let loose: Vec<_> = factors.iter().map(|(value, _)| *value).collect();
                 let reduced: Vec<_> = loose.iter().map(|value| value.reduce()).collect();
-                let (borrowed, owned) = generic(&loose);
+                let borrowed = loose.iter().fold(PastaField::ONE, |a, b| a.mul(b));
+                let owned = loose
+                    .iter()
+                    .copied()
+                    .fold(PastaField::ONE, |a, b| a.mul(&b));
+                #[cfg(feature = "traits")]
+                {
+                    use crate::field::FieldAdapter;
+                    let wrapped = FieldAdapter::from_slice(&loose);
+                    assert_value(
+                        wrapped.iter().product::<FieldAdapter<M>>().into_inner(),
+                        &expected,
+                    );
+                    assert_value(
+                        wrapped
+                            .iter()
+                            .copied()
+                            .product::<FieldAdapter<M>>()
+                            .into_inner(),
+                        &expected,
+                    );
+                }
                 assert_value(borrowed, &expected);
                 assert_value(owned, &expected);
-                assert_value(reduced.iter().product::<PastaField<M>>(), &expected);
-                assert_value(reduced.into_iter().product::<PastaField<M>>(), &expected);
+                assert_value(
+                    reduced.iter().fold(PastaField::ONE, |a, b| a.mul(b)),
+                    &expected,
+                );
+                assert_value(
+                    reduced.into_iter().fold(PastaField::ONE, |a, b| a.mul(&b)),
+                    &expected,
+                );
             }
         }
     }

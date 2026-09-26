@@ -58,7 +58,7 @@ p`. `from_uint_reduced` accepts a full 256-bit integer;
 the empty slice representing zero; `from_wide_bytes_reduced` is the 64-byte
 case. Choose checked canonical decoding instead when out-of-range inputs must
 be rejected. Modular reduction alone does not promise a uniformly distributed
-field sample. The [encoding definitions](../../crates/udon/src/field/encoding.rs)
+field sample. The [encoding definitions](../../crates/udon/src/field/pasta/encoding.rs)
 specify both families.
 
 ### `montgomery_limbs` and `from_montgomery_limbs`
@@ -162,7 +162,7 @@ without assembling parallel vectors. Empty sums are zero. These APIs apply
 to inner products, coefficient evaluation against powers, and sums of
 products arising from constraint equations.
 
-[`ProductSum`](../../crates/udon/src/field/products.rs) keeps that expression
+[`ProductSum`](../../crates/udon/src/field/pasta/products/mod.rs) keeps that expression
 open across calls. Start with `new`, feed `add_product`, `add_square`, and
 `add_term`, combine independent accumulators with `merge`, then obtain the
 field result with `finish`. This expresses quadratic forms with linear

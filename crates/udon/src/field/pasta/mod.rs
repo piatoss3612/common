@@ -36,6 +36,8 @@ pub(crate) use inversion::count_inversions;
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub(crate) use powers::fill_powers;
 pub use products::ProductSum;
+#[cfg(all(test, feature = "traits"))]
+pub(crate) use products::count_slice_sums;
 pub use representation::{Loose, Reduced, ReductionState};
 pub use stored_form::STORED_FORM;
 pub use uint::CanonicalUint;

@@ -1,6 +1,50 @@
 use super::field_model;
 
 #[test]
+#[should_panic(expected = "lengths must agree")]
+fn default_product_sums_reject_unequal_lengths() {
+    use field_model::Small;
+    use zakura_udon::field::{Field, dot};
+
+    let _ = dot(&[Small::ONE, Small::ONE], &[Small::ONE]);
+}
+
+#[test]
+fn default_product_sums_match_integer_arithmetic() {
+    use num_bigint::BigUint;
+    use zakura_udon::field::{PrimeField, dot, dot_iter};
+
+    fn check<F: PrimeField>() {
+        let lhs: Vec<_> = (0..65).map(|i| -F::from(i * i + 1)).collect();
+        let rhs: Vec<_> = (0..65).map(|i| F::from(i * 7 + 3)).collect();
+        let integer = |value: F| BigUint::from_bytes_le(value.to_bytes().as_ref());
+        let modulus = integer(-F::ONE) + 1u8;
+        for length in [0, 1, 2, 3, 31, 32, 33, 63, 64, 65] {
+            let (lhs, rhs) = (&lhs[..length], &rhs[..length]);
+            let expected: BigUint = lhs
+                .iter()
+                .zip(rhs)
+                .map(|(lhs, rhs)| integer(*lhs) * integer(*rhs))
+                .sum();
+            assert_eq!(integer(dot(lhs, rhs)), &expected % &modulus);
+            assert_eq!(
+                integer(F::sum_of_products_slice(lhs, rhs)),
+                &expected % &modulus
+            );
+            assert_eq!(
+                integer(dot_iter(lhs.iter().rev(), rhs.iter().rev())),
+                expected % &modulus
+            );
+        }
+    }
+
+    check::<field_model::BlsBase>();
+    check::<field_model::BlsScalar>();
+    check::<field_model::JubjubScalar>();
+    check::<field_model::Small>();
+}
+
+#[test]
 fn generic_representations_match_the_field_modulus() {
     use num_bigint::BigUint;
     use zakura_udon::field::{PrimeField, low_u64, random};

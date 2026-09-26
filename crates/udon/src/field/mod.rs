@@ -48,7 +48,7 @@ pub use pasta::{
 };
 pub(crate) use pasta::{invert_nonzero, word};
 #[cfg(feature = "traits")]
-pub use products::dot;
+pub use products::{dot, dot_iter};
 #[cfg(feature = "traits")]
 pub use traits::{CubeRootField, DeferredField, FftField, Field, PrimeField};
 

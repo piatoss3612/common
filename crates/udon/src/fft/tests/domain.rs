@@ -269,17 +269,22 @@ mod consumer {
                             let mut values = vec![PastaField::DELTA; count];
                             let mut scratch = vec![PastaField::DELTA; capacity];
                             assert_eq!(
-                                crate::fft::generic::count_lagrange_evaluations(|| {
+                                crate::fft::domain::count_size_powers(|| {
                                     assert_eq!(
-                                        domain.lagrange_evaluations(
-                                            point,
-                                            &mut values,
-                                            &mut scratch
-                                        ),
-                                        nodes.iter().position(|node| *node == point),
+                                        crate::fft::generic::count_lagrange_evaluations(|| {
+                                            assert_eq!(
+                                                domain.lagrange_evaluations(
+                                                    point,
+                                                    &mut values,
+                                                    &mut scratch
+                                                ),
+                                                nodes.iter().position(|node| *node == point),
+                                            );
+                                        }),
+                                        0
                                     );
                                 }),
-                                0
+                                1
                             );
                             assert_eq!(values, expected);
                             assert!(

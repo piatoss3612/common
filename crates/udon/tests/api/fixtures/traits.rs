@@ -104,6 +104,13 @@ fn field() {
         let value = F::from(7);
         assert_eq!(value.mul_add(&F::from(3), &F::from(2)), F::from(23));
         assert_eq!(udon::field::dot(&[value], &[value]), F::from(49));
+        assert_eq!(
+            udon::field::dot_iter(
+                [value, F::ONE].iter(),
+                [F::from(2), F::from(3)].iter().rev()
+            ),
+            F::from(23)
+        );
         F::batch_invert(values, &mut [F::ZERO; 2]);
         assert_eq!(values[0] * F::from(7), F::ONE);
         assert_eq!(values[1], F::ZERO);

@@ -119,11 +119,25 @@ pub trait Field:
     /// The multiplication schedule depends on the exponent.
     fn pow_u64(&self, exponent: u64) -> Self;
 
+    /// Returns the inner product of two equal-length slices, or zero when empty.
+    ///
+    /// The default delegates to [`Self::sum_of_product_pairs`]. Implementations
+    /// may specialize for contiguous inputs; Pasta uses its native slice kernels.
+    /// [`super::dot`] uses this hook.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the lengths differ.
+    fn sum_of_products_slice(lhs: &[Self], rhs: &[Self]) -> Self {
+        assert_eq!(lhs.len(), rhs.len(), "inner product lengths must agree");
+        Self::sum_of_product_pairs(lhs.iter().zip(rhs))
+    }
+
     /// Sums products from paired operands; an empty iterator returns zero.
     ///
     /// The default multiplies each pair separately and sums the results.
     /// Implementations may defer reduction, as the Pasta fields do.
-    /// [`super::dot`] uses this hook for its paired input sequences.
+    /// [`super::dot_iter`] uses this hook for its paired input sequences.
     fn sum_of_product_pairs<'a>(pairs: impl IntoIterator<Item = (&'a Self, &'a Self)>) -> Self {
         pairs.into_iter().map(|(lhs, rhs)| *lhs * rhs).sum()
     }
@@ -399,6 +413,10 @@ impl<M: PrimeModulus> Field for PastaField<M> {
         PastaField::from_u128(value)
     }
 
+    fn sum_of_products_slice(lhs: &[Self], rhs: &[Self]) -> Self {
+        PastaField::sum_of_products_slice(lhs, rhs)
+    }
+
     fn sum_of_product_pairs<'a>(pairs: impl IntoIterator<Item = (&'a Self, &'a Self)>) -> Self {
         PastaField::sum_of_product_pairs(pairs)
     }
@@ -495,9 +513,8 @@ impl<M: PrimeModulus> FftField for PastaField<M> {
         );
         domain
             .subgroup()
-            .evaluate_lagrange(&point, 0..evaluations.len(), evaluations, scratch)
-            .expect("a validated prefix fits the domain and output");
-        domain.contains(point).then(|| domain.index_of(point))
+            .evaluate_lagrange_with_index(&point, evaluations, scratch)
+            .expect("a validated prefix fits the domain and output")
     }
 
     fn root_of_unity(log_size: u32) -> Option<Self> {

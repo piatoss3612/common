@@ -3,6 +3,20 @@
 use super::{FftError, check_element_count, factors::Shift};
 use crate::field::{PastaField, PrimeModulus};
 
+#[cfg(test)]
+std::thread_local! {
+    static SIZE_POWERS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn count_size_powers(f: impl FnOnce()) -> usize {
+    SIZE_POWERS.with(|count| {
+        let before = count.get();
+        f();
+        count.get() - before
+    })
+}
+
 /// A radix-2 subgroup with its canonical root of unity and the scalars
 /// transforms over it need.
 ///
@@ -70,6 +84,17 @@ impl<F: Copy> Domain<F> {
     /// The multiplicative inverse of the domain size in the field.
     pub const fn size_inverse(self) -> F {
         self.size_inverse
+    }
+
+    // Native and consumer operations share the schedule without requiring
+    // consumer field traits in the native implementation.
+    pub(super) fn power_of_size(self, mut x: F, square: impl Fn(&F) -> F) -> F {
+        #[cfg(test)]
+        SIZE_POWERS.with(|count| count.set(count.get() + 1));
+        for _ in 0..self.log_size {
+            x = square(&x);
+        }
+        x
     }
 }
 

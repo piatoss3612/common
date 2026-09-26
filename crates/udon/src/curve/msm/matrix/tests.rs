@@ -278,7 +278,8 @@ fn layouts<C: PastaCurve>(n: usize, limit: usize) {
         );
         let plan = super::super::run::MsmPlan::for_input(&row, options).unwrap();
         let mut digits = vec![0; prepared.cache_len(&plan)];
-        let cached_scalars = prepared.cache(&plan, &mut digits);
+        let cached_scalars =
+            prepared.cache(&plan, &mut digits, TaskBudget::SERIAL, &SerialExecutor);
         for scalars in [prepared, cached_scalars] {
             let matrix = SharedScalarInput::new(bases, scalars, outputs, n + 2, 1).unwrap();
             let expected: Vec<_> = (0..outputs)

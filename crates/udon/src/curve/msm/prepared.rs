@@ -235,12 +235,13 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
         }
     }
 
-    /// Additional bytes for this resolved plan's reusable recoding cache.
+    /// Bytes required to retain this resolved plan's recoding.
     ///
-    /// Returns zero when the plan has a different term count, splits the input into
-    /// chunks, or cannot reuse retained digits. Scalar records remain independently
-    /// reusable. The cache is persistent preparation, separate from the plan's
-    /// workspace ceiling.
+    /// Returns zero when the plan has a different term count, splits the input
+    /// into chunks, streams recoding, or needs no retained digits. A zero result
+    /// makes [`Self::cache`] leave the handle unchanged, including any existing
+    /// cache. Scalar records remain independently reusable. The cache is
+    /// persistent preparation, separate from the plan's workspace ceiling.
     pub fn cache_len(&self, plan: &super::run::MsmPlan<C>) -> usize {
         plan.cache_geometry(self.len()).map_or(0, |geometry| {
             geometry
@@ -249,25 +250,84 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
         })
     }
 
-    /// Retains exactly the resolved plan's recoding in caller-owned bytes.
+    /// Returns a handle retaining the plan's recoding in caller-owned bytes.
     ///
-    /// That plan reuses the cache when executed over these records. Unsupported
-    /// caching returns the unchanged scalar handle and needs no byte storage.
-    /// Size storage with [`Self::cache_len`]. Existing plan requirements remain
-    /// fixed; use [`super::run::MsmPlan::for_input`] with the returned handle to
-    /// resolve requirements that account for the retained cache.
+    /// Size storage with [`Self::cache_len`]. A zero length returns the unchanged
+    /// handle without writing storage. Otherwise the required prefix is
+    /// overwritten; initial contents do not matter and unused tails are untouched.
+    /// The returned handle borrows the scalar records and cache bytes, but not
+    /// the plan or executor. `self` remains unchanged.
     ///
-    /// Insufficient storage panics before writes. Unused storage tails are untouched.
-    pub fn cache(&self, plan: &super::run::MsmPlan<C>, storage: &'a mut [u8]) -> Self {
+    /// The plan reuses these digits when executing an accepted input over these
+    /// records. Other plans can reuse them only when their recoding matches and
+    /// they consume the complete row without streaming. Existing plan
+    /// requirements remain fixed. Resolve
+    /// [`MsmPlan::for_input`](super::run::MsmPlan::for_input) with the returned
+    /// handle to account for its retained preparation when sizing execution scratch.
+    ///
+    /// `budget` bounds concurrent cache construction, independently of the plan's
+    /// execution budget. It does not change the selected recoding or storage
+    /// length. Use [`TaskBudget::SERIAL`] with
+    /// [`SerialExecutor`](crate::exec::SerialExecutor) for serial construction.
+    /// All writes finish before this returns.
+    ///
+    /// # Panics
+    ///
+    /// Insufficient storage panics before writes or executor work.
+    /// An executor panic may partially write the required prefix. Storage can
+    /// be reused after all scoped jobs finish unwinding, as required by [`Executor`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zakura_udon::{
+    ///     curve::{
+    ///         AffinePoint, Pallas,
+    ///         msm::{Bases, Input, PreparedScalars, ScalarStorage, run::MsmPlan},
+    ///     },
+    ///     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
+    ///     field::Fq,
+    /// };
+    /// let mut records = [ScalarStorage::<Pallas>::ZERO; 2];
+    /// let prepared = PreparedScalars::prepare(
+    ///     &[Fq::TWO_INVERSE; 2], &mut records, TaskBudget::SERIAL, &SerialExecutor,
+    /// );
+    /// let options = ExecutionOptions::DEFAULT;
+    /// let plan = MsmPlan::new(prepared.len(), options)?;
+    /// let mut bytes = vec![0; prepared.cache_len(&plan)];
+    /// let cached = prepared.cache(
+    ///     &plan, &mut bytes, TaskBudget::SERIAL, &SerialExecutor,
+    /// );
+    /// let bases = [AffinePoint::<Pallas>::GENERATOR; 2];
+    /// let input = Input::new_prepared(Bases::Affine(&bases), cached);
+    /// let execution = MsmPlan::for_input(&input, options)?;
+    /// assert_eq!(execution.requirements().digits(), 0);
+    /// assert_eq!(
+    ///     cached.retained_bytes(),
+    ///     prepared.retained_bytes() + prepared.cache_len(&plan),
+    /// );
+    /// # Ok::<(), zakura_udon::curve::CurveError>(())
+    /// ```
+    #[must_use = "use the returned scalar handle to retain the cache"]
+    pub fn cache<X: Executor>(
+        &self,
+        plan: &super::run::MsmPlan<C>,
+        storage: &'a mut [u8],
+        budget: TaskBudget,
+        executor: &X,
+    ) -> Self {
         let Some(geometry) = plan.cache_geometry(self.len()) else {
             return *self;
         };
         let len = geometry
             .storage_len(self.len())
             .expect("bounded plan geometry");
+        if len == 0 {
+            return *self;
+        }
         assert_scratch("digits", len, storage.len());
         let digits = &mut storage[..len];
-        super::recode::write(self.records, geometry, digits);
+        super::recode::write_parallel(self.records, geometry, digits, budget, executor);
         Self {
             records: self.records,
             shape: self.shape,
@@ -292,7 +352,7 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
 
     /// Caches recoding in caller-owned bytes and returns a new borrowed handle.
     ///
-    /// Size storage with [`Self::cache_len`]. Execution can reuse the cache when
+    /// Size storage with [`Self::cache_len_with`]. Execution can reuse the cache when
     /// its recoding geometry matches, the complete input fits in one chunk, and
     /// streaming is disabled. Otherwise it recodes retained GLV data into scratch;
     /// it never interprets a cache using another geometry.

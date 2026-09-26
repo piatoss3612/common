@@ -900,25 +900,52 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
         let plan = self.plan;
         let repeat = plan.first() / 2;
         let width = plan.size() / repeat;
+        let twist = plan.twist();
+        let scale = !plan.input_scale.is_one();
+        // Amortize progression setup across at least 32 distinct powers. Tiny
+        // regions retain direct exponentiation, including fragmented repeats.
+        let powers = if twist && plan.residue_scales.is_none() && values.len() / repeat >= 32 {
+            match plan.shift {
+                ForwardShift::Residue { shift, inverse } => Some(
+                    super::factors::BitReversedPowers::new(shift, inverse, width.ilog2()),
+                ),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let mut power = powers.as_ref().map(|powers| powers.at(self.start / repeat));
         let mut offset = 0;
         while offset < values.len() {
             let index = self.start + offset;
             let degree = reverse(index / repeat, width.ilog2());
             let mut value = source.get(degree).copied().unwrap_or(PastaField::ZERO);
-            if degree < source.len() && plan.twist() {
-                let power = plan
-                    .residue_scales
-                    .map_or_else(|| plan.shift.at(degree), |scales| scales[degree]);
-                value = value.mul(&power).mul(&plan.input_scale);
+            if degree < source.len() && twist {
+                if let Some(scales) = plan.residue_scales {
+                    value = value.mul(&scales[degree]);
+                } else if !(plan.shift.is_identity()
+                    || plan.shift.cycle().is_some() && degree.is_multiple_of(3))
+                {
+                    value = value.mul(&power.unwrap_or_else(|| plan.shift.at(degree)));
+                }
+                if scale {
+                    value = value.mul(&plan.input_scale);
+                }
             }
             let len = (repeat - index % repeat).min(values.len() - offset);
             values[offset..offset + len].fill(value);
             offset += len;
+            if offset < values.len()
+                && let Some(powers) = &powers
+            {
+                power = Some(powers.next(index / repeat, power.unwrap()));
+            }
         }
     }
 
     fn twist(&self, values: &mut [PastaField<M>], order: ElementOrder) {
         let plan = self.plan;
+        let scale = !plan.input_scale.is_one();
         if let Some(scales) = plan.residue_scales {
             for (offset, value) in values.iter_mut().enumerate() {
                 let index = if order == ElementOrder::Natural {
@@ -927,19 +954,28 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                     reverse(self.start + offset, plan.size().ilog2())
                 };
                 *value = value.mul(&scales[index]);
-                if plan.input_scale.reduce() != PastaField::<M>::ONE.reduce() {
+                if scale {
                     *value = value.mul(&plan.input_scale);
                 }
             }
         } else if let Some(cycle) = plan.shift.cycle() {
-            let cycle = cycle.scaled(plan.input_scale);
+            if !scale && plan.shift.is_identity() {
+                return;
+            }
+            let cycle = if scale {
+                cycle.scaled(plan.input_scale)
+            } else {
+                cycle
+            };
             for (offset, value) in values.iter_mut().enumerate() {
                 let degree = if order == ElementOrder::Natural {
                     self.start + offset
                 } else {
                     reverse(self.start + offset, plan.size().ilog2())
                 };
-                *value = value.mul(&cycle.at(degree));
+                if scale || !degree.is_multiple_of(3) {
+                    *value = value.mul(&cycle.at(degree));
+                }
             }
         } else {
             let ForwardShift::Residue { shift, inverse } = plan.shift else {

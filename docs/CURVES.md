@@ -194,11 +194,10 @@ prepares the scalar. The const `multiplication_scratch(number_of_bases)` query
 reports field scratch for these batch methods. The type docs include an
 executable example that reuses field scratch after preparation.
 
-`EisensteinScalar::new` also determines whether the scalar permits batched affine
-arithmetic. Callers retain the opaque preparation; Udon selects the batch
-implementation from that fact and the available scratch. The multiplication
-scratch query reports the preferred size. Smaller scratch selects smaller
-batches or complete projective arithmetic, and empty scratch remains valid.
+Udon selects the batch implementation from the batch size and available scratch.
+The multiplication scratch query reports the preferred size. Smaller scratch
+selects smaller batches or complete projective arithmetic, and empty scratch
+remains valid. A zero scalar writes identities.
 
 Use `bind` for stored entries, following the
 [table storage workflow](#preparation-binding-and-stored-formats). A single
@@ -318,10 +317,14 @@ using `PreparedScalars::<C>::storage_len(terms)`, then call
 `PreparedScalars::prepare(scalars, storage, budget, executor)`. Preparation
 retains signed GLV components and small-integer classification and releases the
 original scalar borrow. Preparation is independent of execution choices.
-`cache_len(&plan)` and `cache(&plan, bytes)` optionally retain the recoding
-selected by an `MsmPlan`. A plan that cannot reuse a whole-row cache reports
-zero cache bytes and leaves preparation unchanged. The same resolved geometry
-sizes and consumes the cache, including at algorithm boundaries.
+`cache_len(&plan)` sizes an optional recoding cache selected by an `MsmPlan`.
+Use `cache(&plan, bytes, budget, executor)` and pass its returned handle to
+execution. Its budget controls cache construction independently of the later
+MSM's budget; both scalar preparation and caching accept `TaskBudget::SERIAL`
+with `SerialExecutor`. A plan that needs no cache or cannot reuse a whole-row
+cache reports zero bytes and leaves the handle unchanged, including any
+existing cache. Storage and failure contracts, with an executable example, are
+documented on [`PreparedScalars::cache`](../crates/udon/src/curve/msm/prepared.rs).
 Resolve `MsmPlan::for_input` with the cached handle to size workspace without
 duplicating the retained cache; caching does not change an existing plan's counts.
 `retained_bytes()` counts the borrowed records and optional cache. This storage

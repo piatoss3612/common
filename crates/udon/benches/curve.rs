@@ -6,9 +6,9 @@ use criterion::{
 };
 use zakura_udon::{
     curve::{
-        AffinePoint, CurveTableEntry, EisensteinTable, FixedBaseDescription, FixedBaseTable,
-        Pallas, PastaCurve, Point, PreparedAffinePoint, ProjectivePoint, Vesta, batch_normalize,
-        glv_decompose,
+        AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTable, FixedBaseDescription,
+        FixedBaseTable, Pallas, PastaCurve, Point, PreparedAffinePoint, ProjectivePoint, Vesta,
+        batch_normalize, glv_decompose,
     },
     field::{CanonicalUint, PastaField, PrimeModulus},
 };
@@ -330,6 +330,16 @@ fn decomposition<C: PastaCurve>(
     group.throughput(Throughput::Elements(CORPUS_SIZE as u64));
     bench(&mut group, "corpus", corpus, |scalars| {
         scalars.map(|scalar| glv_decompose::<C>(&scalar))
+    });
+    group.finish();
+
+    let mut group = criterion.benchmark_group(format!("{name}/eisenstein_scalar"));
+    for &(case, scalar) in scalars {
+        bench(&mut group, case, &scalar, EisensteinScalar::<C>::new);
+    }
+    group.throughput(Throughput::Elements(CORPUS_SIZE as u64));
+    bench(&mut group, "corpus", corpus, |scalars| {
+        scalars.map(|scalar| EisensteinScalar::<C>::new(&scalar))
     });
     group.finish();
 }

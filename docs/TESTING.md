@@ -118,6 +118,8 @@ cargo bench --locked -p zakura-udon --bench field -- Fp/inner_product
 
 The [field report](FIELD_PERFORMANCE.md) explains measured choices, including
 the larger square-root tables and their storage/build-time tradeoffs.
+The [specialization report](OPTIMIZATION_PERFORMANCE.md) covers targeted field,
+FFT, addition-chain, and retained MSM cache comparisons and their reproduction.
 
 ## Curve benchmarks
 
@@ -126,6 +128,8 @@ complete arithmetic exceptions, encoding rejection, GLV/endomorphism operations,
 normalization, and ordinary and retained-table multiplication. Scalar corpora
 straddle short/full-width boundaries; table cases distinguish affine and cached
 entries, preparation, binding, and multiplication.
+The `eisenstein_scalar` cases time `EisensteinScalar::new` alone for individual
+scalar shapes and the full-width corpus, without point multiplication.
 Compare the same 32-scalar corpus at equal width or similar storage budgets.
 Preparation fills allocated buffers; binding borrows existing entries; table
 multiplication includes recoding. Table binding checks dimensions and

@@ -65,9 +65,10 @@ impl<M: PrimeModulus> ProductSum<M> {
         self.fold_overflow(carry_overflow);
     }
 
-    // Bounded callers start from zero and feed at most one physical slice.
-    // On 32/64-bit targets its byte-size bound implies fewer than 2^59 terms;
-    // with each product below 2^512, the 576-bit accumulator cannot overflow.
+    // Bounded callers start from zero and feed at most one physical slice or
+    // four explicitly counted iterator entries. On 32/64-bit targets the
+    // slice's byte-size bound implies fewer than 2^59 terms; with each product
+    // below 2^512, the 576-bit accumulator cannot overflow in either case.
     #[inline(always)]
     fn add_product_inner<const BOUNDED: bool>(
         &mut self,
@@ -467,7 +468,26 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     pub fn sum_of_product_pairs<'a, T: ReductionState>(
         pairs: impl IntoIterator<Item = (&'a Self, &'a PastaField<M, T>)>,
     ) -> PastaField<M> {
+        let mut pairs = pairs.into_iter();
+        let Some((a, b)) = pairs.next() else {
+            return PastaField::ZERO;
+        };
+        let Some((c, d)) = pairs.next() else {
+            return a.mul(b);
+        };
+        let Some((e, f)) = pairs.next() else {
+            return Self::sum_of_products_slice(&[*a, *c], &[*b, *d]);
+        };
+        let Some(fourth) = pairs.next() else {
+            return Self::sum_of_products_slice(&[*a, *c, *e], &[*b, *d, *f]);
+        };
         let mut sum = ProductSum::new();
+        // These four actual entries cannot overflow the wide accumulator.
+        // The remaining iterator is unrestricted and retains overflow folding.
+        sum.add_product_inner::<true>(a, b);
+        sum.add_product_inner::<true>(c, d);
+        sum.add_product_inner::<true>(e, f);
+        sum.add_product_inner::<true>(fourth.0, fourth.1);
         for (lhs, rhs) in pairs {
             sum.add_product(lhs, rhs);
         }

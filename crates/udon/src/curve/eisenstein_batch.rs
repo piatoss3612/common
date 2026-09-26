@@ -215,7 +215,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
     ///
     /// Has the mathematical result and buffer and panic contracts of
     /// [`Self::mul_prepared`]. Retain an [`EisensteinScalar`] to reuse scalar
-    /// preparation and its batch eligibility check across calls.
+    /// preparation across calls.
     pub fn mul<X: Executor>(
         &self,
         scalar: &PastaField<C::Scalar>,
@@ -225,7 +225,7 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         executor: &X,
     ) {
         self.mul_prepared(
-            &EisensteinScalar::for_single(scalar),
+            &EisensteinScalar::new(scalar),
             output,
             field,
             budget,
@@ -239,7 +239,6 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
     /// Initial buffer contents do not matter; scratch beyond the reported count
     /// is untouched. A zero scalar writes identities. Entries must satisfy the
     /// mathematical contract of [`EisensteinTable::mul`].
-    /// Scalar preparation retains the eligibility check for affine arithmetic.
     /// Smaller scratch uses bounded batches or complete projective arithmetic.
     ///
     /// # Panics
@@ -260,10 +259,8 @@ impl<'a, C: PastaCurve, E: CurveTableEntry<C>> EisensteinTableBatch<'a, C, E> {
         let n = self.len();
         assert_length("output", n, output.len());
         let digits = scalar.digits();
-        // The exceptional-intermediate check depends only on the scalar, so its
-        // result applies to every base. A certificate also reuses it across calls.
         let batch = n.min(field.len() / 5);
-        let affine = batch >= LADDER_AFFINE_MIN && !digits.is_empty() && scalar.batch_safe();
+        let affine = batch >= LADDER_AFFINE_MIN && !digits.is_empty();
         if affine {
             for (entries, output) in self.entries.chunks(batch * 8).zip(output.chunks_mut(batch)) {
                 let fields = output.len() * 5;
@@ -442,6 +439,37 @@ fn multiply_inner<C: PastaCurve, E: CurveTableEntry<C>, X: Executor>(
     }
 }
 
+// Nonempty digits from EisensteinScalar admit this affine ladder for every
+// nonidentity base B; no per-scalar exceptional-case check is needed.
+//
+// Let q > 2^254 be the prime group order and lambda² + lambda + 1 = 0 mod q.
+// An integer pair (a,b) represents a + b*lambda, and its norm
+// N(a,b) = a² - ab + b² equals (a+b*lambda)(a+b*lambda²) mod q. If the pair
+// represents zero, q divides its norm. Thus a nonzero pair of norm < q
+// cannot vanish modulo q, and its multiple of B cannot be identity.
+//
+// GLV starts with r_0 whose coordinates have magnitude < 2^127. Recoding
+// selects digits d_j with coordinates of magnitude <= 5 and leaves residuals
+// r_(j+1) = (r_j - d_j)/2. After the first step, each coordinate has magnitude
+// <= 2^126 + 2; later steps preserve the looser bound < 2^126 + 5. Recoding
+// stops at the first zero pair, so every recorded proper residual is nonzero.
+// Its norm is < 3*(2^126 + 5)² < q. The initial r_0 represents the original
+// scalar, which is nonzero: GLV maps zero to (0,0) and hence empty digits.
+//
+// The high-to-low ladder reconstructs these residuals. Before processing d_j
+// below the top digit, P = [r_(j+1)]B and D = [d_j]B. All accumulator states
+// are nonidentity. Odd prime order rules out y(P)=0, so doubling is defined.
+// For a nonzero digit, the fused 2P+D step has two possible exceptions:
+//
+// * D=P: the selector matches r_j modulo 8, making r_(j+1) divisible by 4
+//   coordinatewise, whereas d_j has an odd coordinate. Their difference is
+//   nonzero with coordinates of magnitude < 2^126 + 10. Its norm is below
+//   3*(2^126 + 10)² < 2^254 < q, so equality modulo q is impossible.
+// * D=-2P: 2r_(j+1)+d_j = r_j. A proper residual cannot vanish modulo q by
+//   the norm bound; at j=0 it is the original nonzero scalar.
+//
+// These arguments require the GLV bounds, selector congruences, and canonical
+// treatment of zero. Arbitrary injected digit strings need not satisfy them.
 fn affine_ladder<C: PastaCurve, E: CurveTableEntry<C>>(
     entries: &[E],
     digits: &[u8],
@@ -477,7 +505,8 @@ fn affine_ladder<C: PastaCurve, E: CurveTableEntry<C>>(
             // y'=-y-(1+4a*lambda)(lambda+c). These are the two chord
             // additions with their intermediate denominator eliminated.
             // Only den needs inversion; h=0 is allowed when D=-P.
-            // den vanishes for D=P or D=-2P, ruled out by ladder_safe.
+            // The curve equations give den=2yr-3x²h, which vanishes when D
+            // lies on P's tangent: D=P or D=-2P. The proof above excludes both.
             for (i, (group, p)) in entries.chunks_exact(8).zip(output.iter_mut()).enumerate() {
                 let d = eisenstein::digit_point(group, code);
                 hs[i] = d.x.sub(&p.x);
@@ -501,81 +530,5 @@ fn affine_ladder<C: PastaCurve, E: CurveTableEntry<C>>(
                 );
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{
-        curve::{Pallas, Vesta, parameters::GlvParameters},
-        exec::SerialExecutor,
-    };
-    use std::{vec, vec::Vec};
-
-    fn exceptions<C: PastaCurve>() {
-        let lattice = GlvParameters::<C>::BASIS;
-        let (wrapped, len) = eisenstein::recode(lattice.a as i128, -(lattice.b as i128));
-        let cases: [(&[u8], bool); 4] = [
-            (&[1, 1], false),
-            (&[2, 1], true),
-            (&[2, 0, 1], true),
-            (&wrapped[..len], false),
-        ];
-        let bases: Vec<_> = (1..=35)
-            .map(|i| {
-                *AffinePoint::<C>::GENERATOR
-                    .mul_projective(&PastaField::<_>::from_u64(i))
-                    .to_point()
-                    .as_affine()
-                    .unwrap()
-            })
-            .collect();
-        let mut entries = vec![AffinePoint::GENERATOR; 8 * bases.len()];
-        let mut field = vec![PastaField::ZERO; 5 * bases.len()];
-        EisensteinTableBatch::prepare(
-            &bases,
-            &mut entries,
-            &mut [],
-            &mut field,
-            TaskBudget::SERIAL,
-            &SerialExecutor,
-        );
-        for (digits, safe) in cases {
-            assert_eq!(
-                EisensteinScalar::<C>::from_digits(digits).batch_safe(),
-                safe
-            );
-            let mut scalar = PastaField::ZERO;
-            for &code in digits.iter().rev() {
-                scalar = scalar.double();
-                if code != 0 {
-                    scalar = scalar.add(&eisenstein::digit_scalar::<C>(code));
-                }
-            }
-            if digits.len() == len {
-                assert_eq!((scalar).reduce(), (PastaField::<_>::ZERO).reduce());
-            }
-            let mut output = vec![ProjectivePoint::IDENTITY; bases.len()];
-            multiply_inner(
-                &entries,
-                digits,
-                &mut output,
-                &mut field,
-                safe,
-                1,
-                &SerialExecutor,
-            );
-            for (base, actual) in bases.iter().zip(output) {
-                let expected = crate::curve::tests::multiply(&scalar, |sum| sum.add_mixed(base));
-                assert_eq!(actual, expected);
-            }
-        }
-    }
-
-    #[test]
-    fn exact_modular_exception_gate_and_projective_fallback() {
-        exceptions::<Pallas>();
-        exceptions::<Vesta>();
     }
 }

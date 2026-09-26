@@ -34,6 +34,7 @@ mod powers;
 mod products;
 mod representation;
 mod safegcd;
+mod small;
 mod sqrt;
 mod uint;
 pub(crate) mod word;
@@ -67,6 +68,8 @@ const ENCODED_SIZE: usize = 32;
 /// integer: [`Loose`] permits `[0, 2p)` and [`Reduced`] permits `[0, p)`.
 /// Arithmetic returns loose values. [`reduce`](Self::reduce) produces the
 /// unique representative required by equality, ordering, and square roots.
+/// The exact loose limbs of an arithmetic result are not guaranteed; equivalent
+/// computations can produce different representatives within the bound.
 /// Ordering and debug output use the canonical field integer.
 ///
 /// Implements [`bento::Pod`] so a constructed value can be written as bytes
@@ -328,19 +331,19 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Returns `3 * self`.
     #[inline]
     pub fn triple(&self) -> PastaField<M> {
-        self.double().add(self)
+        small::multiply::<M, 3>(self.limbs)
     }
 
     /// Returns `4 * self`.
     #[inline]
     pub fn mul_by_4(&self) -> PastaField<M> {
-        self.double().double()
+        small::multiply::<M, 4>(self.limbs)
     }
 
     /// Returns `8 * self`.
     #[inline]
     pub fn mul_by_8(&self) -> PastaField<M> {
-        self.double().double().double()
+        small::multiply::<M, 8>(self.limbs)
     }
 
     /// Returns `self * multiplier + addend`.

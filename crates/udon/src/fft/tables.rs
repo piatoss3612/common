@@ -157,14 +157,7 @@ impl<'a, M: PrimeModulus> TablesMut<'a, M> {
             (first, step): (PastaField<M>, PastaField<M>),
         ) -> Option<&[PastaField<M>]> {
             table.map(|table| {
-                let mut value = first;
-                let len = table.len();
-                for (index, entry) in table.iter_mut().enumerate() {
-                    *entry = value;
-                    if index + 1 < len {
-                        value = value.mul(&step);
-                    }
-                }
+                crate::field::fill_powers(first, step, table);
                 &*table
             })
         }

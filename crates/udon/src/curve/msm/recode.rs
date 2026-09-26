@@ -10,7 +10,6 @@ use super::storage::Storage;
 
 use super::{Algorithm, ArithmeticOptions, CurveError, PastaCurve, ScalarStorage, checked_count};
 use crate::curve::{digits::centered_digit, eisenstein, parameters::GlvParameters};
-#[cfg(test)]
 use crate::exec::{Executor, TaskBudget, for_each_chunk_mut};
 
 pub(super) const CHUNK: usize = 256;
@@ -206,7 +205,6 @@ pub(super) fn window_views<C: PastaCurve, const DIRECT: bool>(
 /// `digits` must be exactly `geometry.storage_len(records.len())` bytes, so the
 /// final chunk corresponds to the remaining records. Records must contain valid
 /// GLV components. The executor completes all writes before this returns.
-#[cfg(test)]
 pub(super) fn write_parallel<C: PastaCurve, X: Executor>(
     records: &[ScalarStorage<C>],
     geometry: Geometry,

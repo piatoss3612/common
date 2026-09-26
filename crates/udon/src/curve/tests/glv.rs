@@ -38,8 +38,20 @@ fn digit_pair(code: u8) -> (i8, i8) {
 
 fn assert_digits(a: i128, b: i128) {
     let (digits, len) = recode(a, b);
+    let bound = (BigUint::from(1_u32) << 126) + 5_u32;
     let mut reconstructed = (BigInt::from(0), BigInt::from(0));
-    for &code in digits[..len].iter().rev() {
+    for (j, &code) in digits[..len].iter().enumerate().rev() {
+        // These proper prefixes and congruences are the affine ladder proof's
+        // premises. Check them with unbounded integers, including extreme halves.
+        if j + 1 < len {
+            assert_ne!(reconstructed, (BigInt::from(0), BigInt::from(0)));
+            assert!(reconstructed.0.magnitude() < &bound);
+            assert!(reconstructed.1.magnitude() < &bound);
+        }
+        if code != 0 {
+            assert_eq!(&reconstructed.0 % 4_u32, BigInt::from(0));
+            assert_eq!(&reconstructed.1 % 4_u32, BigInt::from(0));
+        }
         let (a, b) = digit_pair(code);
         reconstructed.0 = (reconstructed.0 << 1) + a;
         reconstructed.1 = (reconstructed.1 << 1) + b;
@@ -51,6 +63,9 @@ fn assert_digits(a: i128, b: i128) {
 fn decomposition<C: PastaCurve>() {
     let lattice = GlvParameters::<C>::BASIS;
     let n = modulus::<C::Scalar>();
+    let difference_bound = (BigUint::from(1_u32) << 126) + 10_u32;
+    assert!(3_u32 * &difference_bound * &difference_bound < BigUint::from(1_u32) << 254);
+    assert!(n > BigUint::from(1_u32) << 254);
     let a = BigUint::from(lattice.a);
     let b = BigUint::from(lattice.b);
     let d = BigUint::from(lattice.d);
@@ -134,6 +149,8 @@ fn lattice_rounding_and_signed_reconstruction_match_integers() {
 fn joint_digits_cover_rotations_and_extreme_halves() {
     for code in 1..=48 {
         let (a, b) = digit_pair(code);
+        assert!(a.unsigned_abs() <= 5 && b.unsigned_abs() <= 5);
+        assert!(a % 2 != 0 || b % 2 != 0);
         let (digits, len) = recode(i128::from(a), i128::from(b));
         assert_eq!(len, 1);
         assert_eq!(digits[0], code);

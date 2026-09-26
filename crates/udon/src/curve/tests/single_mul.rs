@@ -15,7 +15,7 @@ fn normalized<C: PastaCurve>(
     let mut entries = [PreparedAffinePoint::from_affine(&AffinePoint::GENERATOR); 8];
     let mut field = [PastaField::ZERO; 8];
     eisenstein::normalize(&points, &mut field, &mut entries);
-    eisenstein::multiply(&entries, EisensteinScalar::<C>::for_single(scalar).digits())
+    eisenstein::multiply(&entries, EisensteinScalar::<C>::new(scalar).digits())
 }
 
 fn compare<C: PastaCurve>(c: &mut criterion::Criterion, name: &str) {

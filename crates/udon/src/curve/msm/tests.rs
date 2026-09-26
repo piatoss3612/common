@@ -24,6 +24,69 @@ impl Executor for Pool {
     }
 }
 
+#[test]
+fn parallel_cache_matches_serial_and_preserves_tails() {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    fn check<C: PastaCurve>() {
+        for n in [0, 5, 1023, 1024, 1025] {
+            let scalars: Vec<_> = field_samples::<C::Scalar>().take(n).collect();
+            let mut records = vec![ScalarStorage::ZERO; n];
+            let prepared = PreparedScalars::<C>::prepare(
+                &scalars,
+                &mut records,
+                TaskBudget::SERIAL,
+                &SerialExecutor,
+            );
+            let plan = run::MsmPlan::<C>::new(n, crate::exec::ExecutionOptions::default()).unwrap();
+            let len = prepared.cache_len(&plan);
+            let mut serial = vec![73; len + 1];
+            let expected = prepared
+                .cache(&plan, &mut serial, TaskBudget::SERIAL, &SerialExecutor)
+                .cached
+                .map(|c| c.digits.to_vec());
+            for workers in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap();
+                let mut bytes = vec![73; len + 1];
+                let cached = pool.install(|| {
+                    prepared.cache(&plan, &mut bytes, TaskBudget::new(4).unwrap(), &Pool)
+                });
+                assert!(cached.records == prepared.records);
+                assert_eq!(cached.cached.map(|c| c.digits), expected.as_deref());
+                assert_eq!(bytes, serial);
+            }
+            for tasks in [1, 2, 3, 8] {
+                let width = JoinWidth(AtomicUsize::new(1));
+                let mut bytes = vec![73; len + 1];
+                let cached =
+                    prepared.cache(&plan, &mut bytes, TaskBudget::new(tasks).unwrap(), &width);
+                assert_eq!(cached.cached.map(|c| c.digits), expected.as_deref());
+                assert_eq!(bytes, serial);
+                assert!(width.0.load(Ordering::Relaxed) <= tasks);
+            }
+            if len != 0 {
+                let width = JoinWidth(AtomicUsize::new(0));
+                let mut short = vec![73; len - 1];
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ =
+                            prepared.cache(&plan, &mut short, TaskBudget::new(4).unwrap(), &width);
+                    }))
+                    .is_err()
+                );
+                assert_eq!(width.0.load(Ordering::Relaxed), 0);
+                assert!(short.iter().all(|&byte| byte == 73));
+            }
+            assert_eq!(serial[len], 73);
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
 fn reference<C: PastaCurve>(input: &Input<'_, C>) -> ProjectivePoint<C> {
     let mut sum = ProjectivePoint::IDENTITY;
     let Scalars::Raw(scalars) = input.scalars else {
@@ -489,6 +552,37 @@ fn scratch_can_be_reused_after_executor_unwind() {
     );
     buffers.tails(r);
     assert!(*storage.last().unwrap() == ScalarStorage::ZERO);
+
+    let scalars: Vec<_> = field_samples().take(1025).collect();
+    let mut records = vec![ScalarStorage::<Pallas>::ZERO; scalars.len()];
+    let prepared =
+        PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
+    let plan = run::MsmPlan::new(scalars.len(), crate::exec::ExecutionOptions::DEFAULT).unwrap();
+    let len = prepared.cache_len(&plan);
+    let mut serial = vec![73; len + 1];
+    let expected = prepared
+        .cache(&plan, &mut serial, TaskBudget::SERIAL, &SerialExecutor)
+        .cached
+        .unwrap()
+        .digits
+        .to_vec();
+    let mut bytes = vec![73; len + 1];
+    for at in [0, 2] {
+        let executor = Panics {
+            calls: AtomicUsize::new(0),
+            at,
+        };
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| {
+                let _ = prepared.cache(&plan, &mut bytes, options.task_budget, &executor);
+            }))
+            .is_err()
+        );
+        assert_eq!(bytes[len], 73);
+        let cached = prepared.cache(&plan, &mut bytes, options.task_budget, &Pool);
+        assert_eq!(cached.cached.unwrap().digits, expected);
+        assert_eq!(bytes, serial);
+    }
 }
 
 fn collisions<C: PastaCurve>() {
@@ -1120,68 +1214,6 @@ fn production_booth_bounds_and_partial_row_visits() {
                     }
                 }
             }
-        }
-    }
-    check::<Pallas>();
-    check::<Vesta>();
-}
-
-#[test]
-fn optional_compact_batch_certificate_preserves_fallbacks() {
-    use crate::curve::{EisensteinScalar, EisensteinTableBatch};
-    fn check<C: PastaCurve>() {
-        let bases = [AffinePoint::<C>::GENERATOR; 32];
-        let r = EisensteinTableBatch::<C>::requirements(bases.len()).unwrap();
-        let mut entries = vec![AffinePoint::GENERATOR; r.table_entries];
-        let mut projective = vec![ProjectivePoint::IDENTITY; r.projective_scratch];
-        let mut fields = vec![PastaField::ZERO; r.field_scratch];
-        let tables = EisensteinTableBatch::prepare(
-            &bases,
-            &mut entries,
-            &mut projective,
-            &mut fields,
-            TaskBudget::SERIAL,
-            &SerialExecutor,
-        );
-        let mut fields = vec![
-            PastaField::ZERO;
-            EisensteinTableBatch::<C>::multiplication_scratch(bases.len())
-                .unwrap()
-        ];
-        for scalar in [
-            PastaField::<_>::ZERO,
-            PastaField::<_>::ONE,
-            PastaField::<_>::ONE.neg(),
-        ]
-        .into_iter()
-        .chain(field_samples::<C::Scalar>().take(64))
-        {
-            let prepared = EisensteinScalar::new(&scalar);
-            let certified = prepared;
-            assert_eq!(prepared.digits(), certified.digits());
-            assert_eq!(prepared.batch_safe(), certified.batch_safe());
-            let mut plain = [ProjectivePoint::IDENTITY; 32];
-            let mut cached = plain;
-            tables.mul_prepared(
-                &prepared,
-                &mut plain,
-                &mut fields,
-                TaskBudget::SERIAL,
-                &SerialExecutor,
-            );
-            tables.mul_prepared(
-                &certified,
-                &mut cached,
-                &mut fields,
-                TaskBudget::new(3).unwrap(),
-                &Pool,
-            );
-            assert_eq!(plain, cached);
-            assert!(
-                cached
-                    .iter()
-                    .all(|p| *p == bases[0].mul_projective(&scalar))
-            );
         }
     }
     check::<Pallas>();

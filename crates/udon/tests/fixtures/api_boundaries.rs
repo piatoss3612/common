@@ -760,7 +760,12 @@ fn curve<C: PastaCurve>() {
         &SerialExecutor,
     );
     let mut digits = vec![0; prepared.cache_len(&plan)];
-    assert_eq!(prepared.cache(&plan, &mut digits).len(), 1);
+    assert_eq!(
+        prepared
+            .cache(&plan, &mut digits, TaskBudget::SERIAL, &SerialExecutor)
+            .len(),
+        1
+    );
 
     #[allow(unused_mut)]
     let mut matrix_bases = [generator, generator.neg()];

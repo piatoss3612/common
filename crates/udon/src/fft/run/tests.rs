@@ -174,6 +174,87 @@ fn fragmented_orders_prefixes_cosets_products_and_codelets_match_contiguous() {
     check::<PallasScalar>();
 }
 
+#[test]
+fn prefix_regions_match_independent_powers() {
+    use super::{FftKernel, ForwardShift};
+    fn check<M: PrimeModulus>() {
+        let size = 1024;
+        let domain = Domain::<M>::for_size(size).unwrap();
+        let arbitrary = PastaField::<M>::from_u64(7);
+        let shifts = [
+            ForwardShift::for_domain(domain.subgroup()),
+            ForwardShift::for_domain(domain.coset()),
+            ForwardShift::Residue {
+                shift: arbitrary,
+                inverse: arbitrary.invert().unwrap(),
+            },
+        ];
+        let loose_one =
+            PastaField::<M>::ONE.add(&PastaField::<M>::from_montgomery_limbs(M::MODULUS));
+        for prefix in [1, 10, 31, 32, 33, 129, 257] {
+            let source: Vec<_> = (0..prefix)
+                .map(|i| PastaField::from_u64((i * i + 5) as u64))
+                .collect();
+            for shift in shifts {
+                let scales: Vec<_> = (0..size).map(|i| shift.shift().pow_u64(i as u64)).collect();
+                for retained in [false, true] {
+                    for scale in [PastaField::ONE, loose_one, PastaField::from_u64(13)] {
+                        let mut plan = FftPlan::with_strategy(
+                            Transform::new(domain.subgroup()),
+                            TransformRequest {
+                                input_storage: InputStorage::Preserve,
+                                support: InputSupport::Prefix(prefix),
+                                ..TransformRequest::new(Direction::Forward)
+                            },
+                            NonZeroUsize::new(size).unwrap(),
+                            Codelet::Radix2,
+                        )
+                        .unwrap()
+                        .with_input_scale(scale);
+                        plan.shift = shift;
+                        plan.residue_scales = retained.then_some(scales.as_slice());
+                        let repeat = plan.first() / 2;
+                        let width = size / repeat;
+                        for start in [0, 1, repeat - 1, size / 3] {
+                            for length in [0, 1, repeat * 31, repeat * 32 + 3, size - start] {
+                                let length = length.min(size - start);
+                                let mut output = vec![PastaField::ZERO; length];
+                                let kernel = FftKernel {
+                                    plan,
+                                    kind: WorkKind::Local,
+                                    start,
+                                    block: 0,
+                                    product: false,
+                                    column: 0,
+                                    band: 0,
+                                };
+                                kernel.initialize_prefix(&mut output, &source.as_slice());
+                                for (offset, value) in output.iter().enumerate() {
+                                    let degree =
+                                        super::reverse((start + offset) / repeat, width.ilog2());
+                                    let expected = source
+                                        .get(degree)
+                                        .copied()
+                                        .unwrap_or(PastaField::ZERO)
+                                        .mul(&scales[degree])
+                                        .mul(&scale);
+                                    assert_eq!(
+                                        value.reduce(),
+                                        expected.reduce(),
+                                        "prefix={prefix}, start={start}, offset={offset}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
 fn fused_scales<M: PrimeModulus>() {
     use crate::{exec::run::ReadView, fft::run::Buffers};
 
@@ -990,3 +1071,5 @@ fn fft_setup_and_later_task_errors_have_distinct_mutation_scopes() {
             .all(|v| v.montgomery_limbs() == sentinel.montgomery_limbs())
     );
 }
+
+mod prefix;

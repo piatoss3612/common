@@ -1,6 +1,17 @@
 use super::*;
 use crate::field::ProductSum;
 
+struct Hint<I>(I, (usize, Option<usize>));
+impl<I: Iterator> Iterator for Hint<I> {
+    type Item = I::Item;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.1
+    }
+}
+
 fn check_sum_states<M: PrimeModulus, S: ReductionState, T: ReductionState, const N: usize>(
     lhs: &[PastaField<M, S>; N],
     rhs: &[PastaField<M, T>; N],
@@ -75,6 +86,21 @@ fn check_products<M: PrimeModulus>() {
         assert_value(
             PastaField::<M>::sum_of_product_pairs(lhs.iter().zip(&rhs)),
             &expected,
+        );
+        // Dispatch and overflow bounds must use actual entries, even when a
+        // safe iterator reports an incorrect length or supplies strided data.
+        for hint in [(0, None), (0, Some(0)), (usize::MAX, Some(usize::MAX))] {
+            assert_value(
+                PastaField::<M>::sum_of_product_pairs(Hint(lhs.iter().zip(&rhs), hint)),
+                &expected,
+            );
+        }
+        let stride_expected = (0..length).step_by(3).fold(BigUint::from(0u8), |sum, i| {
+            sum + &values[i % values.len()].1 * &values[(i * 13 + 5) % values.len()].1
+        });
+        assert_value(
+            PastaField::<M>::sum_of_product_pairs(lhs.iter().step_by(3).zip(rhs.iter().step_by(3))),
+            &stride_expected,
         );
         assert_value(mixed.finish(), &mixed_expected);
         for order in [[0, 1, 2], [2, 1, 0], [1, 0, 2]] {

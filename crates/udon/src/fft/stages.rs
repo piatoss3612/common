@@ -9,7 +9,9 @@ use super::{
     TwiddleStorage, TwiddleTable, reverse,
 };
 use crate::exec::{TaskBudget, for_each_chunk_mut};
-use crate::field::butterfly::{butterfly, butterfly_dif, divide_by_power_of_two, scale};
+use crate::field::butterfly::{
+    butterfly, butterfly_dif, butterfly_pair, divide_by_power_of_two, scale,
+};
 
 #[cfg(test)]
 mod tests;
@@ -352,16 +354,29 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
     ) {
         let mut power = powers.at(start);
         let len = left.len();
-        for (offset, (left, right)) in left.iter_mut().zip(right).enumerate() {
-            let index = start + offset;
-            let twiddle = (index != 0).then_some(&power);
+        let mut low = left.chunks_exact_mut(2);
+        let mut high = right.chunks_exact_mut(2);
+        for (offset, (left, right)) in low.by_ref().zip(high.by_ref()).enumerate() {
+            let index = start + offset * 2;
+            let next = powers.next(index + 1, power);
+            let twiddles = [(index != 0).then_some(&power), Some(&next)];
+            let left = left.try_into().unwrap();
+            let right = right.try_into().unwrap();
+            if Self::DIF {
+                butterfly_pair::<M, true>(left, right, twiddles);
+            } else {
+                butterfly_pair::<M, false>(left, right, twiddles);
+            }
+            if offset * 2 + 2 < len {
+                power = powers.next(index + 2, next);
+            }
+        }
+        if let ([left], [right]) = (low.into_remainder(), high.into_remainder()) {
+            let twiddle = (start + len - 1 != 0).then_some(&power);
             if Self::DIF {
                 butterfly_dif(left, right, twiddle);
             } else {
                 butterfly(left, right, twiddle);
-            }
-            if offset + 1 < len {
-                power = powers.next(index + 1, power);
             }
         }
     }
@@ -453,6 +468,10 @@ impl<'a, M: PrimeModulus, const MODE: u8> Schedule<'_, 'a, '_, M, MODE> {
             |chunk, values, inner| {
                 let (left, right) = values.split_at_mut(block / 2);
                 paired(left, right, 0, inner, executor, &|start, left, right| {
+                    if !terminal {
+                        self.pair_with(left, right, start, powers);
+                        return;
+                    }
                     let mut power = powers.at(start);
                     let factors = if terminal && self.inverse() {
                         Factors::untwist(self.plan.domain)

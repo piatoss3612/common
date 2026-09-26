@@ -37,8 +37,6 @@ pub use interpolation::{
     AdditionKernel, AdditionRequest, InterpolationPlan, InterpolationPublished, InterpolationRun,
 };
 mod driver;
-#[cfg(all(test, feature = "traits"))]
-pub(crate) use expansion::count_expansions;
 
 /// Worker-independent tile geometry and transform semantics.
 ///

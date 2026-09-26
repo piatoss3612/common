@@ -52,7 +52,7 @@ Operator forms forward to the inherent arithmetic. The opt-in `traits` feature
 adds the unstable `Field` consumer interface for arithmetic, canonical encodings,
 transforms, and product accumulation through the same native kernels. With this
 feature, the [`polynomial` module](crates/udon/src/polynomial/mod.rs) adds iterator
-and product utilities over `Field`, and the
+evaluation, linear division, and geometric sums over `Field`, and the
 [`cycle` module](crates/udon/src/cycle/mod.rs) binds the fields, curves, borrowed
 generators, and Poseidon instances of the Pasta cycle
 to one `Cycle` marker for proof systems generic over a curve cycle. The

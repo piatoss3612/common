@@ -291,17 +291,6 @@ pub trait Field:
     /// Panics before mutation if `values.len()` differs from the domain size.
     fn ifft(domain: crate::fft::Domain<Self>, values: &mut [Self]);
 
-    /// Multiplies ascending coefficient slices without allocation.
-    ///
-    /// Implements [`crate::polynomial::multiply`]'s output-length and scratch
-    /// contracts, including validation before mutation. The default selects
-    /// schoolbook convolution or padded transforms through [`Self::fft`] and
-    /// [`Self::ifft`]. Pasta specializes the transform path with coefficient
-    /// expansion and a fused pointwise product.
-    fn multiply_polynomials(a: &[Self], b: &[Self], product: &mut [Self], scratch: &mut [Self]) {
-        crate::polynomial::multiply_default(a, b, product, scratch)
-    }
-
     /// Evaluates a prefix of the domain's Lagrange basis at `point`.
     ///
     /// Implements [`Domain::lagrange_evaluations`], including its node-index
@@ -491,10 +480,6 @@ impl<M: PrimeModulus> Field for PastaField<M> {
                 &mut [],
             )
             .expect("a serial subgroup transform supports empty scratch");
-    }
-
-    fn multiply_polynomials(a: &[Self], b: &[Self], product: &mut [Self], scratch: &mut [Self]) {
-        crate::polynomial::multiply_pasta(a, b, product, scratch)
     }
 
     fn lagrange_evaluations(

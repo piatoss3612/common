@@ -9,18 +9,15 @@
 //! Operations do not allocate and accept both Pasta fields. Arithmetic is
 //! variable-time.
 //!
-//! The unstable `traits` feature adds generic iterator evaluation and descending
-//! quotient streaming, geometric sums, and polynomial multiplication. Iterator
-//! recurrences dispatch through `Field::mul_add`; products dispatch through
-//! `Field::multiply_polynomials`, including Pasta's coefficient expansion.
+//! The unstable `traits` feature adds generic iterator evaluation, descending
+//! quotient streaming, and geometric sums. Iterator recurrences dispatch
+//! through `Field::mul_add`.
 //! Native slice APIs remain available in every feature configuration.
 
 mod division;
 mod evaluation;
 mod fold;
 mod interpolation;
-#[cfg(feature = "traits")]
-mod multiplication;
 mod vanishing;
 
 #[cfg(feature = "traits")]
@@ -31,8 +28,4 @@ pub use evaluation::{EvaluationError, EvaluationPlan, evaluate};
 pub use evaluation::{evaluate_iter, geometric_sum};
 pub use fold::{FoldError, fold_weighted};
 pub use interpolation::{InterpolationError, InterpolationPlan, InterpolationPreparation};
-#[cfg(feature = "traits")]
-pub use multiplication::multiply;
-#[cfg(feature = "traits")]
-pub(crate) use multiplication::{multiply_default, multiply_pasta};
 pub use vanishing::{VanishingError, vanishing_polynomial};

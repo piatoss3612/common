@@ -88,9 +88,6 @@ fn main() {
         quotient.reverse();
         assert_eq!(quotient, divided[split..]);
         assert_eq!(udon::polynomial::geometric_sum(Fp::ONE, 3), Fp::from_u64(3));
-        let mut product = [Fp::ZERO; 4];
-        udon::polynomial::multiply(&coefficients, &[Fp::ONE; 2], &mut product, &mut []);
-        assert_eq!(product, [1, 8, 8, 1].map(Fp::from_u64));
     }
     #[cfg(feature = "cycle")]
     cycle::<udon::cycle::Pasta>();

@@ -5,7 +5,18 @@ use arithmetic::{
     field::{Fp, Fq},
 };
 fn main() {
-    assert_eq!(<Fp>::ONE.add(&<Fp>::ONE), <Fp>::from_u64(2));
+    assert_eq!(
+        <Fp>::ONE.add(&<Fp>::ONE).reduce(),
+        <Fp>::from_u64(2).reduce()
+    );
+    #[cfg(feature = "field-eq")]
+    {
+        let _ = <Fp>::ONE == <Fp>::ONE;
+    }
+    #[cfg(feature = "field-ne")]
+    {
+        let _ = <Fp>::ZERO != <Fp>::ONE;
+    }
     #[cfg(feature = "field-add")]
     {
         let _ = <Fp>::ONE + <Fp>::ONE;

@@ -33,7 +33,13 @@ pub(super) fn check_forward<M: PrimeModulus>(
     domain: CosetDomain<M>,
     actual: &[PastaField<M>],
 ) -> Result<(), &'static str> {
-    if actual == direct(coefficients, domain) {
+    if actual
+        .iter()
+        .map(|value| value.reduce())
+        .eq(direct(coefficients, domain)
+            .into_iter()
+            .map(PastaField::reduce))
+    {
         Ok(())
     } else {
         Err("FFT differs from direct polynomial evaluation")

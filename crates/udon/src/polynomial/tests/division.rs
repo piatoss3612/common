@@ -328,14 +328,20 @@ mod consumer {
                     );
                     assert_eq!(descending.len(), count.saturating_sub(1));
                     descending.reverse();
-                    assert_eq!(descending, in_place[split..]);
+                    assert!(
+                        descending
+                            .iter()
+                            .map(|value| value.reduce())
+                            .eq(in_place[split..].iter().map(|value| value.reduce()))
+                    );
                     let remainder = evaluate(&original, &point);
                     for x in field_samples::<M>().take(4) {
                         assert_eq!(
-                            evaluate(&original, &x),
+                            evaluate(&original, &x).reduce(),
                             evaluate(&descending, &x)
                                 .mul(&x.sub(&point))
                                 .add(&remainder)
+                                .reduce()
                         );
                     }
                 }

@@ -55,20 +55,18 @@ fn check_poseidon<M: PrimeModulus, P: PoseidonPermutation<FieldAdapter<M>>, cons
     let rows = instance.round_constants();
     assert_eq!(rows.len(), parameters.rounds());
     for (row, expected) in rows.iter().zip(parameters.round_constants) {
-        assert_eq!(FieldAdapter::as_slice(row.as_ref()), &expected[..]);
-        assert_eq!(
-            row.as_ref().as_ptr().cast::<PastaField<M>>(),
-            expected.as_ptr()
-        );
+        assert!(core::ptr::eq(
+            FieldAdapter::as_slice(row.as_ref()),
+            &expected[..]
+        ));
     }
     let mds = instance.mds_matrix();
     assert_eq!(mds.len(), T);
     for (row, expected) in mds.iter().zip(parameters.mds) {
-        assert_eq!(FieldAdapter::as_slice(row.as_ref()), &expected[..]);
-        assert_eq!(
-            row.as_ref().as_ptr().cast::<PastaField<M>>(),
-            expected.as_ptr()
-        );
+        assert!(core::ptr::eq(
+            FieldAdapter::as_slice(row.as_ref()),
+            &expected[..]
+        ));
     }
 }
 

@@ -230,8 +230,8 @@ mod consumer {
                         }),
                         count.saturating_sub(1)
                     );
-                    assert_eq!(actual, dot(&coefficients, &powers));
-                    assert_eq!(actual, evaluate(&coefficients, &point));
+                    assert_eq!(actual.reduce(), dot(&coefficients, &powers).reduce());
+                    assert_eq!(actual.reduce(), evaluate(&coefficients, &point).reduce());
                 }
             }
         }
@@ -255,8 +255,10 @@ mod consumer {
                         power = power.mul(&ratio);
                     }
                     assert_eq!(
-                        geometric_sum(FieldAdapter::new(ratio), terms).into_inner(),
-                        naive,
+                        geometric_sum(FieldAdapter::new(ratio), terms)
+                            .into_inner()
+                            .reduce(),
+                        naive.reduce(),
                         "ratio {ratio:?}, {terms} terms"
                     );
                 }

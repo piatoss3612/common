@@ -31,15 +31,19 @@ fn operators_preserve_native_arithmetic() {
                 binary!(+, +=, add);
                 binary!(-, -=, sub);
                 binary!(*, *=, mul);
-                assert_eq!((-x).into_inner(), a.neg());
-                assert_eq!((-&x).into_inner(), a.neg());
+                assert_eq!((-x).into_inner().reduce(), a.neg().reduce());
+                assert_eq!((-&x).into_inner().reduce(), a.neg().reduce());
                 assert_eq!(
-                    [x, y].iter().sum::<FieldAdapter<M>>().into_inner(),
-                    a.add(&b)
+                    [x, y].iter().sum::<FieldAdapter<M>>().into_inner().reduce(),
+                    a.add(&b).reduce()
                 );
                 assert_eq!(
-                    [x, y].into_iter().sum::<FieldAdapter<M>>().into_inner(),
-                    a.add(&b)
+                    [x, y]
+                        .into_iter()
+                        .sum::<FieldAdapter<M>>()
+                        .into_inner()
+                        .reduce(),
+                    a.add(&b).reduce()
                 );
             }
         }
@@ -57,6 +61,31 @@ fn operators_preserve_native_arithmetic() {
 }
 
 #[test]
+fn equality_compares_field_values_across_loose_representatives() {
+    fn check<M: PrimeModulus>() {
+        for (value, _) in samples::<M>(16) {
+            let reduced = value.reduce();
+            let (limbs, carry) =
+                crate::field::word::add_limbs(&reduced.montgomery_limbs(), &M::MODULUS);
+            assert_eq!(carry, 0);
+            let redundant = PastaField::<M>::from_montgomery_limbs(limbs);
+            assert_ne!(reduced.montgomery_limbs(), redundant.montgomery_limbs());
+            assert_eq!(reduced, redundant.reduce());
+            assert_eq!(
+                FieldAdapter::new(reduced.into_loose()),
+                FieldAdapter::new(redundant)
+            );
+            assert_ne!(
+                FieldAdapter::new(redundant),
+                FieldAdapter::new(reduced.add(&PastaField::<M>::ONE))
+            );
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
+#[test]
 fn transparent_views_preserve_field_storage() {
     fn check<M: PrimeModulus>() {
         let mut native = [
@@ -68,7 +97,7 @@ fn transparent_views_preserve_field_storage() {
             let slice = &native[range];
             let wrapped = FieldAdapter::from_slice(slice);
             assert_eq!(wrapped.as_ptr().cast::<PastaField<M>>(), slice.as_ptr());
-            assert_eq!(FieldAdapter::as_slice(wrapped), slice);
+            assert!(core::ptr::eq(FieldAdapter::as_slice(wrapped), slice));
             assert_eq!(bento::bytes_of_slice(wrapped), bento::bytes_of_slice(slice));
         }
         assert!(core::ptr::eq(
@@ -80,13 +109,16 @@ fn transparent_views_preserve_field_storage() {
         wrapped[0] += FieldAdapter::from(3);
         *wrapped[1].as_inner_mut() = PastaField::from_u64(11);
         FieldAdapter::as_slice_mut(wrapped)[2] = PastaField::ONE;
-        assert_eq!(native, [3, 11, 1].map(PastaField::from_u64));
+        assert_eq!(
+            native.map(PastaField::reduce),
+            [3, 11, 1].map(PastaField::from_u64)
+        );
         let mut owned = original.map(FieldAdapter::new);
         let slice = FieldAdapter::as_slice_mut(&mut owned);
         slice[0] = PastaField::ONE;
         FieldAdapter::from_slice_mut(slice)[1] += FieldAdapter::ONE;
         assert_eq!(
-            owned.map(FieldAdapter::into_inner),
+            owned.map(|value| value.into_inner().reduce()),
             [1, 8, 0].map(PastaField::from_u64)
         );
         let rows = [original, native];
@@ -95,7 +127,10 @@ fn transparent_views_preserve_field_storage() {
             borrowed.as_ptr().cast::<[PastaField<M>; 3]>(),
             rows.as_ptr()
         );
-        assert_eq!(FieldAdapter::as_slice(&borrowed[1]), &native);
+        assert_eq!(
+            bento::bytes_of_slice(FieldAdapter::as_slice(&borrowed[1])),
+            bento::bytes_of_slice(&native)
+        );
         assert!(FieldAdapter::<M>::from_rows::<0>(&[[]])[0].is_empty());
     }
     check::<PallasBase>();

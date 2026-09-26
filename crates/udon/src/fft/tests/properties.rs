@@ -58,8 +58,17 @@ fn transforms<M: PrimeModulus>(
         assert_loose_bound(&output);
         plan.inverse_with(&mut output, options, &SerialExecutor, &mut scratch)
             .unwrap();
-        prop_assert_eq!(&output, &input);
-        prop_assert_eq!(scratch[count], sentinel);
+        prop_assert_eq!(
+            output
+                .iter()
+                .map(|value| value.reduce())
+                .collect::<Vec<_>>(),
+            input.iter().map(|value| value.reduce()).collect::<Vec<_>>()
+        );
+        prop_assert_eq!(
+            scratch[count].montgomery_limbs(),
+            sentinel.montgomery_limbs()
+        );
     }
     Ok(())
 }

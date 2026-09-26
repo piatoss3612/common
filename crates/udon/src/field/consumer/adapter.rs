@@ -19,9 +19,19 @@ use core::{
 /// preserve the original allocation, so bulk operations use native kernels
 /// without staging or copying elements. No implicit dereferencing is provided;
 /// use [`Self::as_inner`] when calling native APIs.
-#[derive(Clone, Copy, Eq, PartialEq, bento::Pod)]
+/// Equality compares field values, reducing both native representatives.
+#[derive(Clone, Copy, bento::Pod)]
 #[repr(transparent)]
 pub struct FieldAdapter<M: PrimeModulus>(pub(crate) PastaField<M>);
+
+impl<M: PrimeModulus> PartialEq for FieldAdapter<M> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        self.0.reduce() == other.0.reduce()
+    }
+}
+
+impl<M: PrimeModulus> Eq for FieldAdapter<M> {}
 
 impl<M: PrimeModulus> Default for FieldAdapter<M> {
     fn default() -> Self {

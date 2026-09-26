@@ -11,18 +11,18 @@ fn domain_scalars_are_consistent() {
         let size = domain.size() as u64;
         assert_eq!(domain.log_size(), log_size);
         assert_eq!(size, 1 << log_size);
-        assert_eq!(domain.root().mul(&domain.inverse_root()), <Fp>::ONE);
-        assert_eq!(domain.size_inverse().mul(&<Fp>::from_u64(size)), <Fp>::ONE);
-        assert_eq!(domain.root().pow_u64(size), <Fp>::ONE);
+        assert!(domain.root().mul(&domain.inverse_root()).is_one());
+        assert!(domain.size_inverse().mul(&<Fp>::from_u64(size)).is_one());
+        assert!(domain.root().pow_u64(size).is_one());
         if log_size > 0 {
-            assert_ne!(domain.root().pow_u64(size / 2), <Fp>::ONE);
+            assert!(!domain.root().pow_u64(size / 2).is_one());
         }
         assert_eq!(domain, Domain::for_size(domain.size()).unwrap());
     }
     let trivial = Domain::<Fq>::new(0).unwrap();
     assert_eq!(trivial.size(), 1);
-    assert_eq!(trivial.root(), <Fq>::ONE);
-    assert_eq!(trivial.size_inverse(), <Fq>::ONE);
+    assert!(trivial.root().is_one());
+    assert!(trivial.size_inverse().is_one());
 }
 
 #[cfg(feature = "traits")]
@@ -43,9 +43,18 @@ mod consumer {
                     native
                 );
                 if let (Ok(generic), Ok(native)) = (generic, native) {
-                    assert_eq!(generic.root().into_inner(), native.root());
-                    assert_eq!(generic.inverse_root().into_inner(), native.inverse_root());
-                    assert_eq!(generic.size_inverse().into_inner(), native.size_inverse());
+                    assert_eq!(
+                        generic.root().into_inner().montgomery_limbs(),
+                        native.root().montgomery_limbs()
+                    );
+                    assert_eq!(
+                        generic.inverse_root().into_inner().montgomery_limbs(),
+                        native.inverse_root().montgomery_limbs()
+                    );
+                    assert_eq!(
+                        generic.size_inverse().into_inner().montgomery_limbs(),
+                        native.size_inverse().montgomery_limbs()
+                    );
                 }
             }
         }
@@ -424,14 +433,22 @@ fn layouts_and_subdomain_rows_are_distinct_from_coefficient_tiles() {
                 }))
                 .is_err()
             );
-            assert_eq!(destination, vec![<Fp>::ZERO; output_len]);
+            assert!(
+                destination
+                    .iter()
+                    .all(|value| value.montgomery_limbs() == [0; 4])
+            );
             assert!(
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     layout.copy_to_natural(&source, &mut destination);
                 }))
                 .is_err()
             );
-            assert_eq!(destination, vec![<Fp>::ZERO; output_len]);
+            assert!(
+                destination
+                    .iter()
+                    .all(|value| value.montgomery_limbs() == [0; 4])
+            );
         }
     }
 }

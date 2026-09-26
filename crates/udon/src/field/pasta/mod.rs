@@ -60,9 +60,9 @@ const ENCODED_SIZE: usize = 32;
 /// The representation state `S` carries the bound on the stored Montgomery
 /// integer: [`Loose`] permits `[0, 2p)` and [`Reduced`] permits `[0, p)`.
 /// Arithmetic returns loose values. [`reduce`](Self::reduce) produces the
-/// unique representative required by ordering and square roots. Equality
-/// compares field elements in either state: reduced values compare their
-/// limbs, and loose values first pay the conditional subtraction of `reduce`.
+/// unique representative required by equality, ordering, and square roots.
+/// Only reduced values implement equality, comparing their limbs directly.
+/// Comparing loose field values requires an explicit reduction of both sides.
 /// The exact loose limbs of an arithmetic result are not guaranteed; equivalent
 /// computations can produce different representatives within the bound.
 /// Ordering and debug output use the canonical field integer.
@@ -101,20 +101,14 @@ pub type Fp<S = Loose> = PastaField<PallasBase, S>;
 /// The Vesta coordinate field and Pallas scalar field.
 pub type Fq<S = Loose> = PastaField<PallasScalar, S>;
 
-impl<M: PrimeModulus, S: ReductionState> PartialEq for PastaField<M, S> {
+impl<M: PrimeModulus> PartialEq for PastaField<M, Reduced> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
-        if S::REDUCED {
-            self.limbs == other.limbs
-        } else {
-            // Loose values have two representations; compare their canonical
-            // Montgomery limbs after one conditional subtraction each.
-            reduce_once::<M>(self.limbs) == reduce_once::<M>(other.limbs)
-        }
+        self.limbs == other.limbs
     }
 }
 
-impl<M: PrimeModulus, S: ReductionState> Eq for PastaField<M, S> {}
+impl<M: PrimeModulus> Eq for PastaField<M, Reduced> {}
 
 impl<M: PrimeModulus> Ord for PastaField<M, Reduced> {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {

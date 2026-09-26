@@ -46,6 +46,8 @@ fn consumer_interfaces_require_the_traits_feature() {
 #[ignore = "slow nested Cargo builds; run explicitly with --ignored"]
 fn native_types_do_not_acquire_arithmetic_operators() {
     let cases = [
+        ("field-eq", "error[E0369]"),
+        ("field-ne", "error[E0369]"),
         ("field-add", "error[E0369]"),
         ("field-sub", "error[E0369]"),
         ("field-mul", "error[E0369]"),

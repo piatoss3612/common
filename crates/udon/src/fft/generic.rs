@@ -104,33 +104,27 @@ impl<F: Field> Domain<F> {
     }
 }
 
-impl<F: Copy + Eq> Domain<F> {
+impl<M: PrimeModulus> Domain<PastaField<M>> {
     /// Returns the `i` with `root^i = x` for an `x` known to be in the subgroup.
     ///
     /// The discrete logarithm is taken bit by bit: `root^(size/2)` is the
     /// unique element of order two, so `x^(size / 2^(j+1))` is `-1` exactly
     /// when bit `j` of the logarithm is set, once the lower bits have been
     /// cleared. This costs `O(log_size^2)` squarings instead of a scan.
-    fn index_of(
-        self,
-        mut x: F,
-        one: F,
-        square: impl Fn(&F) -> F,
-        multiply: impl Fn(&F, &F) -> F,
-    ) -> usize {
+    fn index_of(self, mut x: PastaField<M>) -> usize {
         let mut index = 0;
         // `root^-(2^j)` at iteration `j`.
         let mut inverse_power = self.inverse_root();
         for bit in 0..self.log_size() {
             let mut test = x;
             for _ in 0..(self.log_size() - 1 - bit) {
-                test = square(&test);
+                test = test.square();
             }
-            if test != one {
+            if !test.is_one() {
                 index |= 1 << bit;
-                x = multiply(&x, &inverse_power);
+                x = x.mul(&inverse_power);
             }
-            inverse_power = square(&inverse_power);
+            inverse_power = inverse_power.square();
         }
         index
     }
@@ -155,24 +149,12 @@ impl<M: PrimeModulus> CosetDomain<M> {
             // membership. A singleton basis is one even at an off-domain point.
             let relative = self.relative_point(point);
             let power = domain.power_of_size(relative, PastaField::square);
-            power.is_one().then(|| {
-                domain.index_of(
-                    relative,
-                    PastaField::ONE,
-                    PastaField::square,
-                    PastaField::mul,
-                )
-            })
+            power.is_one().then(|| domain.index_of(relative))
         } else {
             match completion.finish {
                 Finish::Scale(_) => None,
                 Finish::Delta(Some(index)) => Some(index),
-                Finish::Delta(None) => Some(domain.index_of(
-                    self.relative_point(point),
-                    PastaField::ONE,
-                    PastaField::square,
-                    PastaField::mul,
-                )),
+                Finish::Delta(None) => Some(domain.index_of(self.relative_point(point))),
             }
         };
         completion.evaluate(output, scratch)?;

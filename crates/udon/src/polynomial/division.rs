@@ -40,6 +40,39 @@ pub fn divide_linear_in_place<M: PrimeModulus>(
     coefficients.len().min(1)
 }
 
+/// Streams the quotient by `X - point` in descending coefficient order.
+///
+/// Input coefficients are ascending; reading them from the back lets synthetic
+/// division produce the highest quotient coefficient first without allocation
+/// or scratch. Empty and constant inputs yield no quotient coefficients.
+/// The remainder `p(point)` is discarded, whether or not `point` is a root.
+/// Use [`divide_linear_in_place`] to retain both the remainder and an ascending
+/// quotient in a mutable Pasta slice.
+///
+/// This consumer API requires `traits`. Its recurrence uses `Field::mul_add`,
+/// including Pasta's native method. Work is linear and arithmetic variable-time.
+#[cfg(feature = "traits")]
+pub fn divide_linear_rev<F: crate::field::Field, I>(
+    coefficients: I,
+    point: F,
+) -> impl Iterator<Item = F>
+where
+    I: IntoIterator<Item = F>,
+    I::IntoIter: DoubleEndedIterator,
+{
+    let mut coefficients = coefficients.into_iter().rev().peekable();
+    let mut carry = coefficients.next().unwrap_or(F::ZERO);
+    core::iter::from_fn(move || {
+        let coefficient = coefficients.next()?;
+        let quotient = carry;
+        // The constant coefficient only affects the discarded remainder.
+        if coefficients.peek().is_some() {
+            carry = carry.mul_add(&point, &coefficient);
+        }
+        Some(quotient)
+    })
+}
+
 /// A divisor that does not explicitly end in a unit leading coefficient.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MonicDivisionError {

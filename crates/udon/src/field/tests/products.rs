@@ -1,12 +1,19 @@
+use crate::field::pasta::count_slice_sums;
 use crate::field::pasta::test_support::{assert_value, limbs, modulus, samples};
-use crate::field::{Fp, PallasBase, PallasScalar, PastaField, PrimeModulus, dot};
+use crate::field::{Field, Fp, PallasBase, PallasScalar, PastaField, PrimeModulus, dot, dot_iter};
 use num_bigint::BigUint;
 use std::{vec, vec::Vec};
 
 #[test]
-#[should_panic(expected = "equal length")]
+#[should_panic(expected = "lengths must agree")]
 fn dot_rejects_unequal_lengths() {
     let _ = dot(&[<Fp>::ONE, <Fp>::ONE], &[<Fp>::ONE]);
+}
+
+#[test]
+#[should_panic(expected = "equal length")]
+fn dot_iter_rejects_unequal_lengths() {
+    let _ = dot_iter([<Fp>::ONE, <Fp>::ONE].iter().rev(), [<Fp>::ONE].iter());
 }
 
 fn check_dot<M: PrimeModulus>() {
@@ -36,11 +43,27 @@ fn check_dot<M: PrimeModulus>() {
                 strided_expected += x * y;
             }
         }
-        assert_value(dot(&lhs, &rhs), &expected);
-        assert_value(dot(lhs.iter().rev(), rhs.iter().rev()), &expected);
-        assert_value(
-            dot(lhs.iter().step_by(2), rhs.iter().step_by(2)),
-            &strided_expected,
+        for product in [
+            dot::<PastaField<M>>,
+            <PastaField<M> as Field>::sum_of_products_slice,
+        ] {
+            assert_eq!(
+                count_slice_sums(|| assert_value(product(&lhs, &rhs), &expected)),
+                1
+            );
+        }
+        assert_eq!(
+            count_slice_sums(|| {
+                assert_value(dot_iter(lhs.iter().rev(), rhs.iter().rev()), &expected);
+                assert_value(
+                    dot_iter(lhs.iter().step_by(2), rhs.iter().step_by(2)),
+                    &strided_expected,
+                );
+            }),
+            // The native iterator path uses slice kernels for two or three
+            // pairs, including the shortened sequence from step_by(2).
+            usize::from((2..=3).contains(&length))
+                + usize::from((2..=3).contains(&length.div_ceil(2)))
         );
         let maximal = PastaField::<M>::from_montgomery_limbs(limbs(&(&p * 2u8 - 1u8)));
         let maximal_integer = BigUint::from_bytes_le(&maximal.to_bytes());

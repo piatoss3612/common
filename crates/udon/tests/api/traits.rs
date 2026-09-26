@@ -9,7 +9,7 @@ fn consumer_interfaces_require_the_traits_feature() {
         ("field", "cannot find trait `Field`"),
         ("curve", "cannot find trait `Affine`"),
         ("domain", "no method named `transform`"),
-        ("poly", "could not find `poly`"),
+        ("polynomial", "cannot find function `evaluate_iter`"),
         ("cycle", "could not find `cycle`"),
         ("poseidon", "cannot find trait `PoseidonPermutation`"),
     ];

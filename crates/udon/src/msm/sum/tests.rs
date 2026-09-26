@@ -1,7 +1,7 @@
 use super::*;
 use crate::msm::test_support::Buffers;
 use crate::{
-    curve::{Pallas, Vesta, msm::test_support::Buffers, pasta::test_reference::multiply},
+    curve::{Pallas, Vesta, pasta::test_reference::multiply},
     exec::{ExecutionOptions, SerialExecutor},
     field::PrimeModulus,
     field::pasta::test_support::{field_samples, modulus},

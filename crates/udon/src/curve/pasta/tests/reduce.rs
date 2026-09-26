@@ -2,8 +2,8 @@ use num_bigint::BigUint;
 
 use super::*;
 use crate::{
-    curve::{Pallas, Point, Vesta, tests::reference::Reference},
-    test_support::modulus,
+    curve::{Pallas, Point, Vesta, pasta::test_reference::Reference},
+    field::pasta::test_support::modulus,
 };
 use std::{vec, vec::Vec};
 

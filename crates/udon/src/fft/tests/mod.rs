@@ -1,5 +1,6 @@
 use super::*;
-use crate::field::pasta::test_support::field_samples;
+use crate::exec::SerialExecutor;
+use crate::field::pasta::test_support::{field_samples, integer, twice_modulus};
 use crate::field::{Fp, PallasBase, PallasScalar, Reduced};
 use bento::bytes_of_slice;
 use std::{
@@ -19,7 +20,9 @@ mod properties;
 mod oracle;
 mod support;
 use oracle::*;
+pub(super) use oracle::{direct, inverse_direct, ordered};
 use support::*;
+pub(super) use support::{inputs, reduced};
 
 mod expansion;
 mod expansion_engine;

@@ -1,6 +1,6 @@
 //! Borrowed commitment generators and their construction checks.
 
-use crate::curve::{Affine, Pallas, PastaCurve, Point, Projective as _, Vesta};
+use crate::curve::{Affine, Pallas, PastaCurve, Point, Vesta};
 
 /// Fixed generators of one curve with unknown discrete logarithm relationships
 /// to each other.
@@ -11,20 +11,6 @@ pub trait FixedGenerators<C: Affine>: Send + Sync + 'static {
 
     /// The generator used for blinding.
     fn h(&self) -> &C;
-
-    /// Commits to one value: `g[0] * value + h * blind`.
-    ///
-    /// This operation is variable-time in both `value` and `blind`. It has
-    /// no constant-time guarantee and must not be used when either scalar
-    /// needs protection from timing or other execution side channels.
-    /// The blinding scalar does not hide those execution traces.
-    ///
-    /// # Panics
-    ///
-    /// Panics if [`g`](Self::g) is empty.
-    fn short_commit(&self, value: C::Scalar, blind: C::Scalar) -> C {
-        (self.g()[0] * value + *self.h() * blind).to_affine()
-    }
 }
 
 /// Fixed generators of a Pasta curve, borrowed from static storage.

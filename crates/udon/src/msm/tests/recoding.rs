@@ -1,136 +1,6 @@
 use super::*;
 
 #[test]
-fn packed_midpoint_carries_reconstruct_signed_extremes() {
-    use crate::curve::pasta::scalar::centered_digit;
-    use num_bigint::BigInt;
-    for width in [2, 4, 8] {
-        for negative in [false, true] {
-            for value in [0, 1, 127, 128, 129, 255, 256, u128::MAX, i128::MAX as u128] {
-                let mut carry = 0;
-                let mut magnitude = value;
-                let mut digits = Vec::new();
-                for _ in 0..128 / width {
-                    let digit = centered_digit(
-                        (magnitude & ((1 << width) - 1)) as u16,
-                        negative,
-                        &mut carry,
-                        width,
-                    );
-                    assert!((-(1 << (width - 1))..1 << (width - 1)).contains(&digit));
-                    assert_eq!(digit as i8 as i16, digit);
-                    digits.push(digit);
-                    magnitude >>= width;
-                }
-                let mut actual = BigInt::from(if negative { -carry } else { carry });
-                for d in digits.into_iter().rev() {
-                    actual = (actual << width) + d;
-                }
-                let expected = BigInt::from(value);
-                assert_eq!(actual, if negative { -expected } else { expected });
-            }
-        }
-    }
-}
-
-#[test]
-fn affine_reducer_and_weighted_collapse_match_biguint() {
-    fn check<C: PastaCurve>() {
-        use crate::{curve::pasta::test_reference::Reference, field::pasta::test_support::modulus};
-        use num_bigint::BigUint;
-        let modulus = modulus::<C::Base>();
-        let g = AffinePoint::<C>::GENERATOR;
-        let pool: Vec<_> = (1..=13)
-            .map(|i| {
-                *g.mul_projective(&PastaField::<_>::from_u64(i))
-                    .to_point()
-                    .as_affine()
-                    .unwrap()
-            })
-            .collect();
-        for case in 0..96 {
-            let mut points = Vec::new();
-            let mut starts = Vec::new();
-            let mut lens = Vec::new();
-            let mut expected = Vec::new();
-            for bucket in 0..7 {
-                starts.push(points.len());
-                let n = (case * 7 + bucket * 3) % 19;
-                lens.push(n);
-                let mut sum = Reference::identity();
-                for i in 0..n {
-                    // Includes all-cancelling levels, odd survivors, and equal
-                    // operands alongside distinct points.
-                    let mut p = pool[if case % 3 == 0 {
-                        bucket
-                    } else {
-                        (case + i / 2) % pool.len()
-                    }];
-                    if case % 2 == 0 && i % 2 == 1 {
-                        p = p.neg();
-                    }
-                    sum = sum.add(&Reference::from_point(&p.to_point()), &modulus);
-                    points.push(p);
-                }
-                expected.push(sum);
-            }
-            let mut control = points.clone();
-            let mut control_lens = lens.clone();
-            let pairs = points.len() / 2;
-            let mut fused = points.clone();
-            let mut fused_lens = lens.clone();
-            let mut fields = vec![PastaField::ONE; pairs * 2 + 3];
-            while fused_lens.iter().any(|&n| n > 1) {
-                buckets::reduce_fused::<C, false>(
-                    &mut fused,
-                    &starts,
-                    &mut fused_lens,
-                    &mut fields[..pairs * 2],
-                );
-            }
-            buckets::reduce_original(
-                &mut control,
-                &starts,
-                &mut control_lens,
-                &mut vec![PastaField::ZERO; pairs * 6],
-                &mut vec![0; pairs],
-            );
-            buckets::reduce(
-                &mut points,
-                &starts,
-                &mut lens,
-                &mut vec![PastaField::ONE; pairs * 2],
-            );
-            assert_eq!(lens, control_lens);
-            assert_eq!(lens, fused_lens);
-            assert!(
-                fields[pairs * 2..]
-                    .iter()
-                    .all(|x| x.reduce() == PastaField::ONE)
-            );
-            let mut survivors = vec![g; starts.len()];
-            let mut weighted = Reference::identity();
-            for i in 0..starts.len() {
-                let result = if lens[i] == 0 {
-                    Point::IDENTITY
-                } else {
-                    survivors[i] = points[starts[i]];
-                    assert_eq!(points[starts[i]], control[starts[i]]);
-                    assert_eq!(points[starts[i]], fused[starts[i]]);
-                    points[starts[i]].to_point()
-                };
-                expected[i].assert_point(&result);
-                weighted =
-                    weighted.add(&expected[i].mul(&BigUint::from(i + 1), &modulus), &modulus);
-            }
-            weighted.assert_point(&buckets::collapse(&survivors, &lens).to_point());
-        }
-    }
-    check::<Pallas>();
-    check::<Vesta>();
-}
-
-#[test]
 fn production_booth_rows_reconstruct_both_glv_halves() {
     fn check<C: PastaCurve>() {
         use num_bigint::BigInt;
@@ -168,7 +38,7 @@ fn production_booth_rows_reconstruct_both_glv_halves() {
 #[test]
 fn production_booth_bounds_and_partial_row_visits() {
     fn check<C: PastaCurve>() {
-        use crate::curve::parameters::GlvParameters;
+        use crate::curve::pasta::parameters::GlvParameters;
         use num_bigint::BigInt;
         let mut records = vec![ScalarStorage::<C>::ZERO; 2049];
         for (i, record) in records.iter_mut().enumerate() {

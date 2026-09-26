@@ -21,10 +21,14 @@ address-space limits; size one is supported. `bit_reverse` maps between natural
 and bit-reversed positions.
 
 The unstable `traits` feature extends this same descriptor to consumer
-`FftField` implementations and adds generic domain operations. `elements()`
-iterates the subgroup in natural order, `vanishing(x)` and `contains(x)` evaluate
+`FftField` implementations through `F::domain(k)`, and adds generic domain
+operations. Pasta's trait constructor delegates to `Domain::new`.
+`elements()` iterates the subgroup in natural order; `vanishing(x)` and
+`contains(x)` evaluate
 `x^n - 1`, and `lagrange_evaluations` writes the Lagrange basis at a point into a
-caller slice with one shared inversion.
+caller slice with bounded inversion scratch. Pasta delegates Lagrange evaluation
+to the native range API; one scratch element per output shares a single inversion,
+and smaller buffers split the work into batches.
 
 With `traits` enabled, `Domain::transform` and `Domain::inverse_transform`
 dispatch field elements directly through the required `FftField::fft` and

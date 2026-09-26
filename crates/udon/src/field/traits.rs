@@ -19,7 +19,7 @@ use super::pasta::TWO_ADICITY;
 use super::{CanonicalUint, PastaField, PrimeModulus, ProductSum};
 use crate::{
     exec::{ExecutionOptions, SerialExecutor},
-    fft::{Domain, Transform},
+    fft::{Domain, FftError, Transform},
 };
 
 use core::{
@@ -76,6 +76,15 @@ pub trait Field:
     /// Returns `self * self`.
     fn square(&self) -> Self;
 
+    /// Returns `self * multiplier + addend`.
+    ///
+    /// The default performs multiplication followed by addition. Implementations
+    /// can specialize the combined operation; Pasta forwards to its native method.
+    #[inline]
+    fn mul_add(&self, multiplier: &Self, addend: &Self) -> Self {
+        *self * multiplier + addend
+    }
+
     /// Returns `2 * self`.
     fn double(&self) -> Self;
 
@@ -90,6 +99,16 @@ pub trait Field:
     /// allocation is performed.
     fn batch_invert(values: &mut [Self], scratch: &mut [Self]);
 
+    /// Inverts nonzero entries across disjoint slices with shared scratch.
+    ///
+    /// Applies [`Self::batch_invert`]'s scratch and zero-preservation contract
+    /// to the concatenation of `groups`, without copying or allocation. Empty
+    /// groups are allowed. Each group's `AsMut::as_mut` must expose the same
+    /// slice throughout the call.
+    fn batch_invert_groups(groups: &mut [impl AsMut<[Self]>], scratch: &mut [Self]) {
+        super::pasta::invert_groups(groups, scratch, Self::ONE, Self::is_zero, Self::invert)
+    }
+
     /// Returns a square root, or `None` for a nonsquare.
     ///
     /// Either root may be returned; zero returns `Some(ZERO)`.
@@ -100,11 +119,25 @@ pub trait Field:
     /// The multiplication schedule depends on the exponent.
     fn pow_u64(&self, exponent: u64) -> Self;
 
+    /// Returns the inner product of two equal-length slices, or zero when empty.
+    ///
+    /// The default delegates to [`Self::sum_of_product_pairs`]. Implementations
+    /// may specialize for contiguous inputs; Pasta uses its native slice kernels.
+    /// [`super::dot`] uses this hook.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the lengths differ.
+    fn sum_of_products_slice(lhs: &[Self], rhs: &[Self]) -> Self {
+        assert_eq!(lhs.len(), rhs.len(), "inner product lengths must agree");
+        Self::sum_of_product_pairs(lhs.iter().zip(rhs))
+    }
+
     /// Sums products from paired operands; an empty iterator returns zero.
     ///
     /// The default multiplies each pair separately and sums the results.
     /// Implementations may defer reduction, as the Pasta fields do.
-    /// [`super::dot`] uses this hook for its paired input sequences.
+    /// [`super::dot_iter`] uses this hook for its paired input sequences.
     fn sum_of_product_pairs<'a>(pairs: impl IntoIterator<Item = (&'a Self, &'a Self)>) -> Self {
         pairs.into_iter().map(|(lhs, rhs)| *lhs * rhs).sum()
     }
@@ -218,6 +251,20 @@ pub trait FftField: PrimeField {
     /// The generator raised to `2^TWO_ADICITY`.
     const DELTA: Self;
 
+    /// Constructs the canonical domain of `2^log_size` elements.
+    ///
+    /// Size one is supported. Returns [`FftError::InvalidSize`] above the
+    /// field's two-adicity, or [`FftError::SizeOverflow`] if the element count
+    /// does not fit `usize` or its slice would exceed `isize::MAX` bytes.
+    /// Pasta delegates to the native [`Domain::new`] constructor.
+    fn domain(log_size: u32) -> Result<Domain<Self>, FftError> {
+        let root = Self::root_of_unity(log_size).ok_or(FftError::InvalidSize)?;
+        let inverse_root = Self::root_of_unity_inverse(log_size).ok_or(FftError::InvalidSize)?;
+        Domain::from_roots(log_size, root, inverse_root, || {
+            Self::power_of_two_inverse(log_size)
+        })
+    }
+
     /// Replaces coefficients with evaluations at `domain`'s elements.
     ///
     /// Both sides use natural order. Implements
@@ -238,6 +285,32 @@ pub trait FftField: PrimeField {
     ///
     /// Panics before mutation if `values.len()` differs from the domain size.
     fn ifft(domain: crate::fft::Domain<Self>, values: &mut [Self]);
+
+    /// Multiplies ascending coefficient slices without allocation.
+    ///
+    /// Implements [`crate::polynomial::multiply`]'s output-length and scratch
+    /// contracts, including validation before mutation. The default selects
+    /// schoolbook convolution or padded transforms through [`Self::fft`] and
+    /// [`Self::ifft`]. Pasta specializes the transform path with coefficient
+    /// expansion and a fused pointwise product.
+    fn multiply_polynomials(a: &[Self], b: &[Self], product: &mut [Self], scratch: &mut [Self]) {
+        crate::polynomial::multiply_default(a, b, product, scratch)
+    }
+
+    /// Evaluates a prefix of the domain's Lagrange basis at `point`.
+    ///
+    /// Implements [`Domain::lagrange_evaluations`], including its node-index
+    /// result, bounded scratch, and validation before mutation. The default
+    /// uses field operations and [`Field::batch_invert`]. Pasta delegates to
+    /// its native range evaluator with scaled batch inversion.
+    fn lagrange_evaluations(
+        domain: Domain<Self>,
+        point: Self,
+        evaluations: &mut [Self],
+        scratch: &mut [Self],
+    ) -> Option<usize> {
+        crate::fft::lagrange_evaluations(domain, point, evaluations, scratch)
+    }
 
     /// Returns a primitive root of unity of order `2^log_size`, or `None`
     /// when `log_size` exceeds the two-adicity.
@@ -307,6 +380,11 @@ impl<M: PrimeModulus> Field for PastaField<M> {
         PastaField::square(self)
     }
 
+    #[inline]
+    fn mul_add(&self, multiplier: &Self, addend: &Self) -> Self {
+        PastaField::mul_add(self, multiplier, addend)
+    }
+
     fn double(&self) -> Self {
         PastaField::double(self)
     }
@@ -319,6 +397,10 @@ impl<M: PrimeModulus> Field for PastaField<M> {
         super::pasta::batch_invert(values, scratch)
     }
 
+    fn batch_invert_groups(groups: &mut [impl AsMut<[Self]>], scratch: &mut [Self]) {
+        super::pasta::batch_invert_groups(groups, scratch)
+    }
+
     fn sqrt(&self) -> Option<Self> {
         self.reduce().sqrt().map(PastaField::into_loose)
     }
@@ -329,6 +411,10 @@ impl<M: PrimeModulus> Field for PastaField<M> {
 
     fn from_u128(value: u128) -> Self {
         PastaField::from_u128(value)
+    }
+
+    fn sum_of_products_slice(lhs: &[Self], rhs: &[Self]) -> Self {
+        PastaField::sum_of_products_slice(lhs, rhs)
     }
 
     fn sum_of_product_pairs<'a>(pairs: impl IntoIterator<Item = (&'a Self, &'a Self)>) -> Self {
@@ -385,6 +471,10 @@ impl<M: PrimeModulus> FftField for PastaField<M> {
     const TWO_INVERSE: Self = Self::TWO_INVERSE;
     const DELTA: Self = Self::DELTA;
 
+    fn domain(log_size: u32) -> Result<Domain<Self>, FftError> {
+        Domain::new(log_size)
+    }
+
     fn fft(domain: Domain<Self>, values: &mut [Self]) {
         Transform::new(domain.subgroup())
             .forward(
@@ -405,6 +495,26 @@ impl<M: PrimeModulus> FftField for PastaField<M> {
                 &mut [],
             )
             .expect("a serial subgroup transform supports empty scratch");
+    }
+
+    fn multiply_polynomials(a: &[Self], b: &[Self], product: &mut [Self], scratch: &mut [Self]) {
+        crate::polynomial::multiply_pasta(a, b, product, scratch)
+    }
+
+    fn lagrange_evaluations(
+        domain: Domain<Self>,
+        point: Self,
+        evaluations: &mut [Self],
+        scratch: &mut [Self],
+    ) -> Option<usize> {
+        assert!(
+            evaluations.len() <= domain.size(),
+            "Lagrange evaluations exceed the domain size"
+        );
+        domain
+            .subgroup()
+            .evaluate_lagrange_with_index(&point, evaluations, scratch)
+            .expect("a validated prefix fits the domain and output")
     }
 
     fn root_of_unity(log_size: u32) -> Option<Self> {

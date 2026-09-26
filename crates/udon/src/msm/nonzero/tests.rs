@@ -3,7 +3,7 @@ use crate::msm::test_support::Buffers;
 use crate::{
     curve::{
         AffinePoint, EisensteinTableBatch, Pallas, Point, PreparedAffinePoint, ProjectivePoint,
-        Vesta, msm::test_support::Buffers, pasta::test_reference::multiply,
+        Vesta, pasta::test_reference::multiply,
     },
     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     field::pasta::test_support::field_samples,

@@ -32,7 +32,7 @@ fn multiply_add<M: PrimeModulus>(
     let (r1, carry) = adc(r1, t5, carry);
     let (r2, carry) = adc(r2, t6, carry);
     let (r3, carry) = adc(r3, t7, carry);
-    PastaField::from_montgomery(crate::field::montgomery::reduce_twice_modulus::<M>(
+    PastaField::from_montgomery(crate::field::pasta::montgomery::reduce_twice_modulus::<M>(
         [r0, r1, r2, r3],
         carry,
     ))

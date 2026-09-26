@@ -1,10 +1,7 @@
 //! Movable guards for fragmented FFT storage. Acquisition never waits.
 
 use core::ops::Range;
-use core::ops::Range;
 use spin::{RwLock, RwLockReadGuard as Read, RwLockWriteGuard as Write};
-use spin::{RwLock, RwLockReadGuard as Read, RwLockWriteGuard as Write};
-use std::{vec, vec::Vec};
 use std::{vec, vec::Vec};
 use zakura_udon::{
     exec::execution::ReadView,

@@ -51,7 +51,7 @@ Field parameters and fixed exponentiation schedules use `bento` at compile time.
 Operator forms forward to the inherent arithmetic. The opt-in `traits` feature
 adds unstable consumer interfaces, including `Field`, `FftField`, and
 `DeferredField`, implemented through the same native kernels. With this feature, the
-[`poly` module](crates/udon/src/poly/mod.rs) provides polynomial utilities over
+[`polynomial` module](crates/udon/src/polynomial/mod.rs) adds iterator and product utilities over
 those traits, and the [`cycle` module](crates/udon/src/cycle/mod.rs) binds the
 fields, curves, borrowed generators, and Poseidon instances of the Pasta cycle
 to one `Cycle` marker for proof systems generic over a curve cycle. The

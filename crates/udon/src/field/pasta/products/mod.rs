@@ -12,6 +12,20 @@ use super::{PastaField, PrimeModulus, ReductionState};
 #[cfg(test)]
 mod tests;
 
+#[cfg(all(test, feature = "traits"))]
+std::thread_local! {
+    static SLICE_SUMS: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, feature = "traits"))]
+pub(crate) fn count_slice_sums(f: impl FnOnce()) -> usize {
+    SLICE_SUMS.with(|count| {
+        let before = count.get();
+        f();
+        count.get() - before
+    })
+}
+
 /// A sum of field products with deferred Montgomery reduction.
 ///
 /// Use [`add_product`](Self::add_product) for products,
@@ -395,6 +409,8 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
         rhs: &[PastaField<M, T>],
     ) -> PastaField<M> {
         assert_eq!(lhs.len(), rhs.len(), "inner product lengths must agree");
+        #[cfg(all(test, feature = "traits"))]
+        SLICE_SUMS.with(|count| count.set(count.get() + 1));
         const {
             assert!(
                 usize::BITS <= 64,

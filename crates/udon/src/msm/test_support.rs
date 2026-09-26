@@ -2,6 +2,7 @@
 
 use super::{
     AffinePoint, PastaCurve, PastaField, ProjectivePoint, Requirements, ScalarStorage, Scratch,
+    recode,
 };
 use crate::exec::{Executor, SerialExecutor};
 use std::{vec, vec::Vec};

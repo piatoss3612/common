@@ -1,7 +1,7 @@
 use num_bigint::BigInt;
 
 use super::*;
-use crate::curve::{
+use crate::curve::pasta::{
     digits::{centered_digit, signed_window_digits},
     parameters::GlvParameters,
 };

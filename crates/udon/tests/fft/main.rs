@@ -19,5 +19,10 @@ mod borrowed;
 mod buffers;
 mod embedding;
 mod expansion;
+#[cfg(feature = "traits")]
+#[path = "../harness/field_model.rs"]
+mod field_model;
 mod interpolation;
+#[cfg(feature = "traits")]
+mod traits;
 mod workspace;

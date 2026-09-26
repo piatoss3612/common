@@ -3,9 +3,10 @@ use super::{Buffers, Pool};
 use criterion::{BenchmarkId, Criterion};
 use std::hint::black_box;
 use zakura_udon::{
-    curve::{AffinePoint, PastaCurve, Point, ProjectivePoint, msm::SuffixBasis},
+    curve::{AffinePoint, PastaCurve, Point, ProjectivePoint},
     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     field::{CanonicalUint, PastaField, PrimeModulus},
+    msm::SuffixBasis,
 };
 
 struct Samples(u64);

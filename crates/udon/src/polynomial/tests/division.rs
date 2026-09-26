@@ -297,3 +297,61 @@ fn invalid_divisors_preserve_storage() {
     invalid_divisors::<PallasBase>();
     invalid_divisors::<PallasScalar>();
 }
+
+#[cfg(feature = "traits")]
+mod consumer {
+    use super::*;
+    use crate::field::pasta::test_support::{count_mul_adds, field_samples};
+    use crate::field::{Fp, PallasBase, PallasScalar};
+    use crate::polynomial::{divide_linear_rev, evaluate};
+
+    #[test]
+    fn descending_quotient_matches_in_place_division_and_identity() {
+        fn check<M: PrimeModulus>() {
+            for count in [0, 1, 2, 3, 7, 16] {
+                let original: Vec<_> = field_samples::<M>().take(count).collect();
+                for point in field_samples::<M>().take(5) {
+                    let mut in_place = original.clone();
+                    let split = divide_linear_in_place(&mut in_place, &point);
+                    let mut descending = Vec::new();
+                    assert_eq!(
+                        count_mul_adds(|| {
+                            descending =
+                                divide_linear_rev(original.iter().copied(), point).collect();
+                        }),
+                        count.saturating_sub(2)
+                    );
+                    assert_eq!(descending.len(), count.saturating_sub(1));
+                    descending.reverse();
+                    assert_eq!(descending, in_place[split..]);
+                    let remainder = evaluate(&original, &point);
+                    for x in field_samples::<M>().take(4) {
+                        assert_eq!(
+                            evaluate(&original, &x),
+                            evaluate(&descending, &x)
+                                .mul(&x.sub(&point))
+                                .add(&remainder)
+                        );
+                    }
+                }
+            }
+        }
+        check::<PallasBase>();
+        check::<PallasScalar>();
+    }
+
+    #[test]
+    fn descending_quotient_reads_coefficients_incrementally() {
+        let reads = core::cell::Cell::new(0);
+        let values = [1, 2, 3, 4].map(Fp::from_u64);
+        let coefficients = values.into_iter().inspect(|_| reads.set(reads.get() + 1));
+        let mut quotient = divide_linear_rev(coefficients, Fp::from_u64(2));
+        assert_eq!(reads.get(), 1);
+        assert_eq!(quotient.next(), Some(Fp::from_u64(4)));
+        assert_eq!(reads.get(), 3);
+        assert_eq!(quotient.next(), Some(Fp::from_u64(11)));
+        assert_eq!(quotient.next(), Some(Fp::from_u64(24)));
+        assert_eq!(quotient.next(), None);
+        assert_eq!(reads.get(), 4);
+    }
+}

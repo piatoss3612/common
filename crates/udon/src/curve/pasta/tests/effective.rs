@@ -1,8 +1,11 @@
 use super::*;
 use crate::{
     curve::{
-        Pallas, Vesta, eisenstein,
-        tests::{multiply, scalar_corpus, scaled},
+        Pallas, Vesta,
+        pasta::{
+            eisenstein,
+            tests::{multiply, scalar_corpus, scaled},
+        },
     },
     field::PrimeModulus,
 };

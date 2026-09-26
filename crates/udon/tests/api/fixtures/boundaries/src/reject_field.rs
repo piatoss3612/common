@@ -10,6 +10,7 @@ use arithmetic::{
 };
 
 pub fn check<M: PrimeModulus>() {
+    reduction_flag::<Reduced>();
     polynomial::<M>();
     interpolation::<M>();
     let _two = PastaField::<M>::from_u64(2);
@@ -298,6 +299,9 @@ fn polynomial<M: PrimeModulus>() {
     }
 }
 
-#[cfg(feature = "foreign-reduction-flag")]
+// The representation bound is selected by the sealed supertrait, not exposed
+// through the public marker trait.
+fn reduction_flag<S: arithmetic::field::ReductionState>() {
+    #[cfg(feature = "foreign-reduction-flag")]
     let _ = S::REDUCED;
 }

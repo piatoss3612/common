@@ -152,7 +152,7 @@ impl<const N: usize> SegmentStorage<N> {
 
 /// A nonforgeable token for an admitted segment.
 #[derive(Debug)]
-pub struct Segment<'a> {
+pub(crate) struct Segment<'a> {
     owner: &'a zakura_udon::exec::execution::Identity,
     slot: usize,
     generation: usize,
@@ -184,7 +184,7 @@ pub(crate) struct TaskPermit<'a, const N: usize> {
 /// nonblocking acquisition and this accounting as one coordinator transaction,
 /// rolling back acquired guards if accounting fails.
 #[derive(Debug)]
-pub struct Admission<'a, const N: usize> {
+pub(crate) struct Admission<'a, const N: usize> {
     identity: &'a zakura_udon::exec::execution::Identity,
     slots: &'a mut [SegmentStorage<N>],
     capacity: Resources<N>,
@@ -197,7 +197,7 @@ impl<'a, const N: usize> Admission<'a, N> {
     ///
     /// Obtain `capacity` from a checked [`ArenaLayout`]. Outstanding tokens keep
     /// the identity borrowed, preventing rebinding that arena before they end.
-    pub fn new(
+    pub(crate) fn new(
         identity: &'a mut zakura_udon::exec::execution::Identity,
         slots: &'a mut [SegmentStorage<N>],
         capacity: Resources<N>,

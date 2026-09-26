@@ -1,7 +1,7 @@
 //! Opt-in native controls. Counters and fixture checks are outside timed loops.
 use super::*;
 use crate::{
-    curve::{CurveTableEntry, Pallas, Vesta, reduce},
+    curve::{CurveTableEntry, Pallas, Vesta, pasta::reduce},
     exec::SerialExecutor,
     field::pasta::test_support::field_samples,
 };

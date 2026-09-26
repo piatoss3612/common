@@ -1,5 +1,5 @@
 use super::*;
-use crate::field::parameters::TWO_ADICITY;
+use crate::field::pasta::parameters::TWO_ADICITY;
 use bento::const_arithmetic::u256;
 
 // Runtime square roots use a generated multiplication schedule instead of the

@@ -8,19 +8,18 @@ use crate::{
     curve::{
         AffinePoint, CurveError, EisensteinTableBatch, Pallas, PastaCurve, Point,
         PreparedAffinePoint, ProjectivePoint, Vesta,
-        msm::{
-            Accumulation, Algorithm, ArithmeticOptions, Bases, BatchOptions, Input,
-            PreparedScalars, Requirements, ScalarStorage, Scratch, Selection,
-            policy::InvalidWindow,
-        },
     },
     exec::execution::test_pool as run_pool,
     exec::{
         SerialExecutor, TaskBudget,
-        run::{Identity, Outcome, ReadView, TaskError, TaskStorage},
+        execution::{Identity, Outcome, ReadView, TaskError, TaskStorage},
     },
     field::{CanonicalUint, PastaField},
     msm::execution::test_buffers::{Arena, Lease, Work},
+    msm::{
+        Accumulation, Algorithm, ArithmeticOptions, Bases, BatchOptions, Input, PreparedScalars,
+        Requirements, ScalarStorage, Scratch, Selection, policy::InvalidWindow,
+    },
 };
 use spin::RwLock;
 use std::num::NonZeroUsize;

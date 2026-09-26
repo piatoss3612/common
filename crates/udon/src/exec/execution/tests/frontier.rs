@@ -1,6 +1,6 @@
-use super::admission;
 use crate::exec::execution::frontier::ReadyRange;
 use crate::exec::execution::test_pool as run_pool;
+use crate::exec::execution::tests::admission;
 use admission::*;
 use std::vec::Vec;
 

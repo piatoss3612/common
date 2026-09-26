@@ -14,7 +14,6 @@ mod fixed_base_sum;
 mod glv;
 mod incomplete;
 use super::test_reference as reference;
-mod reduce;
 mod single_mul;
 
 pub(super) fn scalar_corpus<C: PastaCurve>() -> Vec<PastaField<C::Scalar>> {

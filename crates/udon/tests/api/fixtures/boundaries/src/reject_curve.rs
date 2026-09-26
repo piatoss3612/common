@@ -78,7 +78,7 @@ pub fn check<C: PastaCurve>() {
     #[cfg(feature = "msm-arithmetic")]
     let _ = arithmetic::msm::ArithmeticOptions::default();
     #[cfg(feature = "msm-kernel")]
-    let _ = arithmetic::msm::Kernel::Auto;
+    let _ = arithmetic::msm::Algorithm::Auto;
     #[cfg(feature = "msm-accumulation")]
     let _ = arithmetic::msm::Accumulation::Auto;
     #[cfg(feature = "cache-options")]
@@ -97,9 +97,9 @@ impl PastaCurve for Foreign {
 
 fn suffix<C: PastaCurve>() {
     use arithmetic::{
-        msm::{ScalarStorage, Scratch},
-        curve::{Point, ProjectivePoint, msm::SuffixBasis},
+        curve::{Point, ProjectivePoint},
         exec::{ExecutionOptions, SerialExecutor},
+        msm::{ScalarStorage, Scratch, SuffixBasis},
     };
     let mut sums = [Point::IDENTITY; 3];
     // Original storage can be reused and dropped before using the prepared sums.
@@ -163,7 +163,7 @@ fn suffix<C: PastaCurve>() {
 }
 
 fn basis_sum<C: PastaCurve>() {
-    use arithmetic::curve::{Point, msm::BasisSum};
+    use arithmetic::{curve::Point, msm::BasisSum};
     #[allow(unused_mut)]
     let mut original = [Point::<C>::GENERATOR; 3];
     let basis = BasisSum::prepare(&original);
@@ -205,8 +205,8 @@ fn basis_sum<C: PastaCurve>() {
 }
 
 fn coalescing<C: PastaCurve>() {
-    use arithmetic::curve::{
-        Point,
+    use arithmetic::{
+        curve::Point,
         msm::{Bases, CoalescingKey, CoalescingPlan, IndexedCoalescingPlan},
     };
     let mut points = [Point::IDENTITY; 1];
@@ -273,8 +273,8 @@ fn coalescing<C: PastaCurve>() {
 }
 
 fn nonzero_support<C: PastaCurve>() {
-    use arithmetic::curve::{
-        Point,
+    use arithmetic::{
+        curve::Point,
         msm::{Bases, Selection},
     };
     #[allow(unused_mut)]

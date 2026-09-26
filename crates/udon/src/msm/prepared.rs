@@ -282,10 +282,8 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     ///
     /// ```
     /// use zakura_udon::{
-    ///     curve::{
-    ///         AffinePoint, Pallas,
-    ///         msm::{Bases, Input, PreparedScalars, ScalarStorage, execution::MsmPlan},
-    ///     },
+    ///     curve::{AffinePoint, Pallas},
+    ///     msm::{Bases, Input, PreparedScalars, ScalarStorage, execution::MsmPlan},
     ///     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     ///     field::Fq,
     /// };

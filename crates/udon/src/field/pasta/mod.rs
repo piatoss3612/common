@@ -22,15 +22,13 @@ mod stored_form;
 mod uint;
 pub(crate) mod word;
 
-#[cfg(test)]
-pub(crate) use batch::batch_invert_groups;
 #[cfg(feature = "traits")]
 pub(crate) use batch::invert_groups;
 pub use batch::{
-    BatchInversionError, batch_invert_groups_scaled, batch_invert_scaled, try_batch_invert_by,
-    try_batch_invert_scaled_by,
+    BatchInversionError, batch_invert, batch_invert_groups, batch_invert_groups_scaled,
+    batch_invert_scaled, try_batch_invert_by, try_batch_invert_scaled_by,
 };
-pub(crate) use batch::{NonzeroInversionLanes, batch_invert, invert_nonzero};
+pub(crate) use batch::{NonzeroInversionLanes, invert_nonzero};
 pub use constant_prefix::{ConstantPrefix, ConstantPrefixError};
 pub use fractions::{FractionPrefixError, fraction_prefixes, fraction_prefixes_in_place};
 #[cfg(test)]
@@ -38,6 +36,8 @@ pub(crate) use inversion::count_inversions;
 pub use parameters::{PallasBase, PallasScalar, PrimeModulus};
 pub(crate) use powers::fill_powers;
 pub use products::ProductSum;
+#[cfg(all(test, feature = "traits"))]
+pub(crate) use products::count_slice_sums;
 pub use representation::{Loose, Reduced, ReductionState};
 pub use stored_form::STORED_FORM;
 pub use uint::CanonicalUint;
@@ -365,6 +365,8 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
         multiplier: &PastaField<M, T>,
         addend: &PastaField<M, U>,
     ) -> PastaField<M> {
+        #[cfg(all(test, feature = "traits"))]
+        test_support::record_mul_add();
         self.mul(multiplier).add(addend)
     }
 

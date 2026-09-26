@@ -36,8 +36,9 @@ impl<'a, C: PastaCurve> Selection<'a, C> {
     ///
     /// ```
     /// use zakura_udon::{
-    ///     curve::{Pallas, Point, msm::{Bases, Selection}},
+    ///     curve::{Pallas, Point},
     ///     field::Fq,
+    ///     msm::{Bases, Selection},
     /// };
     /// let bases = [Point::<Pallas>::GENERATOR; 3];
     /// let row = [Fq::ZERO, <Fq>::from_u64(7), Fq::ZERO];

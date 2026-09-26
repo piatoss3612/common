@@ -117,11 +117,22 @@ fn ranges_field<M: PrimeModulus>() {
                     for scratch_len in [0, 1, 2, 3, count, count + 3] {
                         let mut output = vec![sentinel; count + 2];
                         let mut scratch = vec![sentinel; scratch_len];
-                        let inversions = count_inversions(|| {
-                            domain
-                                .evaluate_lagrange(&point, range.clone(), &mut output, &mut scratch)
-                                .unwrap();
-                        });
+                        let mut inversions = 0;
+                        assert_eq!(
+                            crate::fft::domain::count_size_powers(|| {
+                                inversions = count_inversions(|| {
+                                    domain
+                                        .evaluate_lagrange(
+                                            &point,
+                                            range.clone(),
+                                            &mut output,
+                                            &mut scratch,
+                                        )
+                                        .unwrap();
+                                });
+                            }),
+                            usize::from(count != 0 && n != 1)
+                        );
                         let expected_inversions = if node_hit || n == 1 {
                             0
                         } else {

@@ -211,7 +211,10 @@ impl Executor for Pool {
 }
 
 fn layouts<C: PastaCurve>(n: usize, limit: usize) {
-    use crate::curve::{EisensteinTableBatch, PreparedAffinePoint, msm::ScalarStorage};
+    use crate::{
+        curve::{EisensteinTableBatch, PreparedAffinePoint},
+        msm::ScalarStorage,
+    };
     let outputs = 5;
     let samples: Vec<_> = field_samples::<C::Scalar>().take(513).collect();
     let scalars: Vec<_> = (0..n).map(|i| samples[i % samples.len()]).collect();
@@ -428,7 +431,6 @@ fn validation_capacity_and_unwind() {
 fn scalar_boundaries_chunks_and_task_ceilings() {
     fn check<C: PastaCurve>() {
         use crate::field::PrimeModulus;
-        use crate::msm::{ScalarStorage, test_support::JoinWidth};
         use crate::msm::{ScalarStorage, test_support::JoinWidth};
         let scalar_cases = [
             PastaField::ZERO,

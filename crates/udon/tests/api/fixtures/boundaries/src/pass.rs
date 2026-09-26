@@ -2,10 +2,7 @@
 
 mod facade {
     #[cfg(feature = "traits")]
-    pub use arithmetic::{
-        curve::Affine,
-        field::{FftField, batch_invert_groups, batch_invert_with_scratch},
-    };
+    pub use arithmetic::{curve::Affine, field::FftField};
     pub use arithmetic::{
         curve::{AffinePoint, Pallas, PastaCurve, Vesta, glv_decompose},
         field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, Reduced},
@@ -92,8 +89,7 @@ fn curve<C: PastaCurve>() {
     let options = ExecutionOptions::default()
         .with_task_budget(TaskBudget::new(3).unwrap())
         .with_memory_limit(8192);
-    // The compatibility path and the primary MSM path name the same plan.
-    let plan: arithmetic::msm::run::MsmPlan<C> = MsmPlan::<C>::new(1, options).unwrap();
+    let plan = MsmPlan::<C>::new(1, options).unwrap();
     assert_eq!(BatchPlan::<C>::storage_len(1, options).unwrap(), (1, 1));
     let mut records = [ScalarStorage::<C>::ZERO];
     let prepared = PreparedScalars::prepare(
@@ -103,7 +99,12 @@ fn curve<C: PastaCurve>() {
         &SerialExecutor,
     );
     let mut digits = vec![0; prepared.cache_len(&plan)];
-    assert_eq!(prepared.cache(&plan, &mut digits).len(), 1);
+    assert_eq!(
+        prepared
+            .cache(&plan, &mut digits, TaskBudget::SERIAL, &SerialExecutor)
+            .len(),
+        1
+    );
 }
 
 #[cfg(feature = "traits")]
@@ -126,12 +127,12 @@ mod consumer {
             let original = [F::ZERO, value, value.square()];
             let mut values = original;
             let mut scratch = [F::ZERO; 2];
-            batch_invert_with_scratch(&mut values, &mut scratch);
+            F::batch_invert(&mut values, &mut scratch);
             assert_eq!(values[0], F::ZERO);
             assert_eq!(values[1] * original[1], F::ONE);
             assert_eq!(values[2] * original[2], F::ONE);
             let (left, right) = values.split_at_mut(1);
-            batch_invert_groups(&mut [left, right], &mut scratch[..1]);
+            F::batch_invert_groups(&mut [left, right], &mut scratch[..1]);
             assert_eq!(values, original);
         }
         generic_batch(two);
@@ -147,7 +148,7 @@ mod consumer {
 
         // Match consumers that hold only the field trait and a domain descriptor.
         fn generic_transform<F: FftField>(value: F) {
-            let domain = arithmetic::fft::Domain::<F>::new(2).unwrap();
+            let domain = F::domain(2).unwrap();
             let mut values = [value; 4];
             domain.transform(&mut values);
             assert_eq!(values, [value * F::from(4), F::ZERO, F::ZERO, F::ZERO]);

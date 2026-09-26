@@ -103,8 +103,8 @@ fn exercise<C: PastaCurve>() {
                 assert_eq!(input, original);
                 let mut actual = input.clone();
                 assert_eq!(
-                    reference::count_transforms(|| {
-                        reference::transform(&mut actual, &loose(domain.root()))
+                    super::count_transforms(|| {
+                        super::transform(&mut actual, &loose(domain.root()))
                     }),
                     1
                 );

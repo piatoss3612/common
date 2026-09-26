@@ -10,7 +10,7 @@
 //!
 //! [`Affine::msm`] and [`Affine::batch_to_affine`] have reference defaults, so
 //! every implementation is complete from the start. The Pasta implementation
-//! overrides both with the kernels in [`msm`](super::msm) and
+//! overrides both with the kernels in [`msm`](crate::msm) and
 //! [`batch_normalize`](super::batch_normalize), run serially over bounded
 //! stack scratch of about 14 KiB. Callers that want parallel execution or
 //! reusable scratch use those modules directly.
@@ -99,7 +99,7 @@ pub trait Affine:
     /// The default multiplies each base separately and sums the results. It
     /// requires no scratch and serves as the oracle for optimized
     /// implementations, which are checked against it. The Pasta points run the
-    /// planned kernel from [`msm`](super::msm) over bounded stack scratch with
+    /// planned kernel from [`msm`](crate::msm) over bounded stack scratch with
     /// a serial executor.
     ///
     /// # Panics

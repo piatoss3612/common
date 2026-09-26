@@ -3,7 +3,7 @@
 use std::{println, vec::Vec};
 
 use crate::{
-    field::PrimeField,
+    field::{PastaField, PrimeModulus},
     poseidon::{PALLAS_BASE, PALLAS_SCALAR, PoseidonParameters},
 };
 
@@ -19,8 +19,8 @@ fn fnv1a_128(bytes: impl Iterator<Item = u8>) -> u128 {
 /// Digest of every table entry as canonical little-endian bytes: the round
 /// constants row by row, then the MDS rows. Independent of the Montgomery
 /// representation the tables are stored in.
-fn digest<F: PrimeField<Repr = [u8; 32]>, const T: usize>(
-    parameters: &PoseidonParameters<F, T>,
+fn digest<M: PrimeModulus, const T: usize>(
+    parameters: &PoseidonParameters<PastaField<M>, T>,
 ) -> u128 {
     fnv1a_128(
         parameters
@@ -32,8 +32,8 @@ fn digest<F: PrimeField<Repr = [u8; 32]>, const T: usize>(
     )
 }
 
-fn assert_well_formed<F: PrimeField<Repr = [u8; 32]>, const T: usize>(
-    parameters: &PoseidonParameters<F, T>,
+fn assert_well_formed<M: PrimeModulus, const T: usize>(
+    parameters: &PoseidonParameters<PastaField<M>, T>,
 ) {
     assert_eq!(parameters.width(), 5);
     assert_eq!(parameters.rate(), 4);
@@ -57,8 +57,6 @@ fn assert_well_formed<F: PrimeField<Repr = [u8; 32]>, const T: usize>(
     seen.sort_unstable();
     seen.dedup();
     assert_eq!(seen.len(), count);
-
-    assert_eq!(F::NUM_BITS, 255);
 }
 
 #[test]
@@ -95,7 +93,7 @@ const PALLAS_BASE_DIGEST: u128 = 0x38e9_acb9_6cdd_7395_996b_f0e8_a8f2_cacf;
 const PALLAS_SCALAR_DIGEST: u128 = 0x2cba_8835_0552_681a_0f83_ea33_ccb4_049a;
 
 /// Recomputes the digests after a verified table change:
-/// `cargo test -p zakura-udon --features traits --lib poseidon::tests::print_digests -- --ignored --nocapture`.
+/// `cargo test -p zakura-udon --lib poseidon::tests::print_digests -- --ignored --nocapture`.
 #[test]
 #[ignore = "prints the digests for pinning; run explicitly"]
 fn print_digests() {

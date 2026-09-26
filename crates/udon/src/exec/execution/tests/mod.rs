@@ -1,5 +1,4 @@
 //! Frontier contracts and mixed arithmetic workloads.
 
-mod admission;
-mod frontier;
+pub(super) mod admission;
 mod mixed;

@@ -1,10 +1,7 @@
 use super::*;
 use crate::msm::test_support::Buffers;
 use crate::{
-    curve::{
-        Pallas, PreparedAffinePoint, ProjectivePoint, Vesta, msm::test_support::Buffers,
-        pasta::test_reference::multiply,
-    },
+    curve::{Pallas, PreparedAffinePoint, ProjectivePoint, Vesta, pasta::test_reference::multiply},
     exec::{ExecutionOptions, SerialExecutor},
     field::pasta::test_support::{field_samples, modulus},
     field::{PrimeModulus, Reduced},

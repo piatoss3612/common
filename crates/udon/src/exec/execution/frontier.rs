@@ -351,3 +351,7 @@ impl<'a> Frontier<'a> {
         self.inflight
     }
 }
+
+#[cfg(test)]
+#[path = "tests/frontier.rs"]
+mod tests;

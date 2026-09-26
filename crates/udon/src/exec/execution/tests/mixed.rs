@@ -15,10 +15,7 @@ use crate::exec::execution::test_pool as run_pool;
 use crate::fft::execution::test_buffers as fft_run;
 use crate::msm::execution::test_buffers as msm_run;
 use spin::{RwLock, RwLockWriteGuard};
-use spin::{RwLock, RwLockWriteGuard};
 use std::num::NonZeroUsize;
-use std::num::NonZeroUsize;
-use std::{vec, vec::Vec};
 use std::{vec, vec::Vec};
 use zakura_udon::{
     curve::{AffinePoint, Pallas, ProjectivePoint},

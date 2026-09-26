@@ -42,7 +42,7 @@ fn transitions<C: PastaCurve>() {
                     _ => unreachable!(),
                 });
             let expected =
-                scalar::multiply(&coefficient, |sum| sum.add_mixed(g.as_affine().unwrap()));
+                test_reference::multiply(&coefficient, |sum| sum.add_mixed(g.as_affine().unwrap()));
             let input = Input::indexed(Bases::Points(&bases), &indices, &scalars).unwrap();
             for tasks in [1, 3] {
                 let options =

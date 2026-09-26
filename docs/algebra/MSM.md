@@ -1,7 +1,7 @@
 # Weighted group sums
 
 [Algebra reference](../ALGEBRA.md). Names here belong to
-[`curve::msm`](../../crates/udon/src/msm/mod.rs). An MSM computes one
+[`msm`](../../crates/udon/src/msm/mod.rs). An MSM computes one
 point `Q=sum_i [a_i]G_i`, with coefficients in the selected curve's scalar
 field. Look first for structure in the coefficients, the base mapping,
 or a result already available from an earlier calculation.
@@ -74,7 +74,7 @@ records. They are conveniences for selecting bases and binding one row.
 or canceling input. Use `selection`, `len`, and `is_empty` to retain or
 inspect the term mapping; `requirements` describes execution storage.
 
-Choose `run::MsmPlan` when the same compatible operation shape needs a
+Choose `execution::MsmPlan` when the same compatible operation shape needs a
 resolved plan, or `MsmRun` when parts of the sum should enter an
 application scheduler. An `Input` describes the sum as supplied. It
 does not promise to discover constant regions, equal bases, or a
@@ -114,7 +114,7 @@ immutable rows, and zero strides are allowed.
 scratch, and `execute` writes one projective sum per output. Zero
 terms give identity outputs. This differs from
 `EisensteinTableBatch::mul`, which applies one scalar to each base,
-and `run::BatchPlan`, whose independent MSM inputs need not share
+and `execution::BatchPlan`, whose independent MSM inputs need not share
 scalars or lengths. A shared scalar vector is the defining invariant.
 
 ### `CoalescingPlan` and `CoalescingKey`

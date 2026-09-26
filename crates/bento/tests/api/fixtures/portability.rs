@@ -4,12 +4,6 @@
 
 use bento::const_arithmetic::{U256, U320, m255, u256};
 use core::num::NonZeroUsize;
-use udon::curve::{
-    AffinePoint, CurveError, CurveTableRequirements, EisensteinScalar, EisensteinTable,
-    EisensteinTableBatch, FixedBaseDescription, FixedBaseTable, Pallas, PallasAffine, PastaCurve,
-    Point, PreparedAffinePoint, ProjectivePoint, Vesta, VestaAffine, batch_normalize,
-    glv_decompose, msm,
-};
 use udon::exec::{
     ExecutionOptions, Executor, SerialExecutor, TaskBudget, for_each_chunk_mut, for_each_mut,
 };
@@ -20,6 +14,15 @@ use udon::fft::{
 };
 use udon::field::{
     Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, ProductSum, Reduced,
+};
+use udon::{
+    curve::{
+        AffinePoint, CurveError, CurveTableRequirements, EisensteinScalar, EisensteinTable,
+        EisensteinTableBatch, FixedBaseDescription, FixedBaseTable, Pallas, PallasAffine,
+        PastaCurve, Point, PreparedAffinePoint, ProjectivePoint, Vesta, VestaAffine,
+        batch_normalize, glv_decompose,
+    },
+    msm,
 };
 
 // Numeric word order is independent of the target's byte order. These
@@ -192,7 +195,7 @@ fn table_batch_operations<C: PastaCurve>(
 
 const MSM_OPTIONS: ExecutionOptions = ExecutionOptions::DEFAULT.with_memory_limit(8192);
 const MSM_METADATA: (usize, usize) =
-    match msm::run::BatchPlan::<Pallas>::storage_len(1, MSM_OPTIONS) {
+    match msm::execution::BatchPlan::<Pallas>::storage_len(1, MSM_OPTIONS) {
         Ok(counts) => counts,
         Err(_) => panic!("unsupported MSM batch size"),
     };
@@ -227,9 +230,9 @@ fn msm_operations<C: PastaCurve>(
     let selection = msm::Selection::indexed(msm::Bases::Points(&points), &indices)?;
     let input = selection.with_scalars(&scalars);
     let inputs = [input];
-    let mut jobs = [msm::run::JobStorage::EMPTY; MSM_METADATA.0];
-    let mut workers = [msm::run::WorkerStorage::EMPTY; MSM_METADATA.1];
-    let plan = msm::run::BatchPlan::new(&inputs, MSM_OPTIONS, &mut jobs, &mut workers)?;
+    let mut jobs = [msm::execution::JobStorage::EMPTY; MSM_METADATA.0];
+    let mut workers = [msm::execution::WorkerStorage::EMPTY; MSM_METADATA.1];
+    let plan = msm::execution::BatchPlan::new(&inputs, MSM_OPTIONS, &mut jobs, &mut workers)?;
     assert!(plan.temporary_bytes() <= 8192);
     // Fixed caller-owned capacity; execution checks its required prefixes.
     let mut records = [msm::ScalarStorage::ZERO; 64];

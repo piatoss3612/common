@@ -51,9 +51,6 @@
 mod budget;
 pub mod execution;
 mod executor;
-
-/// Compatibility name for the execution module.
-pub use execution as run;
 mod scoped;
 
 pub use budget::{ExecutionOptions, TaskBudget};

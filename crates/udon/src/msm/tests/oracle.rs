@@ -27,7 +27,7 @@ pub(super) fn reference<C: PastaCurve>(input: &Input<'_, C>) -> ProjectivePoint<
             Bases::Compact(b) => b.get(j).unwrap().base().to_projective(),
             Bases::CompactPrepared(b) => b.get(j).unwrap().base().to_projective(),
         };
-        sum = sum.add(&multiply(k, |sum| sum.add(&base)));
+        sum = sum.add(&test_reference::multiply(k, |sum| sum.add(&base)));
     }
     sum
 }

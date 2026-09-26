@@ -2,7 +2,9 @@
 
 use super::*;
 
-pub(super) fn reduced<M: PrimeModulus>(values: &[PastaField<M>]) -> Vec<PastaField<M, Reduced>> {
+pub(in crate::fft) fn reduced<M: PrimeModulus>(
+    values: &[PastaField<M>],
+) -> Vec<PastaField<M, Reduced>> {
     values.iter().map(|value| value.reduce()).collect()
 }
 
@@ -39,7 +41,7 @@ impl<M: PrimeModulus> Prepared<M> {
     }
 }
 
-pub(super) fn inputs<M: PrimeModulus>(size: usize) -> Vec<PastaField<M>> {
+pub(in crate::fft) fn inputs<M: PrimeModulus>(size: usize) -> Vec<PastaField<M>> {
     let mut samples = field_samples();
     (0..size)
         .map(|index| match index % 17 {

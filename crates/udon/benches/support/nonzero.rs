@@ -2,12 +2,10 @@ use super::{Buffers, Pool, shared_scalars::measure};
 use criterion::Criterion;
 use std::hint::black_box;
 use zakura_udon::{
-    curve::{
-        AffinePoint, PastaCurve, ProjectivePoint,
-        msm::{Bases, Selection},
-    },
+    curve::{AffinePoint, PastaCurve, ProjectivePoint},
     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     field::PastaField,
+    msm::{Bases, Selection},
 };
 
 fn binary<C: PastaCurve>(

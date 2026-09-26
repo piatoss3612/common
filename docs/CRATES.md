@@ -100,30 +100,27 @@ allocating workspaces, and worker runtimes belong to their downstream owners.
 | `exec/execution/` | Common incremental task, completion, and frontier protocol |
 | `cycle/` | Optional cycle contracts, borrowed generator containers, and Pasta bindings |
 | `poseidon/` | Fixed Pasta parameter sets and optional consumer trait views |
-| `poly/` | Optional polynomial operations through consumer field traits |
-| `polynomial/` | Native Pasta polynomial evaluation, interpolation, division, and folding |
+| `polynomial/` | Native Pasta polynomial arithmetic and optional generic iterator and product operations |
 
 The `field` and `curve` modules explicitly re-export their concrete types;
 callers use paths such as `field::Fp` and `curve::Pallas`.
 Their private Pasta modules keep representation-specific code separate from
 generic contracts. Each domain's `traits.rs` keeps its optional consumer
 contracts and Pasta implementations together. The unstable `traits` feature
-gates those interfaces and their generic helpers, including `poly` and `cycle`.
+gates those interfaces and their generic helpers, including polynomial iterators and `cycle`.
 Native arithmetic must not depend on the consumer contracts, even when the
 feature is enabled. Standard Rust operators stay beside the concrete types.
 Field butterfly kernels live in `field/pasta/butterfly/`;
 they are the small arithmetic steps used by `fft/`, not a second transform API.
-Likewise, `curve/pasta/buckets.rs` owns the coordinate formulas used by MSM
+Likewise, `curve/pasta/reduce.rs` owns the coordinate formulas used by MSM
 bucket reduction, keeping raw affine coordinates private to the curve implementation.
 
 FFT and MSM are sibling modules for bulk arithmetic over fields and curves.
-`curve::msm` also re-exports `msm` for existing callers.
 Both depend on `exec`, which supplies shared contracts
 without owning threads or allocating a pool. Within FFT, `planning` resolves
 geometry and scratch, `request` describes the requested operation, and
 `normalization` applies inverse scaling. The `fft/execution` and `msm/execution`
 modules own their plans and task kernels; `exec/execution` owns the common protocol.
-All three modules also export `run` as a compatibility name for `execution`.
 
 These are source modules within one library crate. Runtime arithmetic kernels
 stay in Udon; Bento supplies compile-time derivation and code generation.

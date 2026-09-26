@@ -41,7 +41,7 @@ impl core::fmt::Display for LagrangeError {
 impl core::error::Error for LagrangeError {}
 
 #[derive(Clone, Copy)]
-enum Finish<M: PrimeModulus> {
+pub(super) enum Finish<M: PrimeModulus> {
     Scale(PastaField<M>),
     Delta(Option<usize>),
 }
@@ -58,7 +58,7 @@ enum Finish<M: PrimeModulus> {
 #[derive(Clone, Copy)]
 pub struct LagrangeCompletion<M: PrimeModulus> {
     count: usize,
-    finish: Finish<M>,
+    pub(super) finish: Finish<M>,
 }
 
 impl<M: PrimeModulus> core::fmt::Debug for LagrangeCompletion<M> {
@@ -110,6 +110,22 @@ impl<M: PrimeModulus> LagrangeCompletion<M> {
         }
         Ok(())
     }
+
+    // Preparation already validated the output. Both one-shot entry points
+    // scale the shared inverse seed, rather than every inverse afterwards.
+    pub(super) fn evaluate(
+        self,
+        output: &mut [PastaField<M>],
+        scratch: &mut [PastaField<M>],
+    ) -> Result<(), LagrangeError> {
+        match self.finish {
+            Finish::Scale(scale) => {
+                batch_invert_scaled(&mut output[..self.count], &scale, scratch);
+            }
+            Finish::Delta(_) => self.complete(output)?,
+        }
+        Ok(())
+    }
 }
 
 impl<M: PrimeModulus> CosetDomain<M> {
@@ -157,14 +173,8 @@ impl<M: PrimeModulus> CosetDomain<M> {
         output: &mut [PastaField<M>],
         scratch: &mut [PastaField<M>],
     ) -> Result<(), LagrangeError> {
-        let completion = self.prepare_lagrange(point, range, output)?;
-        match completion.finish {
-            Finish::Scale(scale) => {
-                batch_invert_scaled(&mut output[..completion.count], &scale, scratch);
-            }
-            Finish::Delta(_) => completion.complete(output)?,
-        }
-        Ok(())
+        self.prepare_lagrange(point, range, output)?
+            .evaluate(output, scratch)
     }
 
     /// Prepares denominators for a requested Lagrange basis range.
@@ -220,15 +230,8 @@ impl<M: PrimeModulus> CosetDomain<M> {
             });
         }
 
-        let relative = if self.is_subgroup() {
-            point.into_loose()
-        } else {
-            point.mul(&self.inverse_shift())
-        };
-        let mut power = relative;
-        for _ in 0..self.domain().log_size() {
-            power = power.square();
-        }
+        let relative = self.relative_point(point);
+        let power = self.domain().power_of_size(relative, PastaField::square);
         let vanishing = power.sub(&PastaField::<M>::ONE);
         let step = self.domain().inverse_root();
         // Domain construction bounds indices by 2^32, so the exponent fits u64.
@@ -248,6 +251,17 @@ impl<M: PrimeModulus> CosetDomain<M> {
             Finish::Scale(vanishing.mul(&self.domain().size_inverse()))
         };
         Ok(LagrangeCompletion { count, finish })
+    }
+
+    pub(super) fn relative_point(
+        self,
+        point: &PastaField<M, impl ReductionState>,
+    ) -> PastaField<M> {
+        if self.is_subgroup() {
+            point.into_loose()
+        } else {
+            point.mul(&self.inverse_shift())
+        }
     }
 }
 

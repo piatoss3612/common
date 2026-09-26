@@ -3,6 +3,23 @@ use super::ExpansionPlan;
 use crate::exec::Executor;
 use crate::fft::{CoefficientView, ExpansionOrder, ExpansionStorage, assert_length, check_scratch};
 
+#[cfg(all(test, feature = "traits"))]
+std::thread_local! {
+    static EXPANSION_COUNTS: core::cell::Cell<(usize, usize, usize)> = const {
+        core::cell::Cell::new((0, 0, 0))
+    };
+}
+
+#[cfg(all(test, feature = "traits"))]
+// Counts executions, residue transforms, and executions with product factors.
+pub(crate) fn count_expansions(f: impl FnOnce()) -> (usize, usize, usize) {
+    EXPANSION_COUNTS.with(|counts| {
+        let previous = counts.replace((0, 0, 0));
+        f();
+        counts.replace(previous)
+    })
+}
+
 impl<M: PrimeModulus> ExpansionPlan<'_, M> {
     /// Scratch field count for contiguous execution.
     ///
@@ -103,6 +120,15 @@ impl<M: PrimeModulus> ExpansionPlan<'_, M> {
             self.coefficient_fields(),
             coefficients.len(),
         );
+        #[cfg(all(test, feature = "traits"))]
+        EXPANSION_COUNTS.with(|counts| {
+            let (calls, residues, products) = counts.get();
+            counts.set((
+                calls + 1,
+                residues + self.residues(),
+                products + usize::from(factor.is_some()),
+            ));
+        });
         match self.storage {
             ExpansionStorage::DisposableInput { .. } => {
                 panic!("disposable input requires execute_disposable")

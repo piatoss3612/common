@@ -1,11 +1,10 @@
 use super::*;
+use crate::msm::test_support::Buffers;
 use crate::{
     curve::{Pallas, Vesta, pasta::test_reference::multiply},
     exec::{ExecutionOptions, SerialExecutor},
     field::pasta::test_support::{field_samples, modulus},
     field::{CanonicalUint, PrimeModulus},
-    msm::test_support::Buffers,
-    msm::test_support::Buffers,
 };
 use num_bigint::BigUint;
 use std::{

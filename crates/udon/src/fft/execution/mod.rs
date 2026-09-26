@@ -22,7 +22,7 @@ use super::{
 };
 use crate::exec::{
     SerialExecutor,
-    run::{
+    execution::{
         Completion, Frontier, Identity, Kernel, Outcome, ReadView, Task, TaskError, TaskKey,
         TaskStorage,
     },
@@ -37,6 +37,8 @@ pub use interpolation::{
     AdditionKernel, AdditionRequest, InterpolationPlan, InterpolationPublished, InterpolationRun,
 };
 mod driver;
+#[cfg(all(test, feature = "traits"))]
+pub(crate) use expansion::count_expansions;
 
 /// Worker-independent tile geometry and transform semantics.
 ///
@@ -737,7 +739,7 @@ impl<M: PrimeModulus> FftKernel<'_, M> {
                 } else {
                     StageKernel {
                         plan: Transform::new(
-                            Domain::pasta_for_size(tile)
+                            Domain::for_size(tile)
                                 .expect("validated tile domain")
                                 .subgroup(),
                         ),

@@ -10,6 +10,12 @@ use crate::field::{Field, Fp, Fq};
 /// are borrowed from the instance. [`PoseidonFp`] and [`PoseidonFq`] present
 /// [`PALLAS_BASE`] and [`PALLAS_SCALAR`] this way.
 pub trait PoseidonPermutation<F: Field>: Send + Sync + 'static {
+    /// The representation shared by round-constant and MDS rows.
+    ///
+    /// Each row must expose exactly [`T`](Self::T) field elements. Pasta uses
+    /// the same fixed-size arrays as its native [`super::PoseidonParameters`].
+    type Row: AsRef<[F]>;
+
     /// The state width.
     const T: usize;
 
@@ -25,15 +31,17 @@ pub trait PoseidonPermutation<F: Field>: Send + Sync + 'static {
     /// element only.
     const PARTIAL_ROUNDS: usize;
 
-    /// The S-box exponent: the map `x -> x^ALPHA`, a permutation of `F`.
-    const ALPHA: isize;
+    /// The positive S-box exponent: the map `x -> x^ALPHA`, a permutation of `F`.
+    const ALPHA: u32;
 
-    /// Returns the round constants, one row of [`T`](Self::T) per round in
-    /// application order.
-    fn round_constants(&self) -> impl Iterator<Item = &[F]>;
+    /// Borrows the round constants in application order.
+    ///
+    /// Contains [`FULL_ROUNDS`](Self::FULL_ROUNDS) plus
+    /// [`PARTIAL_ROUNDS`](Self::PARTIAL_ROUNDS) rows of [`T`](Self::T) elements.
+    fn round_constants(&self) -> &[Self::Row];
 
-    /// Returns the rows of the MDS matrix.
-    fn mds_matrix(&self) -> impl ExactSizeIterator<Item = &[F]>;
+    /// Borrows the [`T`](Self::T) rows of the square MDS matrix.
+    fn mds_matrix(&self) -> &[Self::Row];
 }
 
 /// The [`PALLAS_BASE`] instance as a [`PoseidonPermutation`] over [`Fp`].
@@ -47,18 +55,20 @@ pub struct PoseidonFq;
 macro_rules! poseidon_permutation {
     ($name:ident, $field:ty, $parameters:expr) => {
         impl PoseidonPermutation<$field> for $name {
+            type Row = [$field; $parameters.width()];
+
             const T: usize = $parameters.width();
             const RATE: usize = $parameters.rate();
             const FULL_ROUNDS: usize = $parameters.full_rounds;
             const PARTIAL_ROUNDS: usize = $parameters.partial_rounds;
-            const ALPHA: isize = $parameters.alpha as isize;
+            const ALPHA: u32 = $parameters.alpha;
 
-            fn round_constants(&self) -> impl Iterator<Item = &[$field]> {
-                $parameters.round_constants.iter().map(|row| &row[..])
+            fn round_constants(&self) -> &[Self::Row] {
+                $parameters.round_constants
             }
 
-            fn mds_matrix(&self) -> impl ExactSizeIterator<Item = &[$field]> {
-                $parameters.mds.iter().map(|row| &row[..])
+            fn mds_matrix(&self) -> &[Self::Row] {
+                $parameters.mds
             }
         }
     };

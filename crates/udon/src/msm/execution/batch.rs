@@ -314,12 +314,10 @@ fn execute_workers<C: PastaCurve, X: Executor>(
 mod tests {
     use super::*;
     use crate::{
-        curve::{
-            AffinePoint, Pallas,
-            msm::{ArithmeticOptions, Bases, test_support::Buffers},
-        },
+        curve::{AffinePoint, Pallas},
         exec::{SerialExecutor, TaskBudget},
         field::Fq,
+        msm::{ArithmeticOptions, Bases, test_support::Buffers},
     };
     use core::num::NonZeroUsize;
     use std::{vec, vec::Vec};

@@ -10,7 +10,10 @@
 
 use core::{iter, ops};
 use num_bigint::BigUint;
-use zakura_udon::field::{Field, PrimeField, batch_invert_groups};
+use zakura_udon::{
+    fft::Domain,
+    field::{FftField, Field, PrimeField},
+};
 
 macro_rules! binary {
     ($name:ident, $trait:ident, $method:ident, $assign:ident, $assign_method:ident, $body:expr) => {
@@ -126,7 +129,7 @@ macro_rules! reference_field {
             }
 
             fn batch_invert(values: &mut [Self], scratch: &mut [Self]) {
-                batch_invert_groups(&mut [values], scratch)
+                Self::batch_invert_groups(&mut [values], scratch)
             }
 
             fn sqrt(&self) -> Option<Self> {
@@ -219,6 +222,42 @@ reference_field!(
 // A byte encoding shorter than a limb catches accidental truncation.
 reference_field!(Small, 1, 1, 5, [17]);
 reference_field!(SmallScalar, 1, 1, 3, [5]);
+
+impl FftField for Small {
+    const TWO_ADICITY: u32 = 4;
+    const MULTIPLICATIVE_GENERATOR: Self = Self([3]);
+    const ROOT_OF_UNITY: Self = Self([3]);
+    const ROOT_OF_UNITY_INVERSE: Self = Self([6]);
+    const TWO_INVERSE: Self = Self([9]);
+    const DELTA: Self = Self::ONE;
+
+    fn fft(domain: Domain<Self>, values: &mut [Self]) {
+        assert_eq!(values.len(), domain.size());
+        Self::dft(values, domain.root(), Self::ONE);
+    }
+
+    fn ifft(domain: Domain<Self>, values: &mut [Self]) {
+        assert_eq!(values.len(), domain.size());
+        Self::dft(values, domain.inverse_root(), domain.size_inverse());
+    }
+}
+
+impl Small {
+    // An independent quadratic transform over integers modulo 17.
+    fn dft(values: &mut [Self], root: Self, scale: Self) {
+        let mut original = [Self::ZERO; 16];
+        let original = &mut original[..values.len()];
+        original.copy_from_slice(values);
+        for (i, value) in values.iter_mut().enumerate() {
+            *value = original
+                .iter()
+                .enumerate()
+                .map(|(j, coefficient)| *coefficient * root.pow_u64((i * j) as u64))
+                .sum::<Self>()
+                * scale;
+        }
+    }
+}
 
 fn sqrt(value: BigUint, p: BigUint) -> Option<BigUint> {
     let zero = BigUint::from(0u8);

@@ -1,9 +1,10 @@
 use super::*;
 use crate::{
     curve::{Pallas, Vesta, pasta::test_reference},
-    exec::SerialExecutor,
+    exec::{SerialExecutor, TaskBudget},
     field::pasta::test_support::field_samples,
 };
+use core::num::NonZeroUsize;
 use std::{vec, vec::Vec};
 
 mod oracle;

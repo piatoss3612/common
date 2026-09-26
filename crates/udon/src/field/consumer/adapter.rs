@@ -113,12 +113,6 @@ impl<M: PrimeModulus> From<PastaField<M>> for FieldAdapter<M> {
     }
 }
 
-impl<M: PrimeModulus> From<FieldAdapter<M>> for PastaField<M> {
-    fn from(value: FieldAdapter<M>) -> Self {
-        value.0
-    }
-}
-
 impl<M: PrimeModulus> From<u64> for FieldAdapter<M> {
     fn from(value: u64) -> Self {
         Self(PastaField::from_u64(value))
@@ -392,15 +386,13 @@ impl<M: PrimeModulus> Field for FieldAdapter<M> {
             evaluations.len() <= domain.size(),
             "Lagrange evaluations exceed the domain size"
         );
-        domain
-            .map(Self::into_inner)
-            .subgroup()
-            .evaluate_lagrange_with_index(
-                &point.0,
-                Self::as_slice_mut(evaluations),
-                Self::as_slice_mut(scratch),
-            )
-            .expect("a validated prefix fits the domain and output")
+        crate::fft::generic::evaluate_lagrange_with_index(
+            domain.map(Self::into_inner).subgroup(),
+            &point.0,
+            Self::as_slice_mut(evaluations),
+            Self::as_slice_mut(scratch),
+        )
+        .expect("a validated prefix fits the domain and output")
     }
 
     fn root_of_unity(log_size: u32) -> Option<Self> {

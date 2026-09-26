@@ -1,14 +1,43 @@
-//! Native arithmetic stays explicit with or without consumer traits.
+//! Native arithmetic and conversions stay explicit with or without consumer traits.
 #![allow(unused_imports)]
 use arithmetic::{
     curve::{PallasAffine, PallasPoint, PallasProjective},
-    field::{Fp, Fq},
+    field::{Fp, Fq, Reduced},
 };
 fn main() {
     assert_eq!(
         <Fp>::ONE.add(&<Fp>::ONE).reduce(),
         <Fp>::from_u64(2).reduce()
     );
+    #[cfg(feature = "field-from-u64")]
+    {
+        let _: Fp = 7u64.into();
+    }
+    #[cfg(feature = "field-reduced-from-u64")]
+    {
+        let _: Fp<Reduced> = 7u64.into();
+    }
+    #[cfg(feature = "point-from-projective")]
+    {
+        let _: PallasPoint = PallasProjective::GENERATOR.into();
+    }
+    #[cfg(feature = "projective-from-point")]
+    {
+        let _: PallasProjective = PallasPoint::GENERATOR.into();
+    }
+    #[cfg(feature = "field-from-adapter")]
+    {
+        let _: Fp = arithmetic::field::FieldAdapter::new(<Fp>::ONE).into();
+    }
+    #[cfg(feature = "point-from-adapter")]
+    {
+        let _: PallasPoint = arithmetic::curve::AffineAdapter::new(PallasPoint::GENERATOR).into();
+    }
+    #[cfg(feature = "projective-from-adapter")]
+    {
+        let _: PallasProjective =
+            arithmetic::curve::ProjectiveAdapter::new(PallasProjective::GENERATOR).into();
+    }
     #[cfg(feature = "field-eq")]
     {
         let _ = <Fp>::ONE == <Fp>::ONE;

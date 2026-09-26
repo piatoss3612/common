@@ -94,11 +94,6 @@ impl<C: PastaCurve> From<Point<C>> for AffineAdapter<C> {
     }
 }
 
-impl<C: PastaCurve> From<AffineAdapter<C>> for Point<C> {
-    fn from(value: AffineAdapter<C>) -> Self {
-        value.0
-    }
-}
 impl<C: PastaCurve> Default for AffineAdapter<C> {
     fn default() -> Self {
         Self(Point::IDENTITY)
@@ -220,11 +215,6 @@ impl<C: PastaCurve> From<ProjectivePoint<C>> for ProjectiveAdapter<C> {
     }
 }
 
-impl<C: PastaCurve> From<ProjectiveAdapter<C>> for ProjectivePoint<C> {
-    fn from(value: ProjectiveAdapter<C>) -> Self {
-        value.0
-    }
-}
 impl<C: PastaCurve> Default for ProjectiveAdapter<C> {
     fn default() -> Self {
         Self(ProjectivePoint::IDENTITY)

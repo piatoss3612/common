@@ -90,6 +90,18 @@ fn check_encodings<M: PrimeModulus>() {
             &signed_mod(BigInt::from(signed), &p),
         );
     }
+    for unsigned in [
+        0,
+        1,
+        u128::from(u64::MAX),
+        1 << 64,
+        (1 << 64) + 1,
+        u128::MAX,
+    ] {
+        let expected = BigUint::from(unsigned);
+        assert_value(PastaField::<M>::from_u128(unsigned), &expected);
+        assert_value(PastaField::<M, Reduced>::from_u128(unsigned), &expected);
+    }
 }
 
 #[test]

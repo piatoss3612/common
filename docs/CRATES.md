@@ -116,6 +116,13 @@ feature is enabled. Native types expose explicit arithmetic methods. The
 optional `field::FieldAdapter`, `curve::AffineAdapter`, and
 `curve::ProjectiveAdapter` wrappers own the operator implementations and borrow
 native buffers through transparent views without allocation or copying.
+Consumer trait requirements alone do not justify extending native types.
+Keep convenience operators and conversions on the adapters when explicit
+native operations already provide the capability. Native additions should
+be useful without the consumer traits and preserve coherent representation
+states and explicit arithmetic costs.
+Use `into_inner` to recover a native value from an adapter; enabling consumer
+traits must not add conversion implementations to native types.
 The `random`, `low_u64`, `dot`, and `dot_iter` helpers use concrete Pasta values
 and need no feature. They live beside native encoding and product arithmetic
 under `field/pasta/` and are re-exported from `field`.

@@ -256,10 +256,3 @@ fn raw_product_sum<M: PrimeModulus>(
     debug_assert_eq!(carry, 0);
     montgomery_reduce_unreduced::<M>(sum)
 }
-
-impl<M: PrimeModulus, S: ReductionState> From<u64> for PastaField<M, S> {
-    #[inline]
-    fn from(value: u64) -> Self {
-        Self::from_u64(value)
-    }
-}

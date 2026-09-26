@@ -163,7 +163,7 @@ mod expansion_operation;
 mod expansion_scales;
 mod factors;
 #[cfg(feature = "traits")]
-mod generic;
+pub(crate) mod generic;
 mod interpolation;
 mod lagrange;
 mod layout;

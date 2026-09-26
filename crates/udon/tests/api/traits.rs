@@ -44,8 +44,12 @@ fn consumer_interfaces_require_the_traits_feature() {
 
 #[test]
 #[ignore = "slow nested Cargo builds; run explicitly with --ignored"]
-fn native_types_do_not_acquire_arithmetic_operators() {
+fn native_arithmetic_and_conversions_stay_explicit() {
     let cases = [
+        ("field-from-u64", "error[E0277]"),
+        ("field-reduced-from-u64", "error[E0277]"),
+        ("point-from-projective", "error[E0277]"),
+        ("projective-from-point", "error[E0277]"),
         ("field-eq", "error[E0369]"),
         ("field-ne", "error[E0369]"),
         ("field-add", "error[E0369]"),
@@ -70,7 +74,16 @@ fn native_types_do_not_acquire_arithmetic_operators() {
         ("projective-sub-assign", "error[E0368]"),
         ("projective-sum", "error[E0277]"),
     ];
-    let features: Vec<_> = cases.iter().map(|&(feature, _)| feature).collect();
+    let adapter_cases = [
+        "field-from-adapter",
+        "point-from-adapter",
+        "projective-from-adapter",
+    ];
+    let features: Vec<_> = cases
+        .iter()
+        .map(|&(feature, _)| feature)
+        .chain(adapter_cases)
+        .collect();
     let consumer = Consumer::new(
         "explicit-native-arithmetic",
         "api/fixtures/operators.rs",
@@ -85,6 +98,17 @@ fn native_types_do_not_acquire_arithmetic_operators() {
                 &format!("{configuration},{feature}"),
                 &[],
                 Some(diagnostic),
+                &["src/main.rs"],
+            );
+        }
+    }
+    for configuration in ["traits", "traits,sqrt-table-large"] {
+        for feature in adapter_cases {
+            consumer.check(
+                "build",
+                &format!("{configuration},{feature}"),
+                &[],
+                Some("error[E0277]"),
                 &["src/main.rs"],
             );
         }

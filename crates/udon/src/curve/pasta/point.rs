@@ -109,10 +109,3 @@ impl<C: PastaCurve> Point<C> {
         }
     }
 }
-
-impl<C: PastaCurve> From<ProjectivePoint<C>> for Point<C> {
-    /// Normalizes the point; see [`ProjectivePoint::to_point`].
-    fn from(point: ProjectivePoint<C>) -> Self {
-        point.to_point()
-    }
-}

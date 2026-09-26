@@ -15,8 +15,8 @@ fn main() {
         PallasPoint::GENERATOR.mul_projective(&Fq::from_u64(2)),
         PallasPoint::GENERATOR.double(),
     );
-    let lifted = udon::curve::PallasProjective::from(PallasPoint::GENERATOR);
-    assert_eq!(PallasPoint::from(lifted), PallasPoint::GENERATOR);
+    let lifted = udon::curve::PallasProjective::from_point(&PallasPoint::GENERATOR);
+    assert_eq!(lifted.to_point(), PallasPoint::GENERATOR);
     assert_eq!(udon::poseidon::PALLAS_BASE.rounds(), 64);
 
     assert_eq!(udon::field::low_u64(&value), 7);
@@ -194,6 +194,10 @@ fn field() {
 fn curve() {
     fn generic<A: udon::curve::Affine>() {
         assert_eq!(A::msm(&[], &[]), A::identity().to_projective());
+        for point in [A::identity(), A::generator()] {
+            let projective: A::Projective = point.into();
+            assert_eq!(A::from(projective), point);
+        }
     }
     generic::<udon::curve::AffineAdapter<udon::curve::Pallas>>();
 }

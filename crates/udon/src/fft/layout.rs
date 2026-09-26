@@ -1,4 +1,4 @@
-use super::{CosetDomain, FftError, PastaField, PrimeModulus, assert_length, reverse};
+use super::{CosetDomain, FftError, PastaField, PrimeModulus, assert_length, bit_reverse};
 
 /// Storage order of logical input or output positions.
 ///
@@ -27,9 +27,9 @@ pub enum InverseScale {
 
 /// Coefficients in increasing degree order, with an explicit mathematical scale.
 ///
-/// The [`ExpansionPlan`](super::run::ExpansionPlan) methods
-/// [`execute`](super::run::ExpansionPlan::execute)
-/// and [`execute_disposable`](super::run::ExpansionPlan::execute_disposable)
+/// The [`ExpansionPlan`](super::execution::ExpansionPlan) methods
+/// [`execute`](super::execution::ExpansionPlan::execute)
+/// and [`execute_disposable`](super::execution::ExpansionPlan::execute_disposable)
 /// return views of the retained coefficient buffer. For source base size `n`
 /// and polynomial coefficients `c[i]`, [`InverseScale::Normalized`] stores
 /// `c[i]` and [`InverseScale::Unscaled`] stores `n * c[i]`. Both use reduced
@@ -53,7 +53,7 @@ pub enum InverseScale {
 /// use zakura_udon::{exec::{ExecutionOptions, SerialExecutor}, field::Fp, fft::{
 ///     Direction, Domain, ElementOrder, Expansion, ExpansionOrder, ExpansionStorage,
 ///     InputStorage, InputSupport, InverseScale, StorageLayout, Transform,
-///     TransformRequest, run::ExpansionPlan,
+///     TransformRequest, execution::ExpansionPlan,
 /// }};
 ///
 /// let options = ExecutionOptions::default();
@@ -185,7 +185,7 @@ impl EvaluationLayout {
         }
         Some(match self {
             Self::Natural => row,
-            Self::BitReversed => reverse(row, size.ilog2()),
+            Self::BitReversed => bit_reverse(row, size.ilog2()),
             Self::Residues(layout) => layout.index(row)?,
         })
     }

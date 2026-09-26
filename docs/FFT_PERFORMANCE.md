@@ -6,7 +6,7 @@ choices under supplied constraints. See the [FFT guide](FFT.md) for
 operation contracts and resource queries.
 
 The tables below were collected on September 12, 2026. They retain comparisons
-between internal strategies, but the current `fft::run` drivers and scratch
+between internal strategies, but the current `fft::execution` drivers and scratch
 requirements differ from the measured versions.
 Use these results as evidence of tradeoffs and the commands below for current
 timings. Obtain temporary storage counts from the current plans.
@@ -113,7 +113,7 @@ not establish that every backend or butterfly is branch-free, or that all
 intermediates remain in registers. An order-four Pasta root still requires real
 field multiplication.
 
-The [isolated kernel experiment](../crates/udon/src/field/butterfly/experiments.rs)
+The [isolated kernel experiment](../crates/udon/src/field/pasta/butterfly/experiments.rs)
 compares two independent butterflies in the existing four-limb `[0,2p)` range.
 Here `p` is the field modulus. It reports the median of five passes over 1,024
 input pairs repeated 256 times, in nanoseconds per pair. A repeated run after

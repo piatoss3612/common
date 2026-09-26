@@ -1,6 +1,7 @@
 use super::*;
-use crate::field::{ReductionState, batch_invert_groups, count_inversions};
-use crate::test_support::{integer, modulus};
+use crate::field::pasta::batch_invert_groups;
+use crate::field::pasta::test_support::{integer, modulus};
+use crate::field::{ReductionState, count_inversions};
 use num_bigint::BigUint;
 
 fn from_raw<M: PrimeModulus>(raw: &BigUint) -> PastaField<M> {
@@ -64,7 +65,7 @@ fn ranges_field<M: PrimeModulus>() {
     let p = modulus::<M>();
     let sentinel = from_raw::<M>(&(&p * 2u8 - 1u8));
     for log in 0..=5 {
-        let subgroup = Domain::<M>::new(log).unwrap();
+        let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
         let n = subgroup.size();
         for domain in [subgroup.subgroup(), subgroup.coset()] {
             let mut points: Vec<_> = field_samples::<M>().take(3).collect();
@@ -116,11 +117,22 @@ fn ranges_field<M: PrimeModulus>() {
                     for scratch_len in [0, 1, 2, 3, count, count + 3] {
                         let mut output = vec![sentinel; count + 2];
                         let mut scratch = vec![sentinel; scratch_len];
-                        let inversions = count_inversions(|| {
-                            domain
-                                .evaluate_lagrange(&point, range.clone(), &mut output, &mut scratch)
-                                .unwrap();
-                        });
+                        let mut inversions = 0;
+                        assert_eq!(
+                            crate::fft::domain::count_size_powers(|| {
+                                inversions = count_inversions(|| {
+                                    domain
+                                        .evaluate_lagrange(
+                                            &point,
+                                            range.clone(),
+                                            &mut output,
+                                            &mut scratch,
+                                        )
+                                        .unwrap();
+                                });
+                            }),
+                            usize::from(count != 0 && n != 1)
+                        );
                         let expected_inversions = if node_hit || n == 1 {
                             0
                         } else {
@@ -159,7 +171,7 @@ fn lagrange_ranges_match_integer_basis_products() {
 }
 
 fn grouped_field<M: PrimeModulus>() {
-    let subgroup = Domain::<M>::new(4).unwrap();
+    let subgroup = Domain::<PastaField<M>>::new(4).unwrap();
     let domains = [subgroup.subgroup(), subgroup.coset(), subgroup.coset()];
     let points = [
         PastaField::from_u64(7),
@@ -237,7 +249,7 @@ fn lagrange_completion_shares_unscaled_inversion_batches() {
 }
 
 fn errors_field<M: PrimeModulus>() {
-    let domain = Domain::<M>::new(3).unwrap().coset();
+    let domain = Domain::<PastaField<M>>::new(3).unwrap().coset();
     let original = [from_raw::<M>(&(modulus::<M>() * 2u8 - 1u8)); 12];
     for range in [
         core::ops::Range { start: 2, end: 1 },
@@ -313,7 +325,7 @@ fn errors_field<M: PrimeModulus>() {
     // Exercise the largest addressable domain without allocating its full size.
     let subgroup = (0..=32)
         .rev()
-        .find_map(|log| Domain::<M>::new(log).ok())
+        .find_map(|log| Domain::<PastaField<M>>::new(log).ok())
         .unwrap();
     let n = subgroup.size();
     for domain in [subgroup.subgroup(), subgroup.coset()] {

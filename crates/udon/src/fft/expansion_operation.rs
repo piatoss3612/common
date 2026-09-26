@@ -16,18 +16,18 @@ pub enum ExpansionOrder {
     BitReversed,
 }
 
-/// Input liveness and coefficient storage for [`super::run::ExpansionPlan`].
+/// Input liveness and coefficient storage for [`super::execution::ExpansionPlan`].
 ///
 /// Workspace and disposable-input policies retain coefficients in their
 /// selected buffer. Its mathematical scale uses the base subgroup size, as
 /// defined by [`InverseScale`]; output evaluations always have their ordinary
-/// values. Scale handling follows [`super::run::ExpansionPlan`].
+/// values. Scale handling follows [`super::execution::ExpansionPlan`].
 /// Input order and support are selected when constructing that plan.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExpansionStorage {
     /// Preserve full coefficients or a natural prefix with a zero suffix.
     ///
-    /// A coefficient scale can be supplied to [`super::run::ExpansionPlan`].
+    /// A coefficient scale can be supplied to [`super::execution::ExpansionPlan`].
     Coefficients,
     /// Preserve base evaluations, using output storage for coefficients.
     ReuseOutput,
@@ -87,7 +87,7 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
     /// Preferred scratch field count for this residue under the resource limits.
     ///
     /// Counts initialized field elements. Resolves a full preserved coefficient
-    /// input through [`super::run::FftPlan::new`], with its planning errors. Direct
+    /// input through [`super::execution::FftPlan::new`], with its planning errors. Direct
     /// execution adapts to smaller or empty scratch without changing the output's
     /// size or order.
     pub fn scratch_requirements(self, options: ExecutionOptions) -> Result<usize, FftError> {
@@ -100,8 +100,8 @@ impl<'a, M: PrimeModulus> Residue<'a, M> {
         self,
         support: super::InputSupport,
         options: ExecutionOptions,
-    ) -> Result<super::run::FftPlan<'a, M>, FftError> {
-        super::run::FftPlan::new(
+    ) -> Result<super::execution::FftPlan<'a, M>, FftError> {
+        super::execution::FftPlan::new(
             self.expansion.base,
             super::TransformRequest {
                 input_storage: super::InputStorage::Preserve,

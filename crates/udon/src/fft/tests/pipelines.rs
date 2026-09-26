@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::fft::run::{ExpansionPlan, FftPlan, InterpolationPlan};
+use crate::fft::execution::{ExpansionPlan, FftPlan, InterpolationPlan};
 use core::num::NonZeroUsize;
 
 fn nz(value: usize) -> NonZeroUsize {
@@ -35,7 +35,7 @@ fn check_coefficients<M: PrimeModulus>(
 
 fn expansions<M: PrimeModulus>() {
     for log in [0, 2, 5] {
-        let base = Transform::new(Domain::<M>::new(log).unwrap().subgroup());
+        let base = Transform::new(Domain::<PastaField<M>>::new(log).unwrap().subgroup());
         let coefficients = inputs(base.domain().size());
         let evaluations = direct(&coefficients, base.domain());
         for extra in [0, 1, 3] {
@@ -232,7 +232,7 @@ fn expansions<M: PrimeModulus>() {
                                 let physical = if order == ElementOrder::Natural {
                                     row
                                 } else {
-                                    reverse(row, base.domain().domain().log_size())
+                                    bit_reverse(row, base.domain().domain().log_size())
                                 };
                                 assert_eq!(
                                     output[physical].reduce(),
@@ -263,7 +263,7 @@ fn fragmented_expansion_and_four_class_interpolation_need_no_workspace() {
             length: nz(8),
             whole_bank: false,
         };
-        let base_domain = Domain::<M>::for_size(8).unwrap().subgroup();
+        let base_domain = Domain::<PastaField<M>>::for_size(8).unwrap().subgroup();
         let base_tables = Prepared::new(base_domain);
         let base = base_tables.tables().bind(base_domain);
         let domains = [6, 5, 4, 3].map(|log| Domain::new(log).unwrap().coset());
@@ -314,7 +314,7 @@ fn fragmented_expansion_and_four_class_interpolation_need_no_workspace() {
         let mut values: [_; 4] = core::array::from_fn(|i| {
             if i == 0 {
                 (0..domains[0].size())
-                    .map(|row| *expanded.get(reverse(row, 6)).unwrap())
+                    .map(|row| *expanded.get(bit_reverse(row, 6)).unwrap())
                     .collect::<Vec<_>>()
             } else {
                 let coefficients = inputs(domains[i].size());
@@ -323,7 +323,7 @@ fn fragmented_expansion_and_four_class_interpolation_need_no_workspace() {
                 }
                 let evaluations = direct(&coefficients, domains[i]);
                 (0..domains[i].size())
-                    .map(|row| evaluations[reverse(row, domains[i].domain().log_size())])
+                    .map(|row| evaluations[bit_reverse(row, domains[i].domain().log_size())])
                     .collect()
             }
         });
@@ -352,7 +352,7 @@ fn fragmented_expansion_and_four_class_interpolation_need_no_workspace() {
 fn residue_transforms_match_extended_rows() {
     fn check<M: PrimeModulus>() {
         for log in [0, 1, 5] {
-            let base = Transform::new(Domain::<M>::new(log).unwrap().subgroup());
+            let base = Transform::new(Domain::<PastaField<M>>::new(log).unwrap().subgroup());
             let coefficients = inputs(base.domain().size());
             for extra in [0, 1, 4] {
                 for coset in [false, true] {
@@ -381,7 +381,7 @@ fn residue_transforms_match_extended_rows() {
                                 let physical = if order == ElementOrder::Natural {
                                     row
                                 } else {
-                                    reverse(row, log)
+                                    bit_reverse(row, log)
                                 };
                                 assert_eq!(
                                     output[physical].reduce(),
@@ -411,7 +411,7 @@ fn resolved_expansion_counts_cover_all_storage_modes_under_memory_limits() {
     }
 
     fn check<M: PrimeModulus>() {
-        let base = Transform::new(Domain::<M>::new(5).unwrap().subgroup());
+        let base = Transform::new(Domain::<PastaField<M>>::new(5).unwrap().subgroup());
         let domain = Domain::new(8).unwrap().coset();
         let expansion = Expansion::new(base, domain, None).unwrap();
         let coefficients = inputs(base.domain().size());
@@ -474,7 +474,7 @@ fn resolved_expansion_counts_cover_all_storage_modes_under_memory_limits() {
                         if input_order == ElementOrder::BitReversed {
                             let natural = input.clone();
                             for (index, value) in input.iter_mut().enumerate() {
-                                *value = natural[reverse(index, base.domain().size().ilog2())];
+                                *value = natural[bit_reverse(index, base.domain().size().ilog2())];
                             }
                         }
                         let mut output = vec![PastaField::ONE; domain.size()];
@@ -520,7 +520,7 @@ fn resolved_expansion_counts_cover_all_storage_modes_under_memory_limits() {
 
 fn short_bit_reversed_expansions<M: PrimeModulus, E: Executor>(executor: &E) {
     for log in [0, 4, 8, 11] {
-        let subgroup = Domain::<M>::new(log).unwrap().subgroup();
+        let subgroup = Domain::<PastaField<M>>::new(log).unwrap().subgroup();
         let domain = Domain::new(log + 3).unwrap().coset();
         let prepared = Prepared::new(subgroup);
         let mut coefficients = inputs(subgroup.size());
@@ -653,7 +653,7 @@ fn short_bit_reversed_products_match_reference_at_pruning_boundary() {
 
 #[test]
 fn short_bit_reversed_residues_preserve_loose_bounds_on_panic() {
-    let base = Transform::new(Domain::<PallasBase>::new(8).unwrap().subgroup());
+    let base = Transform::new(Domain::<PastaField<PallasBase>>::new(8).unwrap().subgroup());
     let domain = Domain::new(11).unwrap().coset();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let residue = expansion.residue(5, ElementOrder::BitReversed).unwrap();
@@ -668,7 +668,7 @@ fn short_bit_reversed_residues_preserve_loose_bounds_on_panic() {
         .unwrap();
     for row in 0..base.domain().size() {
         assert_eq!(
-            output[reverse(row, base.domain().domain().log_size())].reduce(),
+            output[bit_reverse(row, base.domain().domain().log_size())].reduce(),
             expected[5 + expansion.layout().residues() * row].reduce()
         );
     }
@@ -696,7 +696,7 @@ fn short_bit_reversed_residues_preserve_loose_bounds_on_panic() {
 
 #[test]
 fn expansion_metadata_storage_errors_and_panics() {
-    let base = Transform::new(Domain::<PallasBase>::new(5).unwrap().subgroup());
+    let base = Transform::new(Domain::<PastaField<PallasBase>>::new(5).unwrap().subgroup());
     let domain = Domain::new(7).unwrap().coset();
     let expansion = Expansion::new(base, domain, None).unwrap();
     let coefficients = inputs(base.domain().size());
@@ -900,7 +900,7 @@ fn expansion_metadata_storage_errors_and_panics() {
 
 #[test]
 fn interpolation_checks_lengths_before_mutation_and_preserves_loose_bounds_on_panic() {
-    let domain = Domain::<PallasBase>::new(7).unwrap().subgroup();
+    let domain = Domain::<PastaField<PallasBase>>::new(7).unwrap().subgroup();
     let other = domain.domain().coset();
     let original = inputs(domain.size());
     for consume in [false, true] {
@@ -979,7 +979,7 @@ fn interpolation_checks_lengths_before_mutation_and_preserves_loose_bounds_on_pa
 
 fn interpolation<M: PrimeModulus>() {
     for log in [0, 3, 7] {
-        let output_domain = Domain::<M>::new(log).unwrap().coset();
+        let output_domain = Domain::<PastaField<M>>::new(log).unwrap().coset();
         let coefficients = inputs(output_domain.size());
         // Include equal-sized domains, different orders, and a pair of equal
         // smaller domains that the destructive path can combine separately.
@@ -1013,7 +1013,7 @@ fn interpolation<M: PrimeModulus>() {
                         let natural = direct(&lift_coefficients[i - 1], domains[i - 1]);
                         if i % 2 == 1 {
                             (0..natural.len())
-                                .map(|j| natural[reverse(j, natural.len().ilog2())])
+                                .map(|j| natural[bit_reverse(j, natural.len().ilog2())])
                                 .collect()
                         } else {
                             natural
@@ -1077,7 +1077,7 @@ fn equal_size_parallel_and_destructive_interpolation_match_polynomial_sums() {
 #[test]
 fn prepared_subgroup_copy_preserves_validation_and_skips_scheduling() {
     fn check<M: PrimeModulus>() {
-        let base = Transform::new(Domain::<M>::new(5).unwrap().subgroup());
+        let base = Transform::new(Domain::<PastaField<M>>::new(5).unwrap().subgroup());
         let input = inputs(base.domain().size());
         for normalization in [
             ExpansionScaleNormalization::Coefficients,

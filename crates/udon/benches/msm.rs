@@ -32,10 +32,10 @@ use zakura_udon::{
     curve::{
         AffinePoint, CurveTableEntry, EisensteinScalar, EisensteinTableBatch, Pallas, PastaCurve,
         Point, PreparedAffinePoint, ProjectivePoint, Vesta,
-        msm::{Bases, Input, PreparedScalars, Requirements, ScalarStorage, Scratch},
     },
     exec::{ExecutionOptions, Executor, SerialExecutor, TaskBudget},
     field::{CanonicalUint, PastaField, PrimeModulus},
+    msm::{Bases, Input, PreparedScalars, Requirements, ScalarStorage, Scratch},
 };
 
 struct Pool;

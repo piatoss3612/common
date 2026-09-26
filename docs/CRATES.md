@@ -40,6 +40,11 @@ implementation call inside `const { ... }`. Do not export arithmetic functions
 or contexts through the facade: Udon must use this support only at compile time.
 POD storage APIs retain their existing const methods.
 
+Within core's `pod` module, the trait and primitive implementations define the
+storage contract, `layout` owns target measurements and validation, and
+`storage` owns byte views and aligned buffers. The facade preserves the public
+paths while the macro crate emits checks through the core-owned trait metadata.
+
 Use associated constants for fixed values tied to a type, such as field
 parameters and execution presets. Perform construction and representation checks
 in constant initializers so they do not depend on optimizer constant folding.
@@ -75,6 +80,83 @@ that relies on it. Generated unsafe implementations are part of this surface:
 review how their safety-critical names resolve in consumers. Do not rely on
 host layout, trusted generators, or intended callers to satisfy requirements
 that a public safe API permits arbitrary callers to bypass.
+
+## Udon module boundaries
+
+Udon owns runtime arithmetic and the contracts needed to execute it. Bento
+supplies constant derivation and POD tools; it does not own Pasta's runtime
+representations or arithmetic kernels. Artifact schemas, generator derivation,
+allocating workspaces, and worker runtimes belong to their downstream owners.
+
+| Source module | Responsibility |
+| --- | --- |
+| `field/` | Public exports of native field APIs and optional consumer interfaces |
+| `field/pasta/` | Pasta representations, parameters, and optimized field implementations |
+| `field/consumer/` | Optional field trait and its operator adapter |
+| `curve/` | Public exports of native curve APIs and optional consumer interfaces |
+| `curve/pasta/` | Pasta point representations, coordinate kernels, and fixed-base tables |
+| `curve/consumer/` | Optional curve traits and their affine/projective operator adapters |
+| `fft/` | Domains, full transforms, layouts, tables, and transform plans |
+| `msm/` | Multiscalar multiplication, scalar preparation, scheduling, and task plans |
+| `exec/` | Shared executor contracts, operation budgets, and scoped work helpers |
+| `exec/execution/` | Common incremental task, completion, and frontier protocol |
+| `cycle/` | Cycle contracts, borrowed generators, and Pasta bindings; requires `poseidon` |
+| `poseidon/` | Fixed Pasta parameter sets and consumer views, enabled together by `poseidon` |
+| `polynomial/` | Native Pasta polynomial arithmetic and optional generic evaluation, linear division, and geometric sums |
+
+The `field` and `curve` modules explicitly re-export their concrete types;
+callers use paths such as `field::Fp` and `curve::Pallas`.
+Their private Pasta modules keep representation-specific code separate from
+generic contracts. Each domain's `consumer/traits.rs` defines its optional
+contracts; `consumer/adapter.rs` owns the wrappers, their operators, and their
+trait implementations. The unstable `traits` feature gates each `consumer`
+module, along with generic polynomial iterators. The separate `poseidon`
+feature gates the entire parameter module and `cycle`. It enables `traits`
+for the consumer views; `traits` alone does not enable Poseidon.
+Native arithmetic must not depend on the consumer contracts, even when the
+feature is enabled. Native types expose explicit arithmetic methods. The
+optional `field::FieldAdapter`, `curve::AffineAdapter`, and
+`curve::ProjectiveAdapter` wrappers own the operator implementations and borrow
+native buffers through transparent views without allocation or copying.
+Consumer trait requirements alone do not justify extending native types.
+Keep convenience operators and conversions on the adapters when explicit
+native operations already provide the capability. Native additions should
+be useful without the consumer traits and preserve coherent representation
+states and explicit arithmetic costs.
+Use `into_inner` to recover a native value from an adapter; enabling consumer
+traits must not add conversion implementations to native types.
+The `random`, `low_u64`, `dot`, and `dot_iter` helpers use concrete Pasta values
+and need no feature. They live beside native encoding and product arithmetic
+under `field/pasta/` and are re-exported from `field`.
+Field butterfly kernels live in `field/pasta/butterfly/`;
+they are the small arithmetic steps used by `fft/`, not a second transform API.
+Likewise, `curve/pasta/reduce.rs` owns the coordinate formulas used by MSM
+bucket reduction, keeping raw affine coordinates private to the curve implementation.
+
+FFT and MSM are sibling modules for bulk arithmetic over fields and curves.
+Both depend on `exec`, which supplies shared contracts
+without owning threads or allocating a pool. Within FFT, `planning` resolves
+geometry and scratch, `request` describes the requested operation, and
+`normalization` applies inverse scaling. The `fft/execution` and `msm/execution`
+modules own their plans and task kernels; `exec/execution` owns the common protocol.
+
+These are source modules within one library crate. Runtime arithmetic kernels
+stay in Udon; Bento supplies compile-time derivation and code generation.
+The Pasta field implementation also owns its stored-representation descriptor
+and shared field test helpers. `STORED_FORM` and `stored_form!` remain exported
+at the crate root for artifact producers and consumers.
+
+Keep arithmetic, encoding, cycle, and resource-limit assertions beside their
+implementation, including checks written entirely through public methods.
+Keep Pasta field and curve suites under `field/pasta/tests` and
+`curve/pasta/tests`, including their consumer adapter and helper tests.
+Enable tests of the optional consumer interfaces with `traits`.
+Use separate consumers for macro resolution, independent trait implementations,
+caller-owned adapters, and generated artifacts. Group them by field, curve, FFT,
+MSM, or shared execution. Put each domain's storage tests and consumer fixtures in
+that domain, alongside its other tests. Shared test machinery belongs in the
+test harness rather than another suite. See the
+[testing guide](TESTING.md#udon-test-layout) for the test entry points.
 
 ## Procedural macros
 

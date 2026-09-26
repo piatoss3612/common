@@ -1,5 +1,5 @@
 use super::*;
-use crate::fft::run::{ExpansionPlan, FftPlan};
+use crate::fft::execution::{ExpansionPlan, FftPlan};
 use core::num::NonZeroUsize;
 
 fn nz(value: usize) -> NonZeroUsize {
@@ -10,7 +10,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
     for size in [ordinary.len(), ordinary.len() * 4] {
         for coset in [false, true] {
             let domain = {
-                let subgroup = Domain::<M>::for_size(size).unwrap();
+                let subgroup = Domain::<PastaField<M>>::for_size(size).unwrap();
                 if coset {
                     subgroup.coset()
                 } else {
@@ -227,7 +227,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
                             let index = if inner_order == ElementOrder::Natural {
                                 row
                             } else {
-                                reverse(row, size.ilog2())
+                                bit_reverse(row, size.ilog2())
                             };
                             assert_eq!(
                                 (output[index]).reduce(),
@@ -243,7 +243,7 @@ fn consume_coefficients<M: PrimeModulus>(view: CoefficientView<'_, M>, ordinary:
 
 fn coefficient_composition<M: PrimeModulus>() {
     for size in [1, 8] {
-        let domain = Domain::<M>::for_size(size).unwrap().subgroup();
+        let domain = Domain::<PastaField<M>>::for_size(size).unwrap().subgroup();
         let mut ordinary = inputs(size);
         ordinary[0] = PastaField::from_u64(13);
         let evaluations = direct(&ordinary, domain);
@@ -284,7 +284,7 @@ fn retained_views_feed_transforms_expansions_residues_and_products() {
 
 #[test]
 fn coefficient_view_errors_preserve_buffers_and_skip_execution() {
-    let domain = Domain::<PallasBase>::new(3).unwrap().subgroup();
+    let domain = Domain::<Fp>::new(3).unwrap().subgroup();
     let plan = Transform::new(domain);
     let coefficients = inputs(domain.size());
     let view = CoefficientView::normalized(&coefficients);

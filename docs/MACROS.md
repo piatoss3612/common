@@ -47,8 +47,9 @@ active. Explicit paths must name support available in that compilation context.
 ## Storage derivation
 
 The `Pod` derive validates representation and field bounds, then emits recursive
-layout assertions. Measurements and record checks belong to core-owned metadata
-obtained through the actual `Pod` trait, so replacing a caller's `core` path or
+layout assertions. Measurements and record checks belong to
+[core-owned metadata](../crates/bento-core/src/pod/layout.rs) obtained through
+the actual `Pod` trait, so replacing a caller's `core` path or
 re-exporting the trait with counterfeit helpers cannot bypass validation.
 Metadata is not a validation witness: storage consumers must still evaluate
 `Pod::ASSERT_LAYOUT`, including for empty values. See the [POD guide](POD.md)

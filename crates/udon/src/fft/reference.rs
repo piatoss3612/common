@@ -6,11 +6,14 @@
 //! Callers supply roots and inverse lengths. The optimized Pasta API is
 //! [`super::Transform`].
 //!
-//! [`PastaField`] values transform over their own field. [`ProjectivePoint`]
-//! values transform over their curve's scalar field, supporting coefficient
-//! and Lagrange basis conversion in artifact generators. Group arithmetic is
-//! variable-time and needs no allocation; callers can batch-normalize outputs
-//! with [`crate::curve::batch_normalize`].
+//! Pasta fields are their own twiddle domains and butterfly values.
+//! [`ProjectivePoint`] values transform over their curve's scalar field,
+//! supporting coefficient and Lagrange basis conversion in artifact generators.
+//! Callers can batch-normalize outputs with [`crate::curve::batch_normalize`].
+//! Other types can implement [`Twiddle`] and [`Butterfly`] to use these
+//! algorithms. This module does not depend on the optional consumer field
+//! traits. Calls to [`transform`] and [`inverse_transform`] always use the
+//! reference schedule.
 
 use crate::{
     curve::{PastaCurve, ProjectivePoint},
@@ -20,12 +23,27 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+std::thread_local! {
+    static TRANSFORM_COUNT: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(super) fn count_transforms(f: impl FnOnce()) -> usize {
+    TRANSFORM_COUNT.with(|count| {
+        let before = count.get();
+        f();
+        count.get() - before
+    })
+}
+
 /// The scalar domain containing a transform's roots of unity.
 ///
 /// For correct transforms, these operations must agree with multiplication in
 /// a commutative ring: [`Self::ONE`] is its multiplicative identity, and
 /// [`Self::multiply`] is associative and commutative. [`Self::square`] must
-/// agree with multiplying a value by itself. A field is sufficient.
+/// agree with multiplying a value by itself. A field is sufficient. The Pasta
+/// fields implement this trait.
 /// The transform's root requirements are documented on [`transform`]. These
 /// algebraic laws are not checked and are not memory-safety requirements.
 pub trait Twiddle: Copy {
@@ -55,9 +73,11 @@ pub trait Butterfly<T: Twiddle>: Clone {
 
 impl<M: PrimeModulus> Twiddle for PastaField<M> {
     const ONE: Self = Self::ONE;
+
     fn multiply(&self, rhs: &Self) -> Self {
         self.mul(rhs)
     }
+
     fn square(&self) -> Self {
         self.square()
     }
@@ -67,9 +87,11 @@ impl<M: PrimeModulus> Butterfly<Self> for PastaField<M> {
     fn scaled(&self, twiddle: &Self) -> Self {
         self.mul(twiddle)
     }
+
     fn add(&self, rhs: &Self) -> Self {
         self.add(rhs)
     }
+
     fn negated(&self) -> Self {
         self.neg()
     }
@@ -105,6 +127,9 @@ impl<C: PastaCurve> Butterfly<PastaField<C::Scalar>> for ProjectivePoint<C> {
 /// Panics before mutation if the length is zero or not a power of two. Panics
 /// in caller-provided arithmetic or cloning may leave partial results.
 pub fn transform<T: Twiddle, V: Butterfly<T>>(values: &mut [V], root: &T) {
+    #[cfg(test)]
+    TRANSFORM_COUNT.with(|count| count.set(count.get() + 1));
+
     let size = values.len();
     assert!(
         size.is_power_of_two(),
@@ -112,7 +137,7 @@ pub fn transform<T: Twiddle, V: Butterfly<T>>(values: &mut [V], root: &T) {
     );
     let log_size = size.ilog2();
     for index in 0..size {
-        let reversed = super::reverse(index, log_size);
+        let reversed = super::bit_reverse(index, log_size);
         if index < reversed {
             values.swap(index, reversed);
         }

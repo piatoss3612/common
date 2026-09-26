@@ -9,14 +9,37 @@ A plan borrows tables and keeps the domain constants needed for execution.
 Table preparation writes into caller storage; Udon's FFT setup and execution
 do not allocate. An executor's resource use belongs to the caller. Arithmetic
 is variable-time, with no constant-time guarantee for secret inputs; see the
-[field contract](../crates/udon/src/field/mod.rs).
+[field contract](../crates/udon/src/field/pasta/mod.rs).
 
 ## Domains and transform order
 
 [`Domain`](../crates/udon/src/fft/domain.rs) constructs a subgroup with the
-canonical Pasta root for its size. Use `Domain::new(k)` for `2^k` elements or
-`Domain::for_size(n)` for an element count. The constructor documents supported
-orders and target address-space limits. Size one is supported.
+canonical root for its size. `Domain::<Fp>::new(k)` gives `2^k` elements and
+`Domain::for_size(n)` an element count. These constructors work for both Pasta
+fields without features. The constructor documents supported orders and target
+address-space limits; size one is supported. `bit_reverse` maps between natural
+and bit-reversed positions.
+
+The unstable `traits` feature extends this same descriptor to consumer
+`Field` implementations through `F::domain(k)`, and adds generic domain
+operations. `FieldAdapter<M>` implements the consumer field interface; its
+constructor wraps the parameters from native `Domain::new`. The native
+`Domain<PastaField<M>>` continues to serve `Transform` and the planning APIs.
+Other field implementations can use `Domain::from_field` to construct a
+descriptor from their canonical roots and normalization inside `Field::domain`.
+`elements()` iterates the subgroup in natural order; `vanishing(x)` and
+`contains(x)` evaluate
+`x^n - 1`, and `lagrange_evaluations` writes the Lagrange basis at a point into a
+caller slice with bounded inversion scratch. Pasta delegates Lagrange evaluation
+to the native range API; one scratch element per output shares a single inversion,
+and smaller buffers split the work into batches.
+
+With `traits` enabled, `Domain::transform` and `Domain::inverse_transform`
+dispatch field elements directly through the required `Field::fft` and
+`Field::ifft` methods. Pasta fields use `Transform` with serial execution,
+computed twiddles, and no auxiliary buffers. These conveniences allocate nothing.
+Call `Transform` directly to
+reuse tables and scratch or select an executor.
 
 `domain.subgroup()` selects shift one; `domain.coset()` selects the field's
 order-three `ZETA` shift. These are the two supported transform domains.
@@ -53,17 +76,23 @@ operations require matching domains and layouts, including the field type,
 canonical root, size, and shift. Binding checks dimensions and declared
 semantics; it cannot establish which polynomial produced the evaluations.
 
-The [`reference` module](../crates/udon/src/fft/reference.rs) retains a simple
+The [`reference` module](../crates/udon/src/fft/reference.rs) provides a separate
 generic transform through `Twiddle` and `Butterfly`. It takes explicit roots;
-its inverse also takes the inverse size. This is useful as an independent
-schedule or for a downstream value type. Its trait contracts define the
-algebraic laws that a custom implementation must satisfy.
+its inverse also takes the inverse size. Pasta fields are their own twiddle
+domains and butterfly values, and projective points transform over their
+curve's scalar field. Other types implement these two contracts explicitly.
+Their algebraic laws are documented with the traits.
+
+Call `reference::transform` or `reference::inverse_transform` for group-valued
+transforms, artifact generation, or an independent check of the field kernels.
+These functions always use the reference schedule and do not depend on the
+`traits` feature. Generic `Domain` field transforms use `Field` directly.
 
 ## Transform plans and task budgets
 
-[`run::FftPlan`](../crates/udon/src/fft/run.rs) resolves a `TransformRequest`
+[`execution::FftPlan`](../crates/udon/src/fft/execution/mod.rs) resolves a `TransformRequest`
 from a domain/table `Transform`, `StorageLayout`, and shared
-[`ExecutionOptions`](../crates/udon/src/exec.rs). The options supply a total task
+[`ExecutionOptions`](../crates/udon/src/exec/mod.rs). The options supply a total task
 budget and optional workspace byte ceiling. The default is serial execution
 with no extra ceiling. Udon selects local arithmetic, permutations, and column
 panels; the caller does not configure those implementation choices.
@@ -145,15 +174,15 @@ also use the explicit twiddle provider.
 
 Callers can prepare table arrays at runtime and lend their slices, or prepare
 them in a downstream build script and embed them through [Bento POD](POD.md).
-The executable [FFT embedding consumer](../crates/udon/tests/fixtures/fft_embedding)
+The executable [FFT embedding consumer](../crates/udon/tests/fft/fixtures/embedding)
 shows the complete build-to-runtime path for both fields:
 
-1. Its [record schema](../crates/udon/tests/fixtures/fft_embedding/src/record.rs)
+1. Its [record schema](../crates/udon/tests/fft/fixtures/embedding/src/record.rs)
    owns concrete POD arrays for a chosen domain and expansion ratio.
-2. Its [build script](../crates/udon/tests/fixtures/fft_embedding/build.rs) prepares
+2. Its [build script](../crates/udon/tests/fft/fixtures/embedding/build.rs) prepares
    the arrays with Udon, writes `bento::bytes_of(&record)`, and names the file
    using `STORED_FORM`.
-3. Its [consumer library](../crates/udon/tests/fixtures/fft_embedding/src/lib.rs)
+3. Its [consumer library](../crates/udon/tests/fft/fixtures/embedding/src/lib.rs)
    uses `bento::embed_struct!` with `udon::stored_form!()`, borrows tables directly
    from the embedded record, and executes with stack-owned buffers.
 
@@ -173,7 +202,7 @@ but do not execute them.
 
 ## Scratch and execution
 
-[`ExecutionOptions`](../crates/udon/src/exec.rs) is shared by FFTs and MSMs.
+[`ExecutionOptions`](../crates/udon/src/exec/mod.rs) is shared by FFTs and MSMs.
 `with_task_budget` provides the allowance for an entire operation, including
 nested transforms. `with_memory_limit` bounds used arithmetic scratch and
 retained intermediates. Inputs, outputs, persistent tables, metadata, unused
@@ -191,10 +220,10 @@ Scratch arrays filled with `Fp::ZERO` or `Fq::ZERO` suffice. Unused tails remain
 untouched. The [module contract](../crates/udon/src/fft/mod.rs) defines scratch
 reuse, validation boundaries, and recovery on unwind.
 
-The [benchmarks](TESTING.md#fft-benchmarks) include coefficient scaling when
+The [benchmarks](BENCHMARKING.md#fft-benchmarks) include coefficient scaling when
 comparing subgroup transforms and the order-three `ZETA` coset.
 
-FFTs use [`exec::Executor`](../crates/udon/src/exec.rs) for scoped joins. Its trait
+FFTs use [`exec::Executor`](../crates/udon/src/exec/mod.rs) for scoped joins. Its trait
 documentation defines completion, panic handling, and progress during nested
 calls. `SerialExecutor` can also exercise tiled transforms with the queried
 scratch requirement.
@@ -204,11 +233,11 @@ For concurrency across polynomials or separately owned tiles, use
 callback receives a `TaskBudget` for its nested work. Pass it through
 `ExecutionOptions::with_task_budget`, and give concurrent transforms disjoint
 scratch. The
-[execution module's example](../crates/udon/src/exec.rs) demonstrates this with
+[execution module's example](../crates/udon/src/exec/mod.rs) demonstrates this with
 separate tiles. Divide budgets between simultaneous application operations;
 copying a budget does not reserve or limit threads.
 
-[`fft::run`](../crates/udon/src/fft/run.rs) exposes bounded transform, expansion,
+[`fft::execution`](../crates/udon/src/fft/execution/mod.rs) exposes bounded transform, expansion,
 and interpolation work to an application scheduler. Each run owns its buffer
 barriers; completed transforms and residue blocks can ready their consumers
 while other operations continue. The [execution guide](EXECUTION.md) explains
@@ -285,7 +314,7 @@ This uses coefficient support; an inverse `TransformRequest` prefix instead
 describes evaluation positions and does not recover `q`. Consumers of `p`'s
 coefficients still need the full product.
 
-[`run::ExpansionPlan`](../crates/udon/src/fft/run/expansion.rs) fixes liveness,
+[`execution::ExpansionPlan`](../crates/udon/src/fft/execution/expansion.rs) fixes liveness,
 input support, ordering, and resource constraints. `coefficient_fields()` reports
 separate coefficient workspace; `scratch_fields()` reports synchronous transform
 scratch. The workspace ceiling covers both. The plan divides its total task
@@ -340,7 +369,7 @@ contiguous output, so choose storage according to the consumer's access pattern.
 
 ## Constant prefixes and explicit tails
 
-[`ConstantPrefix`](../crates/udon/src/field/constant_prefix.rs) represents
+[`ConstantPrefix`](../crates/udon/src/field/pasta/constant_prefix.rs) represents
 natural-order evaluations with a repeated prefix and a short explicit tail of
 actual values. Use `CosetDomain::interpolate_constant_prefix` to recover
 coefficients directly, or
@@ -375,7 +404,7 @@ before interpolation.
 
 ## Fused class interpolation
 
-[`run::InterpolationPlan`](../crates/udon/src/fft/run/interpolation.rs) combines
+[`execution::InterpolationPlan`](../crates/udon/src/fft/execution/interpolation.rs) combines
 classes supplied as `(Transform, ElementOrder)` pairs. Entry zero is the output;
 other classes may be smaller and independently use subgroup or `ZETA` shifts.
 The caller supplies storage layout, whether lift buffers may be consumed, and
@@ -398,7 +427,7 @@ starts at natural row `s + r*k` and advances by `r`. A subdomain smaller by `d`
 contains extended rows divisible by `d`. When `d` divides `r` and `s`, its window
 starts at `s/d + (r/d)*k` with stride `r/d`. Map each resulting index into the
 selected element order before writing. The
-[workspace fixture](../crates/udon/tests/support/workspaces/fft.rs) checks producer
+[workspace fixture](../crates/udon/tests/fft/buffers.rs) checks producer
 completion before exposing its buffers to interpolation.
 
 Validation precedes mutation. A panic can leave partial results; refill affected

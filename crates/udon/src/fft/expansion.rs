@@ -3,7 +3,9 @@ use super::{
     ExpansionScaleNormalization, ExpansionScales, FftError, PastaField, PrimeModulus,
     ResidueLayout, Transform, assert_length, check_prefix,
 };
-use super::{ElementOrder, ExpansionStorage, InputSupport, StorageLayout, run::ExpansionPlan};
+use super::{
+    ElementOrder, ExpansionStorage, InputSupport, StorageLayout, execution::ExpansionPlan,
+};
 use crate::exec::ExecutionOptions;
 
 /// Evaluates a base polynomial on a coset of equal or larger size.
@@ -12,7 +14,7 @@ use crate::exec::ExecutionOptions;
 /// domain's natural rows `s + r*k`, for `0 <= s < r` and `0 <= k < n`. Direct
 /// methods store each residue contiguously, as described by [`Self::layout`];
 /// use [`EvaluationView`] for lookup by natural row.
-/// [`super::run::ExpansionPlan`] also supports bit-reversed output. The ratio
+/// [`super::execution::ExpansionPlan`] also supports bit-reversed output. The ratio
 /// `r` can be any supported power of two, including one.
 ///
 /// Residues use their output as working storage, avoiding a full zero-padded
@@ -105,7 +107,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
     /// [`CoefficientView`](super::CoefficientView), can use either convention.
     /// Initialization accounts for the view's source base size and any factor already
     /// present in the table. [`Self::evaluations`] accepts either convention.
-    /// [`super::run::ExpansionPlan`] also accounts for the retained coefficient scale
+    /// [`super::execution::ExpansionPlan`] also accounts for the retained coefficient scale
     /// during residue initialization.
     ///
     /// Table contents follow [`ExpansionScales`]' preparation and binding
@@ -123,7 +125,7 @@ impl<'a, M: PrimeModulus> Expansion<'a, M> {
 
     /// Layout used by direct expansion methods and their factor inputs.
     ///
-    /// [`super::run::ExpansionPlan`] can instead select
+    /// [`super::execution::ExpansionPlan`] can instead select
     /// [`ExpansionOrder::BitReversed`]; bind those results with
     /// [`EvaluationLayout::BitReversed`].
     pub const fn layout(self) -> ResidueLayout {

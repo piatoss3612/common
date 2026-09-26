@@ -7,7 +7,7 @@
 //! schedules use this workspace's `bento` support.
 //! [`curve`] provides Pallas and Vesta points, canonical encodings,
 //! GLV scalar multiplication, batch normalization, and borrowed compact and
-//! expanded fixed-base tables. [`curve::msm`] sums dense or indexed inputs with
+//! expanded fixed-base tables. [`msm`] sums dense or indexed inputs with
 //! caller-owned scratch and execution.
 //! [`fft`] provides power-of-two transforms, cosets, residue expansion, and fused
 //! interpolation with caller-owned tables, buffers, scratch, and execution.
@@ -16,17 +16,20 @@
 //! or retained powers, divides by monic polynomials with retained remainders,
 //! constructs vanishing polynomials, and interpolates small distinct point sets.
 //! [`exec`] provides scoped fork/join, task budgets, and borrowed work helpers
-//! shared by arithmetic and downstream workloads. [`exec::run`] supplies bounded
-//! task claims and typed admission for application schedulers; [`curve::msm::run`]
-//! and [`fft::run`] expose incremental arithmetic with exclusively leased scratch.
+//! shared by arithmetic and downstream workloads. [`exec::execution`] supplies bounded
+//! task claims and typed admission for application schedulers; [`msm::execution`]
+//! and [`fft::execution`] expose incremental arithmetic with exclusively leased scratch.
+//! The optional `traits` feature adds the unstable generic interfaces described
+//! below. The separate `poseidon` feature adds fixed Pasta Poseidon parameters.
+//!
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
 //! embedded storage. Construction establishes their invariants; embedding
 //! preserves their exact representations for immediate use. Field arithmetic
 //! returns [`field::Loose`] values; explicit reduction produces [`field::Reduced`]
-//! values for equality, ordering, and square roots. [`stored_form!`] names the
-//! limb representation; artifact schemas identify the field, reduction state,
-//! and curve.
+//! values for equality, ordering, and square roots.
+//! [`stored_form!`] names the limb representation; artifact schemas identify
+//! the field, reduction state, and curve.
 //!
 //! Arithmetic is variable-time and provides no constant-time guarantee for
 //! secret inputs.
@@ -42,8 +45,24 @@
 //!
 //! # Features
 //!
-//! Curves and FFTs are always available without feature flags. All current APIs
-//! work without an allocator.
+//! Concrete field, curve, FFT, and MSM APIs are always available without
+//! feature flags or an allocator.
+//!
+//! `traits` enables unstable consumer interfaces at their domain paths:
+//! `field::Field` and `FieldAdapter`, `curve::Affine` and `Projective`,
+//! and generic field, FFT, and polynomial helpers.
+//! `field::FieldAdapter`, `curve::AffineAdapter`, and `curve::ProjectiveAdapter`
+//! implement these contracts and Rust arithmetic operators through native methods.
+//! Native field, curve, FFT, and MSM kernels do not depend on the consumer traits.
+//! Consumers opt in explicitly; these interfaces may change without preserving
+//! compatibility. Native field and point types expose explicit arithmetic methods
+//! and never implement arithmetic operators, including when `traits` is enabled.
+//!
+//! `poseidon` enables the fixed Pasta parameter tables, their consumer views,
+//! and `cycle`, which binds fields, curves, generators, and Poseidon instances.
+//! It enables `traits` because the views use the consumer field interfaces.
+//! Enabling `traits` alone does not expose Poseidon parameters or `cycle`.
+//! The Poseidon module is likely to move to a separate crate.
 //!
 //! By default, square roots and ratios use small tables of roots of unity.
 //! Enabling `sqrt-table-large` selects a larger table algorithm that reduces
@@ -56,20 +75,24 @@
 //! selects it for that Udon build.
 
 #![no_std]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(unreachable_pub)]
 
 mod checks;
 pub mod curve;
+#[cfg(feature = "poseidon")]
+pub mod cycle;
 pub mod exec;
 pub mod fft;
 pub mod field;
+pub mod msm;
 pub mod polynomial;
-mod stored_form;
+#[cfg(feature = "poseidon")]
+pub mod poseidon;
 
-pub use stored_form::STORED_FORM;
+pub use field::pasta::STORED_FORM;
 
 // Keep macro support anchored to Udon through dependency aliases and re-exports.
 // These expose only Bento's const-enforcing macros, never arithmetic functions.
@@ -82,10 +105,5 @@ pub use bento::const_arithmetic::{
 #[cfg(test)]
 extern crate std;
 
-#[cfg(test)]
-mod test_support;
-
-// The scheduler fixtures shared with `tests/execution/` name the crate by its
-// package name; this alias lets `test_support` mount those same files.
 #[cfg(test)]
 extern crate self as zakura_udon;

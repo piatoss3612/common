@@ -1,8 +1,8 @@
 use super::{Butterfly, Twiddle, inverse_transform, transform};
 use crate::curve::{Pallas, PastaCurve, ProjectivePoint, Vesta};
 use crate::fft::Domain;
+use crate::field::pasta::test_support::{field_samples, integer, modulus};
 use crate::field::{PastaField, PrimeModulus};
-use crate::test_support::{field_samples, integer, modulus};
 use num_bigint::BigUint;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
@@ -56,7 +56,7 @@ fn loose<M: PrimeModulus>(value: PastaField<M>) -> PastaField<M> {
 fn exercise<C: PastaCurve>() {
     let q = modulus::<C::Scalar>();
     for log_size in 0..=6 {
-        let domain = Domain::<C::Scalar>::new(log_size).unwrap();
+        let domain = Domain::<PastaField<C::Scalar>>::new(log_size).unwrap();
         let size = domain.size();
         let dense: Vec<_> = field_samples::<C::Scalar>()
             .take(size)
@@ -102,7 +102,12 @@ fn exercise<C: PastaCurve>() {
                     .collect();
                 assert_eq!(input, original);
                 let mut actual = input.clone();
-                transform(&mut actual, &loose(domain.root()));
+                assert_eq!(
+                    super::count_transforms(|| {
+                        super::transform(&mut actual, &loose(domain.root()))
+                    }),
+                    1
+                );
                 assert_eq!(actual, forward, "forward log={log_size} shape={shape}");
                 inverse_transform(
                     &mut actual,
@@ -159,7 +164,7 @@ fn lengths<C: PastaCurve>() {
         }
     }
     for size in [1, 2, 4, 8, 16] {
-        let domain = Domain::<C::Scalar>::for_size(size).unwrap();
+        let domain = Domain::<PastaField<C::Scalar>>::for_size(size).unwrap();
         let mut values = vec![ProjectivePoint::<C>::GENERATOR; size + 2];
         let tail = [ProjectivePoint::IDENTITY, ProjectivePoint::GENERATOR.neg()];
         values[size..].copy_from_slice(&tail);

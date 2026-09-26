@@ -14,7 +14,4 @@ pub mod const_arithmetic;
 
 #[allow(unsafe_code)]
 mod pod;
-pub use pod::{AlignedBytes, MAX_ALIGN, Pod, bytes_of, bytes_of_slice};
-
-#[doc(hidden)]
-pub use pod::Layout as __PodLayout;
+pub use pod::{AlignedBytes, MAX_ALIGN, Pod, PodLayout, bytes_of, bytes_of_slice};

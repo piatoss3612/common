@@ -36,8 +36,11 @@ named `pasta-final-before` and `pasta-final`. To repeat a comparison, use the
 same harness with each implementation and distinct snapshot names:
 
 ```console
-cargo bench --locked -p zakura-udon --bench field -- 'corpus/|encoding/from_wide_bytes_reduced|inner_product/sum_of_products' --sample-size 30 --warm-up-time 0.1 --measurement-time 0.5 --save-baseline candidate
+cargo bench --locked -p zakura-udon --features traits --bench field -- 'corpus/|encoding/from_wide_bytes_reduced|inner_product/sum_of_products' --sample-size 30 --warm-up-time 0.1 --measurement-time 0.5 --save-baseline candidate
 ```
+
+The current field suite requires `traits` for its generic batch-inversion cases;
+the commands here include that feature when repeating these workloads.
 
 ## Runtime results
 
@@ -95,7 +98,7 @@ both fields, matching the array dispatch improvement.
 ## Implementation choices
 
 The measured implementation shared one checked `MontgomeryContext` across each
-field's parameters. The current [parameter derivation](../crates/udon/src/field/parameters.rs)
+field's parameters. The current [parameter derivation](../crates/udon/src/field/pasta/parameters.rs)
 uses Bento's compile-time macros, sharing setup within the root tables.
 Wide decoding combines two raw products with one REDC, with a compile-time
 check of `R2 + R3 < p`. Arbitrary-width decoding uses 32-byte Horner digits;
@@ -116,10 +119,12 @@ REDC cancels the low half before adding the high half once. Multiplication and
 squaring now preserve `[0, 2p)` directly, including arbitrary-length square
 runs. The generic REDC estimate alone does not prove closure because the Pasta
 primes are slightly above `2^254`. The
-[kernel proof](../crates/udon/src/field/montgomery.rs) uses `p = R/4 + c` and
+[kernel proof](../crates/udon/src/field/pasta/montgomery.rs) uses `p = R/4 + c` and
 `16c² < R` to rule out an output at or above `2p`; parameter derivation checks
 these premises at compile time. Explicit `reduce()` converts a loose value to
-the reduced type required by equality, ordering, and square roots.
+the reduced type required by equality, ordering, and square roots. Native loose
+values do not implement equality; comparing field values requires that explicit
+reduction. Consumer adapters provide field-value equality by reducing both sides.
 
 The chain planner prefers smaller prepared tables on arithmetic-cost ties.
 Planned and supplied chains share one operation graph and compact, unrolled,
@@ -250,9 +255,9 @@ fn main() {
 
 The `sqrt-table-large` feature selects a table-assisted algorithm. The [crate
 feature documentation](../crates/udon/src/lib.rs) describes configuration and the
-[square-root implementation](../crates/udon/src/field/sqrt/large.rs) explains the
+[square-root implementation](../crates/udon/src/field/pasta/sqrt/large.rs) explains the
 exponent recovery and subgroup lookup. Both algorithms remain variable-time;
-the [public square-root contract](../crates/udon/src/field/sqrt.rs) leaves the
+the [public square-root contract](../crates/udon/src/field/pasta/sqrt/mod.rs) leaves the
 choice of root unspecified.
 
 Each field's larger table contains 897 field elements and 1,024 hash bytes:
@@ -261,7 +266,7 @@ the 4,224-byte small ladders, which remain available for root-of-unity lookups.
 These payload sizes describe the table definitions; linked section sizes also
 depend on which fields and operations an executable uses.
 
-The [parameter derivation](../crates/udon/src/field/parameters.rs) builds field
+The [parameter derivation](../crates/udon/src/field/pasta/parameters.rs) builds field
 entries in immutable statics at compile time. No table conversion, initialization,
 or allocation is charged to the runtime measurements. The feature preserves the
 [stored field representation](POD.md#storing-field-elements).
@@ -294,8 +299,8 @@ are repeated calls into one field's tables; applications with competing cache
 pressure, different inputs, or other architectures can have different results.
 
 ```console
-cargo bench --locked -p zakura-udon --bench field -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-small-final
-cargo bench --locked -p zakura-udon --bench field --features sqrt-table-large -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-large-final
+cargo bench --locked -p zakura-udon --features traits --bench field -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-small-final
+cargo bench --locked -p zakura-udon --bench field --features traits,sqrt-table-large -- 'corpus/sqrt_|/sqrt/(one|zero)' --sample-size 50 --warm-up-time 0.5 --measurement-time 2 --save-baseline sqrt-large-final
 ```
 
 ### Build cost and linked storage

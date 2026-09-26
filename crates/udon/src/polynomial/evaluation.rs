@@ -49,14 +49,45 @@ pub fn evaluate<M: PrimeModulus, S: ReductionState>(
     coefficients: &[PastaField<M, S>],
     point: &PastaField<M, impl ReductionState>,
 ) -> PastaField<M> {
-    let Some((last, rest)) = coefficients.split_last() else {
-        return PastaField::ZERO;
+    horner(
+        coefficients.iter(),
+        PastaField::ZERO,
+        |value| value.into_loose(),
+        |value, coefficient| value.mul_add(point, coefficient),
+    )
+}
+
+// Both APIs traverse the same ascending coefficients from the leading term.
+fn horner<C, F>(
+    mut coefficients: impl DoubleEndedIterator<Item = C>,
+    zero: F,
+    initial: impl FnOnce(C) -> F,
+    step: impl FnMut(F, C) -> F,
+) -> F {
+    let Some(last) = coefficients.next_back() else {
+        return zero;
     };
-    rest.iter()
-        .rev()
-        .fold(last.into_loose(), |value, coefficient| {
-            value.mul_add(point, coefficient)
-        })
+    coefficients.rev().fold(initial(last), step)
+}
+
+/// Evaluates an iterator of ascending coefficients at `point` by Horner's rule.
+///
+/// This consumer API requires `traits`. Like [`evaluate`], empty input evaluates
+/// to zero and no allocation or scratch is needed. Each step dispatches through
+/// `Field::mul_add`, including the native Pasta implementation. The iterator must
+/// support reading from its highest coefficient back to the constant term.
+#[cfg(feature = "traits")]
+pub fn evaluate_iter<'a, F: crate::field::Field, I>(coefficients: I, point: F) -> F
+where
+    I: IntoIterator<Item = &'a F>,
+    I::IntoIter: DoubleEndedIterator,
+{
+    horner(
+        coefficients.into_iter(),
+        F::ZERO,
+        |value| *value,
+        |value, coefficient| value.mul_add(&point, coefficient),
+    )
 }
 
 /// Borrows powers for repeated polynomial evaluation at one field point.
@@ -225,4 +256,25 @@ impl<'a, M: PrimeModulus> EvaluationPlan<'a, M> {
             }
         }
     }
+}
+
+/// Evaluates `1 + X + ... + X^(terms - 1)` at `ratio`.
+///
+/// Doubling the covered block uses `O(log terms)` multiplications. Zero terms
+/// give zero.
+#[cfg(feature = "traits")]
+pub fn geometric_sum<F: crate::field::Field>(mut ratio: F, mut terms: usize) -> F {
+    let mut block = F::ONE;
+    let mut sum = F::ZERO;
+    let mut step = F::ONE;
+    while terms > 0 {
+        if terms & 1 == 1 {
+            sum += step * block;
+            step *= ratio;
+        }
+        block += ratio * block;
+        ratio = ratio.square();
+        terms >>= 1;
+    }
+    sum
 }

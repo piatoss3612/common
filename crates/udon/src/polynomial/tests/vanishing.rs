@@ -1,7 +1,7 @@
 use super::*;
+use crate::field::pasta::test_support::{field_samples, integer, modulus};
 use crate::field::{PallasBase, PallasScalar};
 use crate::polynomial::{divide_linear_in_place, divide_monic_in_place};
-use crate::test_support::{field_samples, integer, modulus};
 use num_bigint::BigUint;
 use std::{vec, vec::Vec};
 

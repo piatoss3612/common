@@ -7,15 +7,20 @@ any compatible ready task, without changing arithmetic plans or redistributing
 per-operation budgets. The target library remains `no_std`, allocation-free,
 and safe Rust. The application supplies synchronization and storage.
 
-The internal [mixed-driver fixture](../crates/udon/src/exec/run/tests/mixed_run.rs)
+The internal [mixed-driver fixture](../crates/udon/src/exec/execution/tests/mixed.rs)
 combines two unequal MSMs, two unequal FFTs, application work, immediate consumers,
 and round-challenge fences. It repeats eleven shrinking rounds without growing
 its provision. It uses a private frontier for application work; downstream
-schedulers supply their own application-task state. The
-[execution tests](../crates/udon/tests/execution)
-check independent arithmetic results, one-scratch progress, small dispatch
-queues, scoped borrows, cancellation, and failure draining. The
-[performance report](EXECUTION_PERFORMANCE.md) records measurements and limits.
+schedulers supply their own application-task state. The private
+[mixed scheduling tests](../crates/udon/src/exec/execution/tests),
+[FFT execution tests](../crates/udon/src/fft/execution/tests.rs), and
+[MSM execution tests](../crates/udon/src/msm/execution/tests.rs) check independent
+arithmetic results, one-scratch progress, small dispatch queues, cancellation,
+and failure draining. The [FFT consumers](../crates/udon/tests/fft),
+[MSM consumers](../crates/udon/tests/msm), and
+[executor consumers](../crates/udon/tests/execution) exercise scoped borrows,
+caller-owned workspaces, and worker-pool selection through the public APIs.
+The [performance report](EXECUTION_PERFORMANCE.md) records measurements and limits.
 
 ## Four responsibilities
 
@@ -26,9 +31,9 @@ queues, scoped borrows, cancellation, and failure draining. The
 | Resource provider | Initialized typed blocks and exclusive or shared leases | Provision may span rounds; scratch lease lasts one task |
 | Application scheduler | Admission, ready-work selection, priorities, fairness, dispatch, wakeups | Shared by all work kinds |
 
-[`exec::run`](../crates/udon/src/exec/run/mod.rs) contains the common task and
-completion protocol. [`curve::msm::run`](../crates/udon/src/curve/msm/run.rs) and
-[`fft::run`](../crates/udon/src/fft/run.rs) supply arithmetic plans and runs.
+[`exec::execution`](../crates/udon/src/exec/execution/mod.rs) contains the common task and
+completion protocol. [`msm::execution`](../crates/udon/src/msm/execution/mod.rs) and
+[`fft::execution`](../crates/udon/src/fft/execution/mod.rs) supply arithmetic plans and runs.
 Plans resolve implementation choices from mathematical inputs, physical storage
 layout, and `exec::ExecutionOptions`. Arithmetic runs use private frontiers over
 caller-owned `TaskStorage`, with
@@ -71,10 +76,10 @@ FFT and MSM `Buffers` are transient kernel views. Their direct `Resources`
 implementations allow local execution, but erased `ReadView` references do not
 promise `Sync`. A movable owner can retain typed borrowed slices and create the
 views on the worker in `Resources::buffers`. The small
-[borrowed-owner checks](../crates/udon/tests/execution/borrowed.rs) demonstrate
+[borrowed-owner checks](../crates/udon/tests/fft/borrowed.rs) demonstrate
 both protocols with non-static storage and scoped threads.
 
-The test [fragment provider](../crates/udon/src/test_support/fft_run.rs) uses
+The test [fragment provider](../crates/udon/src/fft/execution/test_buffers.rs) uses
 preallocated `spin::RwLock` fragments and nonblocking acquisition. Shared read
 views retain their guards; disjoint writes take exclusive guards. `spin` is a
 development dependency only. The production protocol also accepts ordinary
@@ -108,7 +113,7 @@ but memory safety does not depend on a destructor running. Abandon the run only
 after all accessible detached tasks have been drained or ended. Fresh identity
 storage cannot be rebound while accessible tickets still borrow it.
 
-[`TaskError`](../crates/udon/src/exec/run/task.rs) reports a retained provision
+[`TaskError`](../crates/udon/src/exec/execution/task.rs) reports a retained provision
 exceeding the plan's workspace ceiling (`Storage`), unrepresentable storage sizes
 or exhausted epoch identity arithmetic (`Overflow`), and invalid task or run
 transitions. Plan compatibility and metadata capacity are caller contracts.
@@ -207,9 +212,9 @@ ceiling together with those temporary bundles. FFT plans likewise count
 retained snapshots and expansion coefficient workspace. Add
 metadata, queues, buffer alignment, and unused provider capacity when deciding
 what the application can admit. See
-[`MsmPlan`](../crates/udon/src/curve/msm/run.rs) for the individual query contracts.
+[`MsmPlan`](../crates/udon/src/msm/execution/mod.rs) for the individual query contracts.
 
-The [test fixture's admission policy](../crates/udon/src/test_support/admission.rs)
+The [test fixture's admission policy](../crates/udon/src/exec/execution/tests/admission.rs)
 charges every provisioned block, including idle capacity,
 padding, lease metadata, retained handoff banks, run/frontier state, envelopes,
 and bounded queues. Classes distinguish exact types and capacities: bytes of

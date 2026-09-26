@@ -7,12 +7,12 @@ The [CI workflow](../.github/workflows/ci.yml) defines required gates and pins
 the additional toolchain and targets. The [README](../README.md#testing) lists
 formatting, lint, and documentation commands.
 
-Run the release suites with both square-root configurations, then the runtime
+Run the release suites with and without the consumer traits, then the runtime
 unit tests with debug assertions:
 
 ```console
 cargo test --release --locked --workspace --all-features
-cargo test --release --locked -p zakura-udon
+cargo test --release --locked -p zakura-udon --no-default-features
 cargo test --locked -p zakura-udon --lib
 cargo test --locked -p zakura-udon --lib --all-features
 ```
@@ -23,6 +23,106 @@ The default configuration has a separate Clippy gate because workspace lints
 enable all features. Slow consumers and timing experiments are ignored by the
 ordinary suites and have separate commands below.
 
+## CI enforcement
+
+The arithmetic matrix runs on x86-64 and ARM64, with one job for each
+architecture and square-root table configuration. Each job executes workspace
+release tests and debug Udon tests with optional APIs disabled and with both
+`traits` and `poseidon` enabled. Isolated consumers check each requested feature
+set, including that `traits` alone does not expose Poseidon and `poseidon`
+enables the traits its consumer views need.
+Consumer-interface tests stay in their owning domains and run with `traits`;
+native kernel tests run in every configuration.
+Lints, slow compiler and artifact consumers, benchmark smoke tests, Miri, and
+target portability have separate jobs. Cross-target compilation is additional
+coverage; it does not replace either native runner.
+
+The stable `ci-required` job runs even when a dependency fails or is skipped and
+succeeds only when every mandatory job succeeds. Repository rules must require
+this exact GitHub Actions check on `main`; defining the job alone does not block
+merges. Keep its `needs` list and explicit success conditions in sync when adding
+a mandatory job. A new check must be present on the branches being merged before
+enabling its repository rule.
+
+Filtered runs check their completed test summaries in the workflow: every
+selected target must report at least one passing test. A target with only ignored
+tests fails this check too. Bash's pipeline failure handling preserves Cargo's
+exit status while recording output. Job timeouts bound hung tests, and newer runs
+cancel superseded runs for the same PR or branch.
+
+## Udon test layout
+
+Unit tests live with the implementation they exercise, including Poseidon
+parameters, cycle bindings, encoding bounds, arithmetic, resource limits,
+and the FFT/MSM execution protocols. This also applies to assertions that use
+only public methods. Pasta consumer adapter tests share `src/field/pasta/tests/`
+and `src/curve/pasta/tests/` with the native arithmetic suites; only the tests
+of optional consumer interfaces require `traits`. Poseidon parameter tests
+and cycle tests require `poseidon`, which also enables `traits`. CI runs both
+suites in its configurations with optional APIs enabled, and the consumer
+checks verify the separate Poseidon opt-in.
+Sampling, canonical-integer access, and dot-product helpers are tested without
+features too.
+External suites check behavior that needs a separate
+consumer: macro resolution, independent trait implementations, caller-owned
+adapters, and artifact generation and embedding. They are grouped by the API
+they exercise. Paths below are relative to
+`crates/udon/`; each integration suite has a `main.rs` Cargo entry point.
+
+| Location | Responsibility | Selection |
+| --- | --- | --- |
+| `src/**/tests.rs` and `src/**/tests/` | Arithmetic, private kernels, and internal protocol contracts | `--lib`, optionally with a module filter |
+| `tests/field/` | Field constant macros, independent trait implementations, POD, and embedding | `--test field` |
+| `tests/curve/` | Curve constant macros, independent trait implementations, POD, and embedding | `--test curve` |
+| `tests/fft/` | Caller-owned FFT execution, workspaces, and embedded tables | `--test fft` |
+| `tests/msm/` | Caller-owned MSM execution and workspaces | `--test msm` |
+| `tests/execution/` | Shared executor contracts and worker-pool selection | `--test execution` |
+| `tests/api/` | Compiler checks of public API boundaries and explicit trait opt-in | `--test api` |
+| `tests/<domain>/fixtures/` | Programs compiled by their owning domain's tests | Through their owning tests, with `--ignored` |
+| `tests/harness/` | Reusable Cargo consumer machinery, executor adapter, and independent field models | Included by the suites that need them |
+
+Keep shared helpers with the implementation that owns their behavior. Pasta
+sampling and integer references live in `src/field/pasta/test_support.rs` and
+are shared by the arithmetic tests that need them.
+Execution buffer adapters and the test worker pool live beside the corresponding
+execution implementation as `test_buffers.rs`, `test_pipeline.rs`, or `test_pool.rs`.
+They are compiled only for tests; integration tests and benchmarks explicitly
+include the helpers that use public APIs. Test suites do not import another
+suite's internal helpers. Independent arithmetic references remain separate
+from buffer setup and worker adapters.
+
+Private execution filters are `fft::execution::tests`,
+`msm::execution::tests`, and `exec::execution::tests`. The arithmetic `execution`
+modules contain production plans and kernels; `exec::execution` supplies their shared
+task protocol. The
+[crate guide](CRATES.md#udon-module-boundaries) explains their ownership.
+
+## Bento test layout
+
+Bento's facade tests exercise macro expansion in callers and the storage APIs
+those expansions use. They are grouped by feature, with fixtures inside the
+owning suite. Paths below are relative to `crates/bento/`.
+
+| Location | Responsibility | Selection |
+| --- | --- | --- |
+| `tests/addition_chain/` | Expansion behavior, hygiene, value ownership, and compiler rejections | `--test addition_chain` |
+| `tests/const_arithmetic/` | Constant-only inputs and arithmetic precondition rejections | `--test const_arithmetic` |
+| `tests/pod/` | Derived records, byte views, compiler contracts, and artifact embedding | `--test pod` |
+| `tests/api/` | Dependency aliases, support paths, re-exports, and target portability | `--test api` |
+| `tests/<feature>/fixtures/` | Consumer source files and stored data owned by that suite | Through the owning tests |
+| `tests/harness/` | Cargo execution, isolated workspaces, and diagnostic checks | Included by the suites that need them |
+
+Each `main.rs` only declares its suite's modules. The dependency matrix owns
+its complete consumers under `tests/api/fixtures/dependencies/`, including
+their arithmetic and POD modules. It exercises those APIs through different
+dependency arrangements; feature-specific rejection cases live with their
+feature. Compiler case tables reuse one temporary workspace per matrix.
+POD's parameterized record cases stay in its compiler test as Rust tokens.
+
+Reference arithmetic and storage implementation tests stay beside their code
+in `bento-core`. Parser and expansion tests stay beside each macro in
+`bento-macros`, under the existing `proc/` and `derive/` modules.
+
 ## Test roles
 
 - Unit tests check algorithms and local contracts against independent references.
@@ -32,10 +132,12 @@ ordinary suites and have separate commands below.
   decomposition and recoding. FFTs use direct sums, polynomial evaluation, and
   independent transform schedules, including loose-range and inverse-scale
   boundaries. Comparing two paths that share the same algorithm is insufficient.
-- Public API tests check observable interactions. The
-  [workspace tests](../crates/udon/tests/workspaces/main.rs) and
-  [execution tests](../crates/udon/tests/execution/main.rs) exercise borrowed
-  workers, scratch reuse, scheduling, and failure boundaries. Distinguish setup
+- Public API tests check consumer-defined adapters. The
+  [execution tests](../crates/udon/tests/execution/main.rs) exercise worker-pool
+  selection and nested work; the [FFT](../crates/udon/tests/fft/main.rs) and
+  [MSM](../crates/udon/tests/msm/main.rs) suites exercise borrowed execution and
+  reusable workspaces. Unit tests cover scheduling and failure boundaries.
+  Distinguish setup
   rejection, rejection before one task writes, and failure after earlier writes;
   cancellation and draining do not promise whole-run rollback.
 - Compiler consumers establish reachability, type, constant-evaluation, feature,
@@ -49,25 +151,59 @@ ordinary suites and have separate commands below.
 
 Keep operation-specific boundaries beside their tests. Shared deterministic
 sampling and integer conversions live in Udon's test-only
-[`test_support`](../crates/udon/src/test_support.rs). Executor adapters should
+[Pasta helpers](../crates/udon/src/field/pasta/test_support.rs). Executor adapters should
 also run inside a one-worker pool to expose nested joins that assume an idle
 worker. Preserve independent checks of cached rotations, scalar reuse, fused
 and unnormalized FFTs, group-valued transforms, and supplied/batched chains
 when changing their public entry points.
 
+### Arithmetic properties and dispatch
+
+Field, FFT, and MSM properties live beside their existing arithmetic suites in
+`src/field/pasta/tests/properties.rs`, `src/fft/tests/properties.rs`, and
+`src/msm/tests/properties.rs`. They compare generated inputs against integer
+arithmetic, direct polynomial evaluation, and binary scalar ladders. Cases include
+redundant field representatives, full-width and short scalars, repeated and inverse
+bases, indexed inputs, optional FFT tables, and reused dirty scratch. The same
+comparison functions must reject deliberately corrupted results at a selected
+boundary while accepting the real result and neighboring cases.
+
+PRs run 32 generated cases per property in each native/feature configuration.
+Run a larger campaign locally by overriding `PROPTEST_CASES`:
+
+```console
+PROPTEST_CASES=1024 cargo test --release --locked -p zakura-udon --lib ::properties::
+PROPTEST_CASES=1024 cargo test --release --locked -p zakura-udon --lib --all-features ::properties::
+```
+
+Proptest shrinks failures and saves replay seeds in `properties.regressions`
+beside the owning source file. CI uploads these files on failure. Copy a failing
+seed file from the artifact to that same directory, reproduce and fix the failure,
+and commit the seed with the fix. For a whole generated run, `PROPTEST_RNG_SEED`
+selects a reproducible seed. These checks establish finite-case agreement, not a
+proof of arithmetic correctness.
+
+MSM transition tests exercise sizes immediately below, at, and above automatic
+window changes and the preparation chunk boundary, including cancellation and
+scratch reuse. Test-only counters check actual kernel execution. Generic MSM
+tests must reach MSM kernels; generic scalar FFTs must avoid the reference
+transform, and batch inversion must retain its expected inversion count. Result
+equality alone cannot detect a slower fallback. The counters and faulty results
+are compiled only for tests; runtime kernels stay in Udon.
+
 Miri checks storage separately from native nested-Cargo consumers:
 
 ```console
 cargo +nightly-2026-09-06 miri test --locked -p zakura-bento-core --lib pod::
-cargo +nightly-2026-09-06 miri test --locked -p zakura-bento --test pod
-cargo +nightly-2026-09-06 miri test --locked -p zakura-udon --test pod
+cargo +nightly-2026-09-06 miri test --locked -p zakura-bento --test pod storage::
+cargo +nightly-2026-09-06 miri test --locked -p zakura-udon --test field --test curve pod::
 ```
 
 Install that toolchain with `miri` and `rust-src` as described in CI. Portability
 requires the `thumbv7em-none-eabi` and `s390x-unknown-linux-gnu` target libraries:
 
 ```console
-cargo test --release --locked -p zakura-bento --test portability -- --ignored
+cargo test --release --locked -p zakura-bento --test api portability:: -- --ignored
 ```
 
 This builds `no_std` consumers with both square-root configurations, checks
@@ -75,181 +211,25 @@ constant results and independent big-endian storage rejections, and compiles
 runtime arithmetic and execution helpers. It does not execute arithmetic on
 those targets or establish constant-time behavior.
 
-## Benchmark execution
+## Benchmarks
 
-Run timing commands sequentially, without concurrent builds or tests. Use name
-filters for focused runs. Criterion's test mode executes each case once without
-collecting timing samples; CI runs all six suites plus both square-root table
-configurations for fields and curves:
-
-```console
-cargo bench --locked -p zakura-udon --bench field --bench curve --bench fft --bench fft_strategies --bench msm --bench execution -- --test
-cargo bench --locked -p zakura-udon --features sqrt-table-large --bench field --bench curve -- --test
-```
-
-Inputs are deterministic, with fixture checks outside timing and optimization
-barriers around inputs/results. Timing boundaries differ by workload as noted
-below. Criterion writes local output under `target/criterion/` (or
-`crates/udon/target/criterion/` when Cargo metadata is unavailable). Keep generated
-results out of curated source. Timings measure particular public inputs; they
-are not side-channel guarantees.
-
-## Field benchmarks
-
-The [field suite](../crates/udon/benches/field.rs) covers arithmetic, encodings,
-reduction, inversion, roots, product sums, and integer helpers in both fields.
-Corpora span all limbs and distinguish dependent and independent products,
-variable-time exponent shapes, and lengths around dispatch boundaries.
-`ProductSum` cases populate fresh accumulators outside timing; formatting reuses
-an allocated buffer. Ordinary arithmetic excludes input preparation and allocation.
-
-Polynomial comparisons distinguish retained preparation from `prepare_*` cases
-that include it. The weighted-fold `powers_and` cases include challenge-power
-generation. Per-call validation and result writes are timed; buffer allocation,
-input restoration, and fixture checks are excluded. Polynomial `bind` cases
-borrow trusted powers or weights with constant work, as specified by the
-[evaluation](../crates/udon/src/polynomial/evaluation.rs) and
-[interpolation](../crates/udon/src/polynomial/interpolation.rs) contracts.
-
-```console
-cargo bench --locked -p zakura-udon --bench field
-cargo bench --locked -p zakura-udon --bench field -- Fp/inner_product
-```
-
-The [field report](FIELD_PERFORMANCE.md) explains measured choices, including
-the larger square-root tables and their storage/build-time tradeoffs.
-The [specialization report](OPTIMIZATION_PERFORMANCE.md) covers targeted field,
-FFT, addition-chain, and retained MSM cache comparisons and their reproduction.
-
-## Curve benchmarks
-
-The [curve suite](../crates/udon/benches/curve.rs) covers both curves, including
-complete arithmetic exceptions, encoding rejection, GLV/endomorphism operations,
-normalization, and ordinary and retained-table multiplication. Scalar corpora
-straddle short/full-width boundaries; table cases distinguish affine and cached
-entries, preparation, binding, and multiplication.
-The `eisenstein_scalar` cases time `EisensteinScalar::new` alone for individual
-scalar shapes and the full-width corpus, without point multiplication.
-Compare the same 32-scalar corpus at equal width or similar storage budgets.
-Preparation fills allocated buffers; binding borrows existing entries; table
-multiplication includes recoding. Table binding checks dimensions and
-configuration but trusts the stored entries; it does not time an entry scan.
-Expanded preparation compares one-window, four-window, and full-table scratch
-allowances at an explicitly selected width.
-
-```console
-cargo bench --locked -p zakura-udon --bench curve
-cargo bench --locked -p zakura-udon --bench curve -- Pallas/fixed_base
-cargo bench --locked -p zakura-udon --bench curve -- Pallas/batch_normalize
-```
-
-See the [curve guide](CURVES.md#fixed-base-multiplication) for binding and
-sizing contracts and the [performance report](CURVE_PERFORMANCE.md) for evidence.
-
-## MSM and compact-table batch benchmarks
-
-The [MSM suite](../crates/udon/benches/msm.rs) compares dense and indexed inputs,
-base layouts, full-width and short scalars, compact-table batches, and grouped
-jobs. The `msm_corpus` cases add dense 96/128-bit scalars, sparse scalars,
-repeated/inverse bases, and cancellation. `ipa` groups two equal indexed jobs;
-`commitments` groups unequal dense jobs. Serial and four-worker cases compare
-unrestricted workspace with a 64 KiB workspace ceiling.
-
-`warm` reuses buffers. `cold` touches each 64-byte interval of a 64 MiB eviction
-buffer before execution, excluding that work from timing. This creates repeatable
-cache pressure without guaranteeing hardware eviction. `prepare_scalars` times
-preparation; `reused` retains the prepared handle and sizes its execution scratch
-accordingly. Compact `mul_prepared` and `mul_same_scalar` prepare scalar digits
-before timing; `mul` prepares them for each table inside timing.
-
-The dense, indexed, corpus, and grouped MSM cases use independent scalar inner
-products over known generator multiples for fixture checks. These cases exclude
-allocation, pool entry, and input length/index validation from timing. Execution
-scratch checks, recoding, initialization, scheduling, and arithmetic are inside.
-Compact preparation takes constructed affine bases.
-
-Structured-row comparisons distinguish retained preparation, preparation plus
-execution, and caller-known support. Per-row conversion, aggregation, and
-validation are timed; known-support cases exclude support discovery, while
-`scan_execute` includes scanning and compaction. Independent binary
-ladders check these results before timing. Retained preparation and compacted
-inputs are outside the execution workspace ceiling. The `shared_scalars` cases
-compare matrix execution with separate MSMs that also reuse prepared scalars.
-
-```console
-cargo bench --locked -p zakura-udon --bench msm
-cargo bench --locked -p zakura-udon --bench msm -- pallas/msm/dense/affine/full
-cargo bench --locked -p zakura-udon --bench msm -- pallas/msm_batch
-cargo bench --locked -p zakura-udon --bench msm -- pallas/msm_corpus
-cargo bench --locked -p zakura-udon --bench msm -- pallas/eisenstein
-```
-
-### Internal MSM experiments
-
-```console
-cargo test --release --locked -p zakura-udon --lib compare_batch_inversion_endpoints -- --ignored --nocapture
-cargo test --release --locked -p zakura-udon --lib curve::msm::tests::experiments::native_controls -- --ignored --nocapture
-cargo test --release --locked -p zakura-udon --lib curve::msm::tests::experiments::phases -- --ignored --nocapture
-```
-
-The inversion experiment compares schedules on identical nonzero inputs,
-alternating each vector with its inverse. Native controls compare the six-field
-reducer, production fused inverse recovery, and a two-pass `mul_sub` expression
-candidate. The expression candidate does not fuse inverse recovery. Histograms
-and result checks occur outside timing. Phase measurements isolate preparation,
-reduction (including resets), window kernels, collapse, and recombination;
-workspace figures are not an additive peak. The
-[MSM performance guide](CURVE_PERFORMANCE.md#multiscalar-multiplication) describes
-the rationale and limits of these comparisons.
-
-## FFT benchmarks
-
-The [FFT suite](../crates/udon/benches/fft.rs) covers subgroups and cosets in both
-fields, transforms, prefixes, expansion, and fused interpolation. `into` and
-`copy_in_place` include initialization. Expansion comparisons give algorithms
-equivalent coefficient prefixes and factors. `native` retains each output
-layout; compare natural-order methods with `residues/natural` when the consumer
-needs natural order, including its timed conversion.
-
-The `constant_prefix` FFT controls include dense input materialization and, for
-extension, conversion from residue order to natural order. Retained-sample cases
-exclude preparation; `prepare_and_extend` includes it. The `vanishing` cases
-compare forward-transform finishing with pointwise division and interpolation
-into the same coefficient pieces; `finish` alone excludes the transform.
-The `group_fft` cases include root powers and scalar preparation on each call;
-`basis_conversion` also includes output normalization. Their buffer allocation,
-input restoration, and fixture checks precede timing.
-
-The [strategy suite](../crates/udon/benches/fft_strategies.rs) compares task budgets,
-workspace ceilings, output orders, retained twiddles and expansion scales,
-storage/normalization, batches, and class interpolation. Udon selects the
-implementation under those constraints. Interpolation plans are bound outside
-timing. Both suites measure table preparation into allocated buffers separately.
-In-place cases restore inputs outside timing; separate-output cases include
-initialization.
-Persistent pool creation and entry are outside timing. Task allowances cover
-both outer jobs and inner transforms; scratch counts exclude input/output and
-executor storage. Callers supply the executor; Rayon is a development dependency.
-
-```console
-cargo bench --locked -p zakura-udon --bench fft -- Fp/fft/16384
-cargo bench --locked -p zakura-udon --bench fft -- Fp/expansion/16384/zeta
-cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/strategies/2048/zeta/tasks_1
-cargo bench --locked -p zakura-udon --bench fft_strategies -- Fp/expansion_prefixes/tasks_1
-cargo test --release --locked -p zakura-udon compare_fft_butterfly_candidates -- --ignored --nocapture
-```
-
-The ignored kernel experiment compares range corrections and interleaved
-products over zero, boundary, and random loose inputs. Its ordinary correctness
-check runs by default. Test-only candidates retain the `[0,2p)` range and do not
-select production defaults. See the [strategy report](FFT_PERFORMANCE.md) for
-measurement limits and the [execution report](EXECUTION_PERFORMANCE.md) for
-isolated and mixed-operation timing boundaries.
+The [benchmarking guide](BENCHMARKING.md) lists the timing suites, smoke-test
+commands, fixture checks, and measurement boundaries. Run timing measurements
+without concurrent builds or tests.
 
 ## Fixtures and nested builds
 
-Keep complete Rust consumer programs in `.rs` files under `tests/fixtures/`,
-grouped by the behavior they exercise. Preserve relative module and data paths.
+Keep complete Rust consumer programs in `.rs` files inside a `fixtures/`
+directory owned by their suite. Udon keeps field, curve, and FFT artifact
+consumers under their domain's `fixtures/embedding/` directory. Cross-domain
+compiler consumers live in `tests/api/fixtures/`. Bento also groups its
+fixtures under their owning suites, including its dependency matrix under
+`tests/api/fixtures/dependencies/`.
+Preserve relative module and data paths. Udon's `api/fixtures/boundaries` fixture
+keeps successful facade use in `src/pass.rs` and rejections in separate field,
+curve, and FFT modules. Run one rejection feature
+at a time and check its diagnostic and source file. Keep each nested Cargo
+workspace alive across its feature cases so they can reuse compiled artifacts.
 Small parameterized inputs and expected expansions can use `quote!` or
 `syn::parse_quote!`. Use source strings only when text itself is under test or
 when writing the generated source at the compiler boundary.
@@ -268,7 +248,7 @@ Cargo to adapt the seed to the fixture's dependency graph. The parent build must
 first fetch any dependencies those consumers require.
 
 Udon's compiler and embedding tests use the shared
-[consumer utility](../crates/udon/tests/support/consumer.rs) for workspace
+[consumer utility](../crates/udon/tests/harness/mod.rs) for workspace
 isolation and Cargo outcome checks. Keep case tables and artifact-specific
 assertions in the individual tests.
 
@@ -286,24 +266,26 @@ and binding:
 
 ```console
 cargo test --release --locked -p zakura-udon \
-  --test embedding --test fft_embedding \
-  --test curve_constants --test curve_embedding --test api_boundaries -- --ignored
+  --test api --test field --test curve --test fft -- --ignored
 ```
 
-CI runs this command in a separate step. Each consumer selects its own dependency
+CI runs this command in a separate job. Each consumer selects its own dependency
 feature matrix, so it only needs to run once. Naming these integration targets
 also avoids selecting the ignored FFT and inversion timing experiments, which
 have their own commands. Target portability checks belong to Bento and run
-separately. To run one consumer, retain just its `--test` argument and
-`-- --ignored`.
+separately. To run one consumer, select its suite and module, for example:
+
+```console
+cargo test --release --locked -p zakura-udon --test field embedding:: -- --ignored
+```
 
 ### Generated artifacts
 
 A producer/consumer round trip must generate data through the writing API before
 building its consumer. Golden bytes alone do not exercise generation. The
-[field](../crates/udon/tests/fixtures/embedding),
-[FFT](../crates/udon/tests/fixtures/fft_embedding), and
-[curve](../crates/udon/tests/fixtures/curve_embedding) fixtures own their schemas,
+[field](../crates/udon/tests/field/fixtures/embedding),
+[FFT](../crates/udon/tests/fft/fixtures/embedding), and
+[curve](../crates/udon/tests/curve/fixtures/embedding) fixtures own their schemas,
 generate through Udon, and write through Bento POD. Consumers borrow embedded
 records directly, including `no_std` libraries with stack-owned scratch.
 

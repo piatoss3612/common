@@ -48,6 +48,20 @@ The [`bento`](crates/bento/src/lib.rs) crate is a facade over
 and product sums. These operations require no allocation. Arithmetic is
 variable-time and provides no constant-time guarantee for secret inputs.
 Field parameters and fixed exponentiation schedules use `bento` at compile time.
+Native arithmetic uses explicit methods. The opt-in `traits` feature adds the
+`FieldAdapter` wrapper with operators and the unstable `Field` consumer interface
+for arithmetic, canonical encodings, transforms, and product accumulation through
+the same native kernels. With this
+feature, the [`polynomial` module](crates/udon/src/polynomial/mod.rs) adds iterator
+evaluation, linear division, and geometric sums over `Field`.
+The separate `poseidon` feature exposes the entire
+[`poseidon` module](crates/udon/src/poseidon/mod.rs), including the fixed Pasta
+parameters and their consumer views. It enables `traits` for those views and
+also exposes the [`cycle` module](crates/udon/src/cycle/mod.rs), which binds the
+fields, curves, borrowed generators, and Poseidon instances of the Pasta cycle
+to one `Cycle` marker for proof systems generic over a curve cycle. Enabling
+`traits` alone does not expose Poseidon. The Poseidon module is likely to move
+to a separate crate.
 Fields implement `bento::Pod`, so downstream build scripts can generate them
 with Udon and embed their Montgomery representations for direct runtime use;
 see the [field storage example](docs/POD.md#storing-field-elements).
@@ -56,18 +70,23 @@ the [performance report](docs/FIELD_PERFORMANCE.md#optional-larger-square-root-t
 for latency, build-time, and storage tradeoffs.
 
 The [`fft` module](crates/udon/src/fft/mod.rs) provides power-of-two transforms,
-cosets, residue expansion, and fused class interpolation for both fields.
+cosets, residue expansion, and fused class interpolation for both fields. With
+`traits` enabled, `Domain` also dispatches generic field transforms directly
+through `Field` and evaluates vanishing and Lagrange polynomials for generic
+consumers. Pasta fields use the optimized field transforms.
 Callers own all tables, buffers, scratch, and parallel execution; Udon's FFT
 setup and execution do not allocate or require a feature flag. See the
 [FFT guide](docs/FFT.md) for layouts, scratch requirements, and downstream table
 generation with Bento POD, and the [crate docs](crates/udon/src/lib.rs) for
 feature definitions.
 
-The [`curve` module](crates/udon/src/curve/mod.rs) provides Pallas and Vesta
+The [`curve` module](crates/udon/src/curve/pasta/mod.rs) provides Pallas and Vesta
 points, canonical encodings, GLV/Eisenstein scalar multiplication, batch
-normalization, and borrowed compact and expanded fixed-base tables. Scalar
-preparation can be reused across compact tables. The
-[`msm` module](crates/udon/src/curve/msm/mod.rs) sums dense or indexed inputs
+normalization, and borrowed compact and expanded fixed-base tables. With
+`traits` enabled, `AffineAdapter` and `ProjectiveAdapter` wrap native points,
+providing operators and the `Affine` and `Projective` consumer interfaces.
+Scalar preparation can be reused across compact tables. The
+[`msm` module](crates/udon/src/msm/mod.rs) sums dense or indexed inputs
 with caller-owned scratch and execution.
 Nonidentity `AffinePoint` and cached `PreparedAffinePoint` entries implement
 `bento::Pod` for direct storage. All curve operations are variable-time and

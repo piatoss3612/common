@@ -1,6 +1,6 @@
 use super::*;
+use crate::field::pasta::test_support::{integer, modulus};
 use crate::field::{ConstantPrefix, ReductionState, count_inversions};
-use crate::test_support::{integer, modulus};
 use num_bigint::BigUint;
 
 fn canonical<M: PrimeModulus, S: ReductionState>(value: &PastaField<M, S>) -> BigUint {
@@ -82,7 +82,7 @@ fn transforms_field<M: PrimeModulus>() {
     let sentinel = from_raw::<M>(&(&p * 2u8 - 1u8));
     let constant = from_raw::<M>(&(integer(&PastaField::<M>::from_u64(7).montgomery_limbs()) + &p));
     for log in 0..=4 {
-        let subgroup = Domain::<M>::new(log).unwrap();
+        let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
         let n = subgroup.size();
         let mut tail = inputs::<M>(n);
         tail[0] = from_raw(&p); // Loose zero must be a value, not a skipped entry.
@@ -130,7 +130,7 @@ fn transforms_field<M: PrimeModulus>() {
                     assert_integer(&ordinary, &expected);
                 }
                 for extra in 0..=2 {
-                    let target = Domain::<M>::new(log + extra).unwrap();
+                    let target = Domain::<PastaField<M>>::new(log + extra).unwrap();
                     for extended in [target.subgroup(), target.coset()] {
                         let size = extended.size();
                         let expected = evaluate_integer(&expected, extended);
@@ -188,7 +188,7 @@ fn transforms_field<M: PrimeModulus>() {
     }
     // A full tail makes every choice of constant immaterial, including loose
     // zero and boundary representations. Equal tail values need not be trimmed.
-    let domain = Domain::<M>::new(2).unwrap().coset();
+    let domain = Domain::<PastaField<M>>::new(2).unwrap().coset();
     let values = [sentinel; 4];
     for constant in [PastaField::ZERO, from_raw(&p), sentinel, PastaField::ONE] {
         let input = ConstantPrefix::new(4, &constant, &values).unwrap();
@@ -212,8 +212,8 @@ fn contracts_field<M: PrimeModulus>() {
     let tail = [PastaField::<M>::ONE; 2];
     let input = ConstantPrefix::new(4, &sentinel, &tail).unwrap();
     let empty = ConstantPrefix::new(0, &sentinel, &tail[..0]).unwrap();
-    let base = Domain::<M>::new(2).unwrap().subgroup();
-    let target = Domain::<M>::new(3).unwrap().coset();
+    let base = Domain::<PastaField<M>>::new(2).unwrap().subgroup();
+    let target = Domain::<PastaField<M>>::new(3).unwrap().coset();
     let mut out = [sentinel; 8];
     let mut scratch = [sentinel; 10];
     for (output_len, scratch_len) in [(3, 2), (4, 1)] {

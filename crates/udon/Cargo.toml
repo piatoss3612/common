@@ -11,6 +11,11 @@ license.workspace = true
 publish.workspace = true
 
 [features]
+# Unstable consumer-facing traits and generic arithmetic adapters.
+traits = []
+# Fixed Pasta Poseidon parameters and consumer views, likely to move to a
+# separate crate. The views use the consumer field traits and adapters.
+poseidon = ["traits"]
 # Selects larger square-root tables; see the crate-level feature documentation.
 sqrt-table-large = []
 
@@ -20,6 +25,7 @@ bento.workspace = true
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
 num-bigint = "0.4"
+proptest = { version = "1.11", default-features = false, features = ["std"] }
 rayon = "1.12"
 spin = { version = "0.10", default-features = false, features = ["rwlock"] }
 tempfile = "3"

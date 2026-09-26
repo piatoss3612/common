@@ -6,10 +6,10 @@ use zakura_udon::{
     curve::{
         AffinePoint, CurveTableEntry, FixedBaseDescription, FixedBaseTable, PastaCurve,
         PreparedAffinePoint, ProjectivePoint,
-        msm::{Bases, Input},
     },
     exec::{ExecutionOptions, SerialExecutor, TaskBudget},
     field::PastaField,
+    msm::{Bases, Input},
 };
 
 fn separate<C: PastaCurve, E: CurveTableEntry<C>>(

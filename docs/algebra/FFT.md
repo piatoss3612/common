@@ -64,7 +64,7 @@ physical order, or a deliberately unscaled inverse. Its fields
 and `input_storage` describe mathematical and ownership facts rather
 than implementation choices. `scratch_requirements` queries the direct
 transform's preferred scratch; direct calls can adapt to bounded or
-empty scratch, while a resolved `run::FftPlan` fixes its workspace.
+empty scratch, while a resolved `execution::FftPlan` fixes its workspace.
 
 ### `InputSupport`
 
@@ -407,9 +407,9 @@ covers local stages of a larger one. The table's representation
 is independent of `ElementOrder`: stage-packed powers do not mean
 that polynomial values are stage-packed.
 
-### `run::FftPlan`
+### `execution::FftPlan`
 
-[`FftPlan::new`](../../crates/udon/src/fft/run.rs) resolves a
+[`FftPlan::new`](../../crates/udon/src/fft/execution/mod.rs) resolves a
 `TransformRequest` together with a domain, tables, `StorageLayout`,
 and execution constraints. Use it when compatible transforms recur
 or must be scheduled incrementally through `FftRun`. `size`, `tile`,
@@ -452,7 +452,7 @@ does not fold the polynomials together. Choose class interpolation
 when the desired result is their coefficient sum, or the ordinary
 `execute` method when input prefixes or preservation are needed.
 
-### `ExpansionStorage` and `run::ExpansionPlan`
+### `ExpansionStorage` and `execution::ExpansionPlan`
 
 `ExpansionPlan::new` fixes extension semantics and input liveness.
 Choose `Coefficients` for existing coefficient input, `ReuseOutput`
@@ -471,7 +471,7 @@ mode. `residues`, `base_size`, and `tile` describe the result's
 geometry; `coefficient_fields`, `snapshot_fields`, and
 `scratch_fields` distinguish retained coefficients, per-slot
 snapshots, and synchronous scratch. See the
-[plan](../../crates/udon/src/fft/run/expansion.rs) for exact ownership.
+[plan](../../crates/udon/src/fft/execution/expansion.rs) for exact ownership.
 
 ### `ExpansionOrder`
 
@@ -484,9 +484,9 @@ residue slices. Bind the result to the corresponding
 `EvaluationLayout` and supply any execution factor in that same
 order. The selected order changes positions, not evaluation points.
 
-### `run::InterpolationPlan` for a sum of classes
+### `execution::InterpolationPlan` for a sum of classes
 
-[`run::InterpolationPlan::new`](../../crates/udon/src/fft/run/interpolation.rs)
+[`execution::InterpolationPlan::new`](../../crates/udon/src/fft/execution/interpolation.rs)
 accepts classes described by `(Transform, ElementOrder)` pairs.
 `execute` interpolates each class and leaves `sum_i f_i` as
 normalized natural coefficients in class zero, implicitly extending

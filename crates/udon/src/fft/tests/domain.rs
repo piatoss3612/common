@@ -28,14 +28,14 @@ fn domain_scalars_are_consistent() {
 #[cfg(feature = "traits")]
 mod consumer {
     use super::*;
-    use crate::field::FftField;
+    use crate::field::Field;
 
     #[test]
     fn field_domain_factory_uses_native_parameters() {
         fn check<M: PrimeModulus>() {
             for log_size in [0, 1, 4, 8, 16, 32, 33, u32::MAX] {
                 let native = Domain::<PastaField<M>>::new(log_size);
-                let generic = <PastaField<M> as FftField>::domain(log_size);
+                let generic = <PastaField<M> as Field>::domain(log_size);
                 assert_eq!(generic, native);
                 if let (Ok(generic), Ok(native)) = (generic, native) {
                     assert_eq!(generic.root(), native.root());
@@ -132,7 +132,7 @@ mod consumer {
     #[test]
     fn field_transform_hooks_reject_wrong_lengths_before_writes() {
         let domain = Domain::<Fp>::new(3).unwrap();
-        for transform in [<Fp as FftField>::fft, <Fp as FftField>::ifft] {
+        for transform in [<Fp as Field>::fft, <Fp as Field>::ifft] {
             for length in [0, 3, 4, 7, 9] {
                 let mut values = vec![Fp::DELTA; length];
                 let original = values.clone();
@@ -149,7 +149,7 @@ mod consumer {
             let size = domain.size() as u64;
             assert_eq!(
                 domain.root(),
-                <Fp as FftField>::root_of_unity(log_size).unwrap()
+                <Fp as Field>::root_of_unity(log_size).unwrap()
             );
 
             let mut power = <Fp>::ONE;
@@ -309,7 +309,7 @@ mod consumer {
         let mut scratch = [Fp::DELTA; 5];
         assert!(
             catch_unwind(AssertUnwindSafe(|| {
-                <Fp as FftField>::lagrange_evaluations(domain, Fp::ZERO, &mut values, &mut scratch)
+                <Fp as Field>::lagrange_evaluations(domain, Fp::ZERO, &mut values, &mut scratch)
             }))
             .is_err()
         );

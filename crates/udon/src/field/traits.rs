@@ -1,16 +1,15 @@
-//! Traits for field arithmetic and optional representation capabilities.
+//! The optional consumer interface for field arithmetic.
 //!
 //! Generic consumers, such as evaluation domains, polynomial utilities, and
 //! proof systems parameterized over a curve cycle, name a field through
 //! [`Field`] instead of a concrete type. [`PastaField`](super::PastaField)
-//! implements these traits for both Pasta fields by delegating to its inherent
+//! implements this trait for both Pasta fields by delegating to its inherent
 //! methods and constants.
 //!
-//! [`PrimeField`] adds a modulus and field-specific encoding and bit widths.
-//! [`FftField`] supplies radix-2 transforms, while [`CubeRootField`] supplies
-//! the root used by the Pasta curve endomorphism. Randomness stays with the
-//! caller: [`random`](super::random) reduces 64 caller-supplied bytes through
-//! [`PrimeField::from_uniform_bytes`] and depends on no particular random number
+//! [`Field`] includes canonical representations, radix-2 transforms, and
+//! product accumulation. Randomness stays with the caller:
+//! [`random`](super::random) reduces 64 caller-supplied bytes through
+//! [`Field::from_uniform_bytes`] and depends on no particular random number
 //! generator.
 //!
 //! Every operation is variable-time, like the arithmetic it delegates to.
@@ -28,7 +27,7 @@ use core::{
     ops::{Add, AddAssign, Mul, MulAssign, Neg, Sub, SubAssign},
 };
 
-/// A field with operator arithmetic and additive and multiplicative identities.
+/// An odd prime field with canonical encodings, transforms, and product sums.
 ///
 /// The operator supertraits cover by-value operands and right operands by
 /// reference, which is what generic code written as `a * b`, `a * &b`, and
@@ -37,6 +36,10 @@ use core::{
 /// [`PastaField`](super::PastaField) does with its loose residues.
 /// Iterator sums and products accept owned or borrowed elements; empty
 /// iterators return [`ZERO`](Self::ZERO) and [`ONE`](Self::ONE), respectively.
+/// Implementations choose their own limb, byte, and bit widths.
+///
+/// Transform methods and product accumulators let generic callers use the
+/// implementation's arithmetic kernels through this single interface.
 pub trait Field:
     Copy
     + Eq
@@ -64,11 +67,71 @@ pub trait Field:
     + Product
     + for<'a> Product<&'a Self>
 {
+    /// The canonical little-endian byte representation.
+    ///
+    /// Its length is fixed for the field and must hold every canonical
+    /// representative. Zero encodes as all zero bytes.
+    type Repr: AsRef<[u8]> + AsMut<[u8]> + Copy + Debug + Eq + Send + Sync + 'static;
+
+    /// Ordinary little-endian 64-bit limbs, wide enough to hold the modulus.
+    type Limbs: AsRef<[u64]> + Copy + Debug + Eq + Send + Sync + 'static;
+
+    /// The canonical little-endian bits, including zero padding to the full
+    /// width of [`Repr`](Self::Repr).
+    type Bits: AsRef<[bool]> + Copy + Debug + Eq + Send + Sync + 'static;
+
+    /// A running sum of products, initialized to zero by [`Default`].
+    ///
+    /// [`mul_accumulate`](Self::mul_accumulate) adds each product, and
+    /// [`reduce`](Self::reduce) returns the field value. Implementations can
+    /// share reduction across products, as Pasta's [`ProductSum`] does.
+    type Accumulator: Default;
+
     /// The additive identity.
     const ZERO: Self;
 
     /// The multiplicative identity.
     const ONE: Self;
+
+    /// The modulus as ordinary little-endian 64-bit limbs.
+    const MODULUS: Self::Limbs;
+
+    /// The bit length of the modulus.
+    const NUM_BITS: u32;
+
+    /// The largest bit length whose integers are all distinct field elements:
+    /// one less than [`NUM_BITS`](Self::NUM_BITS).
+    const CAPACITY: u32;
+
+    /// `s`, the largest `s` such that `2^s` divides `p - 1`: the logarithm of
+    /// the largest supported power-of-two domain.
+    const TWO_ADICITY: u32;
+
+    /// The generator of the multiplicative group from which the other
+    /// constants are derived.
+    const MULTIPLICATIVE_GENERATOR: Self;
+
+    /// A primitive root of unity of order `2^TWO_ADICITY`.
+    ///
+    /// Equals `MULTIPLICATIVE_GENERATOR^((p - 1) / 2^TWO_ADICITY)`.
+    const ROOT_OF_UNITY: Self;
+
+    /// The inverse of [`ROOT_OF_UNITY`](Self::ROOT_OF_UNITY).
+    const ROOT_OF_UNITY_INVERSE: Self;
+
+    /// The inverse of two.
+    const TWO_INVERSE: Self;
+
+    /// The generator raised to `2^TWO_ADICITY`, generating the odd-order
+    /// part of the multiplicative group.
+    const DELTA: Self;
+
+    /// A chosen cube root of unity, primitive when three divides `p - 1`.
+    ///
+    /// Equals [`ONE`](Self::ONE) when the field has no nontrivial cube root.
+    /// [`EndomorphismAffine`](crate::curve::EndomorphismAffine) requires
+    /// compatible primitive roots in the base and scalar fields.
+    const ZETA: Self;
 
     /// Returns whether this is the additive identity.
     fn is_zero(&self) -> bool;
@@ -149,34 +212,6 @@ pub trait Field:
         let two_to_the_64 = Self::from(1u64 << 63).double();
         Self::from((value >> 64) as u64) * two_to_the_64 + Self::from(value as u64)
     }
-}
-
-/// A prime field with canonical little-endian representations.
-///
-/// Implementations choose the widths of their limbs, bytes, and bits.
-pub trait PrimeField: Field {
-    /// The canonical little-endian byte representation.
-    ///
-    /// Its length is fixed for the field and must hold every canonical
-    /// representative. Zero encodes as all zero bytes.
-    type Repr: AsRef<[u8]> + AsMut<[u8]> + Copy + Debug + Eq + Send + Sync + 'static;
-
-    /// Ordinary little-endian 64-bit limbs, wide enough to hold the modulus.
-    type Limbs: AsRef<[u64]> + Copy + Debug + Eq + Send + Sync + 'static;
-
-    /// The canonical little-endian bits, including zero padding to the full
-    /// width of [`Repr`](Self::Repr).
-    type Bits: AsRef<[bool]> + Copy + Debug + Eq + Send + Sync + 'static;
-
-    /// The modulus as ordinary little-endian 64-bit limbs.
-    const MODULUS: Self::Limbs;
-
-    /// The bit length of the modulus.
-    const NUM_BITS: u32;
-
-    /// The largest bit length whose integers are all distinct field elements:
-    /// one less than [`NUM_BITS`](Self::NUM_BITS).
-    const CAPACITY: u32;
 
     /// Returns whether the canonical integer representative is odd.
     fn is_odd(&self) -> bool;
@@ -220,36 +255,6 @@ pub trait PrimeField: Field {
     /// Returns the bits of the canonical representative, least significant
     /// first.
     fn to_le_bits(&self) -> Self::Bits;
-}
-
-/// A [`PrimeField`] with radix-2 transforms and evaluation-domain constants.
-///
-/// With `g` the [`MULTIPLICATIVE_GENERATOR`](Self::MULTIPLICATIVE_GENERATOR)
-/// and `s` the [`TWO_ADICITY`](Self::TWO_ADICITY) of `p - 1`:
-/// [`ROOT_OF_UNITY`](Self::ROOT_OF_UNITY) is `g^((p - 1) / 2^s)`, of order
-/// exactly `2^s`; [`DELTA`](Self::DELTA) is `g^(2^s)`, which generates the
-/// odd-order part of the multiplicative group. The default root lookups
-/// square down from the maximal root; implementations with tables override them.
-pub trait FftField: PrimeField {
-    /// `s`, the largest `s` such that `2^s` divides `p - 1`: the logarithm of
-    /// the largest supported power-of-two domain.
-    const TWO_ADICITY: u32;
-
-    /// The generator of the multiplicative group from which the other
-    /// constants are derived.
-    const MULTIPLICATIVE_GENERATOR: Self;
-
-    /// A primitive root of unity of order `2^TWO_ADICITY`.
-    const ROOT_OF_UNITY: Self;
-
-    /// The inverse of [`ROOT_OF_UNITY`](Self::ROOT_OF_UNITY).
-    const ROOT_OF_UNITY_INVERSE: Self;
-
-    /// The inverse of two.
-    const TWO_INVERSE: Self;
-
-    /// The generator raised to `2^TWO_ADICITY`.
-    const DELTA: Self;
 
     /// Constructs the canonical domain of `2^log_size` elements.
     ///
@@ -341,17 +346,6 @@ pub trait FftField: PrimeField {
     fn power_of_two_inverse(log_size: u32) -> Self {
         Self::TWO_INVERSE.pow_u64(u64::from(log_size))
     }
-}
-
-/// A [`Field`] whose products can be accumulated before reduction.
-///
-/// A sum of products pays one reduction instead of one per term:
-/// [`mul_accumulate`](Self::mul_accumulate) adds a product to the
-/// accumulator and [`reduce`](Self::reduce) returns the field value once.
-/// The accumulator starts from [`Default`].
-pub trait DeferredField: Field {
-    /// The unreduced accumulator.
-    type Accumulator: Default;
 
     /// Adds `lhs * rhs` to the accumulator.
     fn mul_accumulate(accumulator: &mut Self::Accumulator, lhs: &Self, rhs: &Self);
@@ -360,18 +354,45 @@ pub trait DeferredField: Field {
     fn reduce(accumulator: Self::Accumulator) -> Self;
 }
 
-/// A field with a chosen primitive cube root of unity.
-///
-/// This capability is independent of radix-2 FFT support. Curve
-/// implementations must choose compatible roots for their endomorphisms.
-pub trait CubeRootField: Field {
-    /// The chosen element of multiplicative order three.
-    const ZETA: Self;
-}
-
 impl<M: PrimeModulus> Field for PastaField<M> {
+    type Repr = [u8; 32];
+
+    type Limbs = [u64; 4];
+
+    type Bits = [bool; 256];
+
+    type Accumulator = ProductSum<M>;
+
     const ZERO: Self = Self::ZERO;
+
     const ONE: Self = Self::ONE;
+
+    const MODULUS: [u64; 4] = M::MODULUS;
+
+    const NUM_BITS: u32 = 256 - M::MODULUS[3].leading_zeros();
+
+    const CAPACITY: u32 = 255 - M::MODULUS[3].leading_zeros();
+
+    const TWO_ADICITY: u32 = TWO_ADICITY;
+
+    const MULTIPLICATIVE_GENERATOR: Self = Self::MULTIPLICATIVE_GENERATOR;
+
+    const ROOT_OF_UNITY: Self = match Self::root_of_unity(TWO_ADICITY) {
+        Some(root) => root,
+        None => panic!("the two-adicity is a supported root order"),
+    };
+
+    const ROOT_OF_UNITY_INVERSE: Self = match Self::root_of_unity_inverse(TWO_ADICITY) {
+        Some(root) => root,
+        None => panic!("the two-adicity is a supported root order"),
+    };
+
+    const TWO_INVERSE: Self = Self::TWO_INVERSE;
+
+    const DELTA: Self = Self::DELTA;
+
+    const ZETA: Self = Self::ZETA;
+
     fn is_zero(&self) -> bool {
         PastaField::is_zero(self)
     }
@@ -420,16 +441,6 @@ impl<M: PrimeModulus> Field for PastaField<M> {
     fn sum_of_product_pairs<'a>(pairs: impl IntoIterator<Item = (&'a Self, &'a Self)>) -> Self {
         PastaField::sum_of_product_pairs(pairs)
     }
-}
-
-impl<M: PrimeModulus> PrimeField for PastaField<M> {
-    type Repr = [u8; 32];
-    type Limbs = [u64; 4];
-    type Bits = [bool; 256];
-
-    const MODULUS: [u64; 4] = M::MODULUS;
-    const NUM_BITS: u32 = 256 - M::MODULUS[3].leading_zeros();
-    const CAPACITY: u32 = 255 - M::MODULUS[3].leading_zeros();
 
     fn is_odd(&self) -> bool {
         PastaField::is_odd(self)
@@ -455,21 +466,6 @@ impl<M: PrimeModulus> PrimeField for PastaField<M> {
         let bytes = PastaField::to_bytes(*self);
         core::array::from_fn(|index| (bytes[index / 8] >> (index % 8)) & 1 == 1)
     }
-}
-
-impl<M: PrimeModulus> FftField for PastaField<M> {
-    const TWO_ADICITY: u32 = TWO_ADICITY;
-    const MULTIPLICATIVE_GENERATOR: Self = Self::MULTIPLICATIVE_GENERATOR;
-    const ROOT_OF_UNITY: Self = match Self::root_of_unity(TWO_ADICITY) {
-        Some(root) => root,
-        None => panic!("the two-adicity is a supported root order"),
-    };
-    const ROOT_OF_UNITY_INVERSE: Self = match Self::root_of_unity_inverse(TWO_ADICITY) {
-        Some(root) => root,
-        None => panic!("the two-adicity is a supported root order"),
-    };
-    const TWO_INVERSE: Self = Self::TWO_INVERSE;
-    const DELTA: Self = Self::DELTA;
 
     fn domain(log_size: u32) -> Result<Domain<Self>, FftError> {
         Domain::new(log_size)
@@ -528,10 +524,6 @@ impl<M: PrimeModulus> FftField for PastaField<M> {
     fn power_of_two_inverse(log_size: u32) -> Self {
         PastaField::power_of_two_inverse(log_size)
     }
-}
-
-impl<M: PrimeModulus> DeferredField for PastaField<M> {
-    type Accumulator = ProductSum<M>;
 
     fn mul_accumulate(accumulator: &mut ProductSum<M>, lhs: &Self, rhs: &Self) {
         accumulator.add_product(lhs, rhs);
@@ -540,8 +532,4 @@ impl<M: PrimeModulus> DeferredField for PastaField<M> {
     fn reduce(accumulator: ProductSum<M>) -> Self {
         accumulator.finish()
     }
-}
-
-impl<M: PrimeModulus> CubeRootField for PastaField<M> {
-    const ZETA: Self = Self::ZETA;
 }

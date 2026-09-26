@@ -27,7 +27,7 @@ pub(super) fn count_size_powers(f: impl FnOnce()) -> usize {
 ///
 /// [`Self::subgroup`] and [`Self::coset`] configure native Pasta transforms with
 /// caller-owned tables, scratch, and execution. The unstable `traits` feature
-/// also supports consumer field implementations through `FftField::domain`
+/// also supports consumer field implementations through `Field::domain`
 /// and adds generic evaluation and transform methods to this same descriptor.
 #[derive(Clone, Copy, Debug)]
 pub struct Domain<F> {

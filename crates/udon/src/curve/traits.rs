@@ -30,7 +30,7 @@ use core::{
     ops::{Add, AddAssign, Mul, Neg, Sub, SubAssign},
 };
 
-use crate::field::{CubeRootField, Field, PrimeField};
+use crate::field::Field;
 
 /// A curve point in affine coordinates, including identity, with the canonical
 /// compressed encoding.
@@ -54,7 +54,7 @@ pub trait Affine:
     type Base: Field;
 
     /// The field of scalars, whose modulus is the group order.
-    type Scalar: PrimeField;
+    type Scalar: Field;
 
     /// The curve's fixed-size canonical compressed encoding, including identity.
     type Repr: AsRef<[u8]> + AsMut<[u8]> + Copy + Debug + Eq + Send + Sync + 'static;
@@ -171,7 +171,7 @@ pub trait Projective:
     type Base: Field;
 
     /// The field of scalars, whose modulus is the group order.
-    type Scalar: PrimeField;
+    type Scalar: Field;
 
     /// The same curve at the protocol boundary.
     type Affine: Affine<Projective = Self, Base = Self::Base, Scalar = Self::Scalar>;
@@ -202,11 +202,10 @@ pub trait Projective:
 /// An affine curve `y² = x³ + B` with a compatible order-three endomorphism.
 ///
 /// The coordinate map `(x, y) -> (Base::ZETA * x, y)` must equal
-/// multiplication by `Scalar::ZETA`. Identity is preserved. This optional
-/// capability describes the Pasta curves; it is not required by [`Affine`].
-pub trait EndomorphismAffine:
-    Affine<Base: CubeRootField, Scalar: CubeRootField, Projective: EndomorphismProjective>
-{
+/// multiplication by `Scalar::ZETA`. Both roots must have order three.
+/// Identity is preserved. This optional capability describes the Pasta curves;
+/// it is not required by [`Affine`].
+pub trait EndomorphismAffine: Affine<Projective: EndomorphismProjective> {
     /// The constant term of the curve equation `y² = x³ + B`.
     const B: Self::Base;
 
@@ -215,7 +214,7 @@ pub trait EndomorphismAffine:
 }
 
 /// The projective form of an [`EndomorphismAffine`] curve.
-pub trait EndomorphismProjective: Projective<Base: CubeRootField, Scalar: CubeRootField> {
+pub trait EndomorphismProjective: Projective {
     /// Applies the same group endomorphism as the affine representation,
     /// without normalization.
     fn endomorphism(&self) -> Self;

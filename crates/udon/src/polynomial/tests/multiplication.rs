@@ -1,6 +1,6 @@
 use crate::fft::execution::count_expansions;
 use crate::field::pasta::test_support::field_samples;
-use crate::field::{FftField, Fp, PallasBase, PallasScalar, PastaField, PrimeModulus};
+use crate::field::{Field, Fp, PallasBase, PallasScalar, PastaField, PrimeModulus};
 use num_bigint::BigUint;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::vec::Vec;
@@ -205,7 +205,7 @@ fn large_thin_products_keep_the_schoolbook_path() {
 #[test]
 fn multiply_rejects_the_wrong_product_length_before_writes() {
     let a = [<Fp>::ONE, <Fp>::ONE];
-    for multiply in [multiply::<Fp>, <Fp as FftField>::multiply_polynomials] {
+    for multiply in [multiply::<Fp>, <Fp as Field>::multiply_polynomials] {
         for left in [&a[..], &[]] {
             let mut product = [<Fp>::DELTA; 2];
             let mut scratch = [<Fp>::ONE; 8];

@@ -2,9 +2,9 @@
 
 use super::lagrange::Finish;
 use super::{CosetDomain, Domain, LagrangeError};
-use crate::field::{FftField, PastaField, PrimeModulus, ReductionState};
+use crate::field::{Field, PastaField, PrimeModulus, ReductionState};
 
-impl<F: FftField> Domain<F> {
+impl<F: Field> Domain<F> {
     /// Returns the elements `1, root, root^2, ...` in natural order.
     ///
     /// Each element is one multiplication from its predecessor, so the
@@ -30,7 +30,7 @@ impl<F: FftField> Domain<F> {
 
     /// Replaces coefficients with evaluations at the elements, in natural order.
     ///
-    /// Dispatches directly to the field's required [`FftField::fft`] implementation.
+    /// Dispatches directly to the field's required [`Field::fft`] implementation.
     ///
     /// # Panics
     ///
@@ -42,7 +42,7 @@ impl<F: FftField> Domain<F> {
 
     /// Replaces natural-order evaluations with normalized coefficients.
     ///
-    /// Dispatches directly to the field's required [`FftField::ifft`] implementation.
+    /// Dispatches directly to the field's required [`Field::ifft`] implementation.
     ///
     /// # Panics
     ///
@@ -62,7 +62,7 @@ impl<F: FftField> Domain<F> {
     /// each denominator separately. Initial contents do not matter and entries
     /// beyond the evaluation count remain untouched.
     ///
-    /// Dispatches through [`FftField::lagrange_evaluations`]; Pasta uses
+    /// Dispatches through [`Field::lagrange_evaluations`]; Pasta uses
     /// [`super::CosetDomain::evaluate_lagrange`].
     ///
     /// If `x` is the element `root^i`, the evaluations are one at `i` and zero
@@ -151,7 +151,7 @@ impl<M: PrimeModulus> CosetDomain<M> {
 
 // Generic fields may use the field-operation formula; Pasta overrides the hook
 // with its native range evaluator and scaled batch inversion.
-pub(crate) fn lagrange_evaluations<F: FftField>(
+pub(crate) fn lagrange_evaluations<F: Field>(
     domain: Domain<F>,
     x: F,
     evaluations: &mut [F],

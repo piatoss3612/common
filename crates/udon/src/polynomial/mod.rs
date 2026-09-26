@@ -12,7 +12,7 @@
 //! The unstable `traits` feature adds generic iterator evaluation and descending
 //! quotient streaming, geometric sums, and polynomial multiplication. Iterator
 //! recurrences dispatch through `Field::mul_add`; products dispatch through
-//! `FftField::multiply_polynomials`, including Pasta's coefficient expansion.
+//! `Field::multiply_polynomials`, including Pasta's coefficient expansion.
 //! Native slice APIs remain available in every feature configuration.
 
 mod division;

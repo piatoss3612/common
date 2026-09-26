@@ -2,7 +2,7 @@
 
 mod facade {
     #[cfg(feature = "traits")]
-    pub use arithmetic::{curve::Affine, field::FftField};
+    pub use arithmetic::{curve::Affine, field::Field};
     pub use arithmetic::{
         curve::{AffinePoint, Pallas, PastaCurve, Vesta, glv_decompose},
         field::{Fp, Fq, PallasBase, PallasScalar, PastaField, PrimeModulus, Reduced},
@@ -114,7 +114,7 @@ mod consumer {
     pub(super) fn field<M: PrimeModulus>() {
         let two = PastaField::<M>::from_u64(2);
         let four = two.square();
-        fn generic<F: FftField>(value: F) -> F {
+        fn generic<F: Field>(value: F) -> F {
             value.square() * F::root_of_unity(1).unwrap() + F::ONE
         }
         assert_eq!(
@@ -147,7 +147,7 @@ mod consumer {
         generic_product(two);
 
         // Match consumers that hold only the field trait and a domain descriptor.
-        fn generic_transform<F: FftField>(value: F) {
+        fn generic_transform<F: Field>(value: F) {
             let domain = F::domain(2).unwrap();
             let mut values = [value; 4];
             domain.transform(&mut values);

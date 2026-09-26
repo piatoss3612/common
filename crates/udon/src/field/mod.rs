@@ -20,9 +20,9 @@
 //! repeated value for materialization or structured FFT and MSM operations.
 //!
 //! Operators forward to the inherent methods. The unstable `traits` feature
-//! adds `Field`, `PrimeField`, `FftField`, `CubeRootField`, and `DeferredField`,
-//! together with generic batch inversion, sampling, encoding, and dot-product
-//! helpers. The Pasta trait implementations use the same native kernels.
+//! adds the `Field` interface for arithmetic, canonical encodings, transforms,
+//! and product accumulation, together with generic sampling, encoding, and
+//! dot-product helpers. The Pasta implementations use the same native kernels.
 
 // Generic contracts and helpers; concrete storage and kernels stay in Pasta.
 #[cfg(feature = "traits")]
@@ -50,7 +50,7 @@ pub(crate) use pasta::{invert_nonzero, word};
 #[cfg(feature = "traits")]
 pub use products::{dot, dot_iter};
 #[cfg(feature = "traits")]
-pub use traits::{CubeRootField, DeferredField, FftField, Field, PrimeField};
+pub use traits::Field;
 
 pub(crate) use pasta::fill_powers;
 pub use pasta::{

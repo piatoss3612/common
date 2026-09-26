@@ -102,6 +102,21 @@ fn main() {
 fn field() {
     fn generic<F: udon::field::Field>(values: &mut [F]) {
         let value = F::from(7);
+        let repr: F::Repr = value.to_bytes();
+        assert_eq!(F::from_bytes(repr), Some(value));
+        assert_eq!(F::ZETA.pow_u64(3), F::ONE);
+        let mut accumulator = F::Accumulator::default();
+        F::mul_accumulate(&mut accumulator, &value, &value);
+        F::mul_accumulate(&mut accumulator, &F::ONE, &F::from(2));
+        assert_eq!(F::reduce(accumulator), F::from(51));
+
+        let domain = F::domain(1).unwrap();
+        let mut coefficients = [value, F::ONE];
+        domain.transform(&mut coefficients);
+        assert_eq!(coefficients, [F::from(8), F::from(6)]);
+        domain.inverse_transform(&mut coefficients);
+        assert_eq!(coefficients, [value, F::ONE]);
+
         assert_eq!(value.mul_add(&F::from(3), &F::from(2)), F::from(23));
         assert_eq!(udon::field::dot(&[value], &[value]), F::from(49));
         assert_eq!(

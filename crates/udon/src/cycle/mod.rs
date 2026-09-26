@@ -43,11 +43,7 @@
 //! assert_eq!(commitment, multiple(11));
 //! ```
 
-use crate::{
-    curve::EndomorphismAffine,
-    field::{CubeRootField, DeferredField, FftField},
-    poseidon::PoseidonPermutation,
-};
+use crate::{curve::EndomorphismAffine, field::Field, poseidon::PoseidonPermutation};
 
 mod generators;
 mod pasta;
@@ -61,8 +57,8 @@ mod tests;
 /// A cycle of two curves, each defined over the other's scalar field.
 ///
 /// This proof-system interface requires radix-2 FFTs, deferred products, and
-/// compatible order-three curve endomorphisms. The basic [`crate::curve::Affine`] and
-/// [`crate::field::Field`] traits do not require those capabilities.
+/// compatible order-three curve endomorphisms. The latter are required by
+/// [`EndomorphismAffine`], beyond the basic [`crate::curve::Affine`] contract.
 ///
 /// Implementations are zero-sized markers. Parameters that exist at runtime,
 /// such as generators, live in [`Params`](Self::Params) and are reached
@@ -71,11 +67,11 @@ pub trait Cycle: Copy + Default + Send + Sync + 'static {
     /// The field circuits are written over: the scalar field of the
     /// [`HostCurve`](Self::HostCurve) and the coordinate field of the
     /// [`NestedCurve`](Self::NestedCurve).
-    type CircuitField: FftField + DeferredField + CubeRootField;
+    type CircuitField: Field;
 
     /// The scalar field of the [`NestedCurve`](Self::NestedCurve) and the
     /// coordinate field of the [`HostCurve`](Self::HostCurve).
-    type ScalarField: FftField + DeferredField + CubeRootField;
+    type ScalarField: Field;
 
     /// The curve applications use for keys, signatures, and other primitives
     /// whose arithmetic circuits express over the

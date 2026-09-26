@@ -134,7 +134,7 @@ fn pasta_cycle_exposes_compatible_endomorphisms() {
     use crate::{
         curve::{EndomorphismAffine, EndomorphismProjective},
         cycle::{Cycle, Pasta},
-        field::CubeRootField,
+        field::Field,
     };
 
     fn check<A: EndomorphismAffine>() {

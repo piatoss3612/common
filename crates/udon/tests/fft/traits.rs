@@ -2,10 +2,7 @@
 
 use super::field_model::Small;
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use zakura_udon::{
-    fft::FftError,
-    field::{FftField, Field},
-};
+use zakura_udon::{fft::FftError, field::Field};
 
 #[test]
 fn generic_domains_use_the_fields_roots_and_transforms() {

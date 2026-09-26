@@ -40,10 +40,10 @@ scalar to every representation, returning a `ProjectivePoint`. These operators
 are available without features. The unstable `traits` feature adds the
 [`Affine`](../crates/udon/src/curve/traits.rs) and `Projective` interfaces, exposing
 `Point` and `ProjectivePoint` to code generic over a curve, with the base and
-scalar fields as associated `Field` and `PrimeField` types, respectively.
+scalar fields as associated types implementing `Field`.
 Canonical point encodings use an associated `Repr` type, so their width can
-differ between curves. Neither basic trait requires FFTs, a particular curve
-equation, or an endomorphism. `EndomorphismAffine` and
+differ between curves. The basic curve traits do not require a particular curve
+equation or an endomorphism. `EndomorphismAffine` and
 `EndomorphismProjective` expose the additional Pasta-compatible order-three
 endomorphism capability; `Cycle` explicitly requires it for both curves.
 `Projective::add_mixed` adds an identity-capable affine point without inversion;

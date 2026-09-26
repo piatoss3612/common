@@ -49,11 +49,12 @@ and product sums. These operations require no allocation. Arithmetic is
 variable-time and provides no constant-time guarantee for secret inputs.
 Field parameters and fixed exponentiation schedules use `bento` at compile time.
 Operator forms forward to the inherent arithmetic. The opt-in `traits` feature
-adds unstable consumer interfaces, including `Field`, `FftField`, and
-`DeferredField`, implemented through the same native kernels. With this feature, the
-[`polynomial` module](crates/udon/src/polynomial/mod.rs) adds iterator and product utilities over
-those traits, and the [`cycle` module](crates/udon/src/cycle/mod.rs) binds the
-fields, curves, borrowed generators, and Poseidon instances of the Pasta cycle
+adds the unstable `Field` consumer interface for arithmetic, canonical encodings,
+transforms, and product accumulation through the same native kernels. With this
+feature, the [`polynomial` module](crates/udon/src/polynomial/mod.rs) adds iterator
+and product utilities over `Field`, and the
+[`cycle` module](crates/udon/src/cycle/mod.rs) binds the fields, curves, borrowed
+generators, and Poseidon instances of the Pasta cycle
 to one `Cycle` marker for proof systems generic over a curve cycle. The
 [`poseidon` module](crates/udon/src/poseidon/mod.rs) carries the fixed Pasta
 Poseidon parameters without requiring features.
@@ -67,9 +68,8 @@ for latency, build-time, and storage tradeoffs.
 The [`fft` module](crates/udon/src/fft/mod.rs) provides power-of-two transforms,
 cosets, residue expansion, and fused class interpolation for both fields. With
 `traits` enabled, `Domain` also dispatches generic field transforms directly
-through `FftField` and evaluates vanishing and Lagrange
-polynomials for consumers of the field traits. Pasta fields use the optimized
-field transforms.
+through `Field` and evaluates vanishing and Lagrange polynomials for generic
+consumers. Pasta fields use the optimized field transforms.
 Callers own all tables, buffers, scratch, and parallel execution; Udon's FFT
 setup and execution do not allocate or require a feature flag. See the
 [FFT guide](docs/FFT.md) for layouts, scratch requirements, and downstream table

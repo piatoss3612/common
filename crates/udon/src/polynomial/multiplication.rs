@@ -5,7 +5,7 @@ use crate::{
         StorageLayout, Transform, TransformRequest,
         execution::{ExpansionPlan, FftPlan},
     },
-    field::{FftField, PastaField, PrimeModulus},
+    field::{Field, PastaField, PrimeModulus},
 };
 
 #[cfg(test)]
@@ -21,7 +21,7 @@ mod tests;
 /// schoolbook path runs. The choice affects only cost: both paths are exact.
 /// Scratch contents are unspecified afterwards.
 ///
-/// Dispatches through [`FftField::multiply_polynomials`]. Pasta expands each
+/// Dispatches through [`Field::multiply_polynomials`]. Pasta expands each
 /// coefficient prefix into bit-reversed evaluations, multiplies during the
 /// second expansion, and interpolates directly from that order. This avoids
 /// full zero-padded forward transforms and separate evaluation permutations.
@@ -29,7 +29,7 @@ mod tests;
 /// # Panics
 ///
 /// Panics before mutation if `product` has the wrong length.
-pub fn multiply<F: FftField>(a: &[F], b: &[F], product: &mut [F], scratch: &mut [F]) {
+pub fn multiply<F: Field>(a: &[F], b: &[F], product: &mut [F], scratch: &mut [F]) {
     F::multiply_polynomials(a, b, product, scratch)
 }
 
@@ -62,12 +62,7 @@ fn transform_log_size(a: usize, b: usize, product: usize, scratch: usize) -> Opt
     }
 }
 
-pub(crate) fn multiply_default<F: FftField>(
-    a: &[F],
-    b: &[F],
-    product: &mut [F],
-    scratch: &mut [F],
-) {
+pub(crate) fn multiply_default<F: Field>(a: &[F], b: &[F], product: &mut [F], scratch: &mut [F]) {
     let domain = transform_log_size(a.len(), b.len(), product.len(), scratch.len())
         .and_then(|log_size| F::domain(log_size).ok());
     if let Some(domain) = domain {
@@ -109,7 +104,7 @@ fn multiply_schoolbook<F: Copy>(
 }
 
 // Both inputs fit the domain and scratch holds two domain-sized halves.
-fn multiply_by_transform<F: FftField>(
+fn multiply_by_transform<F: Field>(
     domain: Domain<F>,
     a: &[F],
     b: &[F],

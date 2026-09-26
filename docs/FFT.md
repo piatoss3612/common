@@ -21,7 +21,7 @@ address-space limits; size one is supported. `bit_reverse` maps between natural
 and bit-reversed positions.
 
 The unstable `traits` feature extends this same descriptor to consumer
-`FftField` implementations through `F::domain(k)`, and adds generic domain
+`Field` implementations through `F::domain(k)`, and adds generic domain
 operations. Pasta's trait constructor delegates to `Domain::new`.
 `elements()` iterates the subgroup in natural order; `vanishing(x)` and
 `contains(x)` evaluate
@@ -31,8 +31,8 @@ to the native range API; one scratch element per output shares a single inversio
 and smaller buffers split the work into batches.
 
 With `traits` enabled, `Domain::transform` and `Domain::inverse_transform`
-dispatch field elements directly through the required `FftField::fft` and
-`FftField::ifft` methods. Pasta fields use `Transform` with serial execution,
+dispatch field elements directly through the required `Field::fft` and
+`Field::ifft` methods. Pasta fields use `Transform` with serial execution,
 computed twiddles, and no auxiliary buffers. These conveniences allocate nothing.
 Call `Transform` directly to
 reuse tables and scratch or select an executor.
@@ -82,7 +82,7 @@ Their algebraic laws are documented with the traits.
 Call `reference::transform` or `reference::inverse_transform` for group-valued
 transforms, artifact generation, or an independent check of the field kernels.
 These functions always use the reference schedule and do not depend on the
-`traits` feature. Generic `Domain` field transforms use `FftField` directly.
+`traits` feature. Generic `Domain` field transforms use `Field` directly.
 
 ## Transform plans and task budgets
 

@@ -10,10 +10,7 @@
 
 use core::{iter, ops};
 use num_bigint::BigUint;
-use zakura_udon::{
-    fft::Domain,
-    field::{FftField, Field, PrimeField},
-};
+use zakura_udon::{fft::Domain, field::Field};
 
 macro_rules! binary {
     ($name:ident, $trait:ident, $method:ident, $assign:ident, $assign_method:ident, $body:expr) => {
@@ -64,7 +61,12 @@ macro_rules! aggregate {
 }
 
 macro_rules! reference_field {
-    ($name:ident, $limbs:literal, $bytes:literal, $bits:literal, $modulus:expr) => {
+    (
+        $name:ident, $limbs:literal, $bytes:literal, $bits:literal, $modulus:expr,
+        generator = $generator:literal, two_adicity = $two_adicity:literal,
+        root = $root:expr, inverse_root = $inverse_root:expr,
+        two_inverse = $two_inverse:expr, delta = $delta:expr, zeta = $zeta:expr
+    ) => {
         #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
         pub struct $name([u64; $limbs]);
 
@@ -140,10 +142,6 @@ macro_rules! reference_field {
                 Self::from_integer(self.integer().modpow(&exponent.into(), &Self::modulus()))
             }
 
-
-        }
-
-        impl PrimeField for $name {
             type Repr = [u8; $bytes];
             type Limbs = [u64; $limbs];
             type Bits = [bool; $bytes * 8];
@@ -176,6 +174,38 @@ macro_rules! reference_field {
                 let integer = self.integer();
                 core::array::from_fn(|index| integer.bit(index as u64))
             }
+
+            const TWO_ADICITY: u32 = $two_adicity;
+            const MULTIPLICATIVE_GENERATOR: Self = {
+                let mut limbs = [0; $limbs];
+                limbs[0] = $generator;
+                Self(limbs)
+            };
+            const ROOT_OF_UNITY: Self = Self($root);
+            const ROOT_OF_UNITY_INVERSE: Self = Self($inverse_root);
+            const TWO_INVERSE: Self = Self($two_inverse);
+            const DELTA: Self = Self($delta);
+            const ZETA: Self = Self($zeta);
+
+            fn fft(domain: Domain<Self>, values: &mut [Self]) {
+                assert_eq!(values.len(), domain.size());
+                dft(values, domain.root(), Self::ONE);
+            }
+
+            fn ifft(domain: Domain<Self>, values: &mut [Self]) {
+                assert_eq!(values.len(), domain.size());
+                dft(values, domain.inverse_root(), domain.size_inverse());
+            }
+
+            type Accumulator = BigUint;
+
+            fn mul_accumulate(accumulator: &mut BigUint, lhs: &Self, rhs: &Self) {
+                *accumulator += lhs.integer() * rhs.integer();
+            }
+
+            fn reduce(accumulator: BigUint) -> Self {
+                Self::from_integer(accumulator)
+            }
         }
     };
 }
@@ -192,6 +222,41 @@ reference_field!(
         0x6477_4b84_f385_12bf,
         0x4b1b_a7b6_434b_acd7,
         0x1a01_11ea_397f_e69a
+    ],
+    generator = 2,
+    two_adicity = 1,
+    root = [
+        0xb9fe_ffff_ffff_aaaa,
+        0x1eab_fffe_b153_ffff,
+        0x6730_d2a0_f6b0_f624,
+        0x6477_4b84_f385_12bf,
+        0x4b1b_a7b6_434b_acd7,
+        0x1a01_11ea_397f_e69a
+    ],
+    inverse_root = [
+        0xb9fe_ffff_ffff_aaaa,
+        0x1eab_fffe_b153_ffff,
+        0x6730_d2a0_f6b0_f624,
+        0x6477_4b84_f385_12bf,
+        0x4b1b_a7b6_434b_acd7,
+        0x1a01_11ea_397f_e69a
+    ],
+    two_inverse = [
+        0xdcff_7fff_ffff_d556,
+        0x0f55_ffff_58a9_ffff,
+        0xb398_6950_7b58_7b12,
+        0xb23b_a5c2_79c2_895f,
+        0x258d_d3db_21a5_d66b,
+        0x0d00_88f5_1cbf_f34d
+    ],
+    delta = [4, 0, 0, 0, 0, 0],
+    zeta = [
+        0x2e01_ffff_fffe_fffe,
+        0xde17_d813_620a_0002,
+        0xddb3_a93b_e6f8_9688,
+        0xba69_c607_6a0f_77ea,
+        0x5f19_672f_df76_ce51,
+        0
     ]
 );
 // This is also Jubjub's base field.
@@ -205,7 +270,34 @@ reference_field!(
         0x53bd_a402_fffe_5bfe,
         0x3339_d808_09a1_d805,
         0x73ed_a753_299d_7d48
-    ]
+    ],
+    generator = 7,
+    two_adicity = 32,
+    root = [
+        0x3829_971f_439f_0d2b,
+        0xb636_8350_8c22_80b9,
+        0xd09b_6819_22c8_13b4,
+        0x16a2_a19e_dfe8_1f20
+    ],
+    inverse_root = [
+        0x0fb4_d6e1_3cf1_9a78,
+        0x6f67_d4a2_b566_f833,
+        0xed4f_2f74_a35d_0168,
+        0x0538_a6f6_6e19_c653
+    ],
+    two_inverse = [
+        0x7fff_ffff_8000_0001,
+        0xa9de_d201_7fff_2dff,
+        0x199c_ec04_04d0_ec02,
+        0x39f6_d3a9_94ce_bea4
+    ],
+    delta = [
+        0x6c08_3479_5901_89d7,
+        0xf650_2437_c6a0_9c00,
+        0x43ca_b354_fabb_0062,
+        0x0863_4d0a_a021_aaf8
+    ],
+    zeta = [0x0000_0000_ffff_ffff, 0xac45_a401_0001_a402, 0, 0]
 );
 reference_field!(
     JubjubScalar,
@@ -217,45 +309,75 @@ reference_field!(
         0xa668_2093_ccc8_1082,
         0x0667_3b01_0134_3b00,
         0x0e7d_b4ea_6533_afa9
+    ],
+    generator = 6,
+    two_adicity = 1,
+    root = [
+        0xd097_0e5e_d6f7_2cb6,
+        0xa668_2093_ccc8_1082,
+        0x0667_3b01_0134_3b00,
+        0x0e7d_b4ea_6533_afa9
+    ],
+    inverse_root = [
+        0xd097_0e5e_d6f7_2cb6,
+        0xa668_2093_ccc8_1082,
+        0x0667_3b01_0134_3b00,
+        0x0e7d_b4ea_6533_afa9
+    ],
+    two_inverse = [
+        0x684b_872f_6b7b_965c,
+        0x5334_1049_e664_0841,
+        0x8333_9d80_809a_1d80,
+        0x073e_da75_3299_d7d4
+    ],
+    delta = [36, 0, 0, 0],
+    zeta = [
+        0x59bf_ba86_63cd_b2c4,
+        0x7242_494d_4a86_d10b,
+        0xb133_fd7d_bbf3_e5fa,
+        0x07e1_d690_6f41_bf2f
     ]
 );
 // A byte encoding shorter than a limb catches accidental truncation.
-reference_field!(Small, 1, 1, 5, [17]);
-reference_field!(SmallScalar, 1, 1, 3, [5]);
+reference_field!(
+    Small,
+    1,
+    1,
+    5,
+    [17],
+    generator = 3,
+    two_adicity = 4,
+    root = [3],
+    inverse_root = [6],
+    two_inverse = [9],
+    delta = [1],
+    zeta = [1]
+);
+reference_field!(
+    SmallScalar,
+    1,
+    1,
+    3,
+    [5],
+    generator = 2,
+    two_adicity = 2,
+    root = [2],
+    inverse_root = [3],
+    two_inverse = [3],
+    delta = [1],
+    zeta = [1]
+);
 
-impl FftField for Small {
-    const TWO_ADICITY: u32 = 4;
-    const MULTIPLICATIVE_GENERATOR: Self = Self([3]);
-    const ROOT_OF_UNITY: Self = Self([3]);
-    const ROOT_OF_UNITY_INVERSE: Self = Self([6]);
-    const TWO_INVERSE: Self = Self([9]);
-    const DELTA: Self = Self::ONE;
-
-    fn fft(domain: Domain<Self>, values: &mut [Self]) {
-        assert_eq!(values.len(), domain.size());
-        Self::dft(values, domain.root(), Self::ONE);
-    }
-
-    fn ifft(domain: Domain<Self>, values: &mut [Self]) {
-        assert_eq!(values.len(), domain.size());
-        Self::dft(values, domain.inverse_root(), domain.size_inverse());
-    }
-}
-
-impl Small {
-    // An independent quadratic transform over integers modulo 17.
-    fn dft(values: &mut [Self], root: Self, scale: Self) {
-        let mut original = [Self::ZERO; 16];
-        let original = &mut original[..values.len()];
-        original.copy_from_slice(values);
-        for (i, value) in values.iter_mut().enumerate() {
-            *value = original
-                .iter()
-                .enumerate()
-                .map(|(j, coefficient)| *coefficient * root.pow_u64((i * j) as u64))
-                .sum::<Self>()
-                * scale;
-        }
+// An independent quadratic transform using the integer reference arithmetic.
+fn dft<F: Field>(values: &mut [F], root: F, scale: F) {
+    let original = values.to_vec();
+    for (i, value) in values.iter_mut().enumerate() {
+        *value = original
+            .iter()
+            .enumerate()
+            .map(|(j, coefficient)| *coefficient * root.pow_u64((i * j) as u64))
+            .sum::<F>()
+            * scale;
     }
 }
 

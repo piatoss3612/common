@@ -15,7 +15,7 @@
 //! coefficients directly.
 //!
 //! With the unstable `traits` feature, [`Domain`] also dispatches generic field
-//! transforms through `field::FftField` and evaluates vanishing and Lagrange
+//! transforms through `field::Field` and evaluates vanishing and Lagrange
 //! polynomials. The separate [`mod@reference`] API provides explicit transforms
 //! over fields, projective points, and other twiddle-scalable values.
 //!

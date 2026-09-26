@@ -4,7 +4,7 @@ use super::field_model::{Small, SmallScalar};
 use core::{iter::Sum, ops};
 use zakura_udon::{
     curve::{Affine, Projective},
-    field::{Field, PrimeField},
+    field::Field,
 };
 
 // The order-five subgroup of -x² + y² = 1 + 6x²y² over F_17, generated

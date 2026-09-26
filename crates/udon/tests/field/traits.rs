@@ -1,6 +1,72 @@
 use super::field_model;
 
 #[test]
+fn one_field_bound_supports_roots_transforms_and_accumulation() {
+    use num_bigint::BigUint;
+    use zakura_udon::field::Field;
+
+    fn check<F: Field>() {
+        let integer = |value: F| BigUint::from_bytes_le(value.to_bytes().as_ref());
+        let modulus = integer(-F::ONE) + 1u8;
+        let order = &modulus - 1u8;
+        let two_power = BigUint::from(1u8) << F::TWO_ADICITY as usize;
+        let odd_order = &order / &two_power;
+        assert!(odd_order.bit(0));
+        assert_eq!(&order % &two_power, BigUint::from(0u8));
+        assert_eq!(
+            integer(F::ROOT_OF_UNITY),
+            integer(F::MULTIPLICATIVE_GENERATOR).modpow(&odd_order, &modulus)
+        );
+        assert_eq!(F::ROOT_OF_UNITY * F::ROOT_OF_UNITY_INVERSE, F::ONE);
+        assert_eq!(F::TWO_INVERSE.double(), F::ONE);
+        assert_eq!(
+            integer(F::DELTA),
+            integer(F::MULTIPLICATIVE_GENERATOR).modpow(&two_power, &modulus)
+        );
+        assert_eq!(F::ZETA.pow_u64(3), F::ONE);
+        assert_eq!(F::ZETA == F::ONE, &order % 3u8 != BigUint::from(0u8));
+
+        assert_eq!(F::reduce(F::Accumulator::default()), F::ZERO);
+        let mut accumulator = F::Accumulator::default();
+        let mut expected = F::ZERO;
+        for i in 0..65 {
+            let lhs = -F::from(i * i + 1);
+            let rhs = F::from(i * 7 + 3);
+            F::mul_accumulate(&mut accumulator, &lhs, &rhs);
+            expected += lhs * rhs;
+        }
+        assert_eq!(F::reduce(accumulator), expected);
+
+        for log_size in 0..=F::TWO_ADICITY.min(3) {
+            let domain = F::domain(log_size).unwrap();
+            let coefficients: Vec<_> = (0..domain.size())
+                .map(|i| F::from((i * i + 7) as u64))
+                .collect();
+            let mut evaluations = coefficients.clone();
+            domain.transform(&mut evaluations);
+            for (point, actual) in domain.elements().zip(&evaluations) {
+                let expected = coefficients
+                    .iter()
+                    .enumerate()
+                    .map(|(i, coefficient)| *coefficient * point.pow_u64(i as u64))
+                    .sum::<F>();
+                assert_eq!(*actual, expected);
+            }
+            domain.inverse_transform(&mut evaluations);
+            assert_eq!(evaluations, coefficients);
+        }
+    }
+
+    check::<zakura_udon::field::Fp>();
+    check::<zakura_udon::field::Fq>();
+    check::<field_model::BlsBase>();
+    check::<field_model::BlsScalar>();
+    check::<field_model::JubjubScalar>();
+    check::<field_model::Small>();
+    check::<field_model::SmallScalar>();
+}
+
+#[test]
 #[should_panic(expected = "lengths must agree")]
 fn default_product_sums_reject_unequal_lengths() {
     use field_model::Small;
@@ -12,9 +78,9 @@ fn default_product_sums_reject_unequal_lengths() {
 #[test]
 fn default_product_sums_match_integer_arithmetic() {
     use num_bigint::BigUint;
-    use zakura_udon::field::{PrimeField, dot, dot_iter};
+    use zakura_udon::field::{Field, dot, dot_iter};
 
-    fn check<F: PrimeField>() {
+    fn check<F: Field>() {
         let lhs: Vec<_> = (0..65).map(|i| -F::from(i * i + 1)).collect();
         let rhs: Vec<_> = (0..65).map(|i| F::from(i * 7 + 3)).collect();
         let integer = |value: F| BigUint::from_bytes_le(value.to_bytes().as_ref());
@@ -47,9 +113,9 @@ fn default_product_sums_match_integer_arithmetic() {
 #[test]
 fn generic_representations_match_the_field_modulus() {
     use num_bigint::BigUint;
-    use zakura_udon::field::{PrimeField, low_u64, random};
+    use zakura_udon::field::{Field, low_u64, random};
 
-    fn check<F: PrimeField>()
+    fn check<F: Field>()
     where
         F::Limbs: AsMut<[u64]>,
     {

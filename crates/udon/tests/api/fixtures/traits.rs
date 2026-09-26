@@ -146,8 +146,11 @@ fn main() {
         assert_eq!(base.rounds(), 64);
         assert_eq!(scalar.rounds(), 64);
     }
-    #[cfg(feature = "poseidon")]
-    poseidon::<udon::poseidon::PoseidonFp>();
+    #[cfg(feature = "poseidon-interface")]
+    {
+        poseidon::<udon::poseidon::PoseidonFp>();
+        let _: udon::poseidon::PoseidonFq = Default::default();
+    }
 }
 
 #[cfg(feature = "field")]
@@ -211,7 +214,7 @@ fn curve() {
 #[cfg(feature = "cycle")]
 fn cycle<C: udon::cycle::Cycle>() {}
 
-#[cfg(feature = "poseidon")]
+#[cfg(feature = "poseidon-interface")]
 fn poseidon<
     P: udon::poseidon::PoseidonPermutation<udon::field::FieldAdapter<udon::field::PallasBase>>
         + Default,

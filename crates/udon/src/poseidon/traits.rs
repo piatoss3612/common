@@ -1,7 +1,17 @@
 //! Consumer views of the fixed Poseidon parameter sets.
 
 use super::{PALLAS_BASE, PALLAS_SCALAR};
-use crate::field::{Field, FieldAdapter, PallasBase, PallasScalar};
+use crate::field::{Field, FieldAdapter, PallasBase, PallasScalar, PastaField, PrimeModulus};
+
+pub(super) fn parameter_rows<M: PrimeModulus, const N: usize>(
+    rows: &[[PastaField<M>; N]],
+) -> &[[FieldAdapter<M>; N]] {
+    // Flattening fixed-width rows gives a multiple of N elements, so the
+    // borrowed view can be split back into the same rows without a remainder.
+    FieldAdapter::from_slice(rows.as_flattened())
+        .as_chunks::<N>()
+        .0
+}
 
 /// A Poseidon permutation over `F`, described to code generic over the
 /// instance.
@@ -64,11 +74,11 @@ macro_rules! poseidon_permutation {
             const ALPHA: u32 = $parameters.alpha;
 
             fn round_constants(&self) -> &[Self::Row] {
-                FieldAdapter::from_rows($parameters.round_constants)
+                parameter_rows($parameters.round_constants)
             }
 
             fn mds_matrix(&self) -> &[Self::Row] {
-                FieldAdapter::from_rows($parameters.mds)
+                parameter_rows($parameters.mds)
             }
         }
     };

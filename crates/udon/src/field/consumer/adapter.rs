@@ -212,15 +212,6 @@ impl<M: PrimeModulus> core::fmt::Debug for FieldAdapter<M> {
     }
 }
 
-impl<M: PrimeModulus> FieldAdapter<M> {
-    // Poseidon tables retain their fixed row shape and borrowed storage.
-    pub(crate) fn from_rows<const N: usize>(rows: &[[PastaField<M>; N]]) -> &[[Self; N]] {
-        // SAFETY: transparent elements give arrays the same size, alignment,
-        // stride, and validity. The row count and shared borrow are preserved.
-        unsafe { core::slice::from_raw_parts(rows.as_ptr().cast::<[Self; N]>(), rows.len()) }
-    }
-}
-
 impl<M: PrimeModulus> Field for FieldAdapter<M> {
     type Repr = [u8; 32];
 

@@ -6,9 +6,10 @@
 //! (<https://extgit.isec.tugraz.at/krypto/hadeshash>, through the
 //! `daira/pasta-hadeshash` fork). This module carries the parameters only.
 //! The permutation and the sponge built over them belong to the protocol
-//! that hashes with them. This module, including its [`PoseidonPermutation`]
-//! trait and [`PoseidonFp`] / [`PoseidonFq`] views, requires the unstable `traits`
-//! feature.
+//! that hashes with them. This entire module, including its
+//! [`PoseidonPermutation`] trait and [`PoseidonFp`] / [`PoseidonFq`] consumer
+//! views, requires the `poseidon` feature. That feature enables the unstable
+//! `traits` interfaces used by the views.
 //!
 //! These protocol parameters are likely to move to a separate crate.
 

@@ -100,8 +100,8 @@ allocating workspaces, and worker runtimes belong to their downstream owners.
 | `msm/` | Multiscalar multiplication, scalar preparation, scheduling, and task plans |
 | `exec/` | Shared executor contracts, operation budgets, and scoped work helpers |
 | `exec/execution/` | Common incremental task, completion, and frontier protocol |
-| `cycle/` | Optional cycle contracts, borrowed generator containers, and Pasta bindings |
-| `poseidon/` | Fixed Pasta parameter sets and consumer trait views, enabled by `traits` |
+| `cycle/` | Cycle contracts, borrowed generators, and Pasta bindings; requires `poseidon` |
+| `poseidon/` | Fixed Pasta parameter sets and consumer views, enabled together by `poseidon` |
 | `polynomial/` | Native Pasta polynomial arithmetic and optional generic evaluation, linear division, and geometric sums |
 
 The `field` and `curve` modules explicitly re-export their concrete types;
@@ -110,7 +110,9 @@ Their private Pasta modules keep representation-specific code separate from
 generic contracts. Each domain's `consumer/traits.rs` defines its optional
 contracts; `consumer/adapter.rs` owns the wrappers, their operators, and their
 trait implementations. The unstable `traits` feature gates each `consumer`
-module, along with generic polynomial iterators, `cycle`, and `poseidon`.
+module, along with generic polynomial iterators. The separate `poseidon`
+feature gates the entire parameter module and `cycle`. It enables `traits`
+for the consumer views; `traits` alone does not enable Poseidon.
 Native arithmetic must not depend on the consumer contracts, even when the
 feature is enabled. Native types expose explicit arithmetic methods. The
 optional `field::FieldAdapter`, `curve::AffineAdapter`, and

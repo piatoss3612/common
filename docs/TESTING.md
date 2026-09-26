@@ -27,7 +27,10 @@ ordinary suites and have separate commands below.
 
 The arithmetic matrix runs on x86-64 and ARM64, with one job for each
 architecture and square-root table configuration. Each job executes workspace
-release tests and debug Udon tests with `traits` disabled and enabled.
+release tests and debug Udon tests with optional APIs disabled and with both
+`traits` and `poseidon` enabled. Isolated consumers check each requested feature
+set, including that `traits` alone does not expose Poseidon and `poseidon`
+enables the traits its consumer views need.
 Consumer-interface tests stay in their owning domains and run with `traits`;
 native kernel tests run in every configuration.
 Lints, slow compiler and artifact consumers, benchmark smoke tests, Miri, and
@@ -54,8 +57,10 @@ parameters, cycle bindings, encoding bounds, arithmetic, resource limits,
 and the FFT/MSM execution protocols. This also applies to assertions that use
 only public methods. Pasta consumer adapter tests share `src/field/pasta/tests/`
 and `src/curve/pasta/tests/` with the native arithmetic suites; only the tests
-of optional consumer interfaces require `traits`. Poseidon parameter tests and
-cycle tests also require `traits` and run in CI's trait-enabled configurations.
+of optional consumer interfaces require `traits`. Poseidon parameter tests
+and cycle tests require `poseidon`, which also enables `traits`. CI runs both
+suites in its configurations with optional APIs enabled, and the consumer
+checks verify the separate Poseidon opt-in.
 Sampling, canonical-integer access, and dot-product helpers are tested without
 features too.
 External suites check behavior that needs a separate

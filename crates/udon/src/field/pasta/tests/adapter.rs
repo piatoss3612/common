@@ -121,17 +121,6 @@ fn transparent_views_preserve_field_storage() {
             owned.map(|value| value.into_inner().reduce()),
             [1, 8, 0].map(PastaField::from_u64)
         );
-        let rows = [original, native];
-        let borrowed = FieldAdapter::from_rows(&rows);
-        assert_eq!(
-            borrowed.as_ptr().cast::<[PastaField<M>; 3]>(),
-            rows.as_ptr()
-        );
-        assert_eq!(
-            bento::bytes_of_slice(FieldAdapter::as_slice(&borrowed[1])),
-            bento::bytes_of_slice(&native)
-        );
-        assert!(FieldAdapter::<M>::from_rows::<0>(&[[]])[0].is_empty());
     }
     check::<PallasBase>();
     check::<PallasScalar>();

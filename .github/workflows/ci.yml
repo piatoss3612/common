@@ -35,13 +35,17 @@ jobs:
         run: python3 ci/check-format
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - name: Clippy without optional traits or large square-root tables
+      - name: Clippy without optional features
         run: cargo clippy -p zakura-udon --all-targets --no-default-features --locked -- -D warnings
+      - name: Clippy with traits but without Poseidon
+        run: cargo clippy -p zakura-udon --all-targets --no-default-features --features traits --locked -- -D warnings
       - name: Check documentation
         env:
           RUSTDOCFLAGS: -D warnings
         run: |
           cargo doc --locked --workspace --no-default-features --no-deps
+          cargo doc --locked -p zakura-udon --no-default-features --features traits --no-deps
+          cargo doc --locked -p zakura-udon --no-default-features --features poseidon --no-deps
           cargo doc --locked --workspace --all-features --no-deps
 
   test:
@@ -57,7 +61,7 @@ jobs:
         include:
           - tables: default
             native_features: "--no-default-features"
-            trait_features: "--no-default-features --features traits"
+            trait_features: "--no-default-features --features traits,poseidon"
           - tables: large
             native_features: "--no-default-features --features sqrt-table-large"
             trait_features: "--all-features"
@@ -153,7 +157,7 @@ jobs:
           ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/udon-pod.log"
       - name: Check transparent consumer views
         run: |
-          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --lib --features traits transparent_views | tee "$RUNNER_TEMP/udon-views.log"
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --lib --features poseidon transparent_views | tee "$RUNNER_TEMP/udon-views.log"
           grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/udon-views.log"
           ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/udon-views.log"
 

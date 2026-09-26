@@ -62,6 +62,7 @@ publish = false
 [features]
 sqrt-table-large = ["{alias}/sqrt-table-large"]
 traits = ["{alias}/traits"]
+poseidon = ["{alias}/poseidon"]
 {extra_features}
 [dependencies]
 {dependencies}

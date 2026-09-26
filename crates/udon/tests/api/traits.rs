@@ -1,6 +1,16 @@
-//! Consumer APIs require an explicit opt-in; native arithmetic does not.
+//! Consumer APIs and the complete Poseidon module have explicit opt-ins.
 
 use super::harness::Consumer;
+
+const INTERFACE_FEATURES: &[&str] = &[
+    "field",
+    "curve",
+    "domain",
+    "polynomial",
+    "poseidon-parameters",
+    "poseidon-interface",
+    "cycle",
+];
 
 #[test]
 #[ignore = "slow nested Cargo builds; run explicitly with --ignored"]
@@ -10,16 +20,13 @@ fn consumer_interfaces_require_the_traits_feature() {
         ("curve", "cannot find trait `Affine`"),
         ("domain", "unresolved import"),
         ("polynomial", "cannot find function `evaluate_iter`"),
-        ("cycle", "could not find `cycle`"),
-        ("poseidon", "could not find `poseidon`"),
-        ("poseidon-parameters", "could not find `poseidon`"),
     ];
     let features: Vec<_> = cases.iter().map(|&(feature, _)| feature).collect();
     let consumer = Consumer::new(
         "traits-feature-consumer",
         "api/fixtures/traits.rs",
         "arithmetic",
-        &features,
+        INTERFACE_FEATURES,
     );
 
     for tables in ["", "sqrt-table-large"] {
@@ -40,6 +47,44 @@ fn consumer_interfaces_require_the_traits_feature() {
             None,
             &["src/main.rs"],
         );
+    }
+}
+
+#[test]
+#[ignore = "slow nested Cargo builds; run explicitly with --ignored"]
+fn poseidon_apis_require_the_poseidon_feature() {
+    let consumer = Consumer::new(
+        "poseidon-feature-consumer",
+        "api/fixtures/traits.rs",
+        "arithmetic",
+        INTERFACE_FEATURES,
+    );
+
+    for tables in ["", "sqrt-table-large"] {
+        for traits in ["", "traits"] {
+            let configuration = format!("{tables},{traits}");
+            for (feature, diagnostic) in [
+                ("poseidon-parameters", "could not find `poseidon`"),
+                ("poseidon-interface", "could not find `poseidon`"),
+                ("cycle", "could not find `cycle`"),
+            ] {
+                consumer.check(
+                    "build",
+                    &format!("{configuration},{feature}"),
+                    &[],
+                    Some(diagnostic),
+                    &["src/main.rs"],
+                );
+            }
+            // Poseidon enables the field interfaces its consumer views require.
+            consumer.check(
+                "run",
+                &format!("{configuration},poseidon,poseidon-parameters,poseidon-interface,cycle"),
+                &[],
+                None,
+                &["src/main.rs"],
+            );
+        }
     }
 }
 

@@ -5,6 +5,7 @@
 //! together with the fixed generators and Poseidon instances a protocol uses
 //! over them, so a proof system holds one type parameter and reaches every
 //! parameter it needs. [`Pasta`] is the cycle of Pallas and Vesta.
+//! This module requires the `poseidon` feature, which also enables `traits`.
 //!
 //! Generator derivation is not part of this crate. Generators are public
 //! points with unknown discrete logarithm relationships, derived by the

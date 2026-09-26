@@ -20,7 +20,7 @@
 //! task claims and typed admission for application schedulers; [`msm::execution`]
 //! and [`fft::execution`] expose incremental arithmetic with exclusively leased scratch.
 //! The optional `traits` feature adds the unstable generic interfaces described
-//! below and the fixed Pasta Poseidon parameters in `poseidon`.
+//! below. The separate `poseidon` feature adds fixed Pasta Poseidon parameters.
 //!
 //! Field elements, nonidentity [`curve::AffinePoint`] values, and cached
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
@@ -50,14 +50,19 @@
 //!
 //! `traits` enables unstable consumer interfaces at their domain paths:
 //! `field::Field` and `FieldAdapter`, `curve::Affine` and `Projective`,
-//! generic field, FFT, and polynomial helpers, `cycle`, and `poseidon` (parameters
-//! and consumer views).
+//! and generic field, FFT, and polynomial helpers.
 //! `field::FieldAdapter`, `curve::AffineAdapter`, and `curve::ProjectiveAdapter`
 //! implement these contracts and Rust arithmetic operators through native methods.
 //! Native field, curve, FFT, and MSM kernels do not depend on the consumer traits.
 //! Consumers opt in explicitly; these interfaces may change without preserving
 //! compatibility. Native field and point types expose explicit arithmetic methods
 //! and never implement arithmetic operators, including when `traits` is enabled.
+//!
+//! `poseidon` enables the fixed Pasta parameter tables, their consumer views,
+//! and `cycle`, which binds fields, curves, generators, and Poseidon instances.
+//! It enables `traits` because the views use the consumer field interfaces.
+//! Enabling `traits` alone does not expose Poseidon parameters or `cycle`.
+//! The Poseidon module is likely to move to a separate crate.
 //!
 //! By default, square roots and ratios use small tables of roots of unity.
 //! Enabling `sqrt-table-large` selects a larger table algorithm that reduces
@@ -77,14 +82,14 @@
 
 mod checks;
 pub mod curve;
-#[cfg(feature = "traits")]
+#[cfg(feature = "poseidon")]
 pub mod cycle;
 pub mod exec;
 pub mod fft;
 pub mod field;
 pub mod msm;
 pub mod polynomial;
-#[cfg(feature = "traits")]
+#[cfg(feature = "poseidon")]
 pub mod poseidon;
 
 pub use field::pasta::STORED_FORM;

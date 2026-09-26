@@ -3,9 +3,37 @@
 use std::{println, vec::Vec};
 
 use crate::{
-    field::{PastaField, PrimeModulus},
+    field::{PallasBase, PallasScalar, PastaField, PrimeModulus},
     poseidon::{PALLAS_BASE, PALLAS_SCALAR, PoseidonParameters},
 };
+
+#[test]
+fn transparent_views_preserve_poseidon_rows() {
+    fn check<M: PrimeModulus>() {
+        let row = [
+            PastaField::ZERO,
+            PastaField::from_u64(7),
+            PastaField::from_montgomery_limbs(M::MODULUS),
+            PastaField::ONE,
+            PastaField::from_u64(11),
+        ];
+        let rows = [row, row.map(|value| value.double())];
+        for native in [&rows[..0], &rows[..1], &rows[..]] {
+            let borrowed = super::traits::parameter_rows(native);
+            assert_eq!(borrowed.len(), native.len());
+            assert_eq!(
+                borrowed.as_ptr().cast::<[PastaField<M>; 5]>(),
+                native.as_ptr()
+            );
+            assert_eq!(
+                bento::bytes_of_slice(borrowed),
+                bento::bytes_of_slice(native)
+            );
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
 
 /// FNV-1a over 128 bits, folding every byte into the running hash.
 fn fnv1a_128(bytes: impl Iterator<Item = u8>) -> u128 {
@@ -93,7 +121,7 @@ const PALLAS_BASE_DIGEST: u128 = 0x38e9_acb9_6cdd_7395_996b_f0e8_a8f2_cacf;
 const PALLAS_SCALAR_DIGEST: u128 = 0x2cba_8835_0552_681a_0f83_ea33_ccb4_049a;
 
 /// Recomputes the digests after a verified table change:
-/// `cargo test -p zakura-udon --features traits --lib poseidon::tests::print_digests -- --ignored --nocapture`.
+/// `cargo test -p zakura-udon --features poseidon --lib poseidon::tests::print_digests -- --ignored --nocapture`.
 #[test]
 #[ignore = "prints the digests for pinning; run explicitly"]
 fn print_digests() {

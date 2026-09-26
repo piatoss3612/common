@@ -7,13 +7,12 @@ use super::{MAX_ALIGN, Pod};
 /// This describes layout; it does not certify that a type implements `Pod`.
 /// Measurements and assertions live here so a consumer cannot replace them by
 /// shadowing `core` or re-exporting `Pod` alongside counterfeit helpers.
-#[doc(hidden)]
-pub struct Layout {
+pub struct PodLayout {
     size: usize,
     align: usize,
 }
 
-impl Layout {
+impl PodLayout {
     pub(super) const fn of<T>() -> Self {
         Self {
             size: size_of::<T>(),

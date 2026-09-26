@@ -32,6 +32,7 @@ pub mod addchain {
 
 pub mod const_arithmetic;
 
+// The public wrapper passes its hygienic crate path to this proc macro.
 #[doc(hidden)]
 pub use bento_macros::addition_chain as __addition_chain;
 

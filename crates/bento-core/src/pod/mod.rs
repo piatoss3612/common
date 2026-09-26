@@ -21,7 +21,7 @@ mod layout;
 mod macros;
 mod storage;
 
-pub use layout::Layout;
+pub use layout::PodLayout;
 use layout::assert_little_endian;
 pub use storage::{AlignedBytes, MAX_ALIGN, bytes_of, bytes_of_slice};
 
@@ -88,8 +88,7 @@ pub unsafe trait Pod: Copy + Sync + Sized + 'static {
     ///
     /// Implementations must retain the default, which measures `Self` in core.
     /// Substituting another type's metadata violates the unsafe contract.
-    #[doc(hidden)]
-    const __LAYOUT: Layout = Layout::of::<Self>();
+    const __LAYOUT: PodLayout = PodLayout::of::<Self>();
 
     /// Establishes the layout contract for this concrete type.
     ///

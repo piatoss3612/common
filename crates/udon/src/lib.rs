@@ -26,8 +26,8 @@
 //! [`curve::PreparedAffinePoint`] entries implement [`bento::Pod`] for direct
 //! embedded storage. Construction establishes their invariants; embedding
 //! preserves their exact representations for immediate use. Field arithmetic
-//! returns [`field::Loose`] values, which compare as field elements; explicit
-//! reduction produces [`field::Reduced`] values for ordering and square roots.
+//! returns [`field::Loose`] values; explicit reduction produces [`field::Reduced`]
+//! values for equality, ordering, and square roots.
 //! [`stored_form!`] names the limb representation; artifact schemas identify
 //! the field, reduction state, and curve.
 //!

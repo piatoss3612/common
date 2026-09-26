@@ -64,13 +64,13 @@ fn field<M: PrimeModulus>([half, delta, zeta, zeta_inverse]: [PastaField<M>; 4])
     assert_eq!(reduced.mul(&two).reduce(), four.reduce());
     assert!(reduced < four.reduce());
 
-    // Loose values compare as field elements; arithmetic stays explicit.
-    assert_eq!(two.double(), four);
-    assert_ne!(two, four);
-    assert_eq!(two.add(&two), four);
+    // Compare native field values only after explicit reduction.
+    assert_eq!(two.double().reduce(), four.reduce());
+    assert_ne!(two.reduce(), four.reduce());
+    assert_eq!(two.add(&two).reduce(), four.reduce());
     assert_eq!(
-        two.mul(&PastaField::<M>::from_u64(3)),
-        PastaField::from_u64(6)
+        two.mul(&PastaField::<M>::from_u64(3)).reduce(),
+        PastaField::<M>::from_u64(6).reduce()
     );
 }
 

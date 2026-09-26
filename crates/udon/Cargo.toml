@@ -12,7 +12,7 @@ publish.workspace = true
 
 [features]
 # Unstable consumer-facing traits, generic arithmetic adapters, and
-# Poseidon parameters.
+# Poseidon parameters. The Poseidon module is likely to move to a separate crate.
 traits = []
 # Selects larger square-root tables; see the crate-level feature documentation.
 sqrt-table-large = []

@@ -125,7 +125,7 @@ where
 
     let mut bits = bits;
     let mut result = jubjub::SubgroupPoint::identity();
-    let mut generators = crate::constants::PEDERSEN_HASH_EXP_TABLE.iter();
+    let mut generators = crate::constants::pedersen_hash_exp_table().iter();
 
     loop {
         let mut acc = jubjub::Fr::ZERO;
@@ -228,8 +228,8 @@ fn fused_pedersen_hash_scaled(bits: &[bool]) -> jubjub::ExtendedPoint {
 
     let total_chunks = bits.len().div_ceil(3);
 
-    let block_tables = &*PEDERSEN_HASH_BLOCK_TABLE;
-    let single_tables = &*PEDERSEN_HASH_SINGLE_TABLE;
+    let block_tables = pedersen_hash_block_table();
+    let single_tables = pedersen_hash_single_table();
 
     // Accumulate the precomputed-addition points with fast mixed additions.
     let mut result = jubjub::ExtendedPoint::identity();
@@ -283,19 +283,26 @@ fn fused_pedersen_hash_scaled(bits: &[bool]) -> jubjub::ExtendedPoint {
 #[cfg(feature = "fused-pedersen")]
 const PEDERSEN_HASH_CHUNKS_PER_BLOCK: usize = 3;
 
+// `SINGLE[g][j][raw]` is `8^{-1} * enc * 2^{4j} * G_g`, where
+// `8^{-1}` is the inverse Jubjub cofactor in the scalar field.
 #[cfg(feature = "fused-pedersen")]
-lazy_static::lazy_static! {
-    // `SINGLE[g][j][raw]` is `8^{-1} * enc * 2^{4j} * G_g`, where
-    // `8^{-1}` is the inverse Jubjub cofactor in the scalar field.
-    static ref PEDERSEN_HASH_SINGLE_TABLE:
-        Vec<Vec<[jubjub::AffineNielsPoint; 8]>> =
-            generate_pedersen_hash_single_table();
+static PEDERSEN_HASH_SINGLE_TABLE: crate::once::OnceTable<Vec<Vec<[jubjub::AffineNielsPoint; 8]>>> =
+    crate::once::OnceTable::new();
 
-    // `BLOCK[g][b][raw]` sums one block's inverse-cofactor-scaled
-    // single-table entries.
-    static ref PEDERSEN_HASH_BLOCK_TABLE:
-        Vec<Vec<Vec<jubjub::AffineNielsPoint>>> =
-            generate_pedersen_hash_block_table();
+#[cfg(feature = "fused-pedersen")]
+fn pedersen_hash_single_table() -> &'static [Vec<[jubjub::AffineNielsPoint; 8]>] {
+    PEDERSEN_HASH_SINGLE_TABLE.get_or_init(generate_pedersen_hash_single_table)
+}
+
+// `BLOCK[g][b][raw]` sums one block's inverse-cofactor-scaled
+// single-table entries.
+#[cfg(feature = "fused-pedersen")]
+static PEDERSEN_HASH_BLOCK_TABLE: crate::once::OnceTable<Vec<Vec<Vec<jubjub::AffineNielsPoint>>>> =
+    crate::once::OnceTable::new();
+
+#[cfg(feature = "fused-pedersen")]
+fn pedersen_hash_block_table() -> &'static [Vec<Vec<jubjub::AffineNielsPoint>>] {
+    PEDERSEN_HASH_BLOCK_TABLE.get_or_init(generate_pedersen_hash_block_table)
 }
 
 #[cfg(feature = "fused-pedersen")]
@@ -354,7 +361,7 @@ fn generate_pedersen_hash_block_table() -> Vec<Vec<Vec<jubjub::AffineNielsPoint>
     let blocks_per_generator = PEDERSEN_HASH_CHUNKS_PER_GENERATOR / PEDERSEN_HASH_CHUNKS_PER_BLOCK;
     let entries_per_block = 1usize << (3 * PEDERSEN_HASH_CHUNKS_PER_BLOCK);
 
-    PEDERSEN_HASH_SINGLE_TABLE
+    pedersen_hash_single_table()
         .iter()
         .map(|generator| {
             // Normalize each generator's block sums with one batched inversion.

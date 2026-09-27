@@ -154,6 +154,13 @@ impl Collisions {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct ActiveRow {
+    right: u16,
+    key: u8,
+    previous: u8,
+}
+
 #[derive(Clone, Copy)]
 struct InitialOutput<'a> {
     attribute: usize,
@@ -344,6 +351,7 @@ impl Solver {
             (second, first)
         };
         let mut collisions = Collisions::new();
+        let mut active = [ActiveRow::default(); SLOTS];
         debug_assert_eq!(layout.previous_words, PREVIOUS);
         debug_assert_eq!(layout.next_words, NEXT);
         let dummy: &[u32; PREVIOUS] = previous[..PREVIOUS].try_into().unwrap();
@@ -363,11 +371,25 @@ impl Solver {
             let input = &previous[rows..rows + count * PREVIOUS];
             let (rows, remainder) = input.as_chunks::<PREVIOUS>();
             debug_assert!(remainder.is_empty());
+            let mut active_count = 0;
             for (right, right_row) in rows.iter().enumerate() {
                 let key = row_extra_hash(right_row, layout.previous_padding, odd);
-                let Some(colliding) = collisions.add(right, key) else {
-                    continue;
+                let previous = collisions.counts[key] as usize;
+                let _ = collisions.add(right, key);
+                // The first row cannot be active, so even this unconditional
+                // write has a spare descriptor throughout the input scan.
+                active[active_count] = ActiveRow {
+                    right: right as u16,
+                    key: key as u8,
+                    previous: previous.min(COLLISION_CAPACITY) as u8,
                 };
+                active_count += usize::from(previous != 0 && previous < COLLISION_CAPACITY);
+            }
+            for descriptor in &active[..active_count] {
+                let right = descriptor.right as usize;
+                let right_row = &rows[right];
+                let colliding =
+                    &collisions.slots[descriptor.key as usize][..descriptor.previous as usize];
                 for &current_left in colliding {
                     let current_left = current_left as usize;
                     let left_row = &rows[current_left];

@@ -111,8 +111,9 @@ version = "0.8.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.ahash]]
-version = "0.7.8"
+version = "0.8.12"
 criteria = "safe-to-run"
+notes = "Benchmark/profiling dependency alignment; pending review."
 
 [[exemptions.aho-corasick]]
 version = "1.1.5"
@@ -247,20 +248,12 @@ version = "0.2.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap]]
-version = "3.2.25"
-criteria = "safe-to-run"
-
-[[exemptions.clap]]
 version = "4.6.6"
 criteria = "safe-to-deploy"
 
 [[exemptions.clap_builder]]
 version = "4.6.6"
 criteria = "safe-to-deploy"
-
-[[exemptions.clap_derive]]
-version = "3.2.25"
-criteria = "safe-to-run"
 
 [[exemptions.clap_lex]]
 version = "1.1.0"
@@ -281,10 +274,6 @@ criteria = "safe-to-deploy"
 [[exemptions.corez]]
 version = "0.1.1"
 criteria = "safe-to-deploy"
-
-[[exemptions.cpp_demangle]]
-version = "0.3.5"
-criteria = "safe-to-run"
 
 [[exemptions.cpp_demangle]]
 version = "0.4.5"
@@ -321,10 +310,6 @@ criteria = "safe-to-deploy"
 [[exemptions.critical-section]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
-
-[[exemptions.crossbeam-channel]]
-version = "0.5.16"
-criteria = "safe-to-run"
 
 [[exemptions.crossbeam-deque]]
 version = "0.8.7"
@@ -369,10 +354,6 @@ criteria = "safe-to-deploy"
 [[exemptions.darling_macro]]
 version = "0.10.2"
 criteria = "safe-to-deploy"
-
-[[exemptions.debugid]]
-version = "0.7.3"
-criteria = "safe-to-run"
 
 [[exemptions.debugless-unwrap]]
 version = "1.0.0"
@@ -558,6 +539,11 @@ criteria = "safe-to-deploy"
 version = "0.2.1"
 criteria = "safe-to-deploy"
 
+[[exemptions.hashbrown]]
+version = "0.17.1"
+criteria = "safe-to-deploy"
+notes = "Benchmark/profiling dependency alignment; pending review."
+
 [[exemptions.heapless]]
 version = "0.7.17"
 criteria = "safe-to-deploy"
@@ -599,12 +585,14 @@ version = "0.3.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.indexmap]]
-version = "1.9.3"
-criteria = "safe-to-run"
+version = "2.14.2"
+criteria = "safe-to-deploy"
+notes = "Benchmark/profiling dependency alignment; pending review."
 
 [[exemptions.inferno]]
-version = "0.11.4"
+version = "0.11.21"
 criteria = "safe-to-run"
+notes = "Benchmark/profiling dependency alignment; pending review."
 
 [[exemptions.is-terminal]]
 version = "0.4.17"
@@ -682,10 +670,6 @@ criteria = "safe-to-deploy"
 version = "2.8.3"
 criteria = "safe-to-deploy"
 
-[[exemptions.memmap2]]
-version = "0.5.10"
-criteria = "safe-to-run"
-
 [[exemptions.memuse]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
@@ -697,10 +681,6 @@ criteria = "safe-to-deploy"
 [[exemptions.minreq]]
 version = "2.14.1"
 criteria = "safe-to-deploy"
-
-[[exemptions.nix]]
-version = "0.23.2"
-criteria = "safe-to-run"
 
 [[exemptions.nom]]
 version = "7.1.3"
@@ -718,10 +698,6 @@ criteria = "safe-to-deploy"
 version = "0.4.4"
 criteria = "safe-to-run"
 
-[[exemptions.num_cpus]]
-version = "1.17.0"
-criteria = "safe-to-run"
-
 [[exemptions.object]]
 version = "0.37.3"
 criteria = "safe-to-deploy"
@@ -733,18 +709,6 @@ criteria = "safe-to-deploy"
 [[exemptions.oorandom]]
 version = "11.1.5"
 criteria = "safe-to-deploy"
-
-[[exemptions.os_str_bytes]]
-version = "6.6.1"
-criteria = "safe-to-run"
-
-[[exemptions.parking_lot]]
-version = "0.12.5"
-criteria = "safe-to-run"
-
-[[exemptions.parking_lot_core]]
-version = "0.9.12"
-criteria = "safe-to-run"
 
 [[exemptions.password-hash]]
 version = "0.5.0"
@@ -799,14 +763,6 @@ version = "0.8.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.pprof]]
-version = "0.8.0"
-criteria = "safe-to-run"
-
-[[exemptions.pprof]]
-version = "0.11.1"
-criteria = "safe-to-run"
-
-[[exemptions.pprof]]
 version = "0.15.0"
 criteria = "safe-to-run"
 
@@ -839,8 +795,14 @@ version = "1.2.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.quick-xml]]
-version = "0.23.1"
+version = "0.26.0"
 criteria = "safe-to-run"
+notes = "Benchmark/profiling dependency alignment; pending review."
+
+[[exemptions.r-efi]]
+version = "5.3.0"
+criteria = "safe-to-run"
+notes = "Benchmark/profiling dependency alignment; pending review."
 
 [[exemptions.r-efi]]
 version = "6.0.0"
@@ -881,10 +843,6 @@ criteria = "safe-to-deploy"
 [[exemptions.reborrow]]
 version = "0.5.5"
 criteria = "safe-to-deploy"
-
-[[exemptions.redox_syscall]]
-version = "0.5.18"
-criteria = "safe-to-run"
 
 [[exemptions.redox_users]]
 version = "0.5.2"
@@ -1047,23 +1005,7 @@ version = "0.9.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.symbolic-common]]
-version = "8.8.0"
-criteria = "safe-to-run"
-
-[[exemptions.symbolic-common]]
-version = "10.2.1"
-criteria = "safe-to-run"
-
-[[exemptions.symbolic-common]]
 version = "12.18.3"
-criteria = "safe-to-run"
-
-[[exemptions.symbolic-demangle]]
-version = "8.8.0"
-criteria = "safe-to-run"
-
-[[exemptions.symbolic-demangle]]
-version = "10.2.1"
 criteria = "safe-to-run"
 
 [[exemptions.symbolic-demangle]]
@@ -1145,10 +1087,6 @@ criteria = "safe-to-deploy"
 [[exemptions.untrusted]]
 version = "0.9.0"
 criteria = "safe-to-deploy"
-
-[[exemptions.uuid]]
-version = "0.8.2"
-criteria = "safe-to-run"
 
 [[exemptions.uuid]]
 version = "1.24.0"

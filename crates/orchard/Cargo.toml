@@ -56,7 +56,7 @@ zcash_spec = "0.2.1"
 zip32 = { version = "0.2.0", default-features = false }
 
 [dev-dependencies]
-criterion = "0.4"
+criterion = "0.5"
 halo2_gadgets = { workspace = true, features = ["test-dependencies"] }
 hex = "0.4"
 incrementalmerkletree = { version = "0.8.1", features = ["test-dependencies"] }
@@ -69,8 +69,7 @@ sinsemilla = { workspace = true, features = ["test-dependencies"] }
 zcash_note_encryption = { version = "0.4.2", features = ["pre-zip-212"] }
 
 [target."cfg(unix)".dev-dependencies]
-inferno = { version = "0.11", features = ["multithreaded", "nameattr"], default-features = false }
-pprof = { version = "0.11", features = ["criterion", "flamegraph"] }
+pprof = { version = "0.15", features = ["criterion", "flamegraph"] }
 
 [features]
 circuit = ["dep:halo2_gadgets", "dep:halo2_proofs", "std"]

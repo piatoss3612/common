@@ -1,0 +1,30 @@
+[package]
+name = "zakura-bento-macros"
+description = """
+Procedural macro implementations for bento: addition chains and POD derivation
+"""
+version = "0.1.0"
+authors = ["Sean Bowe <ewillbefull@gmail.com>"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+proc-macro = true
+bench = false
+
+[dependencies]
+proc-macro2 = "1"
+proc-macro-crate = "3"
+quote = "1"
+bento-core.workspace = true
+
+[dependencies.syn]
+version = "2"
+features = ["full"]
+# Add `extra-traits` for debugging.
+
+[dev-dependencies]
+num-bigint = "0.4"

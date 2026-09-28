@@ -1,0 +1,579 @@
+use super::*;
+use crate::fft::execution::FftPlan;
+use crate::field::pasta::test_support::max_loose_limbs;
+use core::num::NonZeroUsize;
+
+fn nz(n: usize) -> NonZeroUsize {
+    NonZeroUsize::new(n).unwrap()
+}
+
+fn operations<M: PrimeModulus>() {
+    for log in 0..=6 {
+        for coset in [false, true] {
+            let domain = {
+                let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
+            let plan = Transform::new(domain);
+            let input = inputs(domain.size());
+            let forward = direct(&input, domain);
+            let inverse = inverse_direct(&input, domain, true);
+            for columns in [false, true] {
+                for direction in [Direction::Forward, Direction::Inverse] {
+                    let expected = if direction == Direction::Forward {
+                        &forward
+                    } else {
+                        &inverse
+                    };
+                    for input_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                        for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                            for codelet in [Codelet::Radix2, Codelet::Radix4, Codelet::Radix8] {
+                                for input_storage in [InputStorage::InPlace, InputStorage::Preserve]
+                                {
+                                    let request = TransformRequest {
+                                        input_storage,
+                                        input_order,
+                                        output_order,
+                                        ..TransformRequest::new(direction)
+                                    };
+                                    let mut operation =
+                                        FftPlan::with_strategy(plan, request, nz(4), codelet)
+                                            .unwrap();
+                                    if columns {
+                                        operation = operation.with_columns(nz(3), nz(3)).unwrap();
+                                    }
+                                    let original = ordered(&input, input_order);
+                                    for scatter in [false, true] {
+                                        let operation = if scatter {
+                                            operation.with_scatter_initialization()
+                                        } else {
+                                            operation
+                                        };
+                                        let mut output = original.clone();
+                                        let mut scratch =
+                                            vec![PastaField::ONE; operation.retained_fields() + 1];
+                                        operation.execute_with(
+                                            (input_storage == InputStorage::Preserve)
+                                                .then_some(original.as_slice()),
+                                            &mut output,
+                                            None,
+                                            &mut scratch,
+                                            nz(3),
+                                            &SerialExecutor,
+                                        );
+                                        assert_eq!(
+                                            reduced(&output),
+                                            reduced(&ordered(expected, output_order)),
+                                            "log={log}, columns={columns}, codelet={codelet:?}, request={request:?}"
+                                        );
+                                        assert_loose_bound(&scratch);
+                                        assert_eq!(
+                                            (scratch.last()).map(|value| value.reduce()),
+                                            (Some(&PastaField::<_>::ONE))
+                                                .map(|value| value.reduce())
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn schedules_and_orders_match_independent_transforms() {
+    operations::<PallasBase>();
+    operations::<PallasScalar>();
+}
+
+fn prefixes_and_products<M: PrimeModulus>() {
+    let domain = Domain::<PastaField<M>>::new(5).unwrap().coset();
+    let plan = Transform::new(domain);
+    let values = inputs(domain.size());
+    let factors = direct(&values, domain);
+    for len in [0, 1, 2, 3, 7, 16, 31, 32] {
+        for columns in [false, true] {
+            for direction in [Direction::Forward, Direction::Inverse] {
+                for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                    for inverse_scale in [InverseScale::Normalized, InverseScale::Unscaled] {
+                        if direction == Direction::Forward
+                            && inverse_scale == InverseScale::Unscaled
+                        {
+                            continue;
+                        }
+                        let expected = if direction == Direction::Forward {
+                            direct(&values[..len], domain)
+                        } else {
+                            inverse_direct(
+                                &values[..len],
+                                domain,
+                                inverse_scale == InverseScale::Normalized,
+                            )
+                        };
+                        for input_storage in [InputStorage::InPlace, InputStorage::Preserve] {
+                            let request = TransformRequest {
+                                input_storage,
+                                support: InputSupport::Prefix(len),
+                                output_order,
+                                inverse_scale,
+                                ..TransformRequest::new(direction)
+                            };
+                            let mut operation =
+                                FftPlan::with_strategy(plan, request, nz(4), Codelet::Radix2)
+                                    .unwrap();
+                            if columns {
+                                operation = operation.with_columns(nz(3), nz(3)).unwrap();
+                            }
+                            let input =
+                                (input_storage == InputStorage::Preserve).then_some(&values[..len]);
+                            let mut scratch =
+                                vec![PastaField::ONE; operation.retained_fields() + 1];
+                            let mut output = values.clone();
+                            operation.execute_with(
+                                input,
+                                &mut output,
+                                None,
+                                &mut scratch,
+                                nz(3),
+                                &SerialExecutor,
+                            );
+                            assert_eq!(
+                                reduced(&output),
+                                reduced(&ordered(&expected, output_order)),
+                                "len={len}, request={request:?}"
+                            );
+                            let factor = ordered(&factors, output_order);
+                            output.copy_from_slice(&values);
+                            operation.execute_with(
+                                input,
+                                &mut output,
+                                Some(&factor),
+                                &mut scratch,
+                                nz(3),
+                                &SerialExecutor,
+                            );
+                            let product: Vec<_> = expected
+                                .iter()
+                                .zip(&factors)
+                                .map(|(a, b)| a.mul(b))
+                                .collect();
+                            assert_eq!(reduced(&output), reduced(&ordered(&product, output_order)));
+                            assert_eq!(
+                                (scratch.last()).map(|value| value.reduce()),
+                                (Some(&PastaField::<_>::ONE)).map(|value| value.reduce())
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn inverse_prefix_scale_and_terminal_products_match_direct_sums() {
+    prefixes_and_products::<PallasBase>();
+    prefixes_and_products::<PallasScalar>();
+}
+
+fn twiddle_tables<M: PrimeModulus, E: Executor>(executor: &E) {
+    let domain = Domain::<PastaField<M>>::new(6).unwrap().coset();
+    let plan = Transform::new(domain);
+    let input = inputs(domain.size());
+    for size in [1, 8, 64, 256] {
+        for storage in [TwiddleStorage::Dense, TwiddleStorage::StagePacked] {
+            let description = TwiddleDescription { size, storage };
+            let mut values = vec![PastaField::ZERO; description.requirements().unwrap()];
+            let table = TwiddleTable::prepare(description, &mut values).unwrap();
+            for direction in [Direction::Forward, Direction::Inverse] {
+                let operation = FftPlan::with_strategy(
+                    plan,
+                    TransformRequest::new(direction),
+                    nz(4),
+                    Codelet::Radix2,
+                )
+                .unwrap()
+                .with_contiguous_permutation()
+                .with_twiddles(table);
+                let mut output = input.clone();
+                let mut scratch = vec![PastaField::ZERO; operation.retained_fields()];
+                operation.execute_with(None, &mut output, None, &mut scratch, nz(3), executor);
+                let expected = if direction == Direction::Forward {
+                    direct(&input, domain)
+                } else {
+                    inverse_direct(&input, domain, true)
+                };
+                assert_eq!(
+                    reduced(&output),
+                    reduced(&expected),
+                    "table={description:?}, direction={direction:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn twiddle_shapes_strides_and_directions_are_compatible() {
+    twiddle_tables::<PallasBase, _>(&SerialExecutor);
+    twiddle_tables::<PallasScalar, _>(&SerialExecutor);
+    twiddle_tables::<PallasBase, _>(&Threads);
+    twiddle_tables::<PallasScalar, _>(&Threads);
+}
+
+fn bound_plan_tables<M: PrimeModulus>() {
+    for log in [0, 1, 2, 3, 8] {
+        for coset in [false, true] {
+            let domain = {
+                let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
+            let prepared = Prepared::new(domain);
+            let input = inputs(domain.size());
+            let forward = direct(&input, domain);
+            let inverse = inverse_direct(&input, domain, true);
+            let raw = inverse_direct(&input, domain, false);
+            for mask in 0..8 {
+                let plan = Tables {
+                    forward: (mask & 1 != 0).then_some(prepared.forward.as_slice()),
+                    inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
+                    inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
+                }
+                .bind(domain);
+                for (direction, inverse_scale, expected) in [
+                    (Direction::Forward, InverseScale::Normalized, &forward),
+                    (Direction::Inverse, InverseScale::Normalized, &inverse),
+                    (Direction::Inverse, InverseScale::Unscaled, &raw),
+                ] {
+                    for input_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                        for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                            for codelet in [Codelet::Radix2, Codelet::Radix4, Codelet::Radix8] {
+                                for tasks in [1, 3, 8] {
+                                    let request = TransformRequest {
+                                        input_order,
+                                        output_order,
+                                        inverse_scale,
+                                        ..TransformRequest::new(direction)
+                                    };
+                                    let operation =
+                                        FftPlan::with_strategy(plan, request, nz(128), codelet)
+                                            .unwrap()
+                                            .with_contiguous_permutation();
+                                    let mut output = ordered(&input, input_order);
+                                    // Serial joins still exercise every task region, including
+                                    // the paired terminal split at size 256.
+                                    operation.execute_with(
+                                        None,
+                                        &mut output,
+                                        None,
+                                        &mut [],
+                                        nz(tasks),
+                                        &SerialExecutor,
+                                    );
+                                    assert_eq!(
+                                        reduced(&output),
+                                        reduced(&ordered(expected, output_order)),
+                                        "log={log}, mask={mask}, codelet={codelet:?}, tasks={tasks}, request={request:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn bound_plan_table_directions_and_inverse_finishes_match_direct_sums() {
+    bound_plan_tables::<PallasBase>();
+    bound_plan_tables::<PallasScalar>();
+}
+
+fn periodic_inverse<M: PrimeModulus>() {
+    let boundary = [
+        PastaField::from_montgomery_limbs(M::MODULUS),
+        PastaField::from_montgomery_limbs(max_loose_limbs::<M>()),
+        PastaField::ZERO,
+        PastaField::<M>::ONE.neg(),
+    ];
+    for log in 0..=6 {
+        for coset in [false, true] {
+            let domain = {
+                let subgroup = Domain::<PastaField<M>>::new(log).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
+            let prepared = Prepared::new(domain);
+            let mut input = inputs(domain.size());
+            for (index, value) in input.iter_mut().enumerate() {
+                if index % 8 < boundary.len() {
+                    *value = boundary[index % 8];
+                }
+            }
+            for mask in [0, 2, 4, 6] {
+                let plan = Tables {
+                    inverse: (mask & 2 != 0).then_some(prepared.inverse.as_slice()),
+                    inverse_finish: (mask & 4 != 0).then_some(prepared.finish.as_slice()),
+                    ..Tables::default()
+                }
+                .bind(domain);
+                for inverse_scale in [InverseScale::Normalized, InverseScale::Unscaled] {
+                    let expected =
+                        inverse_direct(&input, domain, inverse_scale == InverseScale::Normalized);
+                    for input_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                        let original = ordered(&input, input_order);
+                        for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                            for input_storage in [InputStorage::InPlace, InputStorage::Preserve] {
+                                for (tile, codelet, columns) in [
+                                    (domain.size(), Codelet::Radix2, false),
+                                    (domain.size(), Codelet::Radix8, false),
+                                    (2, Codelet::Radix4, false),
+                                    (2, Codelet::Radix4, true),
+                                ] {
+                                    let request = TransformRequest {
+                                        input_order,
+                                        output_order,
+                                        input_storage,
+                                        inverse_scale,
+                                        ..TransformRequest::new(Direction::Inverse)
+                                    };
+                                    let mut operation =
+                                        FftPlan::with_strategy(plan, request, nz(tile), codelet)
+                                            .unwrap();
+                                    if columns {
+                                        operation = operation.with_columns(nz(3), nz(2)).unwrap();
+                                        if mask & 2 != 0 {
+                                            operation = operation.with_twiddles(
+                                                TwiddleTable::bind(
+                                                    TwiddleDescription {
+                                                        size: domain.size(),
+                                                        storage: TwiddleStorage::Dense,
+                                                    },
+                                                    &prepared.forward,
+                                                )
+                                                .unwrap(),
+                                            );
+                                        }
+                                    }
+                                    let mut output = original.clone();
+                                    let mut scratch =
+                                        vec![PastaField::ONE; operation.retained_fields() + 1];
+                                    operation.execute_with(
+                                        (input_storage == InputStorage::Preserve)
+                                            .then_some(original.as_slice()),
+                                        &mut output,
+                                        None,
+                                        &mut scratch,
+                                        nz(3),
+                                        &SerialExecutor,
+                                    );
+                                    assert_eq!(
+                                        reduced(&output),
+                                        reduced(&ordered(&expected, output_order)),
+                                        "log={log}, mask={mask}, tile={tile}, codelet={codelet:?}, columns={columns}, request={request:?}"
+                                    );
+                                    assert_loose_bound(&output);
+                                    assert_loose_bound(&scratch);
+                                    assert_eq!(
+                                        scratch.last().unwrap().reduce(),
+                                        PastaField::<M>::ONE.reduce()
+                                    );
+                                }
+                            }
+                        }
+                        assert_eq!(reduced(&original), reduced(&ordered(&input, input_order)));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn periodic_inverse_loose_boundaries_match_direct_sums() {
+    periodic_inverse::<PallasBase>();
+    periodic_inverse::<PallasScalar>();
+}
+
+#[test]
+fn transform_configuration_and_scratch_are_checked_before_mutation() {
+    let plan = Transform::<PallasBase>::new(Domain::new(4).unwrap().subgroup());
+    let request = TransformRequest::new(Direction::Forward);
+    assert!(matches!(
+        FftPlan::with_strategy(plan, request, nz(3), Codelet::Radix2),
+        Err(FftError::InvalidExecution)
+    ));
+    for request in [
+        TransformRequest {
+            support: InputSupport::Prefix(17),
+            ..request
+        },
+        TransformRequest {
+            support: InputSupport::Prefix(3),
+            input_order: ElementOrder::BitReversed,
+            ..request
+        },
+        TransformRequest {
+            inverse_scale: InverseScale::Unscaled,
+            ..request
+        },
+    ] {
+        assert!(FftPlan::with_strategy(plan, request, nz(4), Codelet::Radix2).is_err());
+    }
+    let operation = FftPlan::with_strategy(plan, request, nz(4), Codelet::Radix2)
+        .unwrap()
+        .with_columns(nz(3), nz(2))
+        .unwrap();
+    let mut values = inputs(16);
+    let original = values.clone();
+    let mut scratch = vec![Fp::ONE; operation.retained_fields() - 1];
+    let joins = CountJoins::default();
+    assert!(
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            operation.execute_with(None, &mut values, None, &mut scratch, nz(3), &joins);
+        }))
+        .is_err()
+    );
+    assert_eq!(bytes_of_slice(&values), bytes_of_slice(&original));
+    assert!(scratch.iter().all(|v| v.reduce() == Fp::ONE));
+    assert_eq!(joins.take(), 0);
+}
+
+#[test]
+fn parallel_panics_preserve_loose_field_bounds() {
+    let domain = Domain::<PastaField<PallasScalar>>::new(8).unwrap().coset();
+    let prepared = Prepared::new(domain);
+    for tables in [Tables::default(), prepared.tables()] {
+        let plan = tables.bind(domain);
+        for columns in [false, true] {
+            for codelet in [Codelet::Radix2, Codelet::Radix4, Codelet::Radix8] {
+                for direction in [Direction::Forward, Direction::Inverse] {
+                    for output_order in [ElementOrder::Natural, ElementOrder::BitReversed] {
+                        let mut operation = FftPlan::with_strategy(
+                            plan,
+                            TransformRequest {
+                                output_order,
+                                ..TransformRequest::new(direction)
+                            },
+                            nz(4),
+                            codelet,
+                        )
+                        .unwrap();
+                        if columns {
+                            operation = operation.with_columns(nz(3), nz(3)).unwrap();
+                        }
+                        let mut values = inputs(domain.size());
+                        let mut scratch = vec![PastaField::ONE; operation.retained_fields()];
+                        let joins = CountJoins::default();
+                        operation.execute_with(
+                            None,
+                            &mut values,
+                            None,
+                            &mut scratch,
+                            nz(3),
+                            &joins,
+                        );
+                        for index in 0..joins.take() {
+                            let mut values = inputs(domain.size());
+                            let failed = catch_unwind(AssertUnwindSafe(|| {
+                                operation.execute_with(
+                                    None,
+                                    &mut values,
+                                    None,
+                                    &mut scratch,
+                                    nz(3),
+                                    &FailAt {
+                                        calls: AtomicUsize::new(0),
+                                        index,
+                                    },
+                                )
+                            }));
+                            assert!(failed.is_err());
+                            assert_loose_bound(&values);
+                            assert_loose_bound(&scratch);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn finish_tables_preserve_prefix_and_codelet_results() {
+    for log in [3, 7] {
+        for coset in [false, true] {
+            let domain = {
+                let subgroup = Domain::new(log).unwrap();
+                if coset {
+                    subgroup.coset()
+                } else {
+                    subgroup.subgroup()
+                }
+            };
+            let prepared = Prepared::new(domain);
+            let plan = prepared.tables().bind(domain);
+            let dense = TwiddleTable::bind(
+                TwiddleDescription {
+                    size: domain.size(),
+                    storage: TwiddleStorage::Dense,
+                },
+                &prepared.forward,
+            )
+            .unwrap();
+            for len in [0, 1, 2, 3, domain.size()] {
+                let input = inputs(len);
+                let expected = inverse_direct(&input, domain, true);
+                for (columns, codelet) in [(false, Codelet::Radix8), (true, Codelet::Radix2)] {
+                    for input_storage in [InputStorage::Preserve, InputStorage::InPlace] {
+                        let request = TransformRequest {
+                            input_storage,
+                            support: InputSupport::Prefix(len),
+                            ..TransformRequest::new(Direction::Inverse)
+                        };
+                        let mut operation =
+                            FftPlan::with_strategy(plan, request, nz(4), codelet).unwrap();
+                        if columns {
+                            operation = operation.with_columns(nz(3), nz(3)).unwrap();
+                        }
+                        for operation in [operation, operation.with_twiddles(dense)] {
+                            let mut scratch = vec![Fp::ONE; operation.retained_fields() + 1];
+                            let mut output = input.clone();
+                            output.resize(domain.size(), Fp::ONE);
+                            operation.execute_with(
+                                (input_storage == InputStorage::Preserve)
+                                    .then_some(input.as_slice()),
+                                &mut output,
+                                None,
+                                &mut scratch,
+                                nz(3),
+                                &SerialExecutor,
+                            );
+                            assert_eq!(reduced(&output), reduced(&expected));
+                            assert_eq!(
+                                (scratch.last()).map(|value| value.reduce()),
+                                (Some(&<Fp>::ONE)).map(|value| value.reduce())
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

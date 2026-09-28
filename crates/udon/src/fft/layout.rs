@@ -1,0 +1,371 @@
+use super::{CosetDomain, FftError, PastaField, PrimeModulus, assert_length, bit_reverse};
+
+/// Storage order of logical input or output positions.
+///
+/// For coefficients, logical position `j` is degree `j`. For evaluations, it is
+/// natural row `j` of the [`CosetDomain`]. In both cases, `0 <= j < size`, where
+/// `size` is the domain's element count.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ElementOrder {
+    /// Logical position `j` is at index `j`.
+    Natural,
+    /// Logical position `j` is at the reversal of its low `log2(size)` bits.
+    BitReversed,
+}
+
+/// Whether an inverse divides by the domain size.
+///
+/// Both policies remove the coset shift as defined by [`Transform`](super::Transform).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InverseScale {
+    /// Return the polynomial's coefficients.
+    #[default]
+    Normalized,
+    /// Return each coefficient multiplied by the domain size.
+    Unscaled,
+}
+
+/// Coefficients in increasing degree order, with an explicit mathematical scale.
+///
+/// The [`ExpansionPlan`](super::execution::ExpansionPlan) methods
+/// [`execute`](super::execution::ExpansionPlan::execute)
+/// and [`execute_disposable`](super::execution::ExpansionPlan::execute_disposable)
+/// return views of the retained coefficient buffer. For source base size `n`
+/// and polynomial coefficients `c[i]`, [`InverseScale::Normalized`] stores
+/// `c[i]` and [`InverseScale::Unscaled`] stores `n * c[i]`. Both use reduced
+/// Montgomery representations; this scale concerns the polynomial's values.
+/// Multiply an entry by [`Self::normalization_factor`] to recover `c[i]`.
+///
+/// [`Transform::execute`](super::Transform::execute) and
+/// [`Expansion::coefficients`](super::Expansion::coefficients), among other
+/// coefficient consumers, accept the view directly and apply its scale during
+/// output initialization. The factor uses the source base size even when the
+/// destination domain is larger. The view borrows only the retained buffer, so
+/// the expansion's output and scratch may be reused while the view is live.
+///
+/// Ordinary slices, arrays, and vectors can be borrowed through
+/// [`Self::normalized`] or [`From`]. These conversions assume normalized
+/// coefficients; passing an unscaled view's [`as_slice`](Self::as_slice) to a
+/// coefficient consumer loses its scale information. Pass the view itself to
+/// preserve it.
+///
+/// ```
+/// use zakura_udon::{exec::{ExecutionOptions, SerialExecutor}, field::Fp, fft::{
+///     Direction, Domain, ElementOrder, Expansion, ExpansionOrder, ExpansionStorage,
+///     InputStorage, InputSupport, InverseScale, StorageLayout, Transform,
+///     TransformRequest, execution::ExpansionPlan,
+/// }};
+///
+/// let options = ExecutionOptions::default();
+/// let base = Transform::new(Domain::new(1)?.subgroup());
+/// let expansion = Expansion::new(base, base.domain(), None)?;
+/// let operation = ExpansionPlan::new(expansion,
+///     ExpansionStorage::DisposableInput { scale: InverseScale::Unscaled },
+///     ExpansionOrder::Residues, InputSupport::Full, ElementOrder::Natural,
+///     StorageLayout::Contiguous, options,
+/// )?;
+/// // Evaluations of 1 + x at the two subgroup points.
+/// let mut input = [Fp::from_u64(2), Fp::ZERO];
+/// let mut expanded = [Fp::ZERO; 2];
+/// let retained = operation.execute_disposable(
+///     &mut input, &mut expanded, None, &mut [], &SerialExecutor,
+/// );
+/// let next = Transform::new(Domain::new(2)?.subgroup());
+/// let mut output = [Fp::ZERO; 4];
+/// next.execute(TransformRequest {
+///     input_storage: InputStorage::Preserve,
+///     support: InputSupport::Prefix(retained.as_slice().len()),
+///     ..TransformRequest::new(Direction::Forward)
+/// }, Some(retained), &mut output, options, &SerialExecutor, &mut [])?;
+/// for (row, value) in output.iter().enumerate() {
+///     let point = next.domain().domain().root().pow_u64(row as u64);
+///     assert_eq!(value.reduce(), <Fp>::ONE.add(&point).reduce());
+/// }
+/// assert!(retained.as_slice().iter().all(|value| value.reduce() == Fp::from_u64(2)));
+/// assert_eq!(retained.normalization_factor().reduce(), Fp::power_of_two_inverse(1));
+/// # Ok::<(), zakura_udon::fft::FftError>(())
+/// ```
+#[derive(Clone, Copy)]
+pub struct CoefficientView<'a, M: PrimeModulus> {
+    values: &'a [PastaField<M>],
+    scale: InverseScale,
+}
+
+impl<M: PrimeModulus> core::fmt::Debug for CoefficientView<'_, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CoefficientView")
+            .field("values", &self.values)
+            .field("scale", &self.scale)
+            .finish()
+    }
+}
+
+impl<'a, M: PrimeModulus> CoefficientView<'a, M> {
+    /// Borrows normalized coefficients, including an empty or short prefix.
+    ///
+    /// Entry `i` is the coefficient of degree `i`. This records the declared
+    /// scale without inspecting or modifying the values.
+    pub const fn normalized(values: &'a [PastaField<M>]) -> Self {
+        Self {
+            values,
+            scale: InverseScale::Normalized,
+        }
+    }
+
+    // Unscaled views must contain a complete inverse result of nonzero
+    // power-of-two length: normalization_factor derives the source size from it.
+    pub(super) fn new(values: &'a [PastaField<M>], scale: InverseScale) -> Self {
+        Self { values, scale }
+    }
+    /// Stored coefficients, without changing their scale.
+    pub const fn as_slice(self) -> &'a [PastaField<M>] {
+        self.values
+    }
+    /// Stored scale: normalized for ordinary slices, or the retained inverse scale.
+    pub const fn scale(self) -> InverseScale {
+        self.scale
+    }
+    /// Multiplier that recovers normalized coefficients from stored entries.
+    ///
+    /// Returns one for a normalized view, including an empty prefix, or the
+    /// inverse of the source expansion's base size for an unscaled view.
+    pub fn normalization_factor(self) -> PastaField<M> {
+        match self.scale {
+            InverseScale::Normalized => PastaField::ONE,
+            InverseScale::Unscaled => PastaField::power_of_two_inverse(self.values.len().ilog2()),
+        }
+    }
+}
+
+impl<'a, M: PrimeModulus, T: AsRef<[PastaField<M>]> + ?Sized> From<&'a T>
+    for CoefficientView<'a, M>
+{
+    fn from(values: &'a T) -> Self {
+        Self::normalized(values.as_ref())
+    }
+}
+
+impl<'a, M: PrimeModulus, T: AsRef<[PastaField<M>]> + ?Sized> From<&'a mut T>
+    for CoefficientView<'a, M>
+{
+    fn from(values: &'a mut T) -> Self {
+        Self::normalized(T::as_ref(values))
+    }
+}
+
+/// Storage order of a complete evaluation vector.
+///
+/// For domain size `size`, natural row `j` evaluates the point `shift * root^j`
+/// from the [`CosetDomain`], with `0 <= j < size`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EvaluationLayout {
+    /// Natural row `j` is stored at index `j`.
+    Natural,
+    /// Natural row `j` is stored at its `log2(size)`-bit reversal.
+    BitReversed,
+    /// Naturally numbered residue blocks, each with natural inner order.
+    Residues(ResidueLayout),
+}
+
+impl EvaluationLayout {
+    fn fits(self, size: usize) -> bool {
+        match self {
+            Self::Residues(layout) => layout.size() == size,
+            _ => true,
+        }
+    }
+
+    /// Maps a natural row to its storage index.
+    ///
+    /// Returns `None` unless `size` is a positive power of two, `row < size`,
+    /// and any contained [`ResidueLayout`] has that same size.
+    pub fn index(self, row: usize, size: usize) -> Option<usize> {
+        if !size.is_power_of_two() || row >= size || !self.fits(size) {
+            return None;
+        }
+        Some(match self {
+            Self::Natural => row,
+            Self::BitReversed => bit_reverse(row, size.ilog2()),
+            Self::Residues(layout) => layout.index(row)?,
+        })
+    }
+}
+
+/// Evaluations bound to their field, canonical root, shift, and storage order.
+///
+/// Binding is a structural check, not proof that the values evaluate a
+/// particular polynomial. Mathematical consumers can compare domains before
+/// modifying storage, without relying on equal slice lengths alone.
+#[derive(Clone, Copy)]
+pub struct EvaluationView<'a, M: PrimeModulus> {
+    values: &'a [PastaField<M>],
+    domain: CosetDomain<M>,
+    layout: EvaluationLayout,
+}
+
+impl<M: PrimeModulus> core::fmt::Debug for EvaluationView<'_, M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("EvaluationView")
+            .field("values", &self.values)
+            .field("domain", &self.domain)
+            .field("layout", &self.layout)
+            .finish()
+    }
+}
+
+impl<'a, M: PrimeModulus> EvaluationView<'a, M> {
+    /// Checks the slice and layout dimensions, without checking field contents.
+    ///
+    /// Panics unless the values and layout match the domain's size.
+    pub fn bind(
+        values: &'a [PastaField<M>],
+        domain: CosetDomain<M>,
+        layout: EvaluationLayout,
+    ) -> Self {
+        assert_length("values", domain.size(), values.len());
+        assert!(layout.fits(domain.size()), "layout must match the domain");
+        Self {
+            values,
+            domain,
+            layout,
+        }
+    }
+
+    /// The ordered mathematical domain, independent of storage layout.
+    pub const fn domain(self) -> CosetDomain<M> {
+        self.domain
+    }
+    /// The storage mapping.
+    pub const fn layout(self) -> EvaluationLayout {
+        self.layout
+    }
+    /// The borrowed values in storage order.
+    pub const fn as_slice(self) -> &'a [PastaField<M>] {
+        self.values
+    }
+    /// Looks up a natural domain row, returning `None` when it is out of range.
+    pub fn get(self, row: usize) -> Option<&'a PastaField<M>> {
+        self.values.get(self.layout.index(row, self.domain.size())?)
+    }
+    /// Looks up a natural row of a domain with the same shift and nested root.
+    ///
+    /// The supplied domain must be at least this view's size and have the same
+    /// shift. Returns `None` if either condition fails, if `row` is out of range,
+    /// or if it is not a multiple of the supplied size divided by the view's size.
+    pub fn get_extended_row(self, row: usize, domain: CosetDomain<M>) -> Option<&'a PastaField<M>> {
+        if domain.size() < self.domain.size()
+            || row >= domain.size()
+            || domain.shift != self.domain.shift
+        {
+            return None;
+        }
+        let stride = domain.size() / self.domain.size();
+        if !row.is_multiple_of(stride) {
+            return None;
+        }
+        self.get(row / stride)
+    }
+    /// Writes the pointwise product in the views' shared layout.
+    ///
+    /// The views must have the same domain and layout, and `output` must have the
+    /// domain's size. Violations panic before mutation. Field inputs follow the
+    /// module's [representation contract](super).
+    pub fn multiply_into(self, other: Self, output: &mut [PastaField<M>]) {
+        assert_length("output", self.domain.size(), output.len());
+        assert!(
+            self.domain.same_domain(other.domain) && self.layout == other.layout,
+            "evaluation domains and layouts must agree"
+        );
+        for ((out, left), right) in output.iter_mut().zip(self.values).zip(other.values) {
+            *out = left.mul(right);
+        }
+    }
+}
+
+/// Groups evaluations by the remainder of their natural row index.
+///
+/// For `r` residues in `n` evaluations, natural row `s + r*k` is stored at
+/// `s*(n/r) + k`, where `0 <= s < r` and `0 <= k < n/r`. Thus each residue
+/// occupies one contiguous slice of `n/r` values. This differs from
+/// contiguous coefficient slices, which preserve natural coefficient order.
+///
+/// This descriptor checks dimensions only; it carries no field, root, or shift.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResidueLayout {
+    size: usize,
+    residues: usize,
+}
+
+impl ResidueLayout {
+    /// Constructs a layout with nonzero power-of-two dimensions.
+    ///
+    /// Returns [`FftError::InvalidLayout`] unless both dimensions are nonzero
+    /// powers of two and `residues <= size`.
+    pub fn new(size: usize, residues: usize) -> Result<Self, FftError> {
+        if !size.is_power_of_two() || !residues.is_power_of_two() || residues > size {
+            return Err(FftError::InvalidLayout);
+        }
+        Ok(Self { size, residues })
+    }
+    /// Total number of evaluations.
+    pub const fn size(self) -> usize {
+        self.size
+    }
+    /// Number of contiguous residue transforms.
+    pub const fn residues(self) -> usize {
+        self.residues
+    }
+    /// Number of evaluations in each residue.
+    pub const fn rows(self) -> usize {
+        self.size / self.residues
+    }
+
+    /// Maps a natural row to its stored offset, or returns `None` out of range.
+    pub fn index(self, row: usize) -> Option<usize> {
+        (row < self.size).then(|| (row % self.residues) * self.rows() + row / self.residues)
+    }
+
+    /// Maps a stored offset back to a natural row, or `None` out of range.
+    pub fn natural_row(self, index: usize) -> Option<usize> {
+        (index < self.size).then(|| index / self.rows() + self.residues * (index % self.rows()))
+    }
+
+    /// Maps a row of a larger domain into this subdomain's stored offset.
+    ///
+    /// For this mapping to identify the same evaluation point, the domains
+    /// must use the same shift and roots from [`Domain`](super::Domain).
+    /// Neither shift nor root is checked. Returns `None` for incompatible
+    /// sizes, out-of-range rows, or rows not belonging to the smaller domain.
+    pub fn index_at_extended_row(self, row: usize, extended_size: usize) -> Option<usize> {
+        if !extended_size.is_power_of_two() || extended_size < self.size || row >= extended_size {
+            return None;
+        }
+        let stride = extended_size / self.size;
+        if !row.is_multiple_of(stride) {
+            return None;
+        }
+        self.index(row / stride)
+    }
+
+    /// Copies natural-order evaluations into a distinct residue-major output.
+    ///
+    /// Both slices must have [`Self::size`] elements. A mismatch panics before writing.
+    pub fn copy_from_natural<T: Copy>(self, input: &[T], output: &mut [T]) {
+        assert_length("input", self.size, input.len());
+        assert_length("output", self.size, output.len());
+        for (row, value) in input.iter().enumerate() {
+            output[self.index(row).unwrap()] = *value;
+        }
+    }
+
+    /// Copies residue-major evaluations into a distinct natural-order output.
+    ///
+    /// Both slices must have [`Self::size`] elements. A mismatch panics before writing.
+    pub fn copy_to_natural<T: Copy>(self, input: &[T], output: &mut [T]) {
+        assert_length("input", self.size, input.len());
+        assert_length("output", self.size, output.len());
+        for (row, value) in output.iter_mut().enumerate() {
+            *value = input[self.index(row).unwrap()];
+        }
+    }
+}

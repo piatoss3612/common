@@ -34,6 +34,15 @@ audit-as-crates-io = false
 [policy.zakura-bellman]
 audit-as-crates-io = false
 
+[policy.zakura-bento]
+audit-as-crates-io = false
+
+[policy.zakura-bento-core]
+audit-as-crates-io = false
+
+[policy.zakura-bento-macros]
+audit-as-crates-io = false
+
 [policy.zakura-bls12-381]
 audit-as-crates-io = false
 
@@ -89,6 +98,9 @@ audit-as-crates-io = false
 audit-as-crates-io = false
 
 [policy.zakura-transparent]
+audit-as-crates-io = false
+
+[policy.zakura-udon]
 audit-as-crates-io = false
 
 [policy.zakura-zip321]
@@ -770,6 +782,11 @@ criteria = "safe-to-run"
 version = "0.2.21"
 criteria = "safe-to-deploy"
 
+[[exemptions.proc-macro-crate]]
+version = "3.5.0"
+criteria = "safe-to-deploy"
+notes = "Introduced with the unpublished Udon/Bento import; pending review."
+
 [[exemptions.proc-macro2]]
 version = "1.0.107"
 criteria = "safe-to-deploy"
@@ -1060,6 +1077,16 @@ criteria = "safe-to-deploy"
 version = "2.7.2"
 criteria = "safe-to-deploy"
 
+[[exemptions.toml_edit]]
+version = "0.25.15+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Introduced with the unpublished Udon/Bento import; pending review."
+
+[[exemptions.toml_parser]]
+version = "1.1.3+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Introduced with the unpublished Udon/Bento import; pending review."
+
 [[exemptions.tracing]]
 version = "0.1.44"
 criteria = "safe-to-deploy"
@@ -1211,6 +1238,11 @@ criteria = "safe-to-deploy"
 [[exemptions.windows_x86_64_msvc]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
+
+[[exemptions.winnow]]
+version = "1.0.4"
+criteria = "safe-to-deploy"
+notes = "Introduced with the unpublished Udon/Bento import; pending review."
 
 [[exemptions.wio]]
 version = "0.2.2"

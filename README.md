@@ -44,6 +44,12 @@ This repository contains the Zakura Common libraries: the foundational Rust crat
 
 `zakura-redjubjub` is a thin wrapper over `zakura-reddsa`, so the two are maintained together.
 
+## Experimental arithmetic
+
+- [`zakura-udon`](crates/udon): Pasta field and curve arithmetic and allocation-free FFTs.
+- [`zakura-bento`](crates/bento): compile-time arithmetic and checked POD storage and embedding.
+- [`zakura-bento-core`](crates/bento-core) and [`zakura-bento-macros`](crates/bento-macros): Bento implementation crates.
+
 ## Rust toolchain
 
 [`rust-toolchain.toml`](rust-toolchain.toml) pins the development toolchain to

@@ -1551,6 +1551,9 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           cache: false
+          # The compile-test harnesses build generated consumer crates with
+          # the ambient Cargo environment and assume default warning behavior.
+          build-warnings: ""
       - name: Run release tests without traits
         env:
           FEATURES: ${{ matrix.native_features }}
@@ -1602,6 +1605,9 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           cache: false
+          # The consumer harnesses build generated crates with the ambient
+          # Cargo environment and assume default warning behavior.
+          build-warnings: ""
       - name: Run Udon compiler and artifact consumers
         # Each consumer selects its own dependency feature matrix.
         run: |
@@ -1705,6 +1711,9 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
         with:
           cache: false
+          # The portability harness builds generated crates with the ambient
+          # Cargo environment and assumes default warning behavior.
+          build-warnings: ""
       - name: Install target libraries
         run: rustup target add thumbv7em-none-eabi s390x-unknown-linux-gnu
       - name: Build portable libraries and check unsupported layouts

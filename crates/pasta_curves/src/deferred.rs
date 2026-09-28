@@ -10,6 +10,17 @@ use core::fmt::Debug;
 
 use crate::arithmetic::{adc, mac};
 
+// Keep the assembly exception within this private arithmetic backend.
+#[allow(unsafe_code)]
+#[cfg(all(
+    feature = "aarch64-asm",
+    target_arch = "aarch64",
+    any(target_family = "unix", target_os = "none"),
+    target_pointer_width = "64",
+    target_endian = "little"
+))]
+mod aarch64;
+
 #[cfg(target_arch = "aarch64")]
 pub(crate) const INNER_PRODUCT_BLOCK_SIZE: usize = 32;
 
@@ -93,51 +104,77 @@ impl<F> Product<F> {
     /// and adding it in a second pass.
     #[cfg_attr(not(feature = "uninline-portable"), inline)]
     pub(crate) fn mul_accumulate(&mut self, lhs: &[u64; 4], rhs: &[u64; 4]) {
-        // Row 0 contributes lhs[0] * rhs at limbs 0 through 3. Starting the
-        // multiply-add chain from the stored limbs incorporates that part of
-        // the old accumulator. Its full-limb carry enters untouched limb 4;
-        // `overflow` is the resulting one-bit carry into limb 5.
-        let (d0, carry) = mac(self.limbs[0], lhs[0], rhs[0], 0);
-        let (d1, carry) = mac(self.limbs[1], lhs[0], rhs[1], carry);
-        let (d2, carry) = mac(self.limbs[2], lhs[0], rhs[2], carry);
-        let (d3, carry) = mac(self.limbs[3], lhs[0], rhs[3], carry);
-        let (d4, overflow) = adc(self.limbs[4], carry, 0);
+        #[cfg(all(
+            feature = "aarch64-asm",
+            target_arch = "aarch64",
+            any(target_family = "unix", target_os = "none"),
+            target_pointer_width = "64",
+            target_endian = "little"
+        ))]
+        {
+            let (limbs, overflow) = aarch64::mul_accumulate(self.limbs, lhs, rhs);
+            self.limbs = limbs;
+            let (carry, carry_overflow) = self.carry.overflowing_add(overflow);
+            debug_assert!(
+                !carry_overflow,
+                "carry overflow: too many accumulated products"
+            );
+            self.carry = carry;
+        }
+        #[cfg(not(all(
+            feature = "aarch64-asm",
+            target_arch = "aarch64",
+            any(target_family = "unix", target_os = "none"),
+            target_pointer_width = "64",
+            target_endian = "little"
+        )))]
+        {
+            // Row 0 contributes lhs[0] * rhs at limbs 0 through 3. Starting the
+            // multiply-add chain from the stored limbs incorporates that part of
+            // the old accumulator. Its full-limb carry enters untouched limb 4;
+            // `overflow` is the resulting one-bit carry into limb 5.
+            let (d0, carry) = mac(self.limbs[0], lhs[0], rhs[0], 0);
+            let (d1, carry) = mac(self.limbs[1], lhs[0], rhs[1], carry);
+            let (d2, carry) = mac(self.limbs[2], lhs[0], rhs[2], carry);
+            let (d3, carry) = mac(self.limbs[3], lhs[0], rhs[3], carry);
+            let (d4, overflow) = adc(self.limbs[4], carry, 0);
 
-        // Row 1 begins at limb 1 and updates the partially formed limbs 1
-        // through 4. Its full-limb carry and row 0's one-bit overflow are
-        // combined with untouched accumulator limb 5.
-        let (d1, carry) = mac(d1, lhs[1], rhs[0], 0);
-        let (d2, carry) = mac(d2, lhs[1], rhs[1], carry);
-        let (d3, carry) = mac(d3, lhs[1], rhs[2], carry);
-        let (d4, carry) = mac(d4, lhs[1], rhs[3], carry);
-        let (d5, overflow) = adc(self.limbs[5], carry, overflow);
+            // Row 1 begins at limb 1 and updates the partially formed limbs 1
+            // through 4. Its full-limb carry and row 0's one-bit overflow are
+            // combined with untouched accumulator limb 5.
+            let (d1, carry) = mac(d1, lhs[1], rhs[0], 0);
+            let (d2, carry) = mac(d2, lhs[1], rhs[1], carry);
+            let (d3, carry) = mac(d3, lhs[1], rhs[2], carry);
+            let (d4, carry) = mac(d4, lhs[1], rhs[3], carry);
+            let (d5, overflow) = adc(self.limbs[5], carry, overflow);
 
-        // Row 2 repeats the same carry handoff one limb higher, covering
-        // partially formed limbs 2 through 5 and untouched limb 6.
-        let (d2, carry) = mac(d2, lhs[2], rhs[0], 0);
-        let (d3, carry) = mac(d3, lhs[2], rhs[1], carry);
-        let (d4, carry) = mac(d4, lhs[2], rhs[2], carry);
-        let (d5, carry) = mac(d5, lhs[2], rhs[3], carry);
-        let (d6, overflow) = adc(self.limbs[6], carry, overflow);
+            // Row 2 repeats the same carry handoff one limb higher, covering
+            // partially formed limbs 2 through 5 and untouched limb 6.
+            let (d2, carry) = mac(d2, lhs[2], rhs[0], 0);
+            let (d3, carry) = mac(d3, lhs[2], rhs[1], carry);
+            let (d4, carry) = mac(d4, lhs[2], rhs[2], carry);
+            let (d5, carry) = mac(d5, lhs[2], rhs[3], carry);
+            let (d6, overflow) = adc(self.limbs[6], carry, overflow);
 
-        // Row 3 finishes the 256-by-256-bit product in limbs 3 through 6.
-        // Its carry and row 2's overflow are combined with the final stored
-        // accumulator limb.
-        let (d3, carry) = mac(d3, lhs[3], rhs[0], 0);
-        let (d4, carry) = mac(d4, lhs[3], rhs[1], carry);
-        let (d5, carry) = mac(d5, lhs[3], rhs[2], carry);
-        let (d6, carry) = mac(d6, lhs[3], rhs[3], carry);
-        let (d7, overflow) = adc(self.limbs[7], carry, overflow);
+            // Row 3 finishes the 256-by-256-bit product in limbs 3 through 6.
+            // Its carry and row 2's overflow are combined with the final stored
+            // accumulator limb.
+            let (d3, carry) = mac(d3, lhs[3], rhs[0], 0);
+            let (d4, carry) = mac(d4, lhs[3], rhs[1], carry);
+            let (d5, carry) = mac(d5, lhs[3], rhs[2], carry);
+            let (d6, carry) = mac(d6, lhs[3], rhs[3], carry);
+            let (d7, overflow) = adc(self.limbs[7], carry, overflow);
 
-        // The final one-bit overflow is the only contribution beyond the
-        // 512-bit limb array. Fold it into the accumulator's external carry.
-        self.limbs = [d0, d1, d2, d3, d4, d5, d6, d7];
-        let (carry, carry_overflow) = self.carry.overflowing_add(overflow);
-        debug_assert!(
-            !carry_overflow,
-            "carry overflow: too many accumulated products"
-        );
-        self.carry = carry;
+            // The final one-bit overflow is the only contribution beyond the
+            // 512-bit limb array. Fold it into the accumulator's external carry.
+            self.limbs = [d0, d1, d2, d3, d4, d5, d6, d7];
+            let (carry, carry_overflow) = self.carry.overflowing_add(overflow);
+            debug_assert!(
+                !carry_overflow,
+                "carry overflow: too many accumulated products"
+            );
+            self.carry = carry;
+        }
     }
 
     /// Multiplies corresponding raw 256-bit values and adds their 512-bit
@@ -359,6 +396,7 @@ mod tests {
     use super::{DeferredField, Product};
     use crate::arithmetic::mac;
     use ff::Field;
+    use proptest::prelude::*;
     use rand::{Rng, SeedableRng};
     use rand_xorshift::XorShiftRng;
     use std::vec::Vec;
@@ -425,6 +463,121 @@ mod tests {
             assert_eq!(fused.limbs, two_pass.limbs);
             assert_eq!(fused.carry, two_pass.carry);
         }
+    }
+
+    /// Exercise complete carry propagation, including the external carry's
+    /// last available bit, with an independent multiply-then-add reference.
+    #[test]
+    fn mul_accumulate_carry_boundaries() {
+        let inputs = [
+            [0; 4],
+            [1, 0, 0, 0],
+            [u64::MAX; 4],
+            [0, 0, 0, u64::MAX],
+            [u64::MAX, 0, u64::MAX, 0],
+        ];
+        for lhs in &inputs {
+            for rhs in &inputs {
+                for limbs in [[0; 8], [u64::MAX; 8]] {
+                    for carry in [0, u64::MAX - 1] {
+                        let mut expected = Product::<()> {
+                            limbs,
+                            carry,
+                            _marker: core::marker::PhantomData,
+                        };
+                        let mut actual = expected;
+                        expected.accumulate(mul_unreduced(lhs, rhs));
+                        actual.mul_accumulate(lhs, rhs);
+                        assert_eq!(actual.limbs, expected.limbs);
+                        assert_eq!(actual.carry, expected.carry);
+                    }
+                }
+            }
+        }
+    }
+
+    // Use half-width digits and plain u64 arithmetic so this oracle shares
+    // neither the production carry helpers nor the assembly's row schedule.
+    fn reference_multiply_add_32(
+        mut accumulator: [u32; 18],
+        lhs: [u64; 4],
+        rhs: [u64; 4],
+    ) -> [u32; 18] {
+        let lhs: [u32; 8] = core::array::from_fn(|i| (lhs[i / 2] >> (32 * (i % 2))) as u32);
+        let rhs: [u32; 8] = core::array::from_fn(|i| (rhs[i / 2] >> (32 * (i % 2))) as u32);
+        for (i, lhs) in lhs.into_iter().enumerate() {
+            let mut carry = 0;
+            for (j, rhs) in rhs.into_iter().enumerate() {
+                // (2^32 - 1)^2 + 2 * (2^32 - 1) fits in u64.
+                let sum = u64::from(lhs) * u64::from(rhs) + u64::from(accumulator[i + j]) + carry;
+                accumulator[i + j] = sum as u32;
+                carry = sum >> 32;
+            }
+            for limb in &mut accumulator[i + rhs.len()..] {
+                let sum = u64::from(*limb) + carry;
+                *limb = sum as u32;
+                carry = sum >> 32;
+            }
+            assert_eq!(carry, 0, "reference accumulator overflow");
+        }
+        accumulator
+    }
+
+    fn arbitrary_carry_limb() -> impl Strategy<Value = u64> {
+        prop_oneof![
+            4 => any::<u64>(),
+            1 => Just(0),
+            1 => Just(1),
+            1 => Just(u64::MAX),
+            1 => Just(u64::MAX - 1),
+            1 => Just(1 << 63),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn mul_accumulate_sequences_match_32_bit_reference(
+            limbs in proptest::array::uniform8(arbitrary_carry_limb()),
+            carry in any::<u64>(),
+            products in proptest::collection::vec(
+                (
+                    proptest::array::uniform4(arbitrary_carry_limb()),
+                    proptest::array::uniform4(arbitrary_carry_limb()),
+                ),
+                0..=32,
+            ),
+        ) {
+            // Leave room for the sequence's external carries.
+            let carry = carry >> 1;
+            let mut actual = Product::<()> {
+                limbs,
+                carry,
+                _marker: core::marker::PhantomData,
+            };
+            let words: [u64; 9] = core::array::from_fn(|i| if i < 8 { limbs[i] } else { carry });
+            let mut expected: [u32; 18] =
+                core::array::from_fn(|i| (words[i / 2] >> (32 * (i % 2))) as u32);
+            for (lhs, rhs) in products {
+                actual.mul_accumulate(&lhs, &rhs);
+                expected = reference_multiply_add_32(expected, lhs, rhs);
+                let words: [u64; 9] = core::array::from_fn(|i|
+                    u64::from(expected[2 * i]) | (u64::from(expected[2 * i + 1]) << 32));
+                prop_assert_eq!(&actual.limbs, &words[..8]);
+                prop_assert_eq!(actual.carry, words[8]);
+            }
+        }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "carry overflow: too many accumulated products")]
+    fn mul_accumulate_rejects_external_carry_overflow() {
+        let mut accumulator = Product::<()> {
+            limbs: [u64::MAX; 8],
+            carry: u64::MAX,
+            _marker: core::marker::PhantomData,
+        };
+        accumulator.mul_accumulate(&[1, 0, 0, 0], &[1, 0, 0, 0]);
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -516,6 +669,25 @@ mod tests {
                         <$F>::reduce(<$F as DeferredField>::Accumulator::default()),
                         <$F>::ZERO,
                     );
+                }
+
+                #[test]
+                fn long_scalar_accumulation_matches_eager() {
+                    // Force many carries beyond the eight-limb product while
+                    // checking reductions at increasing sequence lengths.
+                    const TERMS: usize = 1 << 16;
+                    let mut rng = XorShiftRng::from_seed(SEED);
+                    let mut accumulator = <$F as DeferredField>::Accumulator::default();
+                    let mut expected = <$F>::ZERO;
+                    for count in 1..=TERMS {
+                        let lhs = <$F>::random(&mut rng);
+                        let rhs = <$F>::random(&mut rng);
+                        <$F>::mul_accumulate(&mut accumulator, &lhs, &rhs);
+                        expected += lhs * rhs;
+                        if count.is_power_of_two() {
+                            assert_eq!(<$F>::reduce(accumulator), expected, "terms={count}");
+                        }
+                    }
                 }
 
                 #[test]

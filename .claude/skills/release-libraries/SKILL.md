@@ -8,9 +8,12 @@ description: >-
 
 # Release the Zakura Common libraries
 
-The 21 crates version in lockstep from `[workspace.package]` in the root
-`Cargo.toml`. Changelog policy is canonical in `docs/changelog/guidelines.md`;
-this skill adds the mechanics that are easy to miss.
+The published crates version in lockstep from `[workspace.package]` in the
+root `Cargo.toml`. Unpublished members (`publish = false`), including Udon
+and Bento, keep independent versions and are excluded from coordinated
+version bumps, changelog assembly, and publishing. Changelog policy is
+canonical in `docs/changelog/guidelines.md`; this skill adds the mechanics
+that are easy to miss.
 
 ## Safety
 
@@ -20,11 +23,12 @@ this skill adds the mechanics that are easy to miss.
 
 ## Version bump
 
-1. `version` in `[workspace.package]` — every crate inherits it.
+1. `version` in `[workspace.package]` — the published crates inherit it.
 2. The intra-workspace `version = "..."` requirements in
-   `[workspace.dependencies]` (same file, one place).
+   `[workspace.dependencies]` for those published crates (same file, one
+   place). Leave requirements for independently versioned members unchanged.
 3. `cargo metadata --locked` must still succeed and `Cargo.lock` should show
-   only the 21 member version lines changing.
+   only the released members' version lines changing.
 
 ## Changelog assembly
 
@@ -53,7 +57,7 @@ pending fragments instead of a PR-owned fragment.
 - Full suite: `cargo test --release --workspace --all-features --locked`.
 - Docs as docs.rs will build them:
   `RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --workspace --no-deps --all-features --locked`.
-- Package contents: `cargo package --list -p <crate>` for each crate — no
+- Package contents: `cargo package --list -p <crate>` for each published crate — no
   stray files; LICENSE/COPYRIGHT/katex symlinks materialize as real files.
 - Semver: use the [semver policy](../../../docs/semver-policy.md), including
   its feature-removal ignore list. For a release, run

@@ -146,6 +146,55 @@ class ChangelogTests(unittest.TestCase):
             fragment.entries["zakura-beta"]["Changed"], "- Changed behavior."
         )
 
+    def test_unpublished_members_are_excluded_from_releases(self):
+        for setting in ("false", "[]", "{ workspace = true }"):
+            with self.subTest(publish=setting):
+                (self.root / "Cargo.toml").write_text(
+                    WORKSPACE_MANIFEST + "\n[workspace.package]\npublish = false\n"
+                )
+                (self.root / "crates/beta/Cargo.toml").write_text(
+                    MEMBER_MANIFEST.format(name="zakura-beta")
+                    + f"version = \"0.1.0\"\npublish = {setting}\n"
+                )
+                self.member_changelog("beta").unlink(missing_ok=True)
+                self.assertEqual(
+                    changelog.workspace_changelogs(self.root),
+                    {"zakura-alpha": self.member_changelog("alpha")},
+                )
+                changelog.check_seeds(self.root)
+                fragment = self.write_fragment(
+                    "123.md", "## zakura-alpha\n\n### Fixed\n\n- Fixed a bug.\n"
+                )
+                writes, removals = changelog.release_plan(
+                    self.root, "v2.1.0", "2026-09-28"
+                )
+                self.assertEqual(set(writes), {self.member_changelog("alpha")})
+                self.assertEqual(removals, [fragment])
+                self.assertIn("## [2.1.0]", writes[self.member_changelog("alpha")])
+                self.assertFalse(self.member_changelog("beta").exists())
+
+    def test_rejects_fragment_for_unpublished_member(self):
+        (self.root / "crates/beta/Cargo.toml").write_text(
+            MEMBER_MANIFEST.format(name="zakura-beta") + "publish = false\n"
+        )
+        self.write_fragment("123.md", "## zakura-beta\n\n### Added\n\n- Experiment.\n")
+        with self.assertRaisesRegex(changelog.ChangelogError, "unknown crate"):
+            changelog.load_fragments(self.root)
+
+    def test_explicit_and_inherited_registry_lists_remain_publishable(self):
+        (self.root / "Cargo.toml").write_text(
+            WORKSPACE_MANIFEST + '\n[workspace.package]\npublish = ["crates-io"]\n'
+        )
+        for setting in ('["crates-io"]', "{ workspace = true }"):
+            with self.subTest(publish=setting):
+                (self.root / "crates/beta/Cargo.toml").write_text(
+                    MEMBER_MANIFEST.format(name="zakura-beta") + f"publish = {setting}\n"
+                )
+                self.assertIn("zakura-beta", changelog.workspace_changelogs(self.root))
+                self.member_changelog("beta").write_text("# Missing release history\n")
+                with self.assertRaises(changelog.ChangelogError):
+                    changelog.check_seeds(self.root)
+
     def test_rejects_unknown_crate(self):
         self.write_fragment("123.md", "## zakura-gamma\n\n### Fixed\n\n- Fix.\n")
 

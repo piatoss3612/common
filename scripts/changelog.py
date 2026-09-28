@@ -62,7 +62,7 @@ class Fragment:
 
 
 def workspace_changelogs(repo_root: Path) -> dict[str, Path]:
-    """Map each member's package name to its CHANGELOG.md path."""
+    """Map each publishable member's package name to its CHANGELOG.md path."""
     manifest = repo_root / "Cargo.toml"
     with manifest.open("rb") as handle:
         workspace = tomllib.load(handle)
@@ -75,6 +75,11 @@ def workspace_changelogs(repo_root: Path) -> dict[str, Path]:
         member_manifest = repo_root / member / "Cargo.toml"
         with member_manifest.open("rb") as handle:
             package = tomllib.load(handle).get("package", {})
+        publish = package.get("publish", True)
+        if isinstance(publish, dict) and publish.get("workspace"):
+            publish = workspace.get("workspace", {}).get("package", {}).get("publish", True)
+        if publish is False or publish == []:
+            continue
         name = package.get("name")
         if not isinstance(name, str):
             raise ChangelogError(f"{member_manifest}: missing package name")

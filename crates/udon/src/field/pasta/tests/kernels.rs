@@ -70,6 +70,16 @@ fn check_montgomery<M: PrimeModulus>() {
                 integer(&montgomery::montgomery_multiply::<M>(&limbs(a), &limbs(b))) % &p,
                 expected
             );
+            if a < &(&p * 2u8) && b < &(&p * 2u8) {
+                // The field kernel computes the same integer as the general
+                // kernel for loose inputs, and that integer stays below 2p.
+                let loose = montgomery::montgomery_multiply_loose::<M>(&limbs(a), &limbs(b));
+                assert_eq!(
+                    loose,
+                    montgomery::montgomery_multiply::<M>(&limbs(a), &limbs(b))
+                );
+                assert!(integer(&loose) < &p * 2u8);
+            }
             assert_eq!(
                 integer(&montgomery::montgomery_reduce::<M>(limbs(&product))),
                 expected
@@ -88,6 +98,106 @@ fn check_montgomery<M: PrimeModulus>() {
         let reduced = montgomery::reduce_once::<M>(montgomery::reduce_once::<M>(limbs(&raw)));
         assert_eq!(integer(&reduced), &input * &inverse_r % &p);
     }
+}
+
+/// The assembly multiply must agree limb for limb with the portable kernel on
+/// loose inputs, including values in `[p, 2p)`.
+#[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+#[test]
+fn assembly_multiply_matches_portable_kernel_on_loose_inputs() {
+    fn check<M: PrimeModulus>() {
+        let mut state = 0x6a09_e667_f3bc_c908;
+        let p = modulus::<M>();
+        let twice = &p * 2u8;
+        let mut values: Vec<[u64; 4]> = Vec::new();
+        while values.len() < 512 {
+            let x = CanonicalUint::from_le_bytes(deterministic_bytes(&mut state)).limbs();
+            let x = integer(&x) % &twice;
+            values.push(limbs(&x));
+        }
+        values.extend([
+            limbs(&BigUint::from(0u8)),
+            limbs(&p),
+            limbs(&(&twice - 1u8)),
+        ]);
+        for a in &values {
+            for b in values.iter().step_by(7) {
+                assert_eq!(
+                    montgomery::montgomery_multiply_loose::<M>(a, b),
+                    montgomery::montgomery_multiply_loose_rust::<M>(a, b)
+                );
+            }
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
+/// Deterministic loose residues in `[0, 2p)`, with the boundary values.
+fn loose_samples<M: PrimeModulus>(mut state: u64) -> Vec<[u64; 4]> {
+    let p = modulus::<M>();
+    let twice = &p * 2u8;
+    let mut values: Vec<[u64; 4]> = Vec::new();
+    while values.len() < 512 {
+        let x = CanonicalUint::from_le_bytes(deterministic_bytes(&mut state)).limbs();
+        values.push(limbs(&(integer(&x) % &twice)));
+    }
+    values.extend([
+        limbs(&BigUint::from(0u8)),
+        limbs(&(&p - 1u8)),
+        limbs(&p),
+        limbs(&(&twice - 1u8)),
+    ]);
+    values
+}
+
+/// The loose addition and subtraction kernels reduce modulo `2p` exactly,
+/// including the sums that carry past the radix.
+#[test]
+fn loose_add_and_sub_kernels_reduce_modulo_twice_modulus() {
+    fn check<M: PrimeModulus>() {
+        let twice = modulus::<M>() * 2u8;
+        let values = loose_samples::<M>(0xbb67_ae85_84ca_a73b);
+        for a in &values {
+            for b in values.iter().step_by(5) {
+                let (x, y) = (integer(a), integer(b));
+                assert_eq!(
+                    integer(&montgomery::add_twice_modulus_rust::<M>(a, b)),
+                    (&x + &y) % &twice
+                );
+                assert_eq!(
+                    integer(&montgomery::sub_twice_modulus_rust::<M>(a, b)),
+                    (&x + &twice - &y) % &twice
+                );
+            }
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
+}
+
+/// The assembly addition and subtraction compute the same limbs as the
+/// portable kernels on loose inputs, including values in `[p, 2p)`.
+#[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+#[test]
+fn assembly_add_and_sub_match_portable_kernels_on_loose_inputs() {
+    fn check<M: PrimeModulus>() {
+        let values = loose_samples::<M>(0x3c6e_f372_fe94_f82b);
+        for a in &values {
+            for b in values.iter().step_by(5) {
+                assert_eq!(
+                    crate::field::aarch64_asm::add_loose(a, b, &M::TWICE_MODULUS),
+                    montgomery::add_twice_modulus_rust::<M>(a, b)
+                );
+                assert_eq!(
+                    crate::field::aarch64_asm::sub_loose(a, b, &M::TWICE_MODULUS),
+                    montgomery::sub_twice_modulus_rust::<M>(a, b)
+                );
+            }
+        }
+    }
+    check::<PallasBase>();
+    check::<PallasScalar>();
 }
 
 #[test]

@@ -25,6 +25,8 @@
 //! using the same native kernels. Sampling, canonical integer access, and
 //! dot-product helpers operate on native Pasta values without this feature.
 
+#[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+pub(crate) mod aarch64_asm;
 #[cfg(feature = "traits")]
 mod consumer;
 pub(crate) mod pasta;

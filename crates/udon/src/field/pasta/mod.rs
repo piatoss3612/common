@@ -45,7 +45,7 @@ pub use stored_form::STORED_FORM;
 pub use uint::CanonicalUint;
 pub(crate) const TWO_ADICITY: u32 = parameters::TWO_ADICITY;
 
-use montgomery::{montgomery_multiply, montgomery_square, reduce_once};
+use montgomery::{montgomery_multiply_loose, montgomery_square, reduce_once};
 use word::{adc, subtract_limbs};
 
 #[cfg(test)]
@@ -243,24 +243,25 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Returns `self + rhs`.
     #[inline]
     pub fn add<T: ReductionState>(&self, rhs: &PastaField<M, T>) -> PastaField<M> {
-        let mut limbs = [0; 4];
-        let mut carry = 0;
-        for (index, limb) in limbs.iter_mut().enumerate() {
-            (*limb, carry) = adc(self.limbs[index], rhs.limbs[index], carry);
-        }
-        PastaField::from_montgomery(montgomery::reduce_twice_modulus::<M>(limbs, carry))
+        PastaField::from_montgomery(montgomery::add_twice_modulus::<M>(&self.limbs, &rhs.limbs))
     }
 
     /// Returns `self - rhs`.
     #[inline]
     pub fn sub<T: ReductionState>(&self, rhs: &PastaField<M, T>) -> PastaField<M> {
-        let (mut limbs, borrow) = subtract_limbs(&self.limbs, &rhs.limbs);
-        // Restore 2p exactly when subtraction borrowed.
-        let mask = borrow.wrapping_neg();
-        let mut carry = 0;
-        for (limb, modulus) in limbs.iter_mut().zip(M::TWICE_MODULUS) {
-            (*limb, carry) = adc(*limb, modulus & mask, carry);
-        }
+        PastaField::from_montgomery(montgomery::sub_twice_modulus::<M>(&self.limbs, &rhs.limbs))
+    }
+
+    /// Returns the additive inverse of a nonzero reduced value, reduced.
+    ///
+    /// `p - a` is canonical for `0 < a < p`. Curve code uses this for
+    /// coordinates that cannot be zero, avoiding the `2p` restoration and
+    /// conditional reduction of [`Self::neg`].
+    #[inline]
+    pub(crate) fn negate_nonzero(&self) -> PastaField<M, Reduced> {
+        debug_assert!(S::REDUCED && !self.is_zero());
+        let (limbs, borrow) = subtract_limbs(&M::MODULUS, &self.limbs);
+        debug_assert_eq!(borrow, 0);
         PastaField::from_montgomery(limbs)
     }
 
@@ -284,7 +285,7 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Returns `self * rhs`.
     #[inline]
     pub fn mul<T: ReductionState>(&self, rhs: &PastaField<M, T>) -> PastaField<M> {
-        PastaField::from_montgomery(montgomery_multiply::<M>(&self.limbs, &rhs.limbs))
+        PastaField::from_montgomery(montgomery_multiply_loose::<M>(&self.limbs, &rhs.limbs))
     }
 
     /// Returns `self * self`.

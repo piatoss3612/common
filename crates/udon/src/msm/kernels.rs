@@ -458,7 +458,7 @@ fn window<C: PastaCurve, B: Base<C>, const INDEXED: bool, const DIRECT: bool>(
                 }
             },
         );
-        reduce(&mut points[..total], starts, lens, work.field);
+        reduce(&mut points[..total], starts, lens, work.field, cursors);
         for i in 0..buckets {
             if lens[i] != 0 {
                 survivors[i] = points[starts[i]];

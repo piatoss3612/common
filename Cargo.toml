@@ -1,7 +1,7 @@
 # The Zakura Common libraries: Zakura's cryptography dependencies.
 #
-# Each member began as a fork of a crates.io release, vendored as a plain
-# workspace member (no submodules). The members reference each other through the
+# Published members began as forks of crates.io releases, vendored as plain
+# workspace members (no submodules). Members reference each other through the
 # [workspace.dependencies] table below (path + version), and Zakura consumes
 # them from crates.io under their `zakura-*` names — no `[patch]` indirection,
 # so every edge into these crates is an explicit declaration and the upstream
@@ -35,6 +35,9 @@
 #   address, transparent value, and payment request types. They are kept in the
 #   same workspace as their public-type consumers so the graph contains one
 #   coherent family of types.
+# - udon, bento, bento-core, bento-macros: experimental arithmetic and
+#   compile-time storage libraries. These remain unpublished and version
+#   independently of the coordinated Common release.
 
 [workspace]
 # Resolver 3 is resolver 2 plus MSRV-aware version selection: `cargo update`
@@ -45,6 +48,9 @@
 resolver = "3"
 members = [
     "crates/bellman",
+    "crates/bento",
+    "crates/bento-core",
+    "crates/bento-macros",
     "crates/bls12_381",
     "crates/equihash",
     "crates/halo2_gadgets",
@@ -59,6 +65,7 @@ members = [
     "crates/redjubjub",
     "crates/sapling-crypto",
     "crates/sinsemilla",
+    "crates/udon",
     "crates/zcash_address",
     "crates/zcash_keys",
     "crates/zcash_primitives",
@@ -94,6 +101,9 @@ readme = "crates/README.md"
 # alias the same package (halo2_poseidon/poseidon, sapling, zcash_primitives).
 [workspace.dependencies]
 bellman = { package = "zakura-bellman", version = "2.1.0-rc.0", path = "crates/bellman", default-features = false }
+bento = { package = "zakura-bento", version = "0.1.0", path = "crates/bento", default-features = false }
+bento-core = { package = "zakura-bento-core", version = "0.1.0", path = "crates/bento-core", default-features = false }
+bento-macros = { package = "zakura-bento-macros", version = "0.1.0", path = "crates/bento-macros", default-features = false }
 bls12_381 = { package = "zakura-bls12-381", version = "2.1.0-rc.0", path = "crates/bls12_381", default-features = false }
 equihash = { package = "zakura-equihash", version = "2.1.0-rc.0", path = "crates/equihash", default-features = false }
 halo2_gadgets = { package = "zakura-halo2-gadgets", version = "2.1.0-rc.0", path = "crates/halo2_gadgets", default-features = false }
@@ -109,6 +119,7 @@ reddsa = { package = "zakura-reddsa", version = "2.1.0-rc.0", path = "crates/red
 redjubjub = { package = "zakura-redjubjub", version = "2.1.0-rc.0", path = "crates/redjubjub", default-features = false }
 sapling = { package = "zakura-sapling-crypto", version = "2.1.0-rc.0", path = "crates/sapling-crypto", default-features = false }
 sinsemilla = { package = "zakura-sinsemilla", version = "2.1.0-rc.0", path = "crates/sinsemilla", default-features = false }
+udon = { package = "zakura-udon", version = "0.1.0", path = "crates/udon", default-features = false }
 zcash_address = { package = "zakura-address", version = "2.1.0-rc.0", path = "crates/zcash_address", default-features = false }
 zcash_keys = { package = "zakura-keys", version = "2.1.0-rc.0", path = "crates/zcash_keys", default-features = false }
 zcash_primitives = { package = "zakura-primitives", version = "2.1.0-rc.0", path = "crates/zcash_primitives", default-features = false }

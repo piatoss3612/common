@@ -31,7 +31,7 @@ subtle = "2.2.1"
 
 [dev-dependencies]
 bls12_381 = { workspace = true, features = ["default"] }
-criterion = "0.4"
+criterion = "0.5"
 hex-literal = "0.3"
 rand = "0.10"
 rand_xorshift = "0.5"

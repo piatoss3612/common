@@ -78,8 +78,10 @@ impl<C: PastaCurve> Windows<'_, '_, '_, C> {
             }
             return;
         }
+        // Hand each branch a share of the windows proportional to its leases
+        // so no lease serially runs more than its ceiling share.
         let left_leases = self.leases / 2;
-        let middle = self.claims.len() / 2;
+        let middle = self.claims.len() * left_leases / self.leases;
         let (left_claims, right_claims) = self.claims.split_at_mut(middle);
         let (left_outputs, right_outputs) = self.outputs.split_at_mut(middle);
         let (left_receipts, right_receipts) = self.receipts.split_at_mut(middle);

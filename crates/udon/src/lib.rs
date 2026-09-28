@@ -79,6 +79,11 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(unreachable_pub)]
+// Constant-size `chunks_exact` kernels predate `as_chunks`; migrating them is
+// upstream work. The pinned toolchain's Clippy predates the lint itself, so
+// keep `unknown_lints` allowed until the pin reaches 1.98.
+#![allow(unknown_lints)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
 
 mod checks;
 pub mod curve;

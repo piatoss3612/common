@@ -1,5 +1,10 @@
 //! Fixed-base products from shared and distinct retained tables.
 
+// Constant-size `chunks_exact` predates `as_chunks`; migration is upstream
+// work, and the pinned toolchain's Clippy predates the lint itself.
+#![allow(unknown_lints)]
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 use super::*;
 
 fn ladder<C: PastaCurve>(

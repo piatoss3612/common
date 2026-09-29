@@ -4,7 +4,9 @@
 
 use super::PrimeModulus;
 
-use super::word::{adc, mac, subtract_limbs};
+use super::word::{
+    adc, borrow_sub_limbs, carry_add, carry_add_limbs, mac, subtract_limbs, wide_mul,
+};
 
 /// Subtracts `p` if the integer is at least `p`.
 ///
@@ -24,6 +26,67 @@ pub(super) fn reduce_twice_modulus<M: PrimeModulus>(limbs: [u64; 4], carry: u64)
     } else {
         limbs
     }
+}
+
+/// Computes `lhs + rhs mod 2p` in `[0, 2p)` for inputs below `2p`.
+///
+/// The sum is below `4p`, which can exceed the radix, so the top carry takes
+/// part in the single conditional subtraction of `2p`.
+#[inline(always)]
+pub(super) fn add_twice_modulus<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
+    #[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+    {
+        crate::field::aarch64_asm::add_loose(lhs, rhs, &M::TWICE_MODULUS)
+    }
+    #[cfg(not(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri))))]
+    {
+        add_twice_modulus_rust::<M>(lhs, rhs)
+    }
+}
+
+/// Portable [`add_twice_modulus`]; the oracle for the assembly block.
+#[cfg_attr(
+    all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)),
+    allow(dead_code)
+)]
+#[inline(always)]
+pub(super) fn add_twice_modulus_rust<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
+    let (sum, carry) = carry_add_limbs(lhs, rhs);
+    let (reduced, borrow) = borrow_sub_limbs(&sum, &M::TWICE_MODULUS);
+    if carry || !borrow { reduced } else { sum }
+}
+
+/// Computes `lhs - rhs mod 2p` in `[0, 2p)` for inputs below `2p`, adding
+/// `2p` back exactly when the subtraction borrows.
+#[inline(always)]
+pub(super) fn sub_twice_modulus<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
+    #[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+    {
+        crate::field::aarch64_asm::sub_loose(lhs, rhs, &M::TWICE_MODULUS)
+    }
+    #[cfg(not(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri))))]
+    {
+        sub_twice_modulus_rust::<M>(lhs, rhs)
+    }
+}
+
+/// Portable [`sub_twice_modulus`]; the oracle for the assembly block.
+#[cfg_attr(
+    all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)),
+    allow(dead_code)
+)]
+#[inline(always)]
+pub(super) fn sub_twice_modulus_rust<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
+    let (difference, borrow) = borrow_sub_limbs(lhs, rhs);
+    let mask = (borrow as u64).wrapping_neg();
+    let twice = M::TWICE_MODULUS;
+    let restore = [
+        twice[0] & mask,
+        twice[1] & mask,
+        twice[2] & mask,
+        twice[3] & mask,
+    ];
+    carry_add_limbs(&difference, &restore).0
 }
 
 /// Computes `lhs * rhs * R^-1 mod p` in `[0, 2p)`, with `R = 2^256`.
@@ -62,6 +125,91 @@ pub(super) fn montgomery_multiply<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4
     }
     debug_assert_eq!(accumulator[4], 0);
     accumulator[..4].try_into().unwrap()
+}
+
+/// Computes `lhs * rhs * R^-1 mod p` in `[0, 2p)` for inputs below `2p`.
+///
+/// This is the field multiplication kernel; conversion from integers below
+/// `R` uses [`montgomery_multiply`]. With both inputs below `2p`, each
+/// round's five-limb sum `acc + lhs * b + q * p` stays below
+/// `3p + 2^319 + 2^318 < 2^320`, and the shifted result stays below
+/// `lhs + p < 3p < R` (the CIOS invariant), so no limb above the fourth
+/// survives between rounds and no sixth-limb count is needed. The row's low
+/// and high halves are folded in separate carry chains. The cancelled limb
+/// `acc0 + low(q * p0)` is zero modulo `2^64`, so its carry is `acc0 != 0`
+/// and the low product is never formed; `p[2] = 0` and `p[3] = 2^62` reduce
+/// the remaining products to shifts.
+#[inline(always)]
+pub(super) fn montgomery_multiply_loose<M: PrimeModulus>(
+    lhs: &[u64; 4],
+    rhs: &[u64; 4],
+) -> [u64; 4] {
+    debug_assert_eq!(M::MODULUS[2], 0);
+    debug_assert_eq!(M::MODULUS[3], 1 << 62);
+    debug_assert!(super::word::compare_limbs(lhs, &M::TWICE_MODULUS).is_lt());
+    debug_assert!(super::word::compare_limbs(rhs, &M::TWICE_MODULUS).is_lt());
+    #[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+    {
+        crate::field::aarch64_asm::montgomery_multiply_loose(
+            lhs,
+            rhs,
+            M::MODULUS[0],
+            M::MODULUS[1],
+            M::MONTGOMERY_INV,
+        )
+    }
+    #[cfg(not(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri))))]
+    {
+        montgomery_multiply_loose_rust::<M>(lhs, rhs)
+    }
+}
+
+/// The portable form of [`montgomery_multiply_loose`], and the oracle for
+/// the assembly form.
+#[cfg_attr(
+    all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)),
+    allow(dead_code)
+)]
+#[inline(always)]
+pub(super) fn montgomery_multiply_loose_rust<M: PrimeModulus>(
+    lhs: &[u64; 4],
+    rhs: &[u64; 4],
+) -> [u64; 4] {
+    let [a0, a1, a2, a3] = *lhs;
+    let (mut r0, mut r1, mut r2, mut r3) = (0u64, 0u64, 0u64, 0u64);
+    for &b in rhs {
+        let (l0, h0) = wide_mul(a0, b);
+        let (l1, h1) = wide_mul(a1, b);
+        let (l2, h2) = wide_mul(a2, b);
+        let (l3, h3) = wide_mul(a3, b);
+
+        let (s0, carry) = carry_add(r0, l0, false);
+        let (s1, carry) = carry_add(r1, l1, carry);
+        let (s2, carry) = carry_add(r2, l2, carry);
+        let (s3, carry) = carry_add(r3, l3, carry);
+        let s4 = carry as u64;
+        let (s1, carry) = carry_add(s1, h0, false);
+        let (s2, carry) = carry_add(s2, h1, carry);
+        let (s3, carry) = carry_add(s3, h2, carry);
+        let (s4, carry) = carry_add(s4, h3, carry);
+        debug_assert!(!carry);
+
+        let q = s0.wrapping_mul(M::MONTGOMERY_INV);
+        let (_, qh0) = wide_mul(q, M::MODULUS[0]);
+        let (ql1, qh1) = wide_mul(q, M::MODULUS[1]);
+        let (t1, carry) = carry_add(s1, ql1, s0 != 0);
+        let (t2, carry) = carry_add(s2, 0, carry);
+        let (t3, carry) = carry_add(s3, q << 62, carry);
+        let (t4, carry) = carry_add(s4, 0, carry);
+        debug_assert!(!carry);
+        let (n0, carry) = carry_add(t1, qh0, false);
+        let (n1, carry) = carry_add(t2, qh1, carry);
+        let (n2, carry) = carry_add(t3, 0, carry);
+        let (n3, carry) = carry_add(t4, q >> 2, carry);
+        debug_assert!(!carry);
+        (r0, r1, r2, r3) = (n0, n1, n2, n3);
+    }
+    [r0, r1, r2, r3]
 }
 
 /// Squares a loose Montgomery residue, retaining the `[0, 2p)` bound.
@@ -133,7 +281,7 @@ pub(super) fn square_run<M: PrimeModulus>(
         value = montgomery_reduce_unreduced::<M>(super::word::square_wide(&value));
     }
     match factor {
-        Some(factor) => montgomery_multiply::<M>(&value, factor),
+        Some(factor) => montgomery_multiply_loose::<M>(&value, factor),
         None => value,
     }
 }

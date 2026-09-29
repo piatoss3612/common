@@ -71,8 +71,17 @@
 //! compile-time tables without allocation or runtime initialization, and
 //! preserve the same public API and stored field representation.
 //!
-//! Cargo features are additive: any consumer enabling `sqrt-table-large`
-//! selects it for that Udon build.
+//! `aarch64-asm` replaces the field multiplication kernel with an inline
+//! assembly transcription of Supranational's Semolina routine on AArch64
+//! targets, and moves field addition and subtraction onto flag-carried
+//! assembly chains; it has no effect elsewhere or under Miri. These blocks
+//! are the crate's only unsafe code: straight-line, register-only sequences
+//! that compute the same integers as the Rust kernels, which their tests use
+//! as oracles. Field arithmetic keeps its `no_std`, allocation-free, and
+//! variable-time contracts.
+//!
+//! Cargo features are additive: any consumer enabling `sqrt-table-large` or
+//! `aarch64-asm` selects it for that Udon build.
 
 #![no_std]
 #![deny(unsafe_code)]

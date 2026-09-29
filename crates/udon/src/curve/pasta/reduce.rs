@@ -1,5 +1,7 @@
 //! Affine bucket reduction with one shared inversion per pair-tree level.
 
+use core::marker::PhantomData;
+
 use crate::field::invert_nonzero;
 
 use super::{AffinePoint, PastaCurve, ProjectivePoint};
@@ -30,25 +32,252 @@ pub(super) fn sum<C: PastaCurve>(
 /// Reduces disjoint buckets to zero or one affine point, updating their lengths.
 ///
 /// Bucket `i` occupies `points[starts[i]..starts[i] + lens[i]]`. The caller
-/// reserves disjoint ranges, one start per length, and two field elements per
-/// possible pair (`points.len() / 2`). Survivors end up at their bucket's start.
+/// reserves disjoint ranges, one start per length, `fields` sized as described
+/// below, and one `loose_starts` entry per bucket. Survivors end up at their
+/// bucket's start.
+///
+/// The first level stages chord denominators from the reduced deposits in
+/// `points`; every sum is written loose into the tail of `fields`, and each
+/// level also writes the next level's denominators from the sums it has just
+/// formed, so later levels read every pair once. Survivors are reduced back
+/// into `points` once. `fields` holds `points.len() / 2` denominators, as
+/// many suffix products, and `2 * (points.len() / 2 + starts.len())` loose
+/// coordinates; `loose_starts` has one entry per bucket. A zero chord
+/// denominator falls back to one complete level on reduced points, as
+/// [`reduce_level`] documents.
 pub(crate) fn reduce<C: PastaCurve>(
     points: &mut [AffinePoint<C>],
     starts: &[usize],
     lens: &mut [usize],
     fields: &mut [PastaField<C::Base>],
+    loose_starts: &mut [usize],
 ) {
+    let cap = points.len() / 2;
+    let mut in_points = true;
+    let mut staged = 0;
     while lens.iter().any(|&n| n > 1) {
-        reduce_fused::<C, true>(points, starts, lens, fields);
+        let next = {
+            let (denom, rest) = fields.split_at_mut(cap);
+            let (suffix, loose) = rest.split_at_mut(cap);
+            if in_points {
+                let mut offset = 0;
+                for (loose_start, &len) in loose_starts.iter_mut().zip(lens.iter()) {
+                    *loose_start = offset;
+                    offset += len.div_ceil(2);
+                }
+                assert!(2 * offset <= loose.len(), "loose reduction scratch");
+                staged = stage::<C>(points, starts, lens, denom);
+                level::<C, true>(
+                    points,
+                    loose,
+                    starts,
+                    loose_starts,
+                    lens,
+                    denom,
+                    suffix,
+                    staged,
+                )
+            } else {
+                level::<C, false>(
+                    points,
+                    loose,
+                    starts,
+                    loose_starts,
+                    lens,
+                    denom,
+                    suffix,
+                    staged,
+                )
+            }
+        };
+        match next {
+            Some(next) => {
+                in_points = false;
+                staged = next;
+            }
+            None => {
+                if !in_points {
+                    materialize(points, &fields[2 * cap..], starts, loose_starts, lens);
+                }
+                reduce_level::<C, false>(points, starts, lens, fields);
+                in_points = true;
+            }
+        }
+    }
+    if !in_points {
+        materialize(points, &fields[2 * cap..], starts, loose_starts, lens);
     }
 }
 
-/// Reduces one pair-tree level while recovering inverses during point addition.
-///
-/// Storage follows [`reduce`]. Returns the number of noncancelling pairs added.
-/// With `INCOMPLETE`, first try chord denominators for every pair. A zero product
-/// retries [`reduce_level`] with complete formulas before changing points or
-/// lengths, so callers need not exclude doubling or cancellation.
+/// Writes the chord denominators of every pair of reduced deposits.
+fn stage<C: PastaCurve>(
+    points: &[AffinePoint<C>],
+    starts: &[usize],
+    lens: &[usize],
+    denom: &mut [PastaField<C::Base>],
+) -> usize {
+    let mut staged = 0;
+    for (&start, &len) in starts.iter().zip(lens) {
+        for pair in points[start..start + len].chunks_exact(2) {
+            denom[staged] = pair[1].x.sub(&pair[0].x);
+            staged += 1;
+        }
+    }
+    staged
+}
+
+/// Reduces every bucket's live loose points into `points`.
+fn materialize<C: PastaCurve>(
+    points: &mut [AffinePoint<C>],
+    loose: &[PastaField<C::Base>],
+    starts: &[usize],
+    loose_starts: &[usize],
+    lens: &[usize],
+) {
+    for ((&start, &loose_start), &len) in starts.iter().zip(loose_starts).zip(lens) {
+        let live = &loose[2 * loose_start..2 * (loose_start + len)];
+        for (slot, pair) in points[start..start + len]
+            .iter_mut()
+            .zip(live.chunks_exact(2))
+        {
+            *slot = AffinePoint {
+                x: pair[0].reduce(),
+                y: pair[1].reduce(),
+                marker: PhantomData,
+            };
+        }
+    }
+}
+
+/// One incomplete level over `staged` pairs whose denominators are in
+/// `denom`, reading reduced deposits from `points` when `FROM_POINTS` and
+/// loose pairs otherwise. Sums are written loose, and the denominators of the
+/// next level's pairs replace the consumed entries of `denom`. Returns the
+/// next level's pair count, or `None`, before changing `lens` or `loose`,
+/// when the product of the denominators is zero.
+#[inline(always)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "One level takes both point layouts, the bucket tables, and its scratch lanes."
+)]
+fn level<C: PastaCurve, const FROM_POINTS: bool>(
+    points: &[AffinePoint<C>],
+    loose: &mut [PastaField<C::Base>],
+    starts: &[usize],
+    loose_starts: &[usize],
+    lens: &mut [usize],
+    denom: &mut [PastaField<C::Base>],
+    suffix: &mut [PastaField<C::Base>],
+    staged: usize,
+) -> Option<usize> {
+    let mut inverses = [PastaField::ONE; 2];
+    if staged != 0 {
+        let mut products = [PastaField::ONE; 2];
+        products[(staged - 1) & 1] = denom[staged - 1];
+        if staged > 1 {
+            products[(staged - 2) & 1] = denom[staged - 2];
+        }
+        for i in (0..staged.saturating_sub(2)).rev() {
+            suffix[i] = products[i & 1];
+            products[i & 1] = products[i & 1].mul(&denom[i]);
+        }
+        let product = if staged == 1 {
+            products[0]
+        } else {
+            products[0].mul(&products[1])
+        };
+        let inverse = product.invert()?;
+        inverses = if staged == 1 {
+            [inverse, PastaField::ONE]
+        } else {
+            [inverse.mul(&products[1]), inverse.mul(&products[0])]
+        };
+    }
+    let mut read = 0;
+    let mut next = 0;
+    for ((&start, &loose_start), len) in starts.iter().zip(loose_starts).zip(lens.iter_mut()) {
+        let old = *len;
+        // The first level's output region holds one point per pair plus an
+        // odd survivor; later levels rewrite their input region in place.
+        let span = if FROM_POINTS { old.div_ceil(2) } else { old };
+        let out = &mut loose[2 * loose_start..2 * (loose_start + span)];
+        let mut emitter = Emitter {
+            written: 0,
+            previous_x: PastaField::ZERO,
+        };
+        let mut i = 0;
+        while i + 1 < old {
+            let (px, py, qx, qy) = if FROM_POINTS {
+                let (p, q) = (points[start + i], points[start + i + 1]);
+                (
+                    p.x.into_loose(),
+                    p.y.into_loose(),
+                    q.x.into_loose(),
+                    q.y.into_loose(),
+                )
+            } else {
+                let pair = &out[2 * i..2 * i + 4];
+                (pair[0], pair[1], pair[2], pair[3])
+            };
+            let inverse = if read < staged.saturating_sub(2) {
+                let result = inverses[read & 1].mul(&suffix[read]);
+                inverses[read & 1] = inverses[read & 1].mul(&denom[read]);
+                result
+            } else {
+                inverses[read & 1]
+            };
+            read += 1;
+            let slope = qy.sub(&py).mul(&inverse);
+            let (x, y) = AffinePoint::<C>::slope_coordinates(&px, &py, &qx, &slope);
+            emitter.emit(out, denom, &mut next, x, y);
+            i += 2;
+        }
+        if old & 1 != 0 {
+            let (x, y) = if FROM_POINTS {
+                let p = points[start + old - 1];
+                (p.x.into_loose(), p.y.into_loose())
+            } else {
+                (out[2 * (old - 1)], out[2 * (old - 1) + 1])
+            };
+            emitter.emit(out, denom, &mut next, x, y);
+        }
+        *len = emitter.written;
+    }
+    debug_assert_eq!(read, staged);
+    Some(next)
+}
+
+/// Writes one bucket's sums and survivors in order, and the next level's
+/// chord denominator each time a pair completes.
+struct Emitter<M: crate::field::PrimeModulus> {
+    written: usize,
+    previous_x: PastaField<M>,
+}
+
+impl<M: crate::field::PrimeModulus> Emitter<M> {
+    /// Sums land at or before the pair they replace, and the next level's
+    /// pair index never passes the current one, so both slabs are updated in
+    /// place.
+    #[inline(always)]
+    fn emit(
+        &mut self,
+        out: &mut [PastaField<M>],
+        denom: &mut [PastaField<M>],
+        next: &mut usize,
+        x: PastaField<M>,
+        y: PastaField<M>,
+    ) {
+        out[2 * self.written] = x;
+        out[2 * self.written + 1] = y;
+        if self.written & 1 != 0 {
+            denom[*next] = x.sub(&self.previous_x);
+            *next += 1;
+        }
+        self.previous_x = x;
+        self.written += 1;
+    }
+}
+
 #[inline(always)]
 fn reduce_fused<C: PastaCurve, const INCOMPLETE: bool>(
     points: &mut [AffinePoint<C>],

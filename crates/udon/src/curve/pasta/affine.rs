@@ -72,9 +72,11 @@ impl<C: PastaCurve> AffinePoint<C> {
 
     /// Returns the additive inverse `(x, -y)`.
     pub fn neg(&self) -> Self {
+        // Both Pasta groups have prime order, so no nonidentity point has
+        // order two and `y` is never zero: `p - y` is already reduced.
         Self {
             x: self.x,
-            y: self.y.neg().reduce(),
+            y: self.y.negate_nonzero(),
             marker: PhantomData,
         }
     }
@@ -107,6 +109,20 @@ impl<C: PastaCurve> AffinePoint<C> {
             y: y.reduce(),
             marker: PhantomData,
         }
+    }
+
+    /// [`Self::from_slope`] without the closing reductions: the loose
+    /// coordinates of the sum, for callers that keep intermediate sums loose.
+    #[inline]
+    pub(super) fn slope_coordinates<S: ReductionState>(
+        x1: &PastaField<C::Base, S>,
+        y1: &PastaField<C::Base, S>,
+        x2: &PastaField<C::Base, S>,
+        slope: &PastaField<C::Base>,
+    ) -> (PastaField<C::Base>, PastaField<C::Base>) {
+        let x = slope.square().sub(x1).sub(x2);
+        let y = slope.mul(&x1.sub(&x)).sub(y1);
+        (x, y)
     }
 
     /// [`Self::from_slope`] with a fused `mul_sub` for the `y` coordinate.

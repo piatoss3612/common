@@ -383,8 +383,9 @@ fn native_controls() {
                 let lens: Vec<_> = starts.iter().map(|&i| occupancy.min(n - i)).collect();
                 let mut points = bases[..n].to_vec();
                 let mut lengths = lens.clone();
-                let mut fields = vec![PastaField::ZERO; n * 3];
+                let mut fields = vec![PastaField::ZERO; n * 4 + 2 * starts.len()];
                 let mut writes = vec![0; n / 2];
+                let mut loose_starts = vec![0; starts.len()];
                 let mut histogram = Vec::new();
                 reduce::reduce_with::<C, false>(
                     &mut points,
@@ -408,9 +409,13 @@ fn native_controls() {
                                 &mut fields,
                                 &mut writes,
                             ),
-                            1 => {
-                                reduce::reduce(&mut points, &starts, &mut lengths, &mut fields[..n])
-                            }
+                            1 => reduce::reduce(
+                                &mut points,
+                                &starts,
+                                &mut lengths,
+                                &mut fields,
+                                &mut loose_starts,
+                            ),
                             _ => reduce::reduce_with::<C, true>(
                                 &mut points,
                                 &starts,
@@ -447,7 +452,8 @@ fn native_controls() {
                                     &mut points,
                                     &starts,
                                     &mut lengths,
-                                    &mut fields[..n],
+                                    &mut fields,
+                                    &mut loose_starts,
                                 ),
                                 _ => reduce::reduce_with::<C, true>(
                                     &mut points,

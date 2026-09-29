@@ -71,7 +71,8 @@ fn affine_reducer_and_weighted_collapse_match_biguint() {
                 &mut points,
                 &starts,
                 &mut lens,
-                &mut vec![PastaField::ONE; pairs * 2],
+                &mut vec![PastaField::ONE; pairs * 2 + 2 * (pairs + starts.len())],
+                &mut vec![0; starts.len()],
             );
             assert_eq!(lens, control_lens);
             assert_eq!(lens, fused_lens);

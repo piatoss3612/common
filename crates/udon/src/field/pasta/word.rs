@@ -15,6 +15,44 @@ pub(super) const fn sbb(lhs: u64, rhs: u64, borrow: u64) -> (u64, u64) {
     (value, (first_borrow | second_borrow) as u64)
 }
 
+/// Adds two limbs and a carry bit, returning the sum and its carry bit.
+///
+/// Chains of these lower to flag-carrying additions; the `u128` helpers
+/// materialize each carry as a register value instead.
+#[inline(always)]
+pub(super) fn carry_add(lhs: u64, rhs: u64, carry: bool) -> (u64, bool) {
+    lhs.carrying_add(rhs, carry)
+}
+
+/// Subtracts two unsigned 256-bit integers with a flag-carried borrow chain,
+/// returning the wrapped difference and borrow bit.
+#[inline(always)]
+pub(super) fn borrow_sub_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> ([u64; 4], bool) {
+    let (r0, borrow) = lhs[0].borrowing_sub(rhs[0], false);
+    let (r1, borrow) = lhs[1].borrowing_sub(rhs[1], borrow);
+    let (r2, borrow) = lhs[2].borrowing_sub(rhs[2], borrow);
+    let (r3, borrow) = lhs[3].borrowing_sub(rhs[3], borrow);
+    ([r0, r1, r2, r3], borrow)
+}
+
+/// Adds two unsigned 256-bit integers with a flag-carried carry chain,
+/// returning the wrapped sum and carry bit.
+#[inline(always)]
+pub(super) fn carry_add_limbs(lhs: &[u64; 4], rhs: &[u64; 4]) -> ([u64; 4], bool) {
+    let (r0, carry) = carry_add(lhs[0], rhs[0], false);
+    let (r1, carry) = carry_add(lhs[1], rhs[1], carry);
+    let (r2, carry) = carry_add(lhs[2], rhs[2], carry);
+    let (r3, carry) = carry_add(lhs[3], rhs[3], carry);
+    ([r0, r1, r2, r3], carry)
+}
+
+/// Returns the low and high limbs of `lhs * rhs`.
+#[inline(always)]
+pub(super) const fn wide_mul(lhs: u64, rhs: u64) -> (u64, u64) {
+    let value = lhs as u128 * rhs as u128;
+    (value as u64, (value >> 64) as u64)
+}
+
 /// Accumulates one limb product plus an accumulator limb and a carry limb.
 #[inline(always)]
 pub(crate) const fn mac(accumulator: u64, lhs: u64, rhs: u64, carry: u64) -> (u64, u64) {

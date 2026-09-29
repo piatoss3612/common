@@ -153,6 +153,13 @@ const fn layout<C: PastaCurve>(
                         size!(checked_count::<super::AffinePoint<C>>(pass, 2)),
                         buckets
                     ));
+                    // Denominators and suffix products for every pair, plus
+                    // loose coordinates for every sum and odd survivor.
+                    let pairs = deposits / 2;
+                    let loose = size!(checked_count::<crate::field::PastaField<C::Base>>(
+                        size!(add(pairs, buckets)),
+                        2
+                    ));
                     Requirements {
                         affine: size!(add(deposits, buckets)),
                         projective: if matches!(accumulation, Accumulation::Hybrid) {
@@ -160,7 +167,7 @@ const fn layout<C: PastaCurve>(
                         } else {
                             16
                         },
-                        field: 2 * (deposits / 2),
+                        field: size!(add(2 * pairs, loose)),
                         indices: 3 * buckets,
                         ..Requirements::ZERO
                     }

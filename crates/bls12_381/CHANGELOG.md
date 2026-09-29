@@ -10,7 +10,7 @@ internal implementation details are not tracked here.
 
 ## [Unreleased]
 
-## [2.1.0-rc.0] - 2026-09-27
+## [2.1.0] - 2026-09-29
 
 ### Changed
 

@@ -10,7 +10,7 @@ internal implementation details are not tracked here.
 
 ## [Unreleased]
 
-## [2.1.0-rc.0] - 2026-09-27
+## [2.1.0] - 2026-09-29
 
 ### Added
 
@@ -22,6 +22,13 @@ internal implementation details are not tracked here.
 - Sped up cached public-instance commitments in proof batches, improving
   large-batch Orchard verification on x86-64
   ([#503](https://github.com/zakura-core/common/pull/503)).
+- Reduced cloning of IPA generator coefficients and scalars during prepared
+  multi-scalar multiplication evaluation
+  ([#517](https://github.com/zakura-core/common/pull/517)).
+- Cached a constraint-expression evaluation plan in verifying keys. Keys
+  retain additional memory and verification uses extra scratch; pinned-key
+  and transcript hashes are unchanged
+  ([#517](https://github.com/zakura-core/common/pull/517)).
 
 ## [2.0.0] - 2026-09-23
 

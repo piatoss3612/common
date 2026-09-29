@@ -46,6 +46,65 @@ fn assembly_mul_accumulate_matches_full_width_integer_arithmetic() {
     }
 }
 
+#[cfg(all(udon_aarch64_asm, not(miri)))]
+#[test]
+fn assembly_partial_reduce_matches_full_width_integer_arithmetic() {
+    fn check(wide: [u64; 8], carry: u64, b448: [u64; 4], r2: [u64; 4]) {
+        let folded = crate::field::aarch64_asm::partial_reduce(wide, carry, &b448, &r2);
+        assert!(folded[7] <= 1);
+        assert_eq!(
+            integer(&folded),
+            integer(&wide[..7])
+                + BigUint::from(wide[7]) * integer(&b448)
+                + BigUint::from(carry) * integer(&r2)
+        );
+    }
+    fn check_field_constants<M: PrimeModulus>(state: &mut u64) {
+        for _ in 0..64 {
+            let wide = limbs(&BigUint::from_bytes_le(&deterministic_bytes::<64>(state)));
+            check(wide, xorshift64(state), M::B448, M::R2);
+        }
+    }
+    // Exercise the entire permitted range, b448 < 2^253 and r2 < 2^252,
+    // not only the particular residues of the two fields.
+    let folding_terms = [
+        ([0; 4], [0; 4]),
+        (
+            [u64::MAX, u64::MAX, u64::MAX, (1 << 61) - 1],
+            [u64::MAX, u64::MAX, u64::MAX, (1 << 60) - 1],
+        ),
+    ];
+    for (b448, r2) in folding_terms {
+        for carry in [0, 1, u64::MAX] {
+            check([0; 8], carry, b448, r2);
+            check([u64::MAX; 8], carry, b448, r2);
+            for limb in 0..8 {
+                let mut wide = [0; 8];
+                wide[limb] = u64::MAX;
+                check(wide, carry, b448, r2);
+            }
+        }
+    }
+    let mut state = 0x9b05_688c_2b3e_6c1f;
+    check_field_constants::<PallasBase>(&mut state);
+    check_field_constants::<PallasScalar>(&mut state);
+    for _ in 0..4096 {
+        let wide = limbs(&BigUint::from_bytes_le(&deterministic_bytes::<64>(
+            &mut state,
+        )));
+        let carry = xorshift64(&mut state);
+        let mut b448 = limbs::<4>(&BigUint::from_bytes_le(&deterministic_bytes::<32>(
+            &mut state,
+        )));
+        b448[3] &= (1 << 61) - 1;
+        let mut r2 = limbs::<4>(&BigUint::from_bytes_le(&deterministic_bytes::<32>(
+            &mut state,
+        )));
+        r2[3] &= (1 << 60) - 1;
+        check(wide, carry, b448, r2);
+    }
+}
+
 #[test]
 fn limb_kernels_match_full_width_integer_arithmetic() {
     for a in [0, 1, 1 << 63, u64::MAX] {

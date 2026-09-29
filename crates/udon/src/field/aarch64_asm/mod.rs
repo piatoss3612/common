@@ -43,7 +43,7 @@ use core::arch::asm;
 use super::pasta::PrimeModulus;
 
 mod products;
-pub(crate) use products::mul_accumulate;
+pub(crate) use products::{mul_accumulate, partial_reduce};
 
 /// Computes `lhs * rhs * R^-1 mod p` in `[0, 2p)` for inputs below `2p`.
 ///

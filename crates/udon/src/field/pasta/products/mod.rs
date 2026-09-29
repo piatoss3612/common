@@ -6,7 +6,9 @@
 use core::marker::PhantomData;
 
 use super::montgomery::{montgomery_reduce_unreduced, reduce_once, reduce_twice_modulus};
-use super::word::{adc, mac, multiply_wide, sbb, square_wide};
+#[cfg(not(all(udon_aarch64_asm, not(miri))))]
+use super::word::mac;
+use super::word::{adc, multiply_wide, sbb, square_wide};
 use super::{PastaField, PrimeModulus, ReductionState};
 
 #[cfg(test)]
@@ -339,31 +341,38 @@ impl<M: PrimeModulus> ProductSum<M> {
     // bound for Montgomery reduction returning a loose value below 2p.
     #[inline(always)]
     fn partial_reduce(&self) -> [u64; 8] {
-        let upper = self.wide[7];
-        let (t0, carry) = mac(0, upper, M::B448[0], 0);
-        let (t1, carry) = mac(0, upper, M::B448[1], carry);
-        let (t2, carry) = mac(0, upper, M::B448[2], carry);
-        let (t3, carry) = mac(0, upper, M::B448[3], carry);
-        let t4 = carry;
+        #[cfg(all(udon_aarch64_asm, not(miri)))]
+        {
+            crate::field::aarch64_asm::partial_reduce(self.wide, self.carry, &M::B448, &M::R2)
+        }
+        #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+        {
+            let upper = self.wide[7];
+            let (t0, carry) = mac(0, upper, M::B448[0], 0);
+            let (t1, carry) = mac(0, upper, M::B448[1], carry);
+            let (t2, carry) = mac(0, upper, M::B448[2], carry);
+            let (t3, carry) = mac(0, upper, M::B448[3], carry);
+            let t4 = carry;
 
-        let (t0, carry) = mac(t0, self.carry, M::R2[0], 0);
-        let (t1, carry) = mac(t1, self.carry, M::R2[1], carry);
-        let (t2, carry) = mac(t2, self.carry, M::R2[2], carry);
-        let (t3, carry) = mac(t3, self.carry, M::R2[3], carry);
-        let (t4, overflow) = adc(t4, 0, carry);
-        debug_assert_eq!(overflow, 0);
+            let (t0, carry) = mac(t0, self.carry, M::R2[0], 0);
+            let (t1, carry) = mac(t1, self.carry, M::R2[1], carry);
+            let (t2, carry) = mac(t2, self.carry, M::R2[2], carry);
+            let (t3, carry) = mac(t3, self.carry, M::R2[3], carry);
+            let (t4, overflow) = adc(t4, 0, carry);
+            debug_assert_eq!(overflow, 0);
 
-        let (d0, carry) = adc(self.wide[0], t0, 0);
-        let (d1, carry) = adc(self.wide[1], t1, carry);
-        let (d2, carry) = adc(self.wide[2], t2, carry);
-        let (d3, carry) = adc(self.wide[3], t3, carry);
-        let (d4, carry) = adc(self.wide[4], t4, carry);
-        let (d5, carry) = adc(self.wide[5], 0, carry);
-        let (d6, carry) = adc(self.wide[6], 0, carry);
-        let d7 = carry;
-        debug_assert!(d7 <= 1);
+            let (d0, carry) = adc(self.wide[0], t0, 0);
+            let (d1, carry) = adc(self.wide[1], t1, carry);
+            let (d2, carry) = adc(self.wide[2], t2, carry);
+            let (d3, carry) = adc(self.wide[3], t3, carry);
+            let (d4, carry) = adc(self.wide[4], t4, carry);
+            let (d5, carry) = adc(self.wide[5], 0, carry);
+            let (d6, carry) = adc(self.wide[6], 0, carry);
+            let d7 = carry;
+            debug_assert!(d7 <= 1);
 
-        [d0, d1, d2, d3, d4, d5, d6, d7]
+            [d0, d1, d2, d3, d4, d5, d6, d7]
+        }
     }
 }
 

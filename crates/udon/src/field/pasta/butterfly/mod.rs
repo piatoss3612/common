@@ -4,8 +4,11 @@
 
 use super::{
     PastaField, PrimeModulus,
-    word::{adc, mac, subtract_limbs},
+    word::{adc, mac},
 };
+
+#[cfg(any(test, not(all(udon_aarch64_asm, not(miri)))))]
+use super::word::subtract_limbs;
 
 #[cfg(test)]
 mod experiments;
@@ -62,29 +65,37 @@ pub(crate) fn scale<M: PrimeModulus>(
 // The full loose multiplication bound is proved in montgomery::square_run.
 // The sealed Pasta moduli have limbs [p0, p1, 0, 1 << 62], which lets
 // reduction replace two multiplication steps with shifts and addition.
-// Keep this loop separate from ordinary multiplication so FFT inlining
+// Keep the portable loop separate from ordinary multiplication so FFT inlining
 // decisions do not change the field's ordinary multiplication kernel.
+// Assembly shares the field kernel to keep its coverage in sync.
 #[inline]
 fn multiply<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
-    let mut accumulator = [0; 5];
-    for rhs_limb in rhs {
-        let mut carry = 0;
-        for index in 0..4 {
-            (accumulator[index], carry) = mac(accumulator[index], lhs[index], *rhs_limb, carry);
-        }
-        let (upper, product_overflow) = adc(accumulator[4], carry, 0);
-        accumulator[4] = upper;
-        let multiplier = accumulator[0].wrapping_mul(M::MONTGOMERY_INV);
-        let (cancelled, carry) = mac(accumulator[0], multiplier, M::MODULUS[0], 0);
-        debug_assert_eq!(cancelled, 0);
-        let (r0, carry) = mac(accumulator[1], multiplier, M::MODULUS[1], carry);
-        let (r1, carry) = adc(accumulator[2], 0, carry);
-        let (r2, carry) = adc(accumulator[3], multiplier << 62, carry);
-        let (r3, reduction_overflow) = adc(accumulator[4], multiplier >> 2, carry);
-        accumulator = [r0, r1, r2, r3, product_overflow + reduction_overflow];
+    #[cfg(all(udon_aarch64_asm, not(miri)))]
+    {
+        super::montgomery::montgomery_multiply_loose::<M>(lhs, rhs)
     }
-    debug_assert_eq!(accumulator[4], 0);
-    accumulator[..4].try_into().unwrap()
+    #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+    {
+        let mut accumulator = [0; 5];
+        for rhs_limb in rhs {
+            let mut carry = 0;
+            for index in 0..4 {
+                (accumulator[index], carry) = mac(accumulator[index], lhs[index], *rhs_limb, carry);
+            }
+            let (upper, product_overflow) = adc(accumulator[4], carry, 0);
+            accumulator[4] = upper;
+            let multiplier = accumulator[0].wrapping_mul(M::MONTGOMERY_INV);
+            let (cancelled, carry) = mac(accumulator[0], multiplier, M::MODULUS[0], 0);
+            debug_assert_eq!(cancelled, 0);
+            let (r0, carry) = mac(accumulator[1], multiplier, M::MODULUS[1], carry);
+            let (r1, carry) = adc(accumulator[2], 0, carry);
+            let (r2, carry) = adc(accumulator[3], multiplier << 62, carry);
+            let (r3, reduction_overflow) = adc(accumulator[4], multiplier >> 2, carry);
+            accumulator = [r0, r1, r2, r3, product_overflow + reduction_overflow];
+        }
+        debug_assert_eq!(accumulator[4], 0);
+        accumulator[..4].try_into().unwrap()
+    }
 }
 
 // Both inputs, outputs, and any supplied twiddle are loose.
@@ -99,28 +110,38 @@ pub(crate) fn butterfly<M: PrimeModulus>(
         Some(twiddle) => multiply::<M>(&right.limbs, &twiddle.limbs),
         None => right.limbs,
     };
-    let modulus = M::TWICE_MODULUS;
-    debug_assert!(super::word::compare_limbs(&left.limbs, &modulus).is_lt());
-    debug_assert!(super::word::compare_limbs(&product, &modulus).is_lt());
-    let mut sum = [0; 4];
-    let mut carry = 0;
-    for (index, limb) in sum.iter_mut().enumerate() {
-        (*limb, carry) = adc(left.limbs[index], product[index], carry);
+    #[cfg(all(udon_aarch64_asm, not(miri)))]
+    {
+        let sum = super::montgomery::add_twice_modulus::<M>(&left.limbs, &product);
+        let difference = super::montgomery::sub_twice_modulus::<M>(&left.limbs, &product);
+        left.limbs = sum;
+        right.limbs = difference;
     }
-    let (reduced, borrow) = subtract_limbs(&sum, &modulus);
-    if carry != 0 || borrow == 0 {
-        sum = reduced;
-    }
-    let (mut difference, borrow) = subtract_limbs(&left.limbs, &product);
-    if borrow != 0 {
+    #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+    {
+        let modulus = M::TWICE_MODULUS;
+        debug_assert!(super::word::compare_limbs(&left.limbs, &modulus).is_lt());
+        debug_assert!(super::word::compare_limbs(&product, &modulus).is_lt());
+        let mut sum = [0; 4];
         let mut carry = 0;
-        for (limb, modulus) in difference.iter_mut().zip(modulus) {
-            (*limb, carry) = adc(*limb, modulus, carry);
+        for (index, limb) in sum.iter_mut().enumerate() {
+            (*limb, carry) = adc(left.limbs[index], product[index], carry);
         }
-        debug_assert_eq!(carry, 1);
+        let (reduced, borrow) = subtract_limbs(&sum, &modulus);
+        if carry != 0 || borrow == 0 {
+            sum = reduced;
+        }
+        let (mut difference, borrow) = subtract_limbs(&left.limbs, &product);
+        if borrow != 0 {
+            let mut carry = 0;
+            for (limb, modulus) in difference.iter_mut().zip(modulus) {
+                (*limb, carry) = adc(*limb, modulus, carry);
+            }
+            debug_assert_eq!(carry, 1);
+        }
+        left.limbs = sum;
+        right.limbs = difference;
     }
-    left.limbs = sum;
-    right.limbs = difference;
 }
 
 /// Decimation-in-frequency butterfly.
@@ -184,7 +205,12 @@ mod tests {
     fn boundaries<M: PrimeModulus>() {
         let p = integer(M::MODULUS);
         let twice = &p * 2u32;
-        let inverse_r = (BigUint::from(1u32) << 256usize).modpow(&(&p - 2u32), &p);
+        let radix = BigUint::from(1u32) << 256usize;
+        let negative_inverse = &radix - p.modinv(&radix).unwrap();
+        let redc = |product: BigUint| {
+            let q = &product * &negative_inverse % &radix;
+            (product + q * &p) / &radix
+        };
         let values = [
             BigUint::from(0u32),
             BigUint::from(1u32),
@@ -205,35 +231,38 @@ mod tests {
                     Some(field::<M>(&(&p / 2u32))),
                     Some(field::<M>(&(&p - 2u32))),
                     Some(field::<M>(&(&p - 1u32))),
+                    Some(field::<M>(&p)),
+                    Some(field::<M>(&(&p + 1u32))),
+                    Some(field::<M>(&(&twice - 1u32))),
                 ] {
                     let product = twiddle.map_or_else(
-                        || right % &p,
-                        |twiddle| (right * integer(twiddle.montgomery_limbs()) * &inverse_r) % &p,
+                        || right.clone(),
+                        |twiddle| redc(right * integer(twiddle.montgomery_limbs())),
                     );
                     if let Some(twiddle) = twiddle {
                         let scaled = scale(field::<M>(right), &twiddle);
                         assert!(integer(scaled.limbs) < twice);
-                        assert_eq!(integer(scaled.limbs) % &p, product);
+                        assert_eq!(integer(scaled.limbs), product);
                     }
                     let mut low = field::<M>(left);
                     let mut high = field::<M>(right);
                     butterfly(&mut low, &mut high, twiddle.as_ref());
                     assert!(integer(low.limbs) < twice);
                     assert!(integer(high.limbs) < twice);
-                    assert_eq!(integer(low.limbs) % &p, (left + &product) % &p);
-                    assert_eq!(integer(high.limbs) % &p, (left + &twice - &product) % &p);
+                    assert_eq!(integer(low.limbs), (left + &product) % &twice);
+                    assert_eq!(integer(high.limbs), (left + &twice - &product) % &twice);
                     let mut low = field::<M>(left);
                     let mut high = field::<M>(right);
                     butterfly_dif(&mut low, &mut high, twiddle.as_ref());
                     assert!(integer(low.limbs) < twice);
                     assert!(integer(high.limbs) < twice);
-                    assert_eq!(integer(low.limbs) % &p, (left + right) % &p);
-                    let difference = (left + &twice - right) % &p;
+                    assert_eq!(integer(low.limbs), (left + right) % &twice);
+                    let difference = (left + &twice - right) % &twice;
                     let expected = twiddle.map_or_else(
                         || difference.clone(),
-                        |twiddle| (&difference * integer(twiddle.limbs) * &inverse_r) % &p,
+                        |twiddle| redc(&difference * integer(twiddle.limbs)),
                     );
-                    assert_eq!(integer(high.limbs) % &p, expected);
+                    assert_eq!(integer(high.limbs), expected);
                     for dif in [false, true] {
                         let mut lows = [field::<M>(left); 2];
                         let mut highs = [field::<M>(right); 2];
@@ -244,25 +273,29 @@ mod tests {
                             butterfly_pair::<M, false>(&mut lows, &mut highs, twiddles);
                         }
                         for i in 0..2 {
-                            let product = if i == 0 { product.clone() } else { right % &p };
-                            let sum = if dif {
-                                (left + right) % &p
+                            let product = if i == 0 {
+                                product.clone()
                             } else {
-                                (left + &product) % &p
+                                right.clone()
+                            };
+                            let sum = if dif {
+                                (left + right) % &twice
+                            } else {
+                                (left + &product) % &twice
                             };
                             let difference = if dif {
                                 if i == 0 {
                                     expected.clone()
                                 } else {
-                                    (left + &twice - right) % &p
+                                    (left + &twice - right) % &twice
                                 }
                             } else {
-                                (left + &twice - &product) % &p
+                                (left + &twice - &product) % &twice
                             };
                             assert!(integer(lows[i].limbs) < twice);
                             assert!(integer(highs[i].limbs) < twice);
-                            assert_eq!(integer(lows[i].limbs) % &p, sum);
-                            assert_eq!(integer(highs[i].limbs) % &p, difference);
+                            assert_eq!(integer(lows[i].limbs), sum);
+                            assert_eq!(integer(highs[i].limbs), difference);
                         }
                     }
                 }

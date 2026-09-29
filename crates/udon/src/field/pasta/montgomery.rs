@@ -34,21 +34,18 @@ pub(super) fn reduce_twice_modulus<M: PrimeModulus>(limbs: [u64; 4], carry: u64)
 /// part in the single conditional subtraction of `2p`.
 #[inline(always)]
 pub(super) fn add_twice_modulus<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
-    #[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+    #[cfg(all(udon_aarch64_asm, not(miri)))]
     {
         crate::field::aarch64_asm::add_loose(lhs, rhs, &M::TWICE_MODULUS)
     }
-    #[cfg(not(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri))))]
+    #[cfg(not(all(udon_aarch64_asm, not(miri))))]
     {
         add_twice_modulus_rust::<M>(lhs, rhs)
     }
 }
 
 /// Portable [`add_twice_modulus`]; the oracle for the assembly block.
-#[cfg_attr(
-    all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)),
-    allow(dead_code)
-)]
+#[cfg_attr(all(udon_aarch64_asm, not(miri)), allow(dead_code))]
 #[inline(always)]
 pub(super) fn add_twice_modulus_rust<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
     let (sum, carry) = carry_add_limbs(lhs, rhs);
@@ -60,21 +57,18 @@ pub(super) fn add_twice_modulus_rust<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64
 /// `2p` back exactly when the subtraction borrows.
 #[inline(always)]
 pub(super) fn sub_twice_modulus<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
-    #[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+    #[cfg(all(udon_aarch64_asm, not(miri)))]
     {
         crate::field::aarch64_asm::sub_loose(lhs, rhs, &M::TWICE_MODULUS)
     }
-    #[cfg(not(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri))))]
+    #[cfg(not(all(udon_aarch64_asm, not(miri))))]
     {
         sub_twice_modulus_rust::<M>(lhs, rhs)
     }
 }
 
 /// Portable [`sub_twice_modulus`]; the oracle for the assembly block.
-#[cfg_attr(
-    all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)),
-    allow(dead_code)
-)]
+#[cfg_attr(all(udon_aarch64_asm, not(miri)), allow(dead_code))]
 #[inline(always)]
 pub(super) fn sub_twice_modulus_rust<M: PrimeModulus>(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
     let (difference, borrow) = borrow_sub_limbs(lhs, rhs);
@@ -148,7 +142,7 @@ pub(super) fn montgomery_multiply_loose<M: PrimeModulus>(
     debug_assert_eq!(M::MODULUS[3], 1 << 62);
     debug_assert!(super::word::compare_limbs(lhs, &M::TWICE_MODULUS).is_lt());
     debug_assert!(super::word::compare_limbs(rhs, &M::TWICE_MODULUS).is_lt());
-    #[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+    #[cfg(all(udon_aarch64_asm, not(miri)))]
     {
         crate::field::aarch64_asm::montgomery_multiply_loose(
             lhs,
@@ -158,7 +152,7 @@ pub(super) fn montgomery_multiply_loose<M: PrimeModulus>(
             M::MONTGOMERY_INV,
         )
     }
-    #[cfg(not(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri))))]
+    #[cfg(not(all(udon_aarch64_asm, not(miri))))]
     {
         montgomery_multiply_loose_rust::<M>(lhs, rhs)
     }
@@ -166,10 +160,7 @@ pub(super) fn montgomery_multiply_loose<M: PrimeModulus>(
 
 /// The portable form of [`montgomery_multiply_loose`], and the oracle for
 /// the assembly form.
-#[cfg_attr(
-    all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)),
-    allow(dead_code)
-)]
+#[cfg_attr(all(udon_aarch64_asm, not(miri)), allow(dead_code))]
 #[inline(always)]
 pub(super) fn montgomery_multiply_loose_rust<M: PrimeModulus>(
     lhs: &[u64; 4],
@@ -215,11 +206,19 @@ pub(super) fn montgomery_multiply_loose_rust<M: PrimeModulus>(
 /// Squares a loose Montgomery residue, retaining the `[0, 2p)` bound.
 #[inline(always)]
 pub(super) fn montgomery_square<M: PrimeModulus>(value: &[u64; 4]) -> [u64; 4] {
-    montgomery_reduce_unreduced::<M>(crate::field::pasta::word::square_wide(value))
+    #[cfg(all(udon_aarch64_asm, not(miri)))]
+    {
+        crate::field::aarch64_asm::square::<M>(value)
+    }
+    #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+    {
+        montgomery_reduce_unreduced::<M>(super::word::square_wide(value))
+    }
 }
 
 /// Montgomery REDC: maps an eight-limb integer below `p * R` to its
 /// reduced residue after multiplication by `R^-1`, where `R = 2^256`.
+#[cfg(any(test, not(all(udon_aarch64_asm, not(miri)))))]
 #[inline(always)]
 pub(super) fn montgomery_reduce<M: PrimeModulus>(limbs: [u64; 8]) -> [u64; 4] {
     reduce_once::<M>(montgomery_reduce_unreduced::<M>(limbs))
@@ -235,26 +234,33 @@ pub(super) fn montgomery_reduce<M: PrimeModulus>(limbs: [u64; 8]) -> [u64; 4] {
 /// result takes one subtraction, or two for the wider input bound.
 #[inline(always)]
 pub(super) fn montgomery_reduce_unreduced<M: PrimeModulus>(limbs: [u64; 8]) -> [u64; 4] {
-    // Cancel only the low half, then add the untouched high half once.
-    // This is the same REDC integer as full-width cancellation. Under the
-    // documented bound the final sum is below 3p < R, so no carry is lost.
-    let [mut r0, mut r1, mut r2, mut r3, t4, t5, t6, t7] = limbs;
-    for _ in 0..4 {
-        let k = r0.wrapping_mul(M::MONTGOMERY_INV);
-        let (cancelled, carry) = mac(r0, k, M::MODULUS[0], 0);
-        debug_assert_eq!(cancelled, 0);
-        let (s0, carry) = mac(r1, k, M::MODULUS[1], carry);
-        let (s1, carry) = adc(r2, 0, carry);
-        let (s2, carry) = adc(r3, k << 62, carry);
-        let s3 = (k >> 2) + carry;
-        (r0, r1, r2, r3) = (s0, s1, s2, s3);
+    #[cfg(all(udon_aarch64_asm, not(miri)))]
+    {
+        crate::field::aarch64_asm::reduce_wide::<M>(limbs)
     }
-    let (r0, carry) = adc(r0, t4, 0);
-    let (r1, carry) = adc(r1, t5, carry);
-    let (r2, carry) = adc(r2, t6, carry);
-    let (r3, carry) = adc(r3, t7, carry);
-    debug_assert_eq!(carry, 0);
-    [r0, r1, r2, r3]
+    #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+    {
+        // Cancel only the low half, then add the untouched high half once.
+        // This is the same REDC integer as full-width cancellation. Under the
+        // documented bound the final sum is below 3p < R, so no carry is lost.
+        let [mut r0, mut r1, mut r2, mut r3, t4, t5, t6, t7] = limbs;
+        for _ in 0..4 {
+            let k = r0.wrapping_mul(M::MONTGOMERY_INV);
+            let (cancelled, carry) = mac(r0, k, M::MODULUS[0], 0);
+            debug_assert_eq!(cancelled, 0);
+            let (s0, carry) = mac(r1, k, M::MODULUS[1], carry);
+            let (s1, carry) = adc(r2, 0, carry);
+            let (s2, carry) = adc(r3, k << 62, carry);
+            let s3 = (k >> 2) + carry;
+            (r0, r1, r2, r3) = (s0, s1, s2, s3);
+        }
+        let (r0, carry) = adc(r0, t4, 0);
+        let (r1, carry) = adc(r1, t5, carry);
+        let (r2, carry) = adc(r2, t6, carry);
+        let (r3, carry) = adc(r3, t7, carry);
+        debug_assert_eq!(carry, 0);
+        [r0, r1, r2, r3]
+    }
 }
 
 /// Repeated squaring and an optional product, all in `[0, 2p)`.
@@ -276,12 +282,28 @@ pub(super) fn square_run<M: PrimeModulus>(
     count: usize,
     factor: Option<&[u64; 4]>,
 ) -> [u64; 4] {
-    let mut value = *value;
-    for _ in 0..count {
-        value = montgomery_reduce_unreduced::<M>(super::word::square_wide(&value));
+    #[cfg(all(udon_aarch64_asm, not(miri)))]
+    {
+        if count == 0 {
+            return factor.map_or(*value, |factor| {
+                montgomery_multiply_loose::<M>(value, factor)
+            });
+        }
+        match factor {
+            Some(factor) => crate::field::aarch64_asm::sqr_n_mul::<M>(value, count, factor),
+            None if count == 1 => montgomery_square::<M>(value),
+            None => crate::field::aarch64_asm::sqr_n::<M>(value, count),
+        }
     }
-    match factor {
-        Some(factor) => montgomery_multiply_loose::<M>(&value, factor),
-        None => value,
+    #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+    {
+        let mut value = *value;
+        for _ in 0..count {
+            value = montgomery_reduce_unreduced::<M>(super::word::square_wide(&value));
+        }
+        match factor {
+            Some(factor) => montgomery_multiply_loose::<M>(&value, factor),
+            None => value,
+        }
     }
 }

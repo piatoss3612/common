@@ -5,7 +5,9 @@
 
 use core::marker::PhantomData;
 
-use super::montgomery::{montgomery_multiply, montgomery_reduce, montgomery_reduce_unreduced};
+use super::montgomery::{
+    montgomery_multiply, montgomery_multiply_loose, montgomery_reduce_unreduced,
+};
 use super::word::{adc, compare_limbs, multiply_wide};
 use super::{CanonicalUint, ENCODED_SIZE, PastaField, PrimeModulus, ReductionState};
 
@@ -115,13 +117,20 @@ macro_rules! __pasta_hex {
 impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     pub(super) fn from_canonical_limbs(limbs: [u64; 4]) -> Self {
         debug_assert!(compare_limbs(&limbs, &M::MODULUS).is_lt());
-        Self::from_loose(montgomery_multiply::<M>(&limbs, &M::R2))
+        Self::from_loose(montgomery_multiply_loose::<M>(&limbs, &M::R2))
     }
 
     pub(super) fn canonical_limbs(&self) -> [u64; 4] {
-        let mut wide = [0; 8];
-        wide[..4].copy_from_slice(&self.limbs);
-        montgomery_reduce::<M>(wide)
+        #[cfg(all(udon_aarch64_asm, not(miri)))]
+        {
+            crate::field::aarch64_asm::from_mont::<M>(&self.limbs)
+        }
+        #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+        {
+            let mut wide = [0; 8];
+            wide[..4].copy_from_slice(&self.limbs);
+            super::montgomery::montgomery_reduce::<M>(wide)
+        }
     }
 
     /// Converts an ordinary integer to this field, returning `None` if it is

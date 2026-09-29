@@ -52,8 +52,6 @@ pub fn check<M: PrimeModulus>() {
     let _ = M::ZETA_INVERSE;
     #[cfg(feature = "modulus-signed62")]
     let _ = M::MODULUS_SIGNED62;
-    #[cfg(feature = "safegcd-corrections")]
-    let _ = M::SAFEGCD_CORRECTIONS;
     #[cfg(feature = "power-of-two-inverses")]
     let _ = M::POWER_OF_TWO_INVERSES;
     #[cfg(feature = "pow-sqrt-exponent")]

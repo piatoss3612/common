@@ -3950,6 +3950,7 @@ dependencies = [
 name = "zakura-udon"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "criterion 0.6.0",
  "num-bigint",
  "proptest",

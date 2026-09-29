@@ -1,8 +1,5 @@
 //! Variable-time multiscalar multiplication with caller-owned storage.
 //!
-//! The repository's [preparation guide](https://github.com/zakura-core/common/blob/main/docs/msm-preparation.md)
-//! connects table storage, scalar caches, workspace planning, and embedding.
-//!
 //! [`execution::BatchPlan`] plans and executes contiguous inputs, retaining scheduling
 //! metadata for repeated execution of the same immutable scalar rows and bases.
 //! [`Selection`] retains validated base mappings across scalar rows. For

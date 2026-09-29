@@ -65,6 +65,7 @@ fn production_booth_bounds_and_partial_row_visits() {
                 &records,
                 geometry,
                 &mut digits[..geometry.storage_len(records.len()).unwrap()],
+                None,
                 TaskBudget::new(7).unwrap(),
                 &Pool,
             );

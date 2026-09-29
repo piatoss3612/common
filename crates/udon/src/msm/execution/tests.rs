@@ -26,6 +26,98 @@ use std::num::NonZeroUsize;
 use std::{string::ToString, vec, vec::Vec};
 
 struct Fragments<'a, T>(&'a [T]);
+
+#[test]
+fn produced_alpha_falls_back_under_a_small_workspace() {
+    use crate::{
+        exec::ExecutionOptions,
+        msm::{AlphaCodebook, AlphaCoefficient, AlphaDescription, AlphaTable},
+    };
+    fn check<C: PastaCurve>() {
+        let d = AlphaDescription::new(7).unwrap();
+        let mut codes = vec![0; d.codes()];
+        let mut coefficients = vec![AlphaCoefficient::ZERO; d.layers()];
+        let book = AlphaCodebook::prepare(
+            d,
+            &mut codes,
+            &mut coefficients,
+            &mut vec![0; d.codebook_scratch()],
+        );
+        let g = AffinePoint::<C>::GENERATOR;
+        let mut entries = vec![g; d.layers()];
+        let table = AlphaTable::prepare(
+            book,
+            &[g],
+            &mut entries,
+            &mut [ProjectivePoint::IDENTITY],
+            &mut [PastaField::ZERO],
+            TaskBudget::SERIAL,
+            &SerialExecutor,
+        );
+        let input = ProducedInput::dense(Bases::Alpha(table));
+        let options = ExecutionOptions::DEFAULT.with_memory_limit(4096);
+        let plan = MsmPlan::for_produced(input, NonZeroUsize::new(1).unwrap(), options).unwrap();
+        assert!(!matches!(plan.job.geometry, super::Geometry::Alpha(_)));
+        let scalars = [PastaField::<C::Scalar>::from_u64(7).invert().unwrap()];
+        let expected = g.mul_projective(&scalars[0]);
+        let arena = Arena::new(plan);
+        let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
+        let mut identity = Identity::new();
+        let mut slots = [TaskStorage::EMPTY];
+        let mut run = MsmRun::new_produced_partition(plan, input, 0..1, &mut identity, &mut slots);
+        while run.result().is_none() {
+            let mut ready = [None];
+            assert_eq!(run.ready(&mut ready), 1);
+            let request = ready[0].unwrap();
+            let mut task = run
+                .try_claim(request, || {
+                    Some(ProducedLease {
+                        arithmetic: arena.acquire(request, &work)?,
+                        scalars: Fragments(&scalars),
+                        indices: Fragments(&[]),
+                    })
+                })
+                .unwrap()
+                .unwrap();
+            task.execute().unwrap();
+            assert_eq!(run.complete(task.finish()).unwrap().error, None);
+        }
+        assert_eq!(run.result(), Some(expected));
+
+        let mut records = [ScalarStorage::ZERO];
+        let prepared =
+            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
+        let alpha = MsmPlan::for_input(
+            &Input::new_prepared(Bases::Alpha(table), prepared),
+            ExecutionOptions::DEFAULT,
+        )
+        .unwrap();
+        assert!(matches!(alpha.job.geometry, super::Geometry::Alpha(7)));
+        assert!(!alpha.accepts(Input::new_prepared(Bases::Affine(&[g]), prepared)));
+        let streaming = MsmPlan::new_with(
+            1,
+            ArithmeticOptions::DEFAULT
+                .with_algorithm(Algorithm::StreamingBooth { width: None })
+                .unwrap(),
+            NonZeroUsize::new(1).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(prepared.alpha_cache_len(&streaming), 0);
+        let mut storage = [0xa5; 8];
+        let unchanged = prepared.cache_alpha(
+            &streaming,
+            book,
+            &mut storage,
+            TaskBudget::SERIAL,
+            &SerialExecutor,
+        );
+        assert_eq!(unchanged.retained_bytes(), prepared.retained_bytes());
+        assert_eq!(storage, [0xa5; 8]);
+    }
+    check::<Pallas>();
+    check::<Vesta>();
+}
+
 impl<T> ReadView<T> for Fragments<'_, T> {
     fn len(&self) -> usize {
         self.0.len()
@@ -83,113 +175,143 @@ fn produced<C: PastaCurve>() {
         })
         .collect();
     let indices: Vec<_> = (0..TERMS).map(|i| (i * 11 % TERMS) as u32).collect();
-    for indexed in [false, true] {
-        for streaming in [false, true] {
-            let options = if streaming {
-                ArithmeticOptions::DEFAULT
-                    .with_algorithm(Algorithm::StreamingBooth { width: None })
-                    .unwrap()
-                    .with_chunk_size(NonZeroUsize::new(512).unwrap())
-            } else {
-                ArithmeticOptions::DEFAULT
-            };
-            let original =
-                MsmPlan::<C>::new_with(TERMS, options, NonZeroUsize::new(TERMS).unwrap()).unwrap();
-            let plan = original
-                .with_grain(NonZeroUsize::new(512).unwrap())
-                .unwrap();
-            assert_eq!(plan.output_slots(), original.output_slots());
-            assert_eq!(plan.preparation_terms(), 256);
-            let input = if indexed {
-                ProducedInput::indexed(Bases::Affine(&bases), TERMS)
-            } else {
-                ProducedInput::dense(Bases::Affine(&bases))
-            };
-            let range = 17..619;
-            let expected = ladder::<C>(range.clone().fold(PastaField::ZERO, |sum, i| {
-                sum.add(&scalars[i].mul(&PastaField::<_>::from_u64(if indexed {
-                    indices[i] as u64 + 1
+    let description = super::super::AlphaDescription::new(7).unwrap();
+    let mut codes = vec![0; description.codes()];
+    let mut coefficients = vec![super::super::AlphaCoefficient::ZERO; description.layers()];
+    let book = super::super::AlphaCodebook::prepare(
+        description,
+        &mut codes,
+        &mut coefficients,
+        &mut vec![0; description.codebook_scratch()],
+    );
+    let mut entries = vec![AffinePoint::<C>::GENERATOR; TERMS * description.layers()];
+    let table = super::super::AlphaTable::prepare(
+        book,
+        &bases,
+        &mut entries,
+        &mut vec![ProjectivePoint::IDENTITY; TERMS],
+        &mut vec![PastaField::ZERO; TERMS],
+        TaskBudget::SERIAL,
+        &SerialExecutor,
+    );
+    for bank in [Bases::Affine(&bases), Bases::Alpha(table)] {
+        for indexed in [false, true] {
+            for streaming in [false, true] {
+                let options = if streaming {
+                    ArithmeticOptions::DEFAULT
+                        .with_algorithm(Algorithm::StreamingBooth { width: None })
+                        .unwrap()
+                        .with_chunk_size(NonZeroUsize::new(512).unwrap())
                 } else {
-                    i as u64 + 1
-                })))
-            }));
-            let arena = Arena::new(plan);
-            let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
-            let mut identity = Identity::new();
-            let mut slots = [const { TaskStorage::EMPTY }; 3];
-            let mut run = MsmRun::new_produced_partition(
-                plan,
-                input,
-                range.clone(),
-                &mut identity,
-                &mut slots,
-            );
-            let mut ready = [None; 3];
-            run.ready(&mut ready);
-            let old_request = ready[0].unwrap();
-            for repetition in 0..2 {
-                if repetition != 0 {
-                    run.rebind_produced_partition(plan, input, range.clone())
-                        .unwrap();
-                    assert!(matches!(
-                        run.try_claim(old_request, || None::<ProducedLease<'_, C>>),
-                        Err(TaskError::Stale)
-                    ));
-                }
-                let mut first_ready = false;
-                let mut completed_later_preparation = false;
-                while run.result().is_none() {
-                    let count = run.ready(&mut ready);
-                    let mut progress = false;
-                    for request in ready[..count].iter().flatten().rev() {
-                        if request.kind == WorkKind::Prepare
-                            && request.offset == range.start
-                            && !first_ready
-                        {
-                            assert!(
-                                run.try_claim(*request, || None::<ProducedLease<'_, C>>)
-                                    .unwrap()
-                                    .is_none()
-                            );
-                            continue;
-                        }
-                        let source_range = request.offset..request.offset + request.terms;
-                        let mut task = run
-                            .try_claim(*request, || {
-                                Some(ProducedLease {
-                                    arithmetic: arena.acquire(*request, &work)?,
-                                    scalars: Fragments(&scalars[source_range.clone()]),
-                                    indices: Fragments(if indexed {
-                                        &indices[source_range]
-                                    } else {
-                                        &[]
-                                    }),
-                                })
-                            })
-                            .unwrap()
-                            .unwrap();
-                        task.execute().unwrap();
-                        let published = run.complete(task.finish()).unwrap();
-                        assert_eq!(published.error, None);
-                        if request.kind == WorkKind::Prepare && !first_ready {
-                            completed_later_preparation = true;
-                        }
-                        progress = true;
-                    }
-                    if !first_ready {
-                        first_ready = true;
+                    ArithmeticOptions::DEFAULT
+                };
+                let input = if indexed {
+                    ProducedInput::indexed(bank, TERMS)
+                } else {
+                    ProducedInput::dense(bank)
+                };
+                let original = if streaming {
+                    MsmPlan::<C>::new_with(TERMS, options, NonZeroUsize::new(TERMS).unwrap())
+                        .unwrap()
+                } else {
+                    MsmPlan::<C>::for_produced(
+                        input,
+                        NonZeroUsize::new(TERMS).unwrap(),
+                        crate::exec::ExecutionOptions::default(),
+                    )
+                    .unwrap()
+                };
+                let plan = original
+                    .with_grain(NonZeroUsize::new(512).unwrap())
+                    .unwrap();
+                assert_eq!(plan.output_slots(), original.output_slots());
+                assert_eq!(plan.preparation_terms(), 256);
+                let range = 17..619;
+                let expected = ladder::<C>(range.clone().fold(PastaField::ZERO, |sum, i| {
+                    sum.add(&scalars[i].mul(&PastaField::<_>::from_u64(if indexed {
+                        indices[i] as u64 + 1
                     } else {
-                        assert!(progress);
-                    }
-                }
-                assert!(
-                    completed_later_preparation,
-                    "indexed={indexed} streaming={streaming} repetition={repetition} grain={}",
-                    plan.grain()
+                        i as u64 + 1
+                    })))
+                }));
+                let arena = Arena::new(plan);
+                let work = [RwLock::new(Work::new(core::iter::once(plan.temporary())))];
+                let mut identity = Identity::new();
+                let mut slots = [const { TaskStorage::EMPTY }; 3];
+                let mut run = MsmRun::new_produced_partition(
+                    plan,
+                    input,
+                    range.clone(),
+                    &mut identity,
+                    &mut slots,
                 );
-                assert_eq!(run.result(), Some(expected));
-                assert!(!run.is_failed());
-                assert_eq!(run.inflight(), 0);
+                let mut ready = [None; 3];
+                run.ready(&mut ready);
+                let old_request = ready[0].unwrap();
+                for repetition in 0..2 {
+                    if repetition != 0 {
+                        run.rebind_produced_partition(plan, input, range.clone())
+                            .unwrap();
+                        assert!(matches!(
+                            run.try_claim(old_request, || None::<ProducedLease<'_, C>>),
+                            Err(TaskError::Stale)
+                        ));
+                    }
+                    let mut first_ready = false;
+                    let mut completed_later_preparation = false;
+                    while run.result().is_none() {
+                        let count = run.ready(&mut ready);
+                        let mut progress = false;
+                        for request in ready[..count].iter().flatten().rev() {
+                            if request.kind == WorkKind::Prepare
+                                && request.offset == range.start
+                                && !first_ready
+                            {
+                                assert!(
+                                    run.try_claim(*request, || None::<ProducedLease<'_, C>>)
+                                        .unwrap()
+                                        .is_none()
+                                );
+                                continue;
+                            }
+                            let source_range = request.offset..request.offset + request.terms;
+                            let mut task = run
+                                .try_claim(*request, || {
+                                    Some(ProducedLease {
+                                        arithmetic: arena.acquire(*request, &work)?,
+                                        scalars: Fragments(&scalars[source_range.clone()]),
+                                        indices: Fragments(if indexed {
+                                            &indices[source_range]
+                                        } else {
+                                            &[]
+                                        }),
+                                    })
+                                })
+                                .unwrap()
+                                .unwrap();
+                            task.execute().unwrap();
+                            let published = run.complete(task.finish()).unwrap();
+                            assert_eq!(published.error, None);
+                            if request.kind == WorkKind::Prepare && !first_ready {
+                                completed_later_preparation = true;
+                            }
+                            progress = true;
+                        }
+                        if !first_ready {
+                            first_ready = true;
+                        } else {
+                            assert!(progress);
+                        }
+                    }
+                    assert!(
+                        completed_later_preparation,
+                        "indexed={indexed} streaming={streaming} repetition={repetition} grain={}",
+                        plan.grain()
+                    );
+                    assert_eq!(run.result(), Some(expected));
+                    assert!(!run.is_failed());
+                    assert_eq!(run.inflight(), 0);
+                }
             }
         }
     }

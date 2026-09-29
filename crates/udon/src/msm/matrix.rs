@@ -21,6 +21,11 @@ use crate::exec::{ExecutionOptions, Executor};
 /// no matrix copy, index array, or allocation is required. Arithmetic is
 /// variable-time, with no constant-time guarantee for secret inputs.
 ///
+/// Prepared tables are optional accelerators. The planner may use their original
+/// bases when expanded arithmetic exceeds resources. Odd-multiple banks can
+/// share a complete wNAF row across outputs; rows that need chunking use the
+/// ordinary matrix kernels. No specific kernel or crossover is guaranteed.
+///
 /// Multiply two base rows by the same signed coefficients:
 ///
 /// ```
@@ -140,6 +145,26 @@ impl<'a, C: PastaCurve> SharedScalarInput<'a, C> {
         if self.outputs == 0 || self.terms() == 0 {
             return Ok(());
         }
+        if plan.wnaf {
+            macro_rules! run {
+                ($table:expr) => {
+                    super::wnaf::Ladder {
+                        table: $table,
+                        scalars: self.scalars,
+                        outputs: self.outputs,
+                        output_stride: self.output_stride,
+                        term_stride: self.term_stride,
+                    }
+                    .execute(output, plan.lanes, plan.workers, executor, scratch)
+                };
+            }
+            match self.bases {
+                Bases::Odd(table) => run!(table),
+                Bases::OddPrepared(table) => run!(table),
+                _ => unreachable!("odd-table plan"),
+            }
+            return Ok(());
+        }
         let windows = plan.job.geometry.windows();
         let (results, projective) = scratch.projective.split_at_mut(plan.results);
         let mut work = Scratch::new(
@@ -160,7 +185,7 @@ impl<'a, C: PastaCurve> SharedScalarInput<'a, C> {
             } else {
                 let len = plan.job.geometry.storage_len(records.len()).unwrap();
                 let digits = &mut scratch.digits[..len];
-                recode::write(records, plan.job.geometry, digits);
+                recode::write_bases(records, plan.job.geometry, digits, self.bases);
                 &*digits
             };
             for (tile, output) in output.chunks_mut(plan.lanes * plan.workers).enumerate() {
@@ -212,6 +237,7 @@ impl<'a, C: PastaCurve> SharedScalarInput<'a, C> {
     ) -> Result<Plan, CurveError> {
         if self.outputs == 0 || self.terms() == 0 {
             return Ok(Plan {
+                wnaf: false,
                 job: JobStorage::EMPTY,
                 lanes: 1,
                 workers: 1,
@@ -227,7 +253,42 @@ impl<'a, C: PastaCurve> SharedScalarInput<'a, C> {
             scalars: Scalars::Prepared(self.scalars),
             indices: None,
         };
-        let mut options = Options::new(requested.into());
+        let initial = Options::new(requested.into());
+        let job = schedule::job(&facts, initial)?;
+        // A complete digit row is required by the affine ladder. Larger rows
+        // and tight digit capacities use the existing chunked window kernels.
+        if job.cap == self.terms() && !matches!(job.geometry, Geometry::Short(_)) {
+            macro_rules! candidate {
+                ($table:expr) => {
+                    super::wnaf::Ladder {
+                        table: $table,
+                        scalars: self.scalars,
+                        outputs: self.outputs,
+                        output_stride: self.output_stride,
+                        term_stride: self.term_stride,
+                    }
+                    .plan(requested, capacity)
+                    .ok()
+                };
+            }
+            let candidate = match self.bases {
+                Bases::Odd(table) => candidate!(table),
+                Bases::OddPrepared(table) => candidate!(table),
+                _ => None,
+            };
+            if let Some((requirements, lanes, workers)) = candidate {
+                return Ok(Plan {
+                    wnaf: true,
+                    job,
+                    lanes,
+                    workers,
+                    results: 0,
+                    work: Requirements::ZERO,
+                    requirements,
+                });
+            }
+        }
+        let mut options = initial;
         // Bound bucket multiplication independently of the matrix dimensions.
         let mut max_lanes = 4;
         loop {
@@ -259,6 +320,7 @@ impl<'a, C: PastaCurve> SharedScalarInput<'a, C> {
             let memory_ok = requested.memory_limit().is_none_or(|limit| bytes <= limit);
             if memory_ok && capacity.is_none_or(|c| requirements.fits(c)) {
                 return Ok(Plan {
+                    wnaf: false,
                     job,
                     lanes,
                     workers,
@@ -271,6 +333,10 @@ impl<'a, C: PastaCurve> SharedScalarInput<'a, C> {
                 max_lanes = lanes.div_ceil(2);
             } else if let Some(smaller) = schedule::smaller(options, job.cap) {
                 options = smaller;
+            } else if options.alpha && self.bases.alpha().is_some() {
+                options = initial;
+                options.alpha = false;
+                max_lanes = 4;
             } else if !memory_ok {
                 return Err(CurveError::MemoryLimit {
                     limit: requested.memory_limit().unwrap(),
@@ -304,6 +370,7 @@ fn extent(
 }
 
 struct Plan {
+    wnaf: bool,
     job: JobStorage,
     lanes: usize,
     workers: usize,

@@ -239,8 +239,9 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     /// Bytes required to retain this resolved plan's recoding.
     ///
     /// Returns zero when the plan has a different term count, splits the input
-    /// into chunks, streams recoding, or needs no retained digits. A zero result
-    /// makes [`Self::cache`] leave the handle unchanged, including any existing
+    /// into chunks, streams recoding, selects α recoding (use [`Self::cache_alpha`]),
+    /// or needs no retained digits. A zero result makes [`Self::cache`] leave
+    /// the handle unchanged, including any existing
     /// cache. Scalar records remain independently reusable. The cache is
     /// persistent preparation, separate from the plan's workspace ceiling.
     pub fn cache_len(&self, plan: &super::execution::MsmPlan<C>) -> usize {
@@ -326,11 +327,63 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
         }
         assert_scratch("digits", len, storage.len());
         let digits = &mut storage[..len];
-        super::recode::write_parallel(self.records, geometry, digits, budget, executor);
+        super::recode::write_parallel(self.records, geometry, digits, None, budget, executor);
         Self {
             records: self.records,
             shape: self.shape,
             cached: Some(super::recode::Cache { geometry, digits }),
+        }
+    }
+
+    /// Retained bytes for this plan's complete α digit row.
+    ///
+    /// Returns zero for an empty input, a different term count, an ordinary
+    /// geometry, streaming, or a plan that splits the input into chunks.
+    /// These bytes are separate from the plan's execution workspace.
+    pub fn alpha_cache_len(&self, plan: &super::execution::MsmPlan<C>) -> usize {
+        plan.alpha_cache_geometry(self.len()).map_or(0, |g| {
+            g.storage_len(self.len()).expect("bounded plan geometry")
+        })
+    }
+
+    /// Caches this plan's α recoding in caller-owned storage without allocation.
+    ///
+    /// If [`Self::alpha_cache_len`] is zero, returns this handle unchanged and
+    /// does not touch storage or invoke the executor. Otherwise the codebook
+    /// width must match the plan and storage must contain at least that many
+    /// bytes; either mismatch panics before writes or executor work. Surplus
+    /// bytes remain untouched. The trusted codebook must satisfy [`super::AlphaCodebook`].
+    ///
+    /// Only records and the written byte prefix remain borrowed. Replan with
+    /// the returned handle to exclude cached digits from execution scratch.
+    /// Reuse requires the same geometry and a complete, nonstreaming row.
+    /// Execution may instead recode from the records when those conditions do
+    /// not hold. Work is variable-time. Executor panic can leave partial cache
+    /// storage; reuse it only after all scoped jobs finish unwinding.
+    #[must_use = "use the returned scalar handle to retain the cache"]
+    pub fn cache_alpha<X: Executor>(
+        &self,
+        plan: &super::execution::MsmPlan<C>,
+        book: super::AlphaCodebook<'_>,
+        storage: &'a mut [u8],
+        budget: TaskBudget,
+        executor: &X,
+    ) -> Self {
+        let Some(geometry) = plan.alpha_cache_geometry(self.len()) else {
+            return *self;
+        };
+        assert_eq!(
+            geometry,
+            super::recode::Geometry::Alpha(book.description().window_bits()),
+            "codebook width must match plan"
+        );
+        let len = self.alpha_cache_len(plan);
+        assert_scratch("digits", len, storage.len());
+        let digits = &mut storage[..len];
+        super::recode::write_parallel(self.records, geometry, digits, Some(book), budget, executor);
+        Self {
+            cached: Some(super::recode::Cache { geometry, digits }),
+            ..*self
         }
     }
 

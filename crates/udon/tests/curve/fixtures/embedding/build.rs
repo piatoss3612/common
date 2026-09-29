@@ -9,8 +9,10 @@ use udon::{
         EisensteinTable, FixedBaseTable, Pallas, PastaCurve, Point, PreparedAffinePoint,
         ProjectivePoint, Vesta, batch_normalize,
     },
+    exec::{SerialExecutor, TaskBudget},
     fft::reference,
     field::PastaField,
+    msm::{AlphaCodebook, AlphaTable},
 };
 
 #[path = "src/record.rs"]
@@ -47,6 +49,31 @@ fn generate<C: PastaCurve>(name: &str, truncate: bool) {
         &mut record.compact_cached,
         &mut projective,
         &mut field,
+    );
+    let book = AlphaCodebook::prepare(
+        record::ALPHA,
+        &mut record.codes,
+        &mut record.coefficients,
+        &mut [0; record::ALPHA.codebook_scratch()],
+    );
+    let bases = [record.base, record.base.neg(), record.base, record.base];
+    AlphaTable::prepare(
+        book,
+        &bases,
+        &mut record.alpha,
+        &mut projective,
+        &mut field,
+        TaskBudget::SERIAL,
+        &SerialExecutor,
+    );
+    AlphaTable::prepare(
+        book,
+        &bases,
+        &mut record.alpha_cached,
+        &mut projective,
+        &mut field,
+        TaskBudget::SERIAL,
+        &SerialExecutor,
     );
     let directory = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let mut bytes = bento::bytes_of(&record).to_vec();

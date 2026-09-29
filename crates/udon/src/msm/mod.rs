@@ -1,5 +1,8 @@
 //! Variable-time multiscalar multiplication with caller-owned storage.
 //!
+//! The repository's [preparation guide](https://github.com/zakura-core/common/blob/main/docs/msm-preparation.md)
+//! connects table storage, scalar caches, workspace planning, and embedding.
+//!
 //! [`execution::BatchPlan`] plans and executes contiguous inputs, retaining scheduling
 //! metadata for repeated execution of the same immutable scalar rows and bases.
 //! [`Selection`] retains validated base mappings across scalar rows. For
@@ -18,6 +21,11 @@
 //! [`CoalescingPlan`] groups equal and opposite points across scalar rows;
 //! [`IndexedCoalescingPlan`] groups repeated indices without encoding points.
 //! [`Bases::Compact`] consumes ordinary embedded or prepared compact tables.
+//! [`AlphaTable`] supports larger width-five, -six, and -seven expansions with
+//! a shared [`AlphaCodebook`]. [`PreparedScalars::cache_alpha`] optionally caches
+//! their recoding. [`SharedScalarInput`] can share GLV wNAF digits across a matrix
+//! of odd multiples, which [`AlphaTable::odd_multiples`] can supply without
+//! another bank.
 //! For incremental task scheduling, [`execution::MsmPlan`] retains geometry without
 //! borrowing inputs. Reuse it across [`execution::MsmRun`] invocations, each of which
 //! borrows its inputs and frontier storage. [`execution::BatchPlan`] instead borrows
@@ -101,6 +109,7 @@ const fn add(a: usize, b: usize) -> Result<usize, CurveError> {
 mod policy;
 use policy::{Accumulation, Algorithm, ArithmeticOptions, BatchOptions};
 
+mod alpha;
 mod coalesce;
 mod kernels;
 mod matrix;
@@ -111,9 +120,11 @@ mod schedule;
 mod storage;
 mod suffix;
 mod sum;
+mod wnaf;
 
 pub mod execution;
 
+pub use alpha::{AlphaCodebook, AlphaCoefficient, AlphaDescription, AlphaTable};
 pub use coalesce::{CoalescingKey, CoalescingPlan, IndexedCoalescingPlan};
 #[cfg(test)]
 use execution::{BatchPlan, JobStorage, WorkerStorage};
@@ -121,17 +132,18 @@ pub use matrix::SharedScalarInput;
 pub use prepared::{PreparedScalars, ScalarStorage};
 pub use suffix::SuffixBasis;
 pub use sum::BasisSum;
+pub use wnaf::OddTable;
 const BOOTH_MIN: usize = 128;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
 mod tests;
 
-/// Borrowed ordinary, cached, or compact-table base storage.
+/// Borrowed points or reusable point-table storage.
 ///
 /// Stored affine points must be nonidentity and satisfy their documented curve
-/// invariants. Compact tables must satisfy [`EisensteinTableBatch`]'s binding or
-/// preparation contract, including the owner's obligations for trusted bindings.
+/// invariants. Tables must satisfy [`EisensteinTableBatch`], [`AlphaTable`], or
+/// [`OddTable`]'s binding or preparation contract, including trusted bindings.
 /// MSM construction and execution do not recheck these mathematical invariants;
 /// see [`Input`] for the consequences of invalid data.
 #[derive(Clone, Copy, Debug)]
@@ -150,8 +162,47 @@ pub enum Bases<'a, C: PastaCurve> {
     Compact(EisensteinTableBatch<'a, C>),
     /// Compact tables with cached endomorphism coordinates.
     CompactPrepared(EisensteinTableBatch<'a, C, PreparedAffinePoint<C>>),
+    /// Layer-major α-only tables with affine entries.
+    Alpha(AlphaTable<'a, C>),
+    /// Layer-major α-only tables with cached endomorphism coordinates.
+    AlphaPrepared(AlphaTable<'a, C, PreparedAffinePoint<C>>),
+    /// Trusted odd-multiple layers, also usable through their original bases.
+    Odd(OddTable<'a, C>),
+    /// Odd-multiple layers with cached endomorphism coordinates.
+    OddPrepared(OddTable<'a, C, PreparedAffinePoint<C>>),
 }
-impl<C: PastaCurve> Bases<'_, C> {
+impl<'a, C: PastaCurve> Bases<'a, C> {
+    /// Borrows a consecutive sub-bank.
+    ///
+    /// Layer-major tables preserve their
+    /// original stride; compact tables preserve complete eight-entry records.
+    /// Panics for reversed or out-of-range bounds.
+    pub fn range(self, range: core::ops::Range<usize>) -> Self {
+        assert!(range.start <= range.end && range.end <= self.len());
+        match self {
+            Self::Affine(b) => Self::Affine(&b[range]),
+            Self::Prepared(b) => Self::Prepared(&b[range]),
+            Self::Points(b) => Self::Points(&b[range]),
+            Self::Compact(b) => Self::Compact(EisensteinTableBatch::bind(
+                &b.as_slice()[8 * range.start..8 * range.end],
+            )),
+            Self::CompactPrepared(b) => Self::CompactPrepared(EisensteinTableBatch::bind(
+                &b.as_slice()[8 * range.start..8 * range.end],
+            )),
+            Self::Odd(b) => Self::Odd(b.range(range)),
+            Self::OddPrepared(b) => Self::OddPrepared(b.range(range)),
+            Self::Alpha(b) => Self::Alpha(b.range(range)),
+            Self::AlphaPrepared(b) => Self::AlphaPrepared(b.range(range)),
+        }
+    }
+
+    pub(super) const fn alpha(self) -> Option<AlphaCodebook<'a>> {
+        match self {
+            Self::Alpha(t) => Some(t.codebook()),
+            Self::AlphaPrepared(t) => Some(t.codebook()),
+            _ => None,
+        }
+    }
     /// Number of available bases (not compact table entries).
     pub const fn len(&self) -> usize {
         match self {
@@ -160,6 +211,10 @@ impl<C: PastaCurve> Bases<'_, C> {
             Self::Points(b) => b.len(),
             Self::Compact(b) => b.len(),
             Self::CompactPrepared(b) => b.len(),
+            Self::Odd(b) => b.len(),
+            Self::OddPrepared(b) => b.len(),
+            Self::Alpha(b) => b.len(),
+            Self::AlphaPrepared(b) => b.len(),
         }
     }
     /// Whether there are no bases.

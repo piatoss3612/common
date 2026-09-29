@@ -138,6 +138,10 @@ pub(super) fn run_selected<C: PastaCurve>(
         Bases::Points(b) => access(input, b, records, digits, task, work, 1),
         Bases::Compact(b) => compact(input, b.as_slice(), records, digits, task, work),
         Bases::CompactPrepared(b) => compact(input, b.as_slice(), records, digits, task, work),
+        Bases::Odd(b) => access(input, b.originals(), records, digits, task, work, 1),
+        Bases::OddPrepared(b) => access(input, b.originals(), records, digits, task, work, 1),
+        Bases::Alpha(b) => alpha(input, b, records, digits, task, work),
+        Bases::AlphaPrepared(b) => alpha(input, b, records, digits, task, work),
     }
 }
 
@@ -219,6 +223,7 @@ fn execute<C: PastaCurve, B: Base<C>, const INDEXED: bool>(
     #[cfg(test)]
     super::test_support::record_kernel(task.geometry);
     match task.geometry {
+        Geometry::Alpha(_) => unreachable!("α geometry uses prepared layers"),
         Geometry::Short(bits) => short(view, records, bits, work),
         Geometry::Joint => joint(view, records, digits, task.pass, work),
         Geometry::Booth(_) if digits.is_empty() => {
@@ -567,6 +572,10 @@ pub(super) fn stream_selected<C: PastaCurve>(
         Bases::Points(b) => access!(b, 1),
         Bases::Compact(b) => access!(b.as_slice(), 8),
         Bases::CompactPrepared(b) => access!(b.as_slice(), 8),
+        Bases::Odd(b) => access!(b.originals(), 1),
+        Bases::OddPrepared(b) => access!(b.originals(), 1),
+        Bases::Alpha(b) => access!(b.originals(), 1),
+        Bases::AlphaPrepared(b) => access!(b.originals(), 1),
     }
 }
 
@@ -618,6 +627,8 @@ pub(super) fn shared<C: PastaCurve>(
         work: &mut Work<'_, C>,
         output: &mut [ProjectivePoint<C>],
     ) {
+        #[cfg(test)]
+        super::test_support::record_kernel(task.geometry);
         let lanes = output.len();
         let point = |term: usize, lane: usize, rotation: usize| {
             bases[(output_offset + lane * output_stride + (task.offset + term) * term_stride)
@@ -697,5 +708,155 @@ pub(super) fn shared<C: PastaCurve>(
         Bases::Points(b) => access!(b, 1),
         Bases::Compact(b) => access!(b.as_slice(), 8),
         Bases::CompactPrepared(b) => access!(b.as_slice(), 8),
+        Bases::Odd(b) => access!(b.originals(), 1),
+        Bases::OddPrepared(b) => access!(b.originals(), 1),
+        Bases::Alpha(b) => access!(b.originals(), 1),
+        Bases::AlphaPrepared(b) => access!(b.originals(), 1),
     }
+}
+
+fn alpha<C: PastaCurve, E: Base<C> + CurveTableEntry<C>>(
+    input: &BaseView<'_, C>,
+    table: super::AlphaTable<'_, C, E>,
+    records: impl Storage<ScalarStorage<C>>,
+    digits: impl Storage<u8>,
+    task: Task,
+    work: &mut Work<'_, C>,
+) -> ProjectivePoint<C> {
+    if !matches!(task.geometry, Geometry::Alpha(_)) {
+        return access(input, table.originals(), records, digits, task, work, 1);
+    }
+    #[cfg(test)]
+    super::test_support::record_kernel(task.geometry);
+    let description = table.codebook().description();
+    let terms = records.len();
+    let stride = task.geometry.stride();
+    let index = |term| {
+        input
+            .indices
+            .map_or(task.offset + term, |i| i.get(task.offset + term))
+    };
+    let code = |term| {
+        let start = term * stride + task.window * 4;
+        u32::from_le_bytes(core::array::from_fn(|i| digits.get(start + i)))
+    };
+    if task.window == description.main_windows() {
+        // The last row contains two signed residuals, not residue codes. Keeping
+        // it as a separate window lets the ordinary reduction apply B^windows.
+        let mut sum = ProjectivePoint::IDENTITY;
+        let mut top = 0;
+        for term in 0..terms {
+            let c = code(term);
+            top = top
+                .max((c as u16 as i16).unsigned_abs())
+                .max(((c >> 16) as u16 as i16).unsigned_abs());
+        }
+        let bits = 16 - top.leading_zeros();
+        for bit in (0..bits).rev() {
+            sum = sum.double();
+            for term in 0..terms {
+                let c = code(term);
+                for (rotation, value) in [c as u16 as i16, (c >> 16) as u16 as i16]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if value.unsigned_abs() & (1 << bit) != 0 {
+                        let p = table.entry(0, index(term)).rotated(rotation);
+                        sum = sum.add_mixed(&if value < 0 { p.neg() } else { p });
+                    }
+                }
+            }
+        }
+        return sum;
+    }
+    let count = description.layers();
+    let point = |term, c: super::alpha::Code| {
+        let p = table.entry(c.layer(), index(term)).rotated(c.rotation());
+        if c.negative() { p.neg() } else { p }
+    };
+    let integrate_projective = |sums: &[ProjectivePoint<C>]| {
+        let mut sum = ProjectivePoint::IDENTITY;
+        for position in (0..8).rev() {
+            sum = sum.double();
+            for (bucket, coefficient) in table.codebook().coefficients().iter().enumerate() {
+                let digit = coefficient.digits[position];
+                if digit != 0 {
+                    let unit = digit - 1;
+                    let mut p = sums[bucket];
+                    for _ in 0..unit / 2 {
+                        p = p.endomorphism();
+                    }
+                    sum = sum.add(&if unit & 1 != 0 { p.neg() } else { p });
+                }
+            }
+        }
+        sum
+    };
+    if task.accumulation == Accumulation::Projective {
+        let sums = &mut work.projective[..count];
+        sums.fill(ProjectivePoint::IDENTITY);
+        for term in 0..terms {
+            let c = super::alpha::Code::from_bits(code(term));
+            if c.present() {
+                let bucket = c.bucket();
+                sums[bucket] = sums[bucket].add_mixed(&point(term, c));
+            }
+        }
+        return integrate_projective(sums);
+    }
+    let pass = task.pass.min(terms);
+    let (points, survivors) = work.affine.split_at_mut(pass + count);
+    let survivors = &mut survivors[..count];
+    let (starts, rest) = work.indices.split_at_mut(count);
+    let (lens, cursors) = rest.split_at_mut(count);
+    let cursors = &mut cursors[..count];
+    lens.fill(0);
+    for first in (0..terms).step_by(pass) {
+        let end = terms.min(first + pass);
+        cursors.copy_from_slice(lens);
+        for term in first..end {
+            let c = super::alpha::Code::from_bits(code(term));
+            if c.present() {
+                cursors[c.bucket()] += 1;
+            }
+        }
+        let mut total = 0;
+        for bucket in 0..count {
+            starts[bucket] = total;
+            total += cursors[bucket];
+            if lens[bucket] != 0 {
+                points[starts[bucket]] = survivors[bucket];
+            }
+            let cursor = starts[bucket] + lens[bucket];
+            lens[bucket] = cursors[bucket];
+            cursors[bucket] = cursor;
+        }
+        for term in first..end {
+            let c = super::alpha::Code::from_bits(code(term));
+            if c.present() {
+                let bucket = c.bucket();
+                points[cursors[bucket]] = point(term, c);
+                cursors[bucket] += 1;
+            }
+        }
+        reduce(&mut points[..total], starts, lens, work.field, cursors);
+        for bucket in 0..count {
+            if lens[bucket] != 0 {
+                survivors[bucket] = points[starts[bucket]];
+            }
+        }
+    }
+    let mut sum = ProjectivePoint::IDENTITY;
+    for position in (0..8).rev() {
+        sum = sum.double();
+        for (bucket, coefficient) in table.codebook().coefficients().iter().enumerate() {
+            let digit = coefficient.digits[position];
+            if lens[bucket] != 0 && digit != 0 {
+                let unit = digit - 1;
+                let p = survivors[bucket].rotated(usize::from(unit / 2));
+                sum = sum.add_mixed(&if unit & 1 != 0 { p.neg() } else { p });
+            }
+        }
+    }
+    sum
 }

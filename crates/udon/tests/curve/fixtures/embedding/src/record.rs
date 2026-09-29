@@ -7,6 +7,7 @@ use udon::{
     },
     fft::Domain,
     field::PastaField,
+    msm::{AlphaCoefficient, AlphaDescription},
 };
 
 pub const DESCRIPTION: FixedBaseDescription = FixedBaseDescription { window_bits: 4 };
@@ -14,6 +15,12 @@ pub const REQUIREMENTS: CurveTableRequirements = match DESCRIPTION.requirements(
     Ok(required) => required,
     Err(_) => panic!("unsupported fixed-base description"),
 };
+
+pub const ALPHA: AlphaDescription = match AlphaDescription::new(5) {
+    Ok(description) => description,
+    Err(_) => panic!("unsupported alpha description"),
+};
+pub const ALPHA_BASES: usize = 4;
 
 // The record type and artifact filename identify the curve and table layout.
 #[repr(C)]
@@ -24,11 +31,20 @@ pub struct Record<C: PastaCurve> {
     pub cached: [PreparedAffinePoint<C>; REQUIREMENTS.table_entries],
     pub compact: [AffinePoint<C>; 8],
     pub compact_cached: [PreparedAffinePoint<C>; 8],
+    pub codes: [u32; ALPHA.codes()],
+    pub coefficients: [AlphaCoefficient; ALPHA.layers()],
+    pub alpha: [AffinePoint<C>; ALPHA_BASES * ALPHA.layers()],
+    pub alpha_cached: [PreparedAffinePoint<C>; ALPHA_BASES * ALPHA.layers()],
 }
 
 impl<C: PastaCurve> Record<C> {
     pub fn empty() -> Self {
         Self {
+            codes: [0; ALPHA.codes()],
+            coefficients: [AlphaCoefficient::ZERO; ALPHA.layers()],
+            alpha: [AffinePoint::GENERATOR; ALPHA_BASES * ALPHA.layers()],
+            alpha_cached: [PreparedAffinePoint::from_affine(&AffinePoint::GENERATOR);
+                ALPHA_BASES * ALPHA.layers()],
             base: AffinePoint::GENERATOR,
             entries: [AffinePoint::GENERATOR; REQUIREMENTS.table_entries],
             cached: [PreparedAffinePoint::from_affine(&AffinePoint::GENERATOR);

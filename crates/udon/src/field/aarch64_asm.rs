@@ -14,9 +14,10 @@
 //!
 //! The block relies on the shared Pasta modulus shape, `p[2] = 0` and
 //! `p[3] = 2^62`, and keeps a five-limb accumulator. With both inputs below
-//! `2p`, `lhs[3] < 2^63`, so the carry chain folding `high(lhs[3] * b)` into
-//! the fifth limb cannot wrap, and each round's sum `acc + lhs * b + q * p`
-//! stays below `2^320`. The final candidate `(lhs * rhs + m * p) / R` is
+//! `2p`, `lhs[3] <= 2^63`, with equality only for values in `[2^255, 2p)`,
+//! so `high(lhs[3] * b)` is at most `2^63 - 1` and the fifth limb, which
+//! also absorbs one carry, cannot wrap; each round's sum
+//! `acc + lhs * b + q * p` stays below `2^320`. The final candidate `(lhs * rhs + m * p) / R` is
 //! below `2p < R` by the closure proof in `pasta::montgomery::square_run`, so
 //! the fifth limb is zero and is not returned. The block has no branches or
 //! memory accesses.

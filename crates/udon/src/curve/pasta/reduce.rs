@@ -32,9 +32,9 @@ pub(super) fn sum<C: PastaCurve>(
 /// Reduces disjoint buckets to zero or one affine point, updating their lengths.
 ///
 /// Bucket `i` occupies `points[starts[i]..starts[i] + lens[i]]`. The caller
-/// reserves disjoint ranges, one start per length, and two field elements per
-/// possible pair (`points.len() / 2`). Survivors end up at their bucket's start.
-/// Reduces every bucket to at most one point.
+/// reserves disjoint ranges, one start per length, `fields` sized as described
+/// below, and one `loose_starts` entry per bucket. Survivors end up at their
+/// bucket's start.
 ///
 /// The first level stages chord denominators from the reduced deposits in
 /// `points`; every sum is written loose into the tail of `fields`, and each

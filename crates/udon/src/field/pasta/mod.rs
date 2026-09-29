@@ -252,19 +252,6 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
         PastaField::from_montgomery(montgomery::sub_twice_modulus::<M>(&self.limbs, &rhs.limbs))
     }
 
-    /// Returns the additive inverse of a nonzero reduced value, reduced.
-    ///
-    /// `p - a` is canonical for `0 < a < p`. Curve code uses this for
-    /// coordinates that cannot be zero, avoiding the `2p` restoration and
-    /// conditional reduction of [`Self::neg`].
-    #[inline]
-    pub(crate) fn negate_nonzero(&self) -> PastaField<M, Reduced> {
-        debug_assert!(S::REDUCED && !self.is_zero());
-        let (limbs, borrow) = subtract_limbs(&M::MODULUS, &self.limbs);
-        debug_assert_eq!(borrow, 0);
-        PastaField::from_montgomery(limbs)
-    }
-
     /// Returns the additive inverse.
     #[inline]
     pub fn neg(&self) -> PastaField<M> {
@@ -393,6 +380,23 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
 }
 
 // Inline arithmetic wrappers so generic exponentiation uses the specialized kernels.
+impl<M: PrimeModulus> PastaField<M, Reduced> {
+    /// Returns the additive inverse of a nonzero value, reduced.
+    ///
+    /// `p - a` is canonical for `0 < a < p`. Curve code uses this for
+    /// coordinates that cannot be zero, avoiding the `2p` restoration and
+    /// conditional reduction of [`Self::neg`]. A zero input, which no valid
+    /// nonidentity point coordinate can be, would yield `p`; the debug
+    /// assertion rejects it, and only trusted storage can present one.
+    #[inline]
+    pub(crate) fn negate_nonzero(&self) -> Self {
+        debug_assert!(!self.is_zero());
+        let (limbs, borrow) = subtract_limbs(&M::MODULUS, &self.limbs);
+        debug_assert_eq!(borrow, 0);
+        PastaField::from_montgomery(limbs)
+    }
+}
+
 impl<M: PrimeModulus> crate::field::pasta::algorithms::Field for PastaField<M> {
     const ONE: Self = Self::ONE;
     #[inline(always)]

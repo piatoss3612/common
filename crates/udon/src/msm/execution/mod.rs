@@ -116,12 +116,13 @@ pub struct MsmPlan<C: PastaCurve> {
 impl<C: PastaCurve> MsmPlan<C> {
     /// Resolves a reusable plan from the term count and resource constraints.
     ///
-    /// This conservative plan accepts any scalar row and ordinary bases of the
-    /// stated length. Use [`Self::for_input`] to account for retained preparation.
+    /// This conservative plan accepts any scalar row and the original bases of
+    /// any supported bank of the stated length. Use [`Self::for_input`] to account
+    /// for retained preparation.
     /// No storage is allocated or written; impossible sizes or workspace limits
     /// return [`CurveError::SizeOverflow`] or [`CurveError::MemoryLimit`].
     pub fn new(terms: usize, options: ExecutionOptions) -> Result<Self, CurveError> {
-        let (job, arithmetic) = schedule::unbound::<C>(terms, options, None)?;
+        let (job, arithmetic) = schedule::unbound::<C>(terms, options, None, None)?;
         Ok(Self::from_job(
             terms,
             arithmetic,
@@ -138,7 +139,10 @@ impl<C: PastaCurve> MsmPlan<C> {
     /// omits scalar preparation or digit storage, later inputs must supply the
     /// corresponding retained records or matching cache. A plan specialized
     /// for short scalars requires prepared scalars with no larger bit width;
-    /// a plan relying on compact bases requires compact bases again.
+    /// a plan relying on compact bases requires compact bases again. An α plan
+    /// requires an α bank with the same codebook width. Changing task resources
+    /// after planning does not change its geometry. After retaining a digit
+    /// cache, construct a new plan to remove temporary recoding storage.
     /// Use [`Self::new`] for reuse across arbitrary scalar rows and bases.
     ///
     /// Construction does not write storage. Size and workspace errors follow
@@ -166,8 +170,12 @@ impl<C: PastaCurve> MsmPlan<C> {
         source_fragment: NonZeroUsize,
         options: ExecutionOptions,
     ) -> Result<Self, CurveError> {
-        let (job, arithmetic) =
-            schedule::unbound::<C>(input.len(), options, Some(source_fragment))?;
+        let (job, arithmetic) = schedule::unbound::<C>(
+            input.len(),
+            options,
+            Some(source_fragment),
+            input.bases.alpha().map(|c| c.description()),
+        )?;
         Ok(Self::from_job(
             input.len(),
             arithmetic,
@@ -178,7 +186,17 @@ impl<C: PastaCurve> MsmPlan<C> {
     }
 
     pub(super) fn cache_geometry(&self, terms: usize) -> Option<Geometry> {
-        (self.terms == terms && terms <= self.cap && !self.options.streaming())
+        self.complete_cache_geometry(terms)
+            .filter(|geometry| !matches!(geometry, Geometry::Alpha(_)))
+    }
+
+    pub(super) fn alpha_cache_geometry(&self, terms: usize) -> Option<Geometry> {
+        self.complete_cache_geometry(terms)
+            .filter(|geometry| matches!(geometry, Geometry::Alpha(_)))
+    }
+
+    fn complete_cache_geometry(&self, terms: usize) -> Option<Geometry> {
+        (self.terms == terms && terms != 0 && terms <= self.cap && !self.options.streaming())
             .then_some(self.job.geometry)
     }
 
@@ -372,6 +390,14 @@ impl<C: PastaCurve> MsmPlan<C> {
     }
 
     fn accepts(&self, input: Input<'_, C>) -> bool {
+        if let Geometry::Alpha(width) = self.job.geometry
+            && input
+                .bases
+                .alpha()
+                .is_none_or(|c| c.description().window_bits() != width)
+        {
+            return false;
+        }
         if input.is_empty() {
             return true;
         }
@@ -628,7 +654,12 @@ impl<C: PastaCurve> MsmKernel<'_, C> {
                 };
                 shape = Shape::of(records);
                 if let Some(len) = digit_len {
-                    recode::write(records, geometry, &mut scratch.digits[..len]);
+                    recode::write_bases(
+                        records,
+                        geometry,
+                        &mut scratch.digits[..len],
+                        self.input.bases,
+                    );
                 }
             }
             WorkKind::Window => {

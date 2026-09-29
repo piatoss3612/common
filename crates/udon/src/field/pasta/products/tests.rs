@@ -343,3 +343,45 @@ fn all_accumulator_mutations_preserve_overflow_bits() {
     check_overflow::<PallasBase>();
     check_overflow::<PallasScalar>();
 }
+
+fn check_partial_reduce<M: PrimeModulus>() {
+    let check = |wide: [u64; 8], carry: u64| {
+        let sum = ProductSum::<M> {
+            wide,
+            carry,
+            marker: PhantomData,
+        };
+        let folded = sum.partial_reduce();
+        assert!(folded[7] <= 1);
+        assert_eq!(
+            integer(&folded),
+            integer(&wide[..7])
+                + BigUint::from(wide[7]) * integer(&M::B448)
+                + BigUint::from(carry) * integer(&M::R2)
+        );
+    };
+    for carry in [0, 1, u64::MAX] {
+        check([0; 8], carry);
+        check([u64::MAX; 8], carry);
+        for limb in 0..8 {
+            let mut wide = [0; 8];
+            wide[limb] = u64::MAX;
+            check(wide, carry);
+        }
+    }
+    let mut state = 0x1f83_d9ab_fb41_bd6b;
+    for _ in 0..1024 {
+        let wide = limbs(&BigUint::from_bytes_le(&deterministic_bytes::<64>(
+            &mut state,
+        )));
+        check(wide, xorshift64(&mut state));
+    }
+}
+
+// Exact full-width equality over the whole accumulator range covers both the
+// portable fold and the assembly kernel behind the same private entry point.
+#[test]
+fn partial_reduce_folds_the_top_words_exactly() {
+    check_partial_reduce::<PallasBase>();
+    check_partial_reduce::<PallasScalar>();
+}

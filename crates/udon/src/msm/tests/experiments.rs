@@ -12,7 +12,7 @@ use std::{
     vec::Vec,
 };
 
-fn timing(name: &str, n: usize, bytes: usize, mut f: impl FnMut()) {
+pub(super) fn timing(name: &str, n: usize, bytes: usize, mut f: impl FnMut()) {
     f();
     let mut samples = [0.0_f64; 7];
     for sample in &mut samples {
@@ -61,6 +61,7 @@ fn compare_digit_cache_preparation() {
                         &records,
                         geometry,
                         &mut parallel,
+                        None,
                         TaskBudget::new(4).unwrap(),
                         &Pool,
                     )
@@ -76,6 +77,7 @@ fn compare_digit_cache_preparation() {
                             black_box(&records),
                             geometry,
                             black_box(&mut parallel),
+                            None,
                             TaskBudget::new(4).unwrap(),
                             &Pool,
                         );

@@ -145,7 +145,15 @@ impl<C: PastaCurve> AffinePoint<C> {
     /// The doubling slope numerator `3x²`, as `2x² + x²`.
     #[inline]
     pub(super) fn tangent_numerator(&self) -> PastaField<C::Base> {
-        let xx = self.x.square();
+        Self::tangent_numerator_at(&self.x)
+    }
+
+    /// The same numerator for an accumulator with loose coordinates.
+    #[inline]
+    pub(super) fn tangent_numerator_at<S: ReductionState>(
+        x: &PastaField<C::Base, S>,
+    ) -> PastaField<C::Base> {
+        let xx = x.square();
         xx.double().add(&xx)
     }
 

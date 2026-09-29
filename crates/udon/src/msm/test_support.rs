@@ -8,7 +8,7 @@ use crate::exec::{Executor, SerialExecutor};
 use std::{vec, vec::Vec};
 
 std::thread_local! {
-    static KERNEL_CALLS: core::cell::Cell<[usize; 15]> = const { core::cell::Cell::new([0; 15]) };
+    static KERNEL_CALLS: core::cell::Cell<[usize; 18]> = const { core::cell::Cell::new([0; 18]) };
 }
 
 fn kernel_index(geometry: recode::Geometry) -> usize {
@@ -16,6 +16,7 @@ fn kernel_index(geometry: recode::Geometry) -> usize {
         recode::Geometry::Short(_) => 0,
         recode::Geometry::Joint => 1,
         recode::Geometry::Booth(width) => usize::from(width) + 2,
+        recode::Geometry::Alpha(width) => usize::from(width) + 10,
     }
 }
 
@@ -28,7 +29,7 @@ pub(super) fn record_kernel(geometry: recode::Geometry) {
 }
 
 #[derive(Debug)]
-pub(super) struct KernelCalls([usize; 15]);
+pub(super) struct KernelCalls([usize; 18]);
 
 impl KernelCalls {
     pub(super) fn total(&self) -> usize {

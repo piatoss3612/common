@@ -44,6 +44,7 @@ pub(super) struct Options {
     memory_limit: Option<usize>,
     width: Option<u8>,
     accumulation: Accumulation,
+    pub(super) alpha: bool,
 }
 impl Options {
     pub(super) const fn new(options: BatchOptions) -> Self {
@@ -53,6 +54,7 @@ impl Options {
             memory_limit: options.memory_limit,
             width: None,
             accumulation: options.arithmetic.accumulation(),
+            alpha: true,
         }
     }
     pub(super) const fn with_task_budget(mut self, budget: TaskBudget) -> Self {
@@ -141,7 +143,7 @@ const fn layout<C: PastaCurve>(
                 indices: pass,
                 ..Requirements::ZERO
             },
-            Geometry::Booth(_) => {
+            Geometry::Booth(_) | Geometry::Alpha(_) => {
                 let buckets = geometry.buckets();
                 if matches!(accumulation, Accumulation::Projective) {
                     Requirements {
@@ -150,7 +152,14 @@ const fn layout<C: PastaCurve>(
                     }
                 } else {
                     let deposits = size!(add(
-                        size!(checked_count::<super::AffinePoint<C>>(pass, 2)),
+                        size!(checked_count::<super::AffinePoint<C>>(
+                            pass,
+                            if matches!(geometry, Geometry::Alpha(_)) {
+                                1
+                            } else {
+                                2
+                            }
+                        )),
                         buckets
                     ));
                     // Denominators and suffix products for every pair, plus
@@ -301,15 +310,30 @@ pub(super) fn unbound<C: PastaCurve>(
     terms: usize,
     options: ExecutionOptions,
     source_fragment: Option<NonZeroUsize>,
+    alpha: Option<super::AlphaDescription>,
 ) -> Result<(JobStorage, ArithmeticOptions), CurveError> {
+    let execution = options;
     let mut requested = BatchOptions::from(options);
     requested.arithmetic.chunk_size = source_fragment;
-    if terms >= 4096 && source_fragment.is_some_and(|fragment| fragment.get() < 1024) {
+    if alpha.is_none()
+        && terms >= 4096
+        && source_fragment.is_some_and(|fragment| fragment.get() < 1024)
+    {
         requested.arithmetic.algorithm = Algorithm::StreamingBooth { width: None };
     }
     let mut options = Options::new(requested);
     loop {
-        let job = conservative::<C>(terms, options)?;
+        let job = match alpha {
+            Some(description) => layout::<C>(
+                terms,
+                Geometry::Alpha(description.window_bits()),
+                false,
+                false,
+                false,
+                options,
+            )?,
+            None => conservative::<C>(terms, options)?,
+        };
         if options.memory_limit.is_none_or(|limit| {
             job.requirements
                 .bytes::<C>()
@@ -317,11 +341,18 @@ pub(super) fn unbound<C: PastaCurve>(
         }) {
             return Ok((job, options.arithmetic));
         }
-        options =
-            smaller(options, cap(terms, options.arithmetic)).ok_or(CurveError::MemoryLimit {
+        if let Some(smaller) = smaller(options, cap(terms, options.arithmetic)) {
+            options = smaller;
+        } else if alpha.is_some() {
+            // Retained originals remain useful even when the expanded buckets
+            // cannot fit. Restart with the caller's original resource ceilings.
+            return unbound::<C>(terms, execution, source_fragment, None);
+        } else {
+            return Err(CurveError::MemoryLimit {
                 limit: options.memory_limit.unwrap(),
                 required: job.requirements.bytes::<C>()?,
-            })?;
+            });
+        }
     }
 }
 
@@ -345,6 +376,19 @@ pub(super) fn job<C: PastaCurve>(
             }
         },
     );
+    // A prepared bank determines its recoding width even with a test-forced
+    // ordinary algorithm; accumulation and pass choices remain independent.
+    let geometry = if !options.alpha
+        || matches!(geometry, Geometry::Short(_))
+        || options.arithmetic.streaming()
+    {
+        geometry
+    } else {
+        input
+            .bases
+            .alpha()
+            .map_or(geometry, |c| Geometry::Alpha(c.description().window_bits()))
+    };
     let cached = retained.is_some_and(|s| s.cached_digits(geometry).is_some());
     layout::<C>(
         input.len(),
@@ -428,48 +472,50 @@ impl Plan {
         options: BatchOptions,
         capacity: Requirements,
     ) -> Result<Self, CurveError> {
-        let mut plan = Self::new(inputs, options)?;
-        while !plan.requirements.fits(capacity)
-            || plan.options.memory_limit.is_some_and(|limit| {
-                plan.requirements
-                    .bytes::<C>()
-                    .is_ok_and(|bytes| bytes > limit)
-            })
-        {
-            let n = inputs
-                .iter()
-                .map(|i| cap(i.len(), plan.options.arithmetic))
-                .max()
-                .unwrap_or(0);
-            plan.options = smaller(plan.options, n)
-                .ok_or_else(|| plan.requirements.capacity_error(capacity))?;
-            plan.requirements = requirements(inputs, plan.options)?;
-        }
-        Ok(plan)
+        Self::resolve(inputs, options, Some(capacity))
     }
     pub(super) fn new<C: PastaCurve>(
         inputs: &[Input<'_, C>],
         options: BatchOptions,
     ) -> Result<Self, CurveError> {
-        let mut options = Options::new(options);
-        let mut r = requirements(inputs, options)?;
-        if let Some(limit) = options.memory_limit {
-            while r.bytes::<C>()? > limit {
-                let n = inputs
-                    .iter()
-                    .map(|i| cap(i.len(), options.arithmetic))
-                    .max()
-                    .unwrap_or(0);
-                options = smaller(options, n).ok_or(CurveError::MemoryLimit {
-                    limit,
-                    required: r.bytes::<C>()?,
-                })?;
-                r = requirements(inputs, options)?;
+        Self::resolve(inputs, options, None)
+    }
+    fn resolve<C: PastaCurve>(
+        inputs: &[Input<'_, C>],
+        requested: BatchOptions,
+        capacity: Option<Requirements>,
+    ) -> Result<Self, CurveError> {
+        let mut options = Options::new(requested);
+        loop {
+            let r = requirements(inputs, options)?;
+            let bytes = r.bytes::<C>()?;
+            let memory_ok = options.memory_limit.is_none_or(|limit| bytes <= limit);
+            if memory_ok && capacity.is_none_or(|c| r.fits(c)) {
+                return Ok(Self {
+                    requirements: r,
+                    options,
+                });
+            }
+            let n = inputs
+                .iter()
+                .map(|i| cap(i.len(), options.arithmetic))
+                .max()
+                .unwrap_or(0);
+            if let Some(smaller) = smaller(options, n) {
+                options = smaller;
+            } else if options.alpha && inputs.iter().any(|i| i.bases.alpha().is_some()) {
+                options = Options {
+                    alpha: false,
+                    ..Options::new(requested)
+                };
+            } else if !memory_ok {
+                return Err(CurveError::MemoryLimit {
+                    limit: options.memory_limit.unwrap(),
+                    required: bytes,
+                });
+            } else {
+                return Err(r.capacity_error(capacity.unwrap()));
             }
         }
-        Ok(Self {
-            requirements: r,
-            options,
-        })
     }
 }

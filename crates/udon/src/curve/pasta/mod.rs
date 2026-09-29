@@ -8,7 +8,7 @@ use crate::checks::{assert_length, assert_scratch};
 use crate::field::{PastaField, Reduced, ReductionState};
 
 mod affine;
-mod batch;
+pub(crate) mod batch;
 pub(crate) mod digits;
 mod effective;
 pub(crate) mod eisenstein;
@@ -130,7 +130,7 @@ fn curve_rhs<C: PastaCurve>(x: &PastaField<C::Base, impl ReductionState>) -> Pas
 /// A rejected curve operation or multiplication table description.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CurveError {
-    /// The fixed-base window width is outside `2..=8`.
+    /// The window width is unsupported by the requested operation.
     InvalidWindowBits {
         /// The supplied width.
         bits: u32,
@@ -184,7 +184,7 @@ pub enum CurveError {
 impl fmt::Display for CurveError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidWindowBits { bits } => write!(f, "window width {bits} is outside 2..=8"),
+            Self::InvalidWindowBits { bits } => write!(f, "unsupported window width {bits}"),
             Self::InvalidScalar { position } => {
                 write!(f, "invalid MSM scalar at position {position}")
             }

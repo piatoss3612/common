@@ -12,8 +12,9 @@ use udon::{
     fft::reference,
     field::{CanonicalUint, PastaField},
     msm::{
-        Bases, BasisSum, CoalescingKey, CoalescingPlan, IndexedCoalescingPlan, Input,
-        PreparedScalars, ScalarStorage, Scratch, Selection, SuffixBasis,
+        AlphaCodebook, AlphaTable, Bases, BasisSum, CoalescingKey, CoalescingPlan,
+        IndexedCoalescingPlan, Input, PreparedScalars, ScalarStorage, Scratch, Selection,
+        SharedScalarInput, SuffixBasis,
         execution::{BatchPlan, JobStorage, WorkerStorage},
     },
 };
@@ -89,6 +90,56 @@ fn exercise_curve<C: PastaCurve>(record: &record::Record<C>, tables: record::Tab
     assert_eq!(batch.as_slice().as_ptr(), record.compact.as_ptr());
     assert_eq!(batch.get(0).unwrap().as_slice(), compact.as_slice());
     exercise_msm(record);
+    exercise_alpha(record);
+}
+
+fn exercise_alpha<C: PastaCurve>(record: &record::Record<C>) {
+    let book = AlphaCodebook::bind(record::ALPHA, &record.codes, &record.coefficients);
+    let affine = AlphaTable::bind(book, &record.alpha);
+    let cached = AlphaTable::bind(book, &record.alpha_cached);
+    let values = [
+        PastaField::<C::Scalar>::from_u64(7).invert().unwrap(),
+        PastaField::<C::Scalar>::from_u64(11).invert().unwrap(),
+    ];
+    let mut records = [ScalarStorage::ZERO; 2];
+    let prepared =
+        PreparedScalars::prepare(&values, &mut records, TaskBudget::SERIAL, &SerialExecutor);
+    let mut digits = [0; 512];
+    let mut points = [AffinePoint::GENERATOR; 64];
+    let mut projective = [ProjectivePoint::IDENTITY; 64];
+    let mut field = [PastaField::ZERO; 128];
+    let mut indices = [0; 64];
+    let mut scratch = Scratch::new(
+        &mut [],
+        &mut digits,
+        &mut points,
+        &mut projective,
+        &mut field,
+        &mut indices,
+    );
+    for bases in [
+        Bases::Alpha(affine),
+        Bases::AlphaPrepared(cached),
+        Bases::Odd(affine.odd_multiples(5).unwrap()),
+        Bases::OddPrepared(cached.odd_multiples(5).unwrap()),
+    ] {
+        let matrix = SharedScalarInput::new(bases, prepared, 2, 2, 1).unwrap();
+        let mut output = [ProjectivePoint::IDENTITY; 2];
+        matrix
+            .execute(
+                &mut output,
+                ExecutionOptions::DEFAULT,
+                &SerialExecutor,
+                scratch.reborrow(),
+            )
+            .unwrap();
+        for (row, actual) in output.into_iter().enumerate() {
+            let expected = record.alpha[2 * row]
+                .mul_projective(&values[0])
+                .add(&record.alpha[2 * row + 1].mul_projective(&values[1]));
+            assert_eq!(actual, expected);
+        }
+    }
 }
 
 fn exercise_msm<C: PastaCurve>(record: &record::Record<C>) {

@@ -20,6 +20,14 @@ pub(super) enum Geometry {
     Short(u8),
     Joint,
     Booth(u8),
+    Alpha(u8),
+}
+
+const fn alpha_description(width: u8) -> super::AlphaDescription {
+    match super::AlphaDescription::new(width) {
+        Ok(description) => description,
+        Err(_) => panic!("invalid internal alpha width"),
+    }
 }
 
 impl Geometry {
@@ -94,22 +102,27 @@ impl Geometry {
     pub(super) const fn windows(self) -> usize {
         match self {
             Self::Booth(width) => 128_usize.div_ceil(width as usize),
+            Self::Alpha(width) => alpha_description(width).main_windows() + 1,
             _ => 1,
         }
     }
     pub(super) const fn width(self) -> usize {
         match self {
-            Self::Booth(w) => w as usize,
+            Self::Booth(w) | Self::Alpha(w) => w as usize,
             _ => 0,
         }
     }
     pub(super) const fn buckets(self) -> usize {
-        1 << (self.width() - 1)
+        match self {
+            Self::Alpha(width) => alpha_description(width).layers(),
+            _ => 1 << (self.width() - 1),
+        }
     }
     pub(super) const fn stride(self) -> usize {
         match self {
             Self::Short(_) => 0,
             Self::Joint => JOINT_STRIDE,
+            Self::Alpha(_) => 4 * self.windows(),
             Self::Booth(w) => 2 * self.windows() * if w > 8 { 2 } else { 1 },
         }
     }
@@ -209,9 +222,22 @@ pub(super) fn write_parallel<C: PastaCurve, X: Executor>(
     records: &[ScalarStorage<C>],
     geometry: Geometry,
     digits: &mut [u8],
+    book: Option<super::AlphaCodebook<'_>>,
     budget: TaskBudget,
     executor: &X,
 ) {
+    let write = |records: &[ScalarStorage<C>], geometry: Geometry, digits: &mut [u8]| {
+        if let Some(book) = book {
+            for (record, row) in records
+                .iter()
+                .zip(digits.chunks_exact_mut(geometry.stride()))
+            {
+                book.write(record.halves, row);
+            }
+        } else {
+            write(records, geometry, digits);
+        }
+    };
     // Small rows avoid another round of executor joins. Short geometry stores no
     // digits, so it must also bypass for_each_chunk_mut's nonzero chunk length.
     if records.len() < 1024 || budget == TaskBudget::SERIAL || geometry.stride() == 0 {
@@ -243,6 +269,7 @@ pub(super) fn write<C: PastaCurve>(
 ) {
     let stride = geometry.stride();
     match geometry {
+        Geometry::Alpha(_) => unreachable!("α recoding needs its codebook"),
         Geometry::Short(_) => (),
         Geometry::Joint => {
             for (record, row) in records.iter().zip(digits.chunks_exact_mut(stride)) {
@@ -336,5 +363,26 @@ pub(super) fn rows_view(
             visit(term, read(a, ca), read(b, cb));
         }
         first = end;
+    }
+}
+
+/// Writes table-dependent digits without changing the generic cache format.
+pub(super) fn write_bases<C: PastaCurve>(
+    records: &[ScalarStorage<C>],
+    geometry: Geometry,
+    digits: &mut [u8],
+    bases: super::Bases<'_, C>,
+) {
+    if let Geometry::Alpha(width) = geometry {
+        let codebook = bases.alpha().expect("α plan requires α bases");
+        assert_eq!(codebook.description().window_bits(), width);
+        for (record, row) in records
+            .iter()
+            .zip(digits.chunks_exact_mut(geometry.stride()))
+        {
+            codebook.write(record.halves, row);
+        }
+    } else {
+        write(records, geometry, digits);
     }
 }

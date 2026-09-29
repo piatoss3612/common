@@ -19,7 +19,6 @@ fn public_boundaries_hide_parameters_and_implementation_choices() {
         ("zeta", "ZETA"),
         ("zeta-inverse", "ZETA_INVERSE"),
         ("modulus-signed62", "MODULUS_SIGNED62"),
-        ("safegcd-corrections", "SAFEGCD_CORRECTIONS"),
         ("power-of-two-inverses", "POWER_OF_TWO_INVERSES"),
         ("glv-a", "GLV_A"),
         ("glv-b", "GLV_B"),

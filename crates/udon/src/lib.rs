@@ -71,14 +71,19 @@
 //! compile-time tables without allocation or runtime initialization, and
 //! preserve the same public API and stored field representation.
 //!
-//! `aarch64-asm` replaces the field multiplication kernel with an inline
-//! assembly transcription of Supranational's Semolina routine on AArch64
-//! targets, and moves field addition and subtraction onto flag-carried
-//! assembly chains; it has no effect elsewhere or under Miri. These blocks
-//! are the crate's only unsafe code: straight-line, register-only sequences
-//! that compute the same integers as the Rust kernels, which their tests use
-//! as oracles. Field arithmetic keeps its `no_std`, allocation-free, and
-//! variable-time contracts.
+//! `aarch64-asm` enables assembly for loose field multiplication, squaring,
+//! addition, subtraction, negation, doubling, FFT butterflies, wide Montgomery
+//! reduction, repeated-square chains, and canonical integer conversion. The
+//! kernels adapt Supranational's Semolina routines to preserve Udon's exact
+//! loose results. Arbitrary full-width integer conversion retains its portable
+//! multiplication kernel because it requires wider intermediate bounds.
+//! Assembly is selected on little-endian, 64-bit AArch64 Unix and bare-metal
+//! targets; unsupported targets and Miri use portable Rust. Supported builds
+//! require a C assembler for the square-chain and conversion routines.
+//! Unsafe arithmetic is confined to the assembly module: inline blocks operate
+//! only on registers, and external routines access fixed-size limb arrays.
+//! Field arithmetic keeps its `no_std`, allocation-free, and variable-time
+//! contracts. Tests compare exact results against integer and Rust oracles.
 //!
 //! Cargo features are additive: any consumer enabling `sqrt-table-large` or
 //! `aarch64-asm` selects it for that Udon build.

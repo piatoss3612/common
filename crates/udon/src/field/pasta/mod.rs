@@ -86,9 +86,9 @@ const ENCODED_SIZE: usize = 32;
 /// assert_eq!(ZERO.add(&<Fp>::ONE).reduce(), <Fp>::ONE.reduce());
 /// ```
 // SAFETY: The derive checks the integer array and marker layout. All limb bit
-// patterns are valid to read and share. Field operations use safe Rust; the
-// state's bound is required for mathematical results, not memory safety.
-// Any future unsafe kernel must preserve memory safety for arbitrary limbs too.
+// patterns are valid to read and share. The state's bound is required for
+// mathematical results, not memory safety. Assembly kernels use registers or
+// fixed-size limb accesses; arbitrary limb bits cannot affect memory validity.
 #[derive(Clone, Copy, bento::Pod)]
 #[repr(transparent)]
 pub struct PastaField<M: PrimeModulus, S: ReductionState = Loose> {
@@ -255,18 +255,25 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Returns the additive inverse.
     #[inline]
     pub fn neg(&self) -> PastaField<M> {
-        // 2p - a masked to zero for a = 0: the zero test becomes mask
-        // arithmetic instead of a branch on the operand value.
-        let (limbs, borrow) = subtract_limbs(&M::TWICE_MODULUS, &self.limbs);
-        debug_assert_eq!(borrow, 0);
-        let nonzero = self.limbs[0] | self.limbs[1] | self.limbs[2] | self.limbs[3];
-        let mask = u64::from(nonzero != 0).wrapping_neg();
-        PastaField::from_montgomery([
-            limbs[0] & mask,
-            limbs[1] & mask,
-            limbs[2] & mask,
-            limbs[3] & mask,
-        ])
+        #[cfg(all(udon_aarch64_asm, not(miri)))]
+        {
+            PastaField::from_montgomery(montgomery::sub_twice_modulus::<M>(&[0; 4], &self.limbs))
+        }
+        #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+        {
+            // 2p - a masked to zero for a = 0: the zero test becomes mask
+            // arithmetic instead of a branch on the operand value.
+            let (limbs, borrow) = subtract_limbs(&M::TWICE_MODULUS, &self.limbs);
+            debug_assert_eq!(borrow, 0);
+            let nonzero = self.limbs[0] | self.limbs[1] | self.limbs[2] | self.limbs[3];
+            let mask = u64::from(nonzero != 0).wrapping_neg();
+            PastaField::from_montgomery([
+                limbs[0] & mask,
+                limbs[1] & mask,
+                limbs[2] & mask,
+                limbs[3] & mask,
+            ])
+        }
     }
 
     /// Returns `self * rhs`.
@@ -282,20 +289,30 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     }
 
     /// Returns `2 * self`.
-    #[inline]
+    #[inline(always)]
     pub fn double(&self) -> PastaField<M> {
-        // 4p exceeds the radix, so preserve the high carry before reducing
-        // modulo 2p.
-        let limbs = [
-            self.limbs[0] << 1,
-            (self.limbs[1] << 1) | (self.limbs[0] >> 63),
-            (self.limbs[2] << 1) | (self.limbs[1] >> 63),
-            (self.limbs[3] << 1) | (self.limbs[2] >> 63),
-        ];
-        PastaField::from_montgomery(montgomery::reduce_twice_modulus::<M>(
-            limbs,
-            self.limbs[3] >> 63,
-        ))
+        #[cfg(all(udon_aarch64_asm, not(miri)))]
+        {
+            PastaField::from_montgomery(montgomery::add_twice_modulus::<M>(
+                &self.limbs,
+                &self.limbs,
+            ))
+        }
+        #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+        {
+            // 4p exceeds the radix, so preserve the high carry before reducing
+            // modulo 2p.
+            let limbs = [
+                self.limbs[0] << 1,
+                (self.limbs[1] << 1) | (self.limbs[0] >> 63),
+                (self.limbs[2] << 1) | (self.limbs[1] >> 63),
+                (self.limbs[3] << 1) | (self.limbs[2] >> 63),
+            ];
+            PastaField::from_montgomery(montgomery::reduce_twice_modulus::<M>(
+                limbs,
+                self.limbs[3] >> 63,
+            ))
+        }
     }
 
     /// Returns `self / 2`, preserving the representation bound.

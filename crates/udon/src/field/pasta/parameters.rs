@@ -4,7 +4,7 @@ use bento::const_arithmetic::{m255, u256};
 
 use super::word::{add_limbs, compare_limbs, multiply_wide, subtract_limbs};
 use super::{PastaField, Reduced, ReductionState};
-use crate::field::pasta::safegcd::{SAFEGCD_BATCHES, to_signed62};
+use crate::field::pasta::safegcd::to_signed62;
 
 // Derive the remaining field constants from these inputs and each modulus.
 // Tests compare independent integer derivations and fixed literal vectors.
@@ -21,7 +21,7 @@ pub enum PallasScalar {}
 
 // The sparse Montgomery kernels and divstep bounds require the Pasta moduli.
 mod sealed {
-    use super::{INVERSE_POWER_TABLE_LEN, PastaField, Reduced, SAFEGCD_BATCHES};
+    use super::{INVERSE_POWER_TABLE_LEN, PastaField, Reduced};
 
     pub trait Sealed {}
 
@@ -52,9 +52,6 @@ mod sealed {
         const ZETA_INVERSE: [u64; 4];
         /// The modulus in the signed-62 representation the safegcd core runs on.
         const MODULUS_SIGNED62: [i64; 5];
-        /// Per-batch safegcd corrections: Montgomery `2^(2·batches)`, indexed by
-        /// `completed_batches - 1`.
-        const SAFEGCD_CORRECTIONS: [[u64; 4]; SAFEGCD_BATCHES];
         /// Montgomery `2^-k` for `k <= TWO_ADICITY`: the inverse domain sizes of
         /// every supported transform.
         const POWER_OF_TWO_INVERSES: [[u64; 4]; INVERSE_POWER_TABLE_LEN];
@@ -177,8 +174,6 @@ macro_rules! pasta_field_parameters {
             const TWO_INVERSE: [u64; 4] = Self::POWER_OF_TWO_INVERSES[1];
             const DELTA: [u64; 4] = m255::odd_order_generator!(&Self::MODULUS, GENERATOR, TWO_ADICITY);
             const MODULUS_SIGNED62: [i64; 5] = to_signed62(&Self::MODULUS);
-            const SAFEGCD_CORRECTIONS: [[u64; 4]; SAFEGCD_BATCHES] =
-                m255::safegcd_corrections_62_64!(&Self::MODULUS);
             const POWER_OF_TWO_INVERSES: [[u64; 4]; INVERSE_POWER_TABLE_LEN] =
                 m255::inverse_powers_of_two!(&Self::MODULUS);
             $($zeta)*
@@ -325,6 +320,7 @@ impl<M: PrimeModulus> bento::addchain::AdditionChain for Power<M> {
 }
 
 impl<M: PrimeModulus> Power<M> {
+    #[inline]
     fn double_n_add_impl(&self, count: usize, factor: Option<&[u64; 4]>) -> Self {
         Self(PastaField::from_montgomery(
             super::montgomery::square_run::<M>(&self.0.limbs, count, factor),

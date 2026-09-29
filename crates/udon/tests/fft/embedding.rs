@@ -11,7 +11,12 @@ fn generated_fft_tables_embed_in_a_downstream_consumer() {
         "udon",
         &[],
     );
-    for features in ["", "sqrt-table-large"] {
+    for features in [
+        "",
+        "sqrt-table-large",
+        "aarch64-asm",
+        "aarch64-asm,sqrt-table-large",
+    ] {
         for (damage, diagnostic) in [
             ("", None),
             (

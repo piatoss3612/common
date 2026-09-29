@@ -41,12 +41,6 @@ fn check_parameters<M: PrimeModulus>(zeta_power: u32, sqrt_exponent: [u64; 4]) {
             &inverse_two.modpow(&BigUint::from(exponent), &p),
         );
     }
-    for (batch, entry) in M::SAFEGCD_CORRECTIONS.iter().enumerate() {
-        assert_value(
-            PastaField::<M>::from_montgomery_limbs(*entry),
-            &(&one << (2 * (batch + 1))),
-        );
-    }
     for log_size in 0..=32 {
         let expected = five.modpow(&((&p - 1u8) >> log_size), &p);
         let root = PastaField::<M>::root_of_unity(log_size).unwrap();

@@ -13,10 +13,15 @@ fn generated_fields_embed_in_a_downstream_consumer() {
         "udon",
         &[],
     );
-    // The square-root configuration must not change the stored representation,
-    // so both feature sets must generate byte-identical artifacts.
+    // Arithmetic and square-root features must preserve stored representations,
+    // including when the generator itself uses assembly.
     let mut stored = None;
-    for features in ["", "sqrt-table-large"] {
+    for features in [
+        "",
+        "sqrt-table-large",
+        "aarch64-asm",
+        "aarch64-asm,sqrt-table-large",
+    ] {
         consumer.check("run", features, &[], None, &[]);
         let artifacts = generated_artifacts(&consumer.target);
         assert_eq!(
@@ -27,7 +32,7 @@ fn generated_fields_embed_in_a_downstream_consumer() {
             None => stored = Some(artifacts),
             Some(first) => assert_eq!(
                 first, &artifacts,
-                "stored bytes must not depend on the square-root configuration"
+                "stored bytes must not depend on arithmetic features"
             ),
         }
     }

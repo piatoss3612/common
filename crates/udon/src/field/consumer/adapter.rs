@@ -255,6 +255,7 @@ impl<M: PrimeModulus> Field for FieldAdapter<M> {
         self.0.is_zero()
     }
 
+    #[inline(always)]
     fn square(&self) -> Self {
         Self(self.0.square())
     }
@@ -264,6 +265,7 @@ impl<M: PrimeModulus> Field for FieldAdapter<M> {
         Self(self.0.mul_add(&multiplier.0, &addend.0))
     }
 
+    #[inline(always)]
     fn double(&self) -> Self {
         Self(self.0.double())
     }
@@ -398,10 +400,12 @@ impl<M: PrimeModulus> Field for FieldAdapter<M> {
         Self(PastaField::power_of_two_inverse(log_size))
     }
 
+    #[inline]
     fn mul_accumulate(accumulator: &mut ProductSum<M>, lhs: &Self, rhs: &Self) {
         accumulator.add_product(&lhs.0, &rhs.0);
     }
 
+    #[inline]
     fn reduce(accumulator: ProductSum<M>) -> Self {
         Self(accumulator.finish())
     }

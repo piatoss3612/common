@@ -19,13 +19,15 @@ traits = []
 poseidon = ["traits"]
 # Selects larger square-root tables; see the crate-level feature documentation.
 sqrt-table-large = []
-# Inline-assembly field multiplication, addition, and subtraction on AArch64
-# targets; see the crate-level feature documentation. This is the crate's only
-# unsafe code.
-aarch64-asm = []
+# Assembly field arithmetic and FFT butterflies on supported AArch64 targets;
+# see the crate-level feature documentation and arithmetic safety contracts.
+aarch64-asm = ["dep:cc"]
 
 [dependencies]
 bento.workspace = true
+
+[build-dependencies]
+cc = { version = "1", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.6", features = ["html_reports"] }

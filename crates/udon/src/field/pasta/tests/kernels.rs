@@ -1,6 +1,51 @@
 use super::*;
 use crate::field::pasta::{montgomery, word};
 
+#[cfg(all(udon_aarch64_asm, not(miri)))]
+#[test]
+fn assembly_mul_accumulate_matches_full_width_integer_arithmetic() {
+    fn check(accumulator: [u64; 8], lhs: [u64; 4], rhs: [u64; 4]) {
+        let (wide, overflow) = crate::field::aarch64_asm::mul_accumulate(accumulator, &lhs, &rhs);
+        assert!(overflow <= 1);
+        assert_eq!(
+            integer(&wide) + (BigUint::from(overflow) << 512usize),
+            integer(&accumulator) + integer(&lhs) * integer(&rhs)
+        );
+    }
+    let operands = [
+        [0; 4],
+        [1, 0, 0, 0],
+        [u64::MAX; 4],
+        [0, 0, 0, u64::MAX],
+        [u64::MAX, 0, u64::MAX, 0],
+        [0, u64::MAX, 0, u64::MAX],
+    ];
+    for lhs in operands {
+        for rhs in operands {
+            check([0; 8], lhs, rhs);
+            check([u64::MAX; 8], lhs, rhs);
+            for limb in 0..8 {
+                let mut accumulator = [0; 8];
+                accumulator[limb] = u64::MAX;
+                check(accumulator, lhs, rhs);
+            }
+        }
+    }
+    let mut state = 0x510e_527f_ade6_82d1;
+    for _ in 0..4096 {
+        let accumulator = limbs(&BigUint::from_bytes_le(&deterministic_bytes::<64>(
+            &mut state,
+        )));
+        let lhs = limbs(&BigUint::from_bytes_le(&deterministic_bytes::<32>(
+            &mut state,
+        )));
+        let rhs = limbs(&BigUint::from_bytes_le(&deterministic_bytes::<32>(
+            &mut state,
+        )));
+        check(accumulator, lhs, rhs);
+    }
+}
+
 #[test]
 fn limb_kernels_match_full_width_integer_arithmetic() {
     for a in [0, 1, 1 << 63, u64::MAX] {
@@ -102,7 +147,7 @@ fn check_montgomery<M: PrimeModulus>() {
 
 /// The assembly multiply must agree limb for limb with the portable kernel on
 /// loose inputs, including values in `[p, 2p)`.
-#[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+#[cfg(all(udon_aarch64_asm, not(miri)))]
 #[test]
 fn assembly_multiply_matches_portable_kernel_on_loose_inputs() {
     fn check<M: PrimeModulus>() {
@@ -178,7 +223,7 @@ fn loose_add_and_sub_kernels_reduce_modulo_twice_modulus() {
 
 /// The assembly addition and subtraction compute the same limbs as the
 /// portable kernels on loose inputs, including values in `[p, 2p)`.
-#[cfg(all(feature = "aarch64-asm", target_arch = "aarch64", not(miri)))]
+#[cfg(all(udon_aarch64_asm, not(miri)))]
 #[test]
 fn assembly_add_and_sub_match_portable_kernels_on_loose_inputs() {
     fn check<M: PrimeModulus>() {
@@ -209,29 +254,37 @@ fn montgomery_kernels_cover_their_full_input_bounds() {
 fn check_lazy_squares<M: PrimeModulus>() {
     let p = modulus::<M>();
     let radix = BigUint::from(1u8) << 256usize;
-    let inverse_r = radix.modinv(&p).unwrap();
     // Check the actual unreduced intermediates against exact REDC, not just
     // field equality, at every supported run length.
     let negative_inverse = (&radix - p.modinv(&radix).unwrap()) % &radix;
-    for (value, _) in samples::<M>(32) {
+    let mut values: Vec<_> = samples::<M>(32)
+        .into_iter()
+        .map(|(value, _)| value)
+        .collect();
+    values.extend(
+        [p.clone(), &p + 1u8, &p * 2u8 - 1u8].map(|x| PastaField::<M>::from_montgomery(limbs(&x))),
+    );
+    for value in values {
         let mut raw = value.limbs;
         let mut expected = integer(&raw);
         for count in 0..=1024 {
             assert_eq!(integer(&raw), expected);
             assert!(expected < &p * 2u8);
-            if count <= 260 || count == 512 || count == 1024 {
+            if count <= 260 || count == 512 || count == 513 || count == 1024 {
                 assert_eq!(
                     integer(&montgomery::square_run::<M>(&value.limbs, count, None)),
                     expected,
                 );
-                let factor = limbs(&(&p - 1u8));
+                let factor = limbs(&(&p * 2u8 - 1u8));
+                let product = &expected * integer(&factor);
+                let q = &product * &negative_inverse % &radix;
                 assert_eq!(
                     integer(&montgomery::square_run::<M>(
                         &value.limbs,
                         count,
                         Some(&factor)
-                    )) % &p,
-                    &expected * (&p - 1u8) * &inverse_r % &p,
+                    )),
+                    (&product + q * &p) / &radix,
                 );
             }
             if count != 1024 {
@@ -248,4 +301,98 @@ fn check_lazy_squares<M: PrimeModulus>() {
 fn lazy_squares_preserve_exact_redc_bounds_for_every_run_length() {
     check_lazy_squares::<PallasBase>();
     check_lazy_squares::<PallasScalar>();
+}
+
+// Check feature selection independently of the build script's custom cfg so a
+// missing backend cannot silently turn the native assembly run into a fallback.
+#[test]
+fn assembly_feature_selects_the_supported_native_backend() {
+    assert_eq!(
+        cfg!(udon_aarch64_asm),
+        cfg!(all(
+            feature = "aarch64-asm",
+            target_arch = "aarch64",
+            target_endian = "little",
+            target_pointer_width = "64",
+            any(target_family = "unix", target_os = "none"),
+        )),
+    );
+}
+
+fn check_loose_arithmetic<M: PrimeModulus>() {
+    let p = modulus::<M>();
+    let twice = &p * 2u8;
+    let radix = BigUint::from(1u8) << 256usize;
+    let inverse_r = radix.modinv(&p).unwrap();
+    let negative_inverse = &radix - p.modinv(&radix).unwrap();
+    let redc = |product: BigUint| {
+        let q = &product * &negative_inverse % &radix;
+        (product + q * &p) / &radix
+    };
+    let mut values = vec![
+        BigUint::from(0u8),
+        BigUint::from(1u8),
+        &p - 1u8,
+        p.clone(),
+        &p + 1u8,
+        &twice - 1u8,
+        &radix / 2u8,
+        &radix / 2u8 - 1u8,
+    ];
+    for bit in [64usize, 128, 192] {
+        let power = BigUint::from(1u8) << bit;
+        values.extend([&power - 1u8, power.clone(), &twice - power]);
+    }
+    let mut state = 0x3c6e_f372_fe94_f82b;
+    values.extend(
+        (0..64).map(|_| BigUint::from_bytes_le(&deterministic_bytes::<32>(&mut state)) % &twice),
+    );
+    for x in &values {
+        let a = PastaField::<M>::from_montgomery(limbs(x));
+        if x < &p {
+            assert_eq!(
+                integer(&PastaField::<M>::from_canonical_limbs(limbs(x)).limbs),
+                redc(x * integer(&M::R2)),
+            );
+        }
+        assert_eq!(integer(&a.double().limbs), x * 2u8 % &twice);
+        assert_eq!(integer(&a.neg().limbs), (&twice - x) % &twice);
+        assert_eq!(integer(&a.square().limbs), redc(x * x));
+        assert_eq!(integer(&a.canonical_limbs()), x * &inverse_r % &p);
+        for y in &values {
+            let b = PastaField::<M>::from_montgomery(limbs(y));
+            assert_eq!(integer(&a.add(&b).limbs), (x + y) % &twice);
+            assert_eq!(integer(&a.sub(&b).limbs), (x + &twice - y) % &twice);
+            let expected = redc(x * y);
+            assert!(expected < twice);
+            assert_eq!(integer(&a.mul(&b).limbs), expected);
+            assert_eq!(
+                a.mul(&b).limbs,
+                montgomery::montgomery_multiply::<M>(&a.limbs, &b.limbs)
+            );
+        }
+    }
+    let limit = &p * (&radix + &p);
+    let mut wide = vec![
+        BigUint::from(0u8),
+        &p * &radix - 1u8,
+        &p * &radix,
+        &limit - 1u8,
+    ];
+    for _ in 0..128 {
+        let low = BigUint::from_bytes_le(&deterministic_bytes::<32>(&mut state));
+        let high = BigUint::from_bytes_le(&deterministic_bytes::<32>(&mut state));
+        wide.push(((high << 256usize) + low) % &limit);
+    }
+    for input in wide {
+        let actual = integer(&montgomery::montgomery_reduce_unreduced::<M>(limbs(&input)));
+        assert_eq!(actual, redc(input));
+        assert!(actual < &p * 3u8);
+    }
+}
+
+#[test]
+fn loose_arithmetic_preserves_exact_integer_results() {
+    check_loose_arithmetic::<PallasBase>();
+    check_loose_arithmetic::<PallasScalar>();
 }

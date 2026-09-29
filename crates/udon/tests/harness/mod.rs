@@ -61,6 +61,7 @@ publish = false
 
 [features]
 sqrt-table-large = ["{alias}/sqrt-table-large"]
+aarch64-asm = ["{alias}/aarch64-asm"]
 traits = ["{alias}/traits"]
 poseidon = ["{alias}/poseidon"]
 {extra_features}

@@ -136,31 +136,38 @@ impl<M: PrimeModulus> ProductSum<M> {
         lhs: &PastaField<M, impl ReductionState>,
         rhs: &PastaField<M, impl ReductionState>,
     ) {
-        let (d0, carry) = mac(self.wide[0], lhs.limbs[0], rhs.limbs[0], 0);
-        let (d1, carry) = mac(self.wide[1], lhs.limbs[0], rhs.limbs[1], carry);
-        let (d2, carry) = mac(self.wide[2], lhs.limbs[0], rhs.limbs[2], carry);
-        let (d3, carry) = mac(self.wide[3], lhs.limbs[0], rhs.limbs[3], carry);
-        let (d4, overflow) = adc(self.wide[4], carry, 0);
+        #[cfg(all(udon_aarch64_asm, not(miri)))]
+        let (wide, overflow) =
+            crate::field::aarch64_asm::mul_accumulate(self.wide, &lhs.limbs, &rhs.limbs);
+        #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+        let (wide, overflow) = {
+            let (d0, carry) = mac(self.wide[0], lhs.limbs[0], rhs.limbs[0], 0);
+            let (d1, carry) = mac(self.wide[1], lhs.limbs[0], rhs.limbs[1], carry);
+            let (d2, carry) = mac(self.wide[2], lhs.limbs[0], rhs.limbs[2], carry);
+            let (d3, carry) = mac(self.wide[3], lhs.limbs[0], rhs.limbs[3], carry);
+            let (d4, overflow) = adc(self.wide[4], carry, 0);
 
-        let (d1, carry) = mac(d1, lhs.limbs[1], rhs.limbs[0], 0);
-        let (d2, carry) = mac(d2, lhs.limbs[1], rhs.limbs[1], carry);
-        let (d3, carry) = mac(d3, lhs.limbs[1], rhs.limbs[2], carry);
-        let (d4, carry) = mac(d4, lhs.limbs[1], rhs.limbs[3], carry);
-        let (d5, overflow) = adc(self.wide[5], carry, overflow);
+            let (d1, carry) = mac(d1, lhs.limbs[1], rhs.limbs[0], 0);
+            let (d2, carry) = mac(d2, lhs.limbs[1], rhs.limbs[1], carry);
+            let (d3, carry) = mac(d3, lhs.limbs[1], rhs.limbs[2], carry);
+            let (d4, carry) = mac(d4, lhs.limbs[1], rhs.limbs[3], carry);
+            let (d5, overflow) = adc(self.wide[5], carry, overflow);
 
-        let (d2, carry) = mac(d2, lhs.limbs[2], rhs.limbs[0], 0);
-        let (d3, carry) = mac(d3, lhs.limbs[2], rhs.limbs[1], carry);
-        let (d4, carry) = mac(d4, lhs.limbs[2], rhs.limbs[2], carry);
-        let (d5, carry) = mac(d5, lhs.limbs[2], rhs.limbs[3], carry);
-        let (d6, overflow) = adc(self.wide[6], carry, overflow);
+            let (d2, carry) = mac(d2, lhs.limbs[2], rhs.limbs[0], 0);
+            let (d3, carry) = mac(d3, lhs.limbs[2], rhs.limbs[1], carry);
+            let (d4, carry) = mac(d4, lhs.limbs[2], rhs.limbs[2], carry);
+            let (d5, carry) = mac(d5, lhs.limbs[2], rhs.limbs[3], carry);
+            let (d6, overflow) = adc(self.wide[6], carry, overflow);
 
-        let (d3, carry) = mac(d3, lhs.limbs[3], rhs.limbs[0], 0);
-        let (d4, carry) = mac(d4, lhs.limbs[3], rhs.limbs[1], carry);
-        let (d5, carry) = mac(d5, lhs.limbs[3], rhs.limbs[2], carry);
-        let (d6, carry) = mac(d6, lhs.limbs[3], rhs.limbs[3], carry);
-        let (d7, overflow) = adc(self.wide[7], carry, overflow);
+            let (d3, carry) = mac(d3, lhs.limbs[3], rhs.limbs[0], 0);
+            let (d4, carry) = mac(d4, lhs.limbs[3], rhs.limbs[1], carry);
+            let (d5, carry) = mac(d5, lhs.limbs[3], rhs.limbs[2], carry);
+            let (d6, carry) = mac(d6, lhs.limbs[3], rhs.limbs[3], carry);
+            let (d7, overflow) = adc(self.wide[7], carry, overflow);
 
-        self.wide = [d0, d1, d2, d3, d4, d5, d6, d7];
+            ([d0, d1, d2, d3, d4, d5, d6, d7], overflow)
+        };
+        self.wide = wide;
         let (carry, carry_overflow) = adc(self.carry, overflow, 0);
         self.carry = carry;
         if BOUNDED {
@@ -173,6 +180,7 @@ impl<M: PrimeModulus> ProductSum<M> {
     // Column accumulation shares carry handoffs across terms in a block.
     // Only fresh, physically bounded slice sums call this path.
     #[cfg(target_arch = "aarch64")]
+    #[inline]
     fn add_product_block(
         &mut self,
         lhs: &[PastaField<M, impl ReductionState>],

@@ -36,12 +36,12 @@ pub(super) fn sum<C: PastaCurve>(
 /// below, and one `loose_starts` entry per bucket. Survivors end up at their
 /// bucket's start.
 ///
-/// The first level stages chord denominators from the reduced deposits in
+/// The first level stages chord denominators and numerators from the deposits in
 /// `points`; every sum is written loose into the tail of `fields`, and each
-/// level also writes the next level's denominators from the sums it has just
+/// level also writes the next level's chords from the sums it has just
 /// formed, so later levels read every pair once. Survivors are reduced back
 /// into `points` once. `fields` holds `points.len() / 2` denominators, as
-/// many suffix products, and `2 * (points.len() / 2 + starts.len())` loose
+/// many scaled numerators, and `2 * (points.len() / 2 + starts.len())` loose
 /// coordinates; `loose_starts` has one entry per bucket. A zero chord
 /// denominator falls back to one complete level on reduced points, as
 /// [`reduce_level`] documents.
@@ -58,7 +58,7 @@ pub(crate) fn reduce<C: PastaCurve>(
     while lens.iter().any(|&n| n > 1) {
         let next = {
             let (denom, rest) = fields.split_at_mut(cap);
-            let (suffix, loose) = rest.split_at_mut(cap);
+            let (numerators, loose) = rest.split_at_mut(cap);
             if in_points {
                 let mut offset = 0;
                 for (loose_start, &len) in loose_starts.iter_mut().zip(lens.iter()) {
@@ -66,7 +66,7 @@ pub(crate) fn reduce<C: PastaCurve>(
                     offset += len.div_ceil(2);
                 }
                 assert!(2 * offset <= loose.len(), "loose reduction scratch");
-                staged = stage::<C>(points, starts, lens, denom);
+                staged = stage::<C>(points, starts, lens, denom, numerators);
                 level::<C, true>(
                     points,
                     loose,
@@ -74,7 +74,7 @@ pub(crate) fn reduce<C: PastaCurve>(
                     loose_starts,
                     lens,
                     denom,
-                    suffix,
+                    numerators,
                     staged,
                 )
             } else {
@@ -85,7 +85,7 @@ pub(crate) fn reduce<C: PastaCurve>(
                     loose_starts,
                     lens,
                     denom,
-                    suffix,
+                    numerators,
                     staged,
                 )
             }
@@ -109,17 +109,19 @@ pub(crate) fn reduce<C: PastaCurve>(
     }
 }
 
-/// Writes the chord denominators of every pair of reduced deposits.
+/// Writes the chord denominators and numerators of every pair of deposits.
 fn stage<C: PastaCurve>(
     points: &[AffinePoint<C>],
     starts: &[usize],
     lens: &[usize],
     denom: &mut [PastaField<C::Base>],
+    numerators: &mut [PastaField<C::Base>],
 ) -> usize {
     let mut staged = 0;
     for (&start, &len) in starts.iter().zip(lens) {
         for pair in points[start..start + len].chunks_exact(2) {
             denom[staged] = pair[1].x.sub(&pair[0].x);
+            numerators[staged] = pair[1].y.sub(&pair[0].y);
             staged += 1;
         }
     }
@@ -151,8 +153,8 @@ fn materialize<C: PastaCurve>(
 
 /// One incomplete level over `staged` pairs whose denominators are in
 /// `denom`, reading reduced deposits from `points` when `FROM_POINTS` and
-/// loose pairs otherwise. Sums are written loose, and the denominators of the
-/// next level's pairs replace the consumed entries of `denom`. Returns the
+/// loose pairs otherwise. Sums are written loose, and the chords of the
+/// next level's pairs replace the consumed scratch entries. Returns the
 /// next level's pair count, or `None`, before changing `lens` or `loose`,
 /// when the product of the denominators is zero.
 #[inline(always)]
@@ -167,7 +169,7 @@ fn level<C: PastaCurve, const FROM_POINTS: bool>(
     loose_starts: &[usize],
     lens: &mut [usize],
     denom: &mut [PastaField<C::Base>],
-    suffix: &mut [PastaField<C::Base>],
+    numerators: &mut [PastaField<C::Base>],
     staged: usize,
 ) -> Option<usize> {
     let mut inverses = [PastaField::ONE; 2];
@@ -177,8 +179,12 @@ fn level<C: PastaCurve, const FROM_POINTS: bool>(
         if staged > 1 {
             products[(staged - 2) & 1] = denom[staged - 2];
         }
+        // Pre-scale each numerator by the later denominators in its lane.
+        // Recovering the slope then needs one multiplication before squaring,
+        // instead of recovering the denominator inverse first. This keeps the
+        // multiplication count and scratch size unchanged.
         for i in (0..staged.saturating_sub(2)).rev() {
-            suffix[i] = products[i & 1];
+            numerators[i] = numerators[i].mul(&products[i & 1]);
             products[i & 1] = products[i & 1].mul(&denom[i]);
         }
         let product = if staged == 1 {
@@ -204,32 +210,65 @@ fn level<C: PastaCurve, const FROM_POINTS: bool>(
         let mut emitter = Emitter {
             written: 0,
             previous_x: PastaField::ZERO,
+            previous_y: PastaField::ZERO,
         };
         let mut i = 0;
-        while i + 1 < old {
-            let (px, py, qx, qy) = if FROM_POINTS {
-                let (p, q) = (points[start + i], points[start + i + 1]);
+        // Finish two independent chords together so their multiplication and
+        // squaring chains can overlap. Each pair of outputs also supplies the
+        // next level's chord without separate emitter bookkeeping.
+        while i + 3 < old {
+            let (px, py, qx, rx, ry, sx) = if FROM_POINTS {
+                let pair = &points[start + i..start + i + 4];
                 (
-                    p.x.into_loose(),
-                    p.y.into_loose(),
-                    q.x.into_loose(),
-                    q.y.into_loose(),
+                    pair[0].x.into_loose(),
+                    pair[0].y.into_loose(),
+                    pair[1].x.into_loose(),
+                    pair[2].x.into_loose(),
+                    pair[2].y.into_loose(),
+                    pair[3].x.into_loose(),
                 )
             } else {
-                let pair = &out[2 * i..2 * i + 4];
-                (pair[0], pair[1], pair[2], pair[3])
+                let pair = &out[2 * i..2 * i + 8];
+                (pair[0], pair[1], pair[2], pair[4], pair[5], pair[6])
             };
-            let inverse = if read < staged.saturating_sub(2) {
-                let result = inverses[read & 1].mul(&suffix[read]);
+            let first_sum = px.add(&qx);
+            let second_sum = rx.add(&sx);
+            let first = inverses[read & 1].mul(&numerators[read]);
+            let second = inverses[(read + 1) & 1].mul(&numerators[read + 1]);
+            if read < staged.saturating_sub(2) {
                 inverses[read & 1] = inverses[read & 1].mul(&denom[read]);
-                result
+            }
+            if read + 1 < staged.saturating_sub(2) {
+                inverses[(read + 1) & 1] = inverses[(read + 1) & 1].mul(&denom[read + 1]);
+            }
+            read += 2;
+            let first_x = first.square().sub(&first_sum);
+            let second_x = second.square().sub(&second_sum);
+            let first_y = first.mul(&px.sub(&first_x)).sub(&py);
+            let second_y = second.mul(&rx.sub(&second_x)).sub(&ry);
+            let output = &mut out[2 * emitter.written..2 * emitter.written + 4];
+            output.copy_from_slice(&[first_x, first_y, second_x, second_y]);
+            denom[next] = second_x.sub(&first_x);
+            numerators[next] = second_y.sub(&first_y);
+            next += 1;
+            emitter.written += 2;
+            i += 4;
+        }
+        while i + 1 < old {
+            let (px, py, qx) = if FROM_POINTS {
+                let (p, q) = (points[start + i], points[start + i + 1]);
+                (p.x.into_loose(), p.y.into_loose(), q.x.into_loose())
             } else {
-                inverses[read & 1]
+                let pair = &out[2 * i..2 * i + 4];
+                (pair[0], pair[1], pair[2])
             };
+            let slope = inverses[read & 1].mul(&numerators[read]);
+            if read < staged.saturating_sub(2) {
+                inverses[read & 1] = inverses[read & 1].mul(&denom[read]);
+            }
             read += 1;
-            let slope = qy.sub(&py).mul(&inverse);
             let (x, y) = AffinePoint::<C>::slope_coordinates(&px, &py, &qx, &slope);
-            emitter.emit(out, denom, &mut next, x, y);
+            emitter.emit(out, denom, numerators, &mut next, x, y);
             i += 2;
         }
         if old & 1 != 0 {
@@ -239,7 +278,7 @@ fn level<C: PastaCurve, const FROM_POINTS: bool>(
             } else {
                 (out[2 * (old - 1)], out[2 * (old - 1) + 1])
             };
-            emitter.emit(out, denom, &mut next, x, y);
+            emitter.emit(out, denom, numerators, &mut next, x, y);
         }
         *len = emitter.written;
     }
@@ -248,10 +287,11 @@ fn level<C: PastaCurve, const FROM_POINTS: bool>(
 }
 
 /// Writes one bucket's sums and survivors in order, and the next level's
-/// chord denominator each time a pair completes.
+/// chord denominator and numerator each time a pair completes.
 struct Emitter<M: crate::field::PrimeModulus> {
     written: usize,
     previous_x: PastaField<M>,
+    previous_y: PastaField<M>,
 }
 
 impl<M: crate::field::PrimeModulus> Emitter<M> {
@@ -263,6 +303,7 @@ impl<M: crate::field::PrimeModulus> Emitter<M> {
         &mut self,
         out: &mut [PastaField<M>],
         denom: &mut [PastaField<M>],
+        numerators: &mut [PastaField<M>],
         next: &mut usize,
         x: PastaField<M>,
         y: PastaField<M>,
@@ -271,9 +312,11 @@ impl<M: crate::field::PrimeModulus> Emitter<M> {
         out[2 * self.written + 1] = y;
         if self.written & 1 != 0 {
             denom[*next] = x.sub(&self.previous_x);
+            numerators[*next] = y.sub(&self.previous_y);
             *next += 1;
         }
         self.previous_x = x;
+        self.previous_y = y;
         self.written += 1;
     }
 }

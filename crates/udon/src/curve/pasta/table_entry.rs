@@ -158,7 +158,7 @@ impl<C: PastaCurve> CurveTableEntry<C> for PreparedAffinePoint<C> {
         let x = match rotation {
             0 => self.x,
             1 => self.endomorphism_x,
-            2 => self.x.add(&self.endomorphism_x).neg().reduce(),
+            2 => self.x.negate_nonzero().sub_reduced(&self.endomorphism_x),
             _ => unreachable!("a cube root has three rotations"),
         };
         AffinePoint {

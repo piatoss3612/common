@@ -715,6 +715,130 @@ pub(super) fn shared<C: PastaCurve>(
     }
 }
 
+// Keep the residual kernel separate: its bucket bookkeeping otherwise bloats
+// the main-window function and increases register spills in point staging.
+#[inline(never)]
+fn alpha_tail<C: PastaCurve, E: Base<C> + CurveTableEntry<C>>(
+    input: &BaseView<'_, C>,
+    table: super::AlphaTable<'_, C, E>,
+    digits: impl Storage<u8>,
+    terms: usize,
+    task: Task,
+    work: &mut Work<'_, C>,
+) -> ProjectivePoint<C> {
+    let description = table.codebook().description();
+    let stride = task.geometry.stride();
+    let index = |term| {
+        input
+            .indices
+            .map_or(task.offset + term, |i| i.get(task.offset + term))
+    };
+    let code = |term| {
+        let start = term * stride + task.window * 4;
+        u32::from_le_bytes(match digits.slice(start..start + 4).contiguous() {
+            Some(bytes) => bytes.try_into().expect("one alpha code"),
+            None => core::array::from_fn(|i| digits.get(start + i)),
+        })
+    };
+    // The last row contains two signed residuals, not residue codes. Keeping
+    // it as a separate window lets the ordinary reduction apply B^windows.
+    let mut sum = ProjectivePoint::IDENTITY;
+    let mut top = 0;
+    let mut max_odd = 0;
+    for term in 0..terms {
+        let c = code(term);
+        for value in [c as u16 as i16, (c >> 16) as u16 as i16] {
+            let m = value.unsigned_abs();
+            if m != 0 {
+                max_odd = max_odd.max(m >> m.trailing_zeros());
+            }
+        }
+        top = top
+            .max((c as u16 as i16).unsigned_abs())
+            .max(((c >> 16) as u16 as i16).unsigned_abs());
+    }
+    let bits = 16 - top.leading_zeros();
+    // Even-numbered alpha layers contain odd multiples of P. Factor each
+    // component as 2^bit * odd, then reduce all bit positions together to
+    // share their inversions. Larger odd parts use the binary fallback.
+    if task.accumulation != Accumulation::Projective && usize::from(max_odd) < description.layers()
+    {
+        let points = &mut work.affine[..task.pass.min(terms) + description.layers()];
+        let (starts, rest) = work.indices.split_at_mut(16);
+        let (lens, cursors) = rest.split_at_mut(16);
+        let cursors = &mut cursors[..16];
+        let sums = &mut work.projective[..16];
+        sums.fill(ProjectivePoint::IDENTITY);
+        let mut first = 0;
+        while first < terms {
+            let mut end = first;
+            let mut deposits = 0;
+            lens.fill(0);
+            // Each term can deposit both GLV components. Bound the pass by
+            // occupied point slots as well as the caller's term limit.
+            while end < terms && end - first < task.pass && points.len() - deposits >= 2 {
+                let c = code(end);
+                for value in [c as u16 as i16, (c >> 16) as u16 as i16] {
+                    if value != 0 {
+                        lens[value.unsigned_abs().trailing_zeros() as usize] += 1;
+                        deposits += 1;
+                    }
+                }
+                end += 1;
+            }
+            let mut total = 0;
+            for bit in 0..16 {
+                starts[bit] = total;
+                total += lens[bit];
+                cursors[bit] = starts[bit];
+            }
+            for term in first..end {
+                let c = code(term);
+                for (rotation, value) in [c as u16 as i16, (c >> 16) as u16 as i16]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if value != 0 {
+                        let magnitude = value.unsigned_abs();
+                        let bit = magnitude.trailing_zeros() as usize;
+                        let layer = usize::from(magnitude >> bit) - 1;
+                        let p = table.entry(layer, index(term)).rotated(rotation);
+                        points[cursors[bit]] = if value < 0 { p.neg() } else { p };
+                        cursors[bit] += 1;
+                    }
+                }
+            }
+            reduce(&mut points[..total], starts, lens, work.field, cursors);
+            for bit in 0..16 {
+                if lens[bit] != 0 {
+                    sums[bit] = sums[bit].add_mixed(&points[starts[bit]]);
+                }
+            }
+            first = end;
+        }
+        for bit in (0..bits as usize).rev() {
+            sum = sum.double().add(&sums[bit]);
+        }
+        return sum;
+    }
+    for bit in (0..bits).rev() {
+        sum = sum.double();
+        for term in 0..terms {
+            let c = code(term);
+            for (rotation, value) in [c as u16 as i16, (c >> 16) as u16 as i16]
+                .into_iter()
+                .enumerate()
+            {
+                if value.unsigned_abs() & (1 << bit) != 0 {
+                    let p = table.entry(0, index(term)).rotated(rotation);
+                    sum = sum.add_mixed(&if value < 0 { p.neg() } else { p });
+                }
+            }
+        }
+    }
+    sum
+}
+
 fn alpha<C: PastaCurve, E: Base<C> + CurveTableEntry<C>>(
     input: &BaseView<'_, C>,
     table: super::AlphaTable<'_, C, E>,
@@ -738,36 +862,13 @@ fn alpha<C: PastaCurve, E: Base<C> + CurveTableEntry<C>>(
     };
     let code = |term| {
         let start = term * stride + task.window * 4;
-        u32::from_le_bytes(core::array::from_fn(|i| digits.get(start + i)))
+        u32::from_le_bytes(match digits.slice(start..start + 4).contiguous() {
+            Some(bytes) => bytes.try_into().expect("one alpha code"),
+            None => core::array::from_fn(|i| digits.get(start + i)),
+        })
     };
     if task.window == description.main_windows() {
-        // The last row contains two signed residuals, not residue codes. Keeping
-        // it as a separate window lets the ordinary reduction apply B^windows.
-        let mut sum = ProjectivePoint::IDENTITY;
-        let mut top = 0;
-        for term in 0..terms {
-            let c = code(term);
-            top = top
-                .max((c as u16 as i16).unsigned_abs())
-                .max(((c >> 16) as u16 as i16).unsigned_abs());
-        }
-        let bits = 16 - top.leading_zeros();
-        for bit in (0..bits).rev() {
-            sum = sum.double();
-            for term in 0..terms {
-                let c = code(term);
-                for (rotation, value) in [c as u16 as i16, (c >> 16) as u16 as i16]
-                    .into_iter()
-                    .enumerate()
-                {
-                    if value.unsigned_abs() & (1 << bit) != 0 {
-                        let p = table.entry(0, index(term)).rotated(rotation);
-                        sum = sum.add_mixed(&if value < 0 { p.neg() } else { p });
-                    }
-                }
-            }
-        }
-        return sum;
+        return alpha_tail(input, table, digits, terms, task, work);
     }
     let count = description.layers();
     let point = |term, c: super::alpha::Code| {
@@ -831,20 +932,92 @@ fn alpha<C: PastaCurve, E: Base<C> + CurveTableEntry<C>>(
             lens[bucket] = cursors[bucket];
             cursors[bucket] = cursor;
         }
-        for term in first..end {
-            let c = super::alpha::Code::from_bits(code(term));
-            if c.present() {
-                let bucket = c.bucket();
-                points[cursors[bucket]] = point(term, c);
-                cursors[bucket] += 1;
+        // Give the scatter loop direct slice arguments and its own register
+        // allocation, independent of the reducer and integration bookkeeping.
+        #[inline(never)]
+        fn scatter<C: PastaCurve, E: Base<C> + CurveTableEntry<C>>(
+            input: &BaseView<'_, C>,
+            table: super::AlphaTable<'_, C, E>,
+            digits: impl Storage<u8>,
+            task: Task,
+            range: core::ops::Range<usize>,
+            points: &mut [AffinePoint<C>],
+            cursors: &mut [usize],
+        ) {
+            let stride = task.geometry.stride();
+            for term in range {
+                let start = term * stride + task.window * 4;
+                let c = super::alpha::Code::from_bits(u32::from_le_bytes(
+                    match digits.slice(start..start + 4).contiguous() {
+                        Some(bytes) => bytes.try_into().expect("one alpha code"),
+                        None => core::array::from_fn(|i| digits.get(start + i)),
+                    },
+                ));
+                if c.present() {
+                    let term = task.offset + term;
+                    let base = input.indices.map_or(term, |indices| indices.get(term));
+                    let p = table.entry(c.layer(), base).rotated(c.rotation());
+                    let bucket = c.bucket();
+                    points[cursors[bucket]] = if c.negative() { p.neg() } else { p };
+                    cursors[bucket] += 1;
+                }
             }
         }
+        scatter(input, table, digits, task, first..end, points, cursors);
         reduce(&mut points[..total], starts, lens, work.field, cursors);
         for bucket in 0..count {
             if lens[bucket] != 0 {
                 survivors[bucket] = points[starts[bucket]];
             }
         }
+    }
+    let additions = table
+        .codebook()
+        .coefficients()
+        .iter()
+        .map(|coefficient| {
+            coefficient
+                .digits
+                .iter()
+                .filter(|&&digit| digit != 0)
+                .count()
+        })
+        .sum::<usize>();
+    // Match the prepared reference's crossover: large coefficient programs
+    // amortize a shared inversion tree across the eight binary positions.
+    // Reuse existing scratch; small passes retain mixed projective additions.
+    if additions >= 112 && points.len() >= additions && work.field.len() >= 2 * additions + 16 {
+        let mut position_starts = [0; 8];
+        let mut position_lens = [0; 8];
+        let mut total = 0;
+        for position in 0..8 {
+            position_starts[position] = total;
+            for (bucket, coefficient) in table.codebook().coefficients().iter().enumerate() {
+                let digit = coefficient.digits[position];
+                if lens[bucket] != 0 && digit != 0 {
+                    let unit = digit - 1;
+                    let p = survivors[bucket].rotated(usize::from(unit / 2));
+                    points[total] = if unit & 1 != 0 { p.neg() } else { p };
+                    total += 1;
+                    position_lens[position] += 1;
+                }
+            }
+        }
+        reduce(
+            &mut points[..total],
+            &position_starts,
+            &mut position_lens,
+            work.field,
+            &mut [0; 8],
+        );
+        let mut sum = ProjectivePoint::IDENTITY;
+        for position in (0..8).rev() {
+            sum = sum.double();
+            if position_lens[position] != 0 {
+                sum = sum.add_mixed(&points[position_starts[position]]);
+            }
+        }
+        return sum;
     }
     let mut sum = ProjectivePoint::IDENTITY;
     for position in (0..8).rev() {

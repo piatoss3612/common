@@ -792,3 +792,89 @@ fn odd_matrices_use_short_specialization_and_chunked_fallbacks() {
     check::<Pallas>();
     check::<Vesta>();
 }
+
+// Exercise both sides of the batched coefficient integration threshold, with
+// enough deposits to test tail and main-window passes beyond small-bank cases.
+#[test]
+fn large_alpha_batches_match_independent_multiplication() {
+    fn check<C: PastaCurve>(width: u8) {
+        let affine: Vec<_> = (1..=19)
+            .map(|i| {
+                *AffinePoint::<C>::GENERATOR
+                    .mul_projective(&PastaField::from_u64(i))
+                    .to_point()
+                    .as_affine()
+                    .unwrap()
+            })
+            .collect();
+        let d = AlphaDescription::new(width).unwrap();
+        let mut codes = vec![0; d.codes()];
+        let mut coefficients = vec![AlphaCoefficient::ZERO; d.layers()];
+        let book = AlphaCodebook::prepare(
+            d,
+            &mut codes,
+            &mut coefficients,
+            &mut vec![0; d.codebook_scratch()],
+        );
+        let mut entries = vec![AffinePoint::GENERATOR; d.layers() * affine.len()];
+        AlphaTable::prepare(
+            book,
+            &affine,
+            &mut entries,
+            &mut vec![ProjectivePoint::IDENTITY; affine.len()],
+            &mut vec![PastaField::ZERO; affine.len()],
+            TaskBudget::SERIAL,
+            &SerialExecutor,
+        );
+        let prepared: Vec<_> = entries
+            .iter()
+            .map(PreparedAffinePoint::from_affine)
+            .collect();
+        let mut scalars: Vec<_> = field_samples::<C::Scalar>().take(233).collect();
+        let mut indices: Vec<_> = (0..scalars.len())
+            .map(|i| (i % affine.len()) as u32)
+            .collect();
+        // Force cancellation as well as unrelated full-width scalar pairs.
+        for i in (0..200).step_by(8) {
+            scalars[i + 1] = scalars[i].neg();
+            indices[i + 1] = indices[i];
+            scalars[i + 2] = PastaField::ZERO;
+        }
+        let expected =
+            reference(&Input::indexed(Bases::Affine(&affine), &indices, &scalars).unwrap());
+        for bases in [
+            Bases::Alpha(AlphaTable::bind(book, &entries)),
+            Bases::AlphaPrepared(AlphaTable::bind(book, &prepared)),
+        ] {
+            let input = Input::indexed(bases, &indices, &scalars).unwrap();
+            for tasks in [1, 3] {
+                for cap in [17, 97, 233] {
+                    let options = BatchOptions::new(
+                        ArithmeticOptions::DEFAULT
+                            .with_algorithm(Algorithm::Booth {
+                                width: None,
+                                accumulation: Accumulation::Affine,
+                            })
+                            .unwrap()
+                            .with_max_terms_per_pass(NonZeroUsize::new(cap)),
+                    )
+                    .with_task_budget(TaskBudget::new(tasks).unwrap());
+                    let r = input.requirements_with(options).unwrap();
+                    let mut buffers = Buffers::new(r);
+                    assert_eq!(
+                        input
+                            .execute_with(options, &Pool, buffers.borrow())
+                            .unwrap(),
+                        expected,
+                        "width={width} tasks={tasks} cap={cap}"
+                    );
+                    buffers.tails(r);
+                }
+            }
+        }
+    }
+    for width in 5..=7 {
+        check::<Pallas>(width);
+        check::<Vesta>(width);
+    }
+}

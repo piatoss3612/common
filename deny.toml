@@ -62,10 +62,10 @@ skip = [
     # corresponding packages from local paths or crates.io. Keep these source
     # duplicates exact until the external stack can share workspace sources.
     { name = "maybe-rayon", version = "=0.1.1" },
-    { name = "zakura-bls12-381", version = "=1.0.1" },
-    { name = "zakura-jubjub", version = "=1.0.1" },
-    { name = "zakura-pasta-curves", version = "=1.0.1" },
-    { name = "zakura-reddsa", version = "=1.0.1" },
+    { name = "zakura-bls12-381", version = "=1.2.0" },
+    { name = "zakura-jubjub", version = "=1.2.0" },
+    { name = "zakura-pasta-curves", version = "=1.2.0" },
+    { name = "zakura-reddsa", version = "=1.2.0" },
 ]
 
 [sources]

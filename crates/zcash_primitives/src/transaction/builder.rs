@@ -3032,11 +3032,7 @@ mod tests {
                 orchard_padding: BundlePadding::DEFAULT,
                 ironwood_padding: BundlePadding::DEFAULT,
             };
-            let mut builder = Builder::new(
-                nu_tachyon_test_network(),
-                zcash_protocol::consensus::BlockHeight::from_u32(11),
-                build_config,
-            );
+            let mut builder = Builder::new(TEST_NETWORK, tx_height, build_config);
             builder
                 .add_sapling_spend::<Infallible>(
                     dfvk.fvk().clone(),

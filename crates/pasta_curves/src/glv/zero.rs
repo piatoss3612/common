@@ -1736,7 +1736,7 @@ fn plan_mode<C: GlvParams>(
         .find(|candidate| {
             estimated_table_footprint::<C>(
                 terms,
-                candidate.mode.window_bits(),
+                candidate.mode,
                 candidate.variants,
                 candidate.buckets,
             )
@@ -1749,7 +1749,7 @@ fn plan_mode<C: GlvParams>(
 /// [`PreparedZeroMsm::prepared_bytes`] without first building the table.
 fn estimated_table_footprint<C: GlvParams>(
     terms: usize,
-    window_bits: usize,
+    mode: CodebookMode,
     variants: usize,
     buckets: usize,
 ) -> Option<usize> {
@@ -1757,8 +1757,7 @@ fn estimated_table_footprint<C: GlvParams>(
         .checked_mul(variants)?
         .checked_mul(core::mem::size_of::<prepared::PreparedPoint<C::Base>>())?;
     let tail_bases = terms.checked_mul(core::mem::size_of::<orbit::RotatedBase<C::Base>>())?;
-    let residue_entries =
-        (1usize << (2 * window_bits)).checked_mul(core::mem::size_of::<codebook::CodeEntry>())?;
+    let residue_entries = (1usize << (2 * mode.window_bits())).checked_mul(mode.entry_bytes())?;
     let lifts = variants
         .checked_add(buckets)?
         .checked_mul(core::mem::size_of::<codebook::Eis>())?;
@@ -2748,12 +2747,55 @@ mod tests {
         assert!(prepared.is_zero_vartime(&scalars));
         let estimate = estimated_table_footprint::<C>(
             bases.len(),
-            prepared.mode().window_bits(),
+            prepared.mode(),
             prepared.codebook.variants().len(),
             prepared.codebook.bucket_count(),
         )
         .expect("the table-footprint estimate fits usize");
         assert_eq!(estimate, prepared.prepared_bytes());
+    }
+
+    /// Estimates agree with actual allocations for compact and general modes,
+    /// and compact modes become eligible at their exact footprint budget.
+    fn table_footprint_matches_preparation<C: GlvParams>() {
+        let (_, bases) = testutil::zero_relation::<C>(32, 11);
+        let modes = [
+            ALPHA_FIVE.mode,
+            ALPHA_SIX.mode,
+            ALPHA_SEVEN.mode,
+            CodebookMode::alpha_only(8),
+            CodebookMode::Subgroup {
+                window_bits: 5,
+                beta_power: Some(4),
+            },
+            BETA_SIX_POWER_FOUR.mode,
+            BETA_SEVEN_POWER_EIGHT.mode,
+            CodebookMode::ExponentBox {
+                window_bits: 6,
+                alpha_extent: 8,
+                beta_extent: 8,
+            },
+        ];
+        for mode in modes {
+            let prepared = PreparedZeroMsm::<C>::prepare_with_mode(&bases, mode);
+            let bytes = prepared.prepared_bytes();
+            assert_eq!(
+                estimated_table_footprint::<C>(
+                    bases.len(),
+                    mode,
+                    prepared.codebook.variants().len(),
+                    prepared.codebook.bucket_count(),
+                ),
+                Some(bytes),
+                "footprint estimate differs for {mode:?}"
+            );
+            if [ALPHA_FIVE.mode, ALPHA_SIX.mode, ALPHA_SEVEN.mode].contains(&mode) {
+                for threads in [1, 32] {
+                    assert_eq!(plan_mode::<C>(bases.len(), threads, bytes), Some(mode));
+                    assert_ne!(plan_mode::<C>(bases.len(), threads, bytes - 1), Some(mode));
+                }
+            }
+        }
     }
 
     /// The default mode planner stays within its table-footprint budget and
@@ -2765,7 +2807,7 @@ mod tests {
             assert_eq!(mode, Some(CodebookMode::alpha_only(7)));
             let bytes = estimated_table_footprint::<pallas::Point>(
                 2_050,
-                ALPHA_SEVEN.mode.window_bits(),
+                ALPHA_SEVEN.mode,
                 ALPHA_SEVEN.variants,
                 ALPHA_SEVEN.buckets,
             )
@@ -2774,14 +2816,14 @@ mod tests {
 
             let fixed = estimated_table_footprint::<pallas::Point>(
                 0,
-                ALPHA_FIVE.mode.window_bits(),
+                ALPHA_FIVE.mode,
                 ALPHA_FIVE.variants,
                 ALPHA_FIVE.buckets,
             )
             .unwrap();
             let one = estimated_table_footprint::<pallas::Point>(
                 1,
-                ALPHA_FIVE.mode.window_bits(),
+                ALPHA_FIVE.mode,
                 ALPHA_FIVE.variants,
                 ALPHA_FIVE.buckets,
             )
@@ -2933,6 +2975,10 @@ mod tests {
                 #[test]
                 fn planned_mode() {
                     planned_mode_works::<$curve>();
+                }
+                #[test]
+                fn table_footprint() {
+                    table_footprint_matches_preparation::<$curve>();
                 }
                 #[test]
                 fn coefficient_program() {

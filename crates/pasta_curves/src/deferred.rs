@@ -8,7 +8,15 @@
 
 use core::fmt::Debug;
 
-use crate::arithmetic::{adc, mac};
+use crate::arithmetic::adc;
+#[cfg(not(all(
+    feature = "aarch64-asm",
+    target_arch = "aarch64",
+    any(target_family = "unix", target_os = "none"),
+    target_pointer_width = "64",
+    target_endian = "little"
+)))]
+use crate::arithmetic::mac;
 
 // Keep the assembly exception within this private arithmetic backend.
 #[allow(unsafe_code)]
@@ -305,43 +313,62 @@ impl<F> Product<F> {
     /// Montgomery reduction.
     #[cfg_attr(not(feature = "uninline-portable"), inline)]
     pub(crate) fn partial_reduce(&self, b448: &[u64; 4], r2: &[u64; 4]) -> [u64; 8] {
-        let b7 = self.limbs[7];
-        let b8 = self.carry;
+        #[cfg(all(
+            feature = "aarch64-asm",
+            target_arch = "aarch64",
+            any(target_family = "unix", target_os = "none"),
+            target_pointer_width = "64",
+            target_endian = "little"
+        ))]
+        {
+            aarch64::partial_reduce(self.limbs, self.carry, b448, r2)
+        }
+        #[cfg(not(all(
+            feature = "aarch64-asm",
+            target_arch = "aarch64",
+            any(target_family = "unix", target_os = "none"),
+            target_pointer_width = "64",
+            target_endian = "little"
+        )))]
+        {
+            let b7 = self.limbs[7];
+            let b8 = self.carry;
 
-        // Compute b7 * b448 (5 limbs)
-        let (t0, c) = mac(0, b7, b448[0], 0);
-        let (t1, c) = mac(0, b7, b448[1], c);
-        let (t2, c) = mac(0, b7, b448[2], c);
-        let (t3, c) = mac(0, b7, b448[3], c);
-        let t4 = c;
+            // Compute b7 * b448 (5 limbs)
+            let (t0, c) = mac(0, b7, b448[0], 0);
+            let (t1, c) = mac(0, b7, b448[1], c);
+            let (t2, c) = mac(0, b7, b448[2], c);
+            let (t3, c) = mac(0, b7, b448[3], c);
+            let t4 = c;
 
-        // Accumulate b8 * r2
-        let (t0, c) = mac(t0, b8, r2[0], 0);
-        let (t1, c) = mac(t1, b8, r2[1], c);
-        let (t2, c) = mac(t2, b8, r2[2], c);
-        let (t3, c) = mac(t3, b8, r2[3], c);
-        let (t4, t5) = adc(t4, 0, c);
-        debug_assert!(
-            t5 == 0,
-            "folding term overflow: t4 + carry does not fit in 64 bits"
-        );
+            // Accumulate b8 * r2
+            let (t0, c) = mac(t0, b8, r2[0], 0);
+            let (t1, c) = mac(t1, b8, r2[1], c);
+            let (t2, c) = mac(t2, b8, r2[2], c);
+            let (t3, c) = mac(t3, b8, r2[3], c);
+            let (t4, t5) = adc(t4, 0, c);
+            debug_assert!(
+                t5 == 0,
+                "folding term overflow: t4 + carry does not fit in 64 bits"
+            );
 
-        // Add to lower 7 limbs
-        let (d0, c) = adc(self.limbs[0], t0, 0);
-        let (d1, c) = adc(self.limbs[1], t1, c);
-        let (d2, c) = adc(self.limbs[2], t2, c);
-        let (d3, c) = adc(self.limbs[3], t3, c);
-        let (d4, c) = adc(self.limbs[4], t4, c);
-        let (d5, c) = adc(self.limbs[5], 0, c);
-        let (d6, c) = adc(self.limbs[6], 0, c);
-        let (d7, _) = adc(0, 0, c);
+            // Add to lower 7 limbs
+            let (d0, c) = adc(self.limbs[0], t0, 0);
+            let (d1, c) = adc(self.limbs[1], t1, c);
+            let (d2, c) = adc(self.limbs[2], t2, c);
+            let (d3, c) = adc(self.limbs[3], t3, c);
+            let (d4, c) = adc(self.limbs[4], t4, c);
+            let (d5, c) = adc(self.limbs[5], 0, c);
+            let (d6, c) = adc(self.limbs[6], 0, c);
+            let (d7, _) = adc(0, 0, c);
 
-        // B448 < 2^253 and r2 < 2^252, so the folding term
-        // b7 * B448 + b8 * r2 < 2^317 + 2^316 < 2^318.
-        // The full value is < 2^448 + 2^318 < 2^449, so d7 is at most 1.
-        debug_assert!(d7 <= 1);
+            // B448 < 2^253 and r2 < 2^252, so the folding term
+            // b7 * B448 + b8 * r2 < 2^317 + 2^316 < 2^318.
+            // The full value is < 2^448 + 2^318 < 2^449, so d7 is at most 1.
+            debug_assert!(d7 <= 1);
 
-        [d0, d1, d2, d3, d4, d5, d6, d7]
+            [d0, d1, d2, d3, d4, d5, d6, d7]
+        }
     }
 }
 
@@ -565,6 +592,35 @@ mod tests {
                 prop_assert_eq!(&actual.limbs, &words[..8]);
                 prop_assert_eq!(actual.carry, words[8]);
             }
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn partial_reduce_matches_32_bit_reference(
+            limbs in proptest::array::uniform8(arbitrary_carry_limb()),
+            carry in arbitrary_carry_limb(),
+            mut b448 in proptest::array::uniform4(arbitrary_carry_limb()),
+            mut r2 in proptest::array::uniform4(arbitrary_carry_limb()),
+        ) {
+            // Exercise the entire permitted range, including residues beyond
+            // the particular constants used by the two fields.
+            b448[3] &= (1 << 61) - 1;
+            r2[3] &= (1 << 60) - 1;
+            let accumulator = Product::<()> {
+                limbs,
+                carry,
+                _marker: core::marker::PhantomData,
+            };
+            let low: [u32; 18] = core::array::from_fn(|i|
+                if i < 14 { (limbs[i / 2] >> (32 * (i % 2))) as u32 } else { 0 });
+            let expected = reference_multiply_add_32(low, [limbs[7], 0, 0, 0], b448);
+            let expected = reference_multiply_add_32(expected, [carry, 0, 0, 0], r2);
+            let words: [u64; 8] = core::array::from_fn(|i|
+                u64::from(expected[2 * i]) | (u64::from(expected[2 * i + 1]) << 32));
+            prop_assert_eq!(accumulator.partial_reduce(&b448, &r2), words);
+            prop_assert!(words[7] <= 1);
+            prop_assert_eq!(&expected[16..], &[0, 0]);
         }
     }
 

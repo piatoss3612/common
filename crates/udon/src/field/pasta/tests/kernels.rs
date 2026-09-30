@@ -455,3 +455,35 @@ fn loose_arithmetic_preserves_exact_integer_results() {
     check_loose_arithmetic::<PallasBase>();
     check_loose_arithmetic::<PallasScalar>();
 }
+
+#[cfg(all(udon_aarch64_asm, not(miri)))]
+#[test]
+fn assembly_wrapping_subtraction_matches_integer_arithmetic() {
+    let modulus = BigUint::from(1u8) << 256usize;
+    let check = |a: [u64; 4], b: [u64; 4]| {
+        let actual = crate::field::aarch64_asm::subtract_wrapping(&a, &b);
+        assert_eq!(
+            integer(&actual),
+            (integer(&a) + &modulus - integer(&b)) % &modulus
+        );
+    };
+    let endpoints = [
+        [0; 4],
+        [u64::MAX; 4],
+        [1, 0, 0, 0],
+        [0, 0, 0, 1],
+        [0, u64::MAX, 0, u64::MAX],
+        [u64::MAX, 0, u64::MAX, 0],
+    ];
+    for a in endpoints {
+        for b in endpoints {
+            check(a, b);
+        }
+    }
+    let mut state = 0xa54f_f53a_5f1d_36f1;
+    for _ in 0..4096 {
+        let a = core::array::from_fn(|_| xorshift64(&mut state));
+        let b = core::array::from_fn(|_| xorshift64(&mut state));
+        check(a, b);
+    }
+}

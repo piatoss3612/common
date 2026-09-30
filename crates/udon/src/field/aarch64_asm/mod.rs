@@ -299,14 +299,13 @@ pub(crate) fn add_loose(lhs: &[u64; 4], rhs: &[u64; 4], twice_modulus: &[u64; 4]
     [r0, r1, r2, r3]
 }
 
-/// Computes `lhs - rhs mod 2p` in `[0, 2p)` for inputs below `2p`.
+/// Computes `lhs - rhs mod modulus` for inputs below `modulus`.
 ///
-/// `twice_modulus` is `2p`, added back exactly when the subtraction borrows;
-/// the final carry is discarded after wrapping modulo `2^256`. This computes
-/// the same function as the portable kernel in `pasta::montgomery` on all
-/// inputs.
+/// Loose arithmetic supplies `2p`; canonical arithmetic supplies `p`. The
+/// modulus is added back exactly when the subtraction borrows, discarding
+/// the final carry after wrapping modulo `2^256`.
 #[inline(always)]
-pub(crate) fn sub_loose(lhs: &[u64; 4], rhs: &[u64; 4], twice_modulus: &[u64; 4]) -> [u64; 4] {
+pub(crate) fn sub_loose(lhs: &[u64; 4], rhs: &[u64; 4], modulus: &[u64; 4]) -> [u64; 4] {
     let [mut r0, mut r1, mut r2, mut r3] = *lhs;
     // SAFETY: straight-line register-only arithmetic with no memory access
     // and no stack use; the outputs depend only on the declared inputs.
@@ -332,14 +331,40 @@ pub(crate) fn sub_loose(lhs: &[u64; 4], rhs: &[u64; 4], twice_modulus: &[u64; 4]
             b1 = in(reg) rhs[1],
             b2 = in(reg) rhs[2],
             b3 = in(reg) rhs[3],
-            m0 = in(reg) twice_modulus[0],
-            m1 = in(reg) twice_modulus[1],
-            m2 = in(reg) twice_modulus[2],
-            m3 = in(reg) twice_modulus[3],
+            m0 = in(reg) modulus[0],
+            m1 = in(reg) modulus[1],
+            m2 = in(reg) modulus[2],
+            m3 = in(reg) modulus[3],
             t0 = out(reg) _,
             t1 = out(reg) _,
             t2 = out(reg) _,
             t3 = out(reg) _,
+            options(pure, nomem, nostack),
+        );
+    }
+    [r0, r1, r2, r3]
+}
+
+/// Subtracts two unsigned 256-bit integers, wrapping modulo `2^256`.
+#[inline(always)]
+pub(crate) fn subtract_wrapping(lhs: &[u64; 4], rhs: &[u64; 4]) -> [u64; 4] {
+    let [mut r0, mut r1, mut r2, mut r3] = *lhs;
+    // SAFETY: straight-line register-only arithmetic with no memory access
+    // or stack use; all inputs, outputs and modified flags are declared.
+    unsafe {
+        asm!(
+            "subs {r0}, {r0}, {b0}",
+            "sbcs {r1}, {r1}, {b1}",
+            "sbcs {r2}, {r2}, {b2}",
+            "sbc {r3}, {r3}, {b3}",
+            r0 = inout(reg) r0,
+            r1 = inout(reg) r1,
+            r2 = inout(reg) r2,
+            r3 = inout(reg) r3,
+            b0 = in(reg) rhs[0],
+            b1 = in(reg) rhs[1],
+            b2 = in(reg) rhs[2],
+            b3 = in(reg) rhs[3],
             options(pure, nomem, nostack),
         );
     }

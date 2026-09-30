@@ -46,7 +46,7 @@ pub use uint::CanonicalUint;
 pub(crate) const TWO_ADICITY: u32 = parameters::TWO_ADICITY;
 
 use montgomery::{montgomery_multiply_loose, montgomery_square, reduce_once};
-use word::{adc, subtract_limbs};
+use word::adc;
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -263,7 +263,7 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
         {
             // 2p - a masked to zero for a = 0: the zero test becomes mask
             // arithmetic instead of a branch on the operand value.
-            let (limbs, borrow) = subtract_limbs(&M::TWICE_MODULUS, &self.limbs);
+            let (limbs, borrow) = word::subtract_limbs(&M::TWICE_MODULUS, &self.limbs);
             debug_assert_eq!(borrow, 0);
             let nonzero = self.limbs[0] | self.limbs[1] | self.limbs[2] | self.limbs[3];
             let mask = u64::from(nonzero != 0).wrapping_neg();
@@ -398,6 +398,21 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
 
 // Inline arithmetic wrappers so generic exponentiation uses the specialized kernels.
 impl<M: PrimeModulus> PastaField<M, Reduced> {
+    /// Subtracts canonical residues without passing through the loose range.
+    #[inline(always)]
+    pub(crate) fn sub_reduced(&self, rhs: &Self) -> Self {
+        #[cfg(all(udon_aarch64_asm, not(miri)))]
+        let limbs = crate::field::aarch64_asm::sub_loose(&self.limbs, &rhs.limbs, &M::MODULUS);
+        #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+        let limbs = {
+            let (difference, borrow) = word::borrow_sub_limbs(&self.limbs, &rhs.limbs);
+            let mask = (borrow as u64).wrapping_neg();
+            let restore = M::MODULUS.map(|limb| limb & mask);
+            word::carry_add_limbs(&difference, &restore).0
+        };
+        Self::from_montgomery(limbs)
+    }
+
     /// Returns the additive inverse of a nonzero value, reduced.
     ///
     /// `p - a` is canonical for `0 < a < p`. Curve code uses this for
@@ -408,8 +423,10 @@ impl<M: PrimeModulus> PastaField<M, Reduced> {
     #[inline]
     pub(crate) fn negate_nonzero(&self) -> Self {
         debug_assert!(!self.is_zero());
-        let (limbs, borrow) = subtract_limbs(&M::MODULUS, &self.limbs);
-        debug_assert_eq!(borrow, 0);
+        #[cfg(all(udon_aarch64_asm, not(miri)))]
+        let limbs = crate::field::aarch64_asm::subtract_wrapping(&M::MODULUS, &self.limbs);
+        #[cfg(not(all(udon_aarch64_asm, not(miri))))]
+        let limbs = word::subtract_limbs(&M::MODULUS, &self.limbs).0;
         PastaField::from_montgomery(limbs)
     }
 }

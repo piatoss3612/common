@@ -38,6 +38,11 @@ fn check_arithmetic<M: PrimeModulus>() {
         assert_value(a.mul_by_4(), &(x * 4u8));
         assert_value(a.mul_by_8(), &(x * 8u8));
         assert_value(a.reduce().neg(), &(&p - x));
+        if !a.is_zero() {
+            let negated = a.reduce().negate_nonzero();
+            assert_value(negated, &(&p - x));
+            assert!(integer(&negated.montgomery_limbs()) < p);
+        }
         assert_value(a.reduce().square(), &(x * x));
         assert_value(a.reduce().double(), &(x * 2u8));
         assert_value(a.reduce().half(), &(x * ((&p + 1u8) >> 1usize)));
@@ -47,6 +52,9 @@ fn check_arithmetic<M: PrimeModulus>() {
             check_pair(&a.reduce(), b, x, y, &p);
             check_pair(a, &b.reduce(), x, y, &p);
             check_pair(&a.reduce(), &b.reduce(), x, y, &p);
+            let difference = a.reduce().sub_reduced(&b.reduce());
+            assert_value(difference, &(x + &p - y));
+            assert!(integer(&difference.montgomery_limbs()) < p);
             assert_eq!(a.reduce().cmp(&b.reduce()), x.cmp(y));
             assert_eq!(a.reduce().partial_cmp(&b.reduce()), Some(x.cmp(y)));
             assert_eq!(a.reduce() == b.reduce(), x == y);

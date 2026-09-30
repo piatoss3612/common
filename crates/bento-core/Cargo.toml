@@ -1,0 +1,15 @@
+[package]
+name = "zakura-bento-core"
+description = """
+Implementation crate behind the bento facade; depend on `bento` instead
+"""
+version = "0.1.0"
+authors = ["Sean Bowe <ewillbefull@gmail.com>"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dev-dependencies]
+num-bigint = "0.4"

@@ -62,7 +62,7 @@ class Fragment:
 
 
 def workspace_changelogs(repo_root: Path) -> dict[str, Path]:
-    """Map each member's package name to its CHANGELOG.md path."""
+    """Map each publishable member's package name to its CHANGELOG.md path."""
     manifest = repo_root / "Cargo.toml"
     with manifest.open("rb") as handle:
         workspace = tomllib.load(handle)
@@ -75,6 +75,11 @@ def workspace_changelogs(repo_root: Path) -> dict[str, Path]:
         member_manifest = repo_root / member / "Cargo.toml"
         with member_manifest.open("rb") as handle:
             package = tomllib.load(handle).get("package", {})
+        publish = package.get("publish", True)
+        if isinstance(publish, dict) and publish.get("workspace"):
+            publish = workspace.get("workspace", {}).get("package", {}).get("publish", True)
+        if publish is False or publish == []:
+            continue
         name = package.get("name")
         if not isinstance(name, str):
             raise ChangelogError(f"{member_manifest}: missing package name")
@@ -273,19 +278,24 @@ def parse_category_body(body: str, path: Path, section: str) -> dict[str, str]:
     return categories
 
 
-def promote_release_candidates(
+def promote_prereleases(
     suffix: str, stable_version: str, path: Path
 ) -> tuple[dict[str, str], str]:
-    """Collapse X.Y.Z-rc* sections into entries for the stable X.Y.Z release."""
+    """Collapse X.Y.Z-<pre-release> sections into entries for the stable X.Y.Z release.
+
+    Alpha, beta, and release-candidate sections are all pre-releases of the
+    stable version: their entries fold into the stable section, oldest first,
+    and the pre-release sections are removed.
+    """
     matches = list(VERSION_HEADING.finditer(suffix))
     candidate_sections: list[dict[str, str]] = []
     kept: list[str] = []
     cursor = 0
-    candidate_prefix = f"{stable_version}-rc"
+    prerelease_prefix = f"{stable_version}-"
 
     for match in matches:
         version = match.group(1)
-        if version.startswith(candidate_prefix) and version != candidate_prefix:
+        if version.startswith(prerelease_prefix):
             # A section ends at the next ## heading of any kind: the next
             # version section or the trailing Record of Fork section.
             next_heading = re.search(r"^## ", suffix[match.end() :], re.MULTILINE)
@@ -394,7 +404,7 @@ def release_plan(
 
         promoted: dict[str, str] = {}
         if stable:
-            promoted, suffix = promote_release_candidates(suffix, version, path)
+            promoted, suffix = promote_prereleases(suffix, version, path)
 
         additions: dict[str, list[str]] = defaultdict(list)
         for category, body in current.items():

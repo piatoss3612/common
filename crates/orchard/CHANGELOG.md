@@ -10,7 +10,15 @@ internal implementation details are not tracked here.
 
 ## [Unreleased]
 
-## [1.3.0-alpha.1] - 2026-09-18
+## [2.1.0] - 2026-09-29
+
+### Added
+
+- Added the `portable` feature to forward portable Pasta field arithmetic
+  selection through the proving dependencies
+  ([#505](https://github.com/zakura-core/common/pull/505)).
+
+## [2.0.0] - 2026-09-23
 
 ### Added
 

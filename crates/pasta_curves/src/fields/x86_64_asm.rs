@@ -52,9 +52,12 @@
 //! constant-time.
 //!
 //! ISA requirement: MULX needs BMI2 and ADCX/ADOX need ADX (Intel Broadwell
-//! / AMD Zen or newer). The feature is opt-in precisely because this is not
-//! checked at runtime; enabling it on an older CPU faults with an illegal
-//! instruction.
+//! / AMD Zen or newer). Builds select this backend when Rust's resolved target
+//! features include both extensions, or when `x86_64-asm` is enabled. The
+//! `portable` Cargo feature disables this backend in either case, but does not
+//! undo CPU instructions enabled by Rust's target flags. There is no runtime
+//! dispatch, so running an assembly-enabled binary on an unsupported CPU can
+//! cause an illegal-instruction fault.
 
 use core::arch::asm;
 

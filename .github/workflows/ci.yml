@@ -1,9 +1,10 @@
 name: CI
 
 # The test and cross-target suites below are adapted from each upstream
-# repository's primary CI workflow, as inspected on 2026-08-11. Book jobs are
+# repository's primary CI workflow at the revision noted below. Book jobs are
 # omitted; API documentation is built once for the whole workspace (docs-build)
-# rather than per upstream. Shared lint, formatting, and MSRV checks use the
+# rather than per upstream, with extra Udon feature-specific doc checks.
+# Shared lint, formatting, and MSRV checks use the
 # same policy as zakura-core/zakura.
 
 on:
@@ -33,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
+      equihash: ${{ steps.filter.outputs.equihash }}
       halo2: ${{ steps.filter.outputs.halo2 }}
       halo2_legacy_pdqsort: ${{ steps.filter.outputs.halo2_legacy_pdqsort }}
       orchard: ${{ steps.filter.outputs.orchard }}
@@ -42,6 +44,7 @@ jobs:
       sapling_crypto: ${{ steps.filter.outputs.sapling_crypto }}
       sinsemilla: ${{ steps.filter.outputs.sinsemilla }}
       librustzcash: ${{ steps.filter.outputs.librustzcash }}
+      udon: ${{ steps.filter.outputs.udon }}
       rust_checks: ${{ steps.filter.outputs.rust_checks }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,6 +92,7 @@ jobs:
           fi
           changed=$(git diff --name-only --no-renames "$base_sha" "$head_sha")
 
+          equihash=false
           halo2=false
           halo2_legacy_pdqsort=false
           orchard=false
@@ -98,6 +102,7 @@ jobs:
           sapling_crypto=false
           sinsemilla=false
           librustzcash=false
+          udon=false
           shared=false
 
           # Trip on workspace membership drift so maintainers revisit this
@@ -105,7 +110,11 @@ jobs:
           # together. This does not prove those three mappings are equivalent.
           handled_members=(
             crates/bellman
+            crates/bento
+            crates/bento-core
+            crates/bento-macros
             crates/bls12_381
+            crates/equihash
             crates/halo2_gadgets
             crates/halo2_legacy_pdqsort
             crates/halo2_poseidon
@@ -118,10 +127,15 @@ jobs:
             crates/redjubjub
             crates/sapling-crypto
             crates/sinsemilla
+            crates/udon
+            crates/zcash_address
             crates/zcash_history
             crates/zcash_keys
             crates/zcash_primitives
+            crates/zcash_protocol
             crates/zcash_proofs
+            crates/zcash_transparent
+            crates/zip321
           )
           workspace_packages=$(python3 .github/scripts/workspace_packages.py)
           workspace_members=()
@@ -137,6 +151,12 @@ jobs:
 
           while IFS= read -r path; do
             case "$path" in
+              crates/bento/*|crates/bento-core/*|crates/bento-macros/*|crates/udon/*|.github/scripts/check_udon_fixtures.py)
+                udon=true
+                ;;
+              crates/equihash/*)
+                equihash=true
+                ;;
               crates/halo2_gadgets/*|crates/halo2_poseidon/*|crates/halo2_proofs/*|.github/fixtures/ironwood-circuits.sha256)
                 halo2=true
                 ;;
@@ -168,7 +188,7 @@ jobs:
               crates/sinsemilla/*)
                 sinsemilla=true
                 ;;
-              crates/zcash_history/*|crates/zcash_keys/*|crates/zcash_primitives/*|crates/zcash_proofs/*)
+              crates/zcash_address/*|crates/zcash_history/*|crates/zcash_keys/*|crates/zcash_primitives/*|crates/zcash_protocol/*|crates/zcash_proofs/*|crates/zcash_transparent/*|crates/zip321/*)
                 librustzcash=true
                 ;;
               Cargo.toml|Cargo.lock|rust-toolchain.toml|.cargo/*|.github/scripts/check_rust_group.sh|.github/scripts/workspace_packages.py|.github/workflows/ci.yml|.github/workflows/maintenance.yml)
@@ -178,6 +198,7 @@ jobs:
           done <<< "$changed"
 
           if [[ "$shared" == true ]]; then
+            equihash=true
             halo2=true
             halo2_legacy_pdqsort=true
             orchard=true
@@ -187,6 +208,7 @@ jobs:
             sapling_crypto=true
             sinsemilla=true
             librustzcash=true
+            udon=true
           fi
 
           # Expand changed packages through the workspace's reverse-dependency
@@ -219,12 +241,16 @@ jobs:
           if [[ "$orchard" == true ]]; then
             librustzcash=true
           fi
+          if [[ "$equihash" == true ]]; then
+            librustzcash=true
+          fi
           if [[ "$sapling_crypto" == true ]]; then
             librustzcash=true
           fi
 
           rust_checks=false
-          if [[ "$halo2" == true ||
+          if [[ "$equihash" == true ||
+            "$halo2" == true ||
             "$halo2_legacy_pdqsort" == true ||
             "$orchard" == true ||
             "$pasta_curves" == true ||
@@ -232,11 +258,13 @@ jobs:
             "$redjubjub" == true ||
             "$sapling_crypto" == true ||
             "$sinsemilla" == true ||
-            "$librustzcash" == true ]]; then
+            "$librustzcash" == true ||
+            "$udon" == true ]]; then
             rust_checks=true
           fi
 
           {
+            echo "equihash=$equihash"
             echo "halo2=$halo2"
             echo "halo2_legacy_pdqsort=$halo2_legacy_pdqsort"
             echo "orchard=$orchard"
@@ -246,6 +274,7 @@ jobs:
             echo "sapling_crypto=$sapling_crypto"
             echo "sinsemilla=$sinsemilla"
             echo "librustzcash=$librustzcash"
+            echo "udon=$udon"
             echo "rust_checks=$rust_checks"
           } >> "$GITHUB_OUTPUT"
 
@@ -268,6 +297,9 @@ jobs:
       # One package per invocation: a grouped invocation lets Cargo unify
       # features across the group, masking a package that cannot build
       # against its own manifest alone.
+      - name: zakura-equihash / Stable and MSRV checks
+        if: ${{ !cancelled() && needs.changes.outputs.equihash == 'true' }}
+        run: bash .github/scripts/check_rust_group.sh zakura-equihash true false
       - name: halo2 / Stable and MSRV checks
         if: ${{ !cancelled() && needs.changes.outputs.halo2 == 'true' }}
         run: |
@@ -312,7 +344,20 @@ jobs:
         if: ${{ !cancelled() && needs.changes.outputs.librustzcash == 'true' }}
         run: >-
           bash .github/scripts/check_rust_group.sh
-          "zakura-history zakura-keys zakura-primitives zakura-proofs" true false
+          "zakura-history zakura-keys zakura-primitives zakura-protocol zakura-proofs zakura-zip321" true false
+
+      - name: Udon and Bento / Stable and MSRV checks
+        if: ${{ !cancelled() && needs.changes.outputs.udon == 'true' }}
+        run: |
+          bash .github/scripts/check_rust_group.sh zakura-bento-core true false
+          bash .github/scripts/check_rust_group.sh zakura-bento-macros true false
+          bash .github/scripts/check_rust_group.sh zakura-bento true false
+          bash .github/scripts/check_rust_group.sh zakura-udon true false
+      - name: Udon and Bento / MSRV feature check
+        if: ${{ !cancelled() && needs.changes.outputs.udon == 'true' }}
+        run: >-
+          cargo +1.91.0 check --locked --all-features --all-targets
+          -p zakura-bento-core -p zakura-bento-macros -p zakura-bento -p zakura-udon
 
   formatting:
     name: Formatting
@@ -329,6 +374,9 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo +nightly fmt --all -- --check
+      - name: Check standalone Udon and Bento fixtures
+        if: needs.changes.outputs.udon == 'true'
+        run: python3 .github/scripts/check_udon_fixtures.py
 
   # zcash/halo2 .github/workflows/ci.yml @
   # 723a90bc598d986bdf59941a8011c60a0819d6b9
@@ -857,6 +905,21 @@ jobs:
           --verbose
           --release
           ${{ matrix.features }}
+      - name: Test explicit x86-64 target features
+        if: matrix.features == '--features=multicore'
+        env:
+          RUSTFLAGS: -C target-feature=+adx,+bmi2
+        run: |
+          if grep -qw adx /proc/cpuinfo && grep -qw bmi2 /proc/cpuinfo; then
+            cargo +stable test -p zakura-pasta-curves \
+              --verbose --release --features=multicore \
+              --target x86_64-unknown-linux-gnu
+          else
+            echo "Runner lacks ADX/BMI2; compile assembly tests without running."
+            cargo +stable test -p zakura-pasta-curves \
+              --verbose --release --features=multicore --no-run \
+              --target x86_64-unknown-linux-gnu
+          fi
       - name: Verify working directory is clean
         run: git diff --exit-code
 
@@ -889,6 +952,10 @@ jobs:
           --release
           --all-features
           test_inv
+      # This is the only CI runner that executes the aarch64-asm backend; the
+      # AArch64 Linux and bare-metal jobs only build, and the Linux test jobs
+      # run the portable path. Run the whole suite so every assembly-backed
+      # path, including deferred accumulation, meets its portable oracles.
       - name: Test Apple AArch64 assembly
         if: runner.os == 'macOS' && runner.arch == 'ARM64'
         run: >-
@@ -896,7 +963,6 @@ jobs:
           --verbose
           --release
           --all-features
-          aarch64_asm_matches_portable_arithmetic
       - name: Verify working directory is clean
         run: git diff --exit-code
 
@@ -1211,6 +1277,24 @@ jobs:
 
   # zcash/librustzcash .github/workflows/ci.yml @
   # 82fa052a06e3af0058a73f320538f9b93193439c
+  equihash-test:
+    name: zakura-equihash / Test all features
+    needs: changes
+    if: needs.changes.outputs.equihash == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@839ed2261f110eedd370cb037b6038e074512c4e # zizmor: ignore[impostor-commit,ref-version-mismatch] -- pinned 1.91.0; action uses orphan commits
+      - name: Run tests
+        run: cargo +1.91.0 test -p zakura-equihash --all-features --locked
+      - name: Check no-default-features
+        run: cargo +1.91.0 check -p zakura-equihash --no-default-features --locked
+      - name: Verify working directory is clean
+        run: git diff --exit-code
+
   librustzcash-test:
     name: librustzcash subset / Test all features (${{ matrix.configuration }})
     needs: changes
@@ -1237,10 +1321,14 @@ jobs:
       - name: Run tests
         run: >-
           cargo +1.91.0 test
+          -p zakura-address
           -p zakura-history
           -p zakura-keys
           -p zakura-primitives
+          -p zakura-protocol
           -p zakura-proofs
+          -p zakura-transparent
+          -p zakura-zip321
           --all-features
           -- --test-threads=2
       - name: Test NuTachyon history nodes
@@ -1266,20 +1354,28 @@ jobs:
       - name: Check no-default-features
         run: >-
           cargo +1.91.0 check
+          -p zakura-address
           -p zakura-history
           -p zakura-keys
           -p zakura-primitives
+          -p zakura-protocol
           -p zakura-proofs
+          -p zakura-transparent
+          -p zakura-zip321
           --all-targets
           --no-default-features
       - name: Check transparent-inputs-only
         if: ${{ !cancelled() }}
         run: >-
           cargo +1.91.0 check
+          -p zakura-address
           -p zakura-history
           -p zakura-keys
           -p zakura-primitives
+          -p zakura-protocol
           -p zakura-proofs
+          -p zakura-transparent
+          -p zakura-zip321
           --all-targets
           --no-default-features
           --features zakura-keys/transparent-inputs,zakura-primitives/transparent-inputs
@@ -1287,10 +1383,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: >-
           cargo +1.91.0 check
+          -p zakura-address
           -p zakura-history
           -p zakura-keys
           -p zakura-primitives
+          -p zakura-protocol
           -p zakura-proofs
+          -p zakura-transparent
+          -p zakura-zip321
           --all-targets
           --no-default-features
           --features zakura-keys/transparent-key-encoding
@@ -1298,10 +1398,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: >-
           cargo +1.91.0 check
+          -p zakura-address
           -p zakura-history
           -p zakura-keys
           -p zakura-primitives
+          -p zakura-protocol
           -p zakura-proofs
+          -p zakura-transparent
+          -p zakura-zip321
           --all-targets
           --no-default-features
           --features zakura-keys/sapling,zakura-primitives/circuits
@@ -1309,10 +1413,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: >-
           cargo +1.91.0 check
+          -p zakura-address
           -p zakura-history
           -p zakura-keys
           -p zakura-primitives
+          -p zakura-protocol
           -p zakura-proofs
+          -p zakura-transparent
+          -p zakura-zip321
           --all-targets
           --no-default-features
           --features zakura-keys/orchard,zakura-primitives/circuits
@@ -1320,17 +1428,20 @@ jobs:
         if: ${{ !cancelled() }}
         run: >-
           cargo +1.91.0 check
+          -p zakura-address
           -p zakura-history
           -p zakura-keys
           -p zakura-primitives
+          -p zakura-protocol
           -p zakura-proofs
+          -p zakura-transparent
           --all-targets
           --all-features
       - name: Clippy each feature of each imported crate
         if: ${{ !cancelled() }}
         shell: bash
         run: |
-          for package in zakura-history zakura-keys zakura-primitives zakura-proofs; do
+          for package in zakura-history zakura-keys zakura-primitives zakura-protocol zakura-proofs zakura-zip321; do
             cargo +1.91.0 metadata --no-deps --format-version 1 |
               jq -r --arg package "$package" \
                 '.packages[] | select(.name == $package) | .features | keys[]' |
@@ -1352,10 +1463,14 @@ jobs:
         continue-on-error: true
         run: >-
           cargo +beta clippy
+          -p zakura-address
           -p zakura-history
           -p zakura-keys
           -p zakura-primitives
+          -p zakura-protocol
           -p zakura-proofs
+          -p zakura-transparent
+          -p zakura-zip321
           --no-deps
           --all-features
           --all-targets
@@ -1375,7 +1490,7 @@ jobs:
             packages: -p zakura-proofs
             build-deps: gcc-multilib
           - target: thumbv7em-none-eabihf
-            packages: -p zakura-history -p zakura-keys -p zakura-primitives
+            packages: -p zakura-address -p zakura-history -p zakura-keys -p zakura-primitives -p zakura-protocol -p zakura-transparent
             build-deps: gcc-arm-none-eabi
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1392,7 +1507,251 @@ jobs:
         env:
           PACKAGES: ${{ matrix.packages }}
           TARGET: ${{ matrix.target }}
-        run: cargo +1.91.0 build $PACKAGES --no-default-features --target "$TARGET" --verbose
+        run: |
+          read -r -a packages <<< "$PACKAGES"
+          cargo +1.91.0 build "${packages[@]}" --no-default-features --target "$TARGET" --verbose
+
+  # tachyon-zcash/udon .github/workflows/ci.yml @
+  # 586329a8c94fe042e7ec264b61bfd632888828cb
+  udon-features:
+    needs: changes
+    if: needs.changes.outputs.udon == 'true'
+    defaults:
+      run:
+        shell: bash
+    name: Udon / Feature checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      PROPTEST_CASES: "32"
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+      - name: Clippy without optional features
+        run: cargo clippy -p zakura-udon --all-targets --no-default-features --locked -- -D warnings
+      - name: Clippy with traits but without Poseidon
+        run: cargo clippy -p zakura-udon --all-targets --no-default-features --features traits --locked -- -D warnings
+      - name: Check documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc --locked -p zakura-bento-core -p zakura-bento-macros -p zakura-bento -p zakura-udon --no-default-features --no-deps
+          cargo doc --locked -p zakura-udon --no-default-features --features traits --no-deps
+          cargo doc --locked -p zakura-udon --no-default-features --features poseidon --no-deps
+          cargo doc --locked -p zakura-bento-core -p zakura-bento-macros -p zakura-bento -p zakura-udon --all-features --no-deps
+
+  udon-test:
+    needs: changes
+    if: needs.changes.outputs.udon == 'true'
+    defaults:
+      run:
+        shell: bash
+    name: Udon / Arithmetic (${{ matrix.platform.arch }}, ${{ matrix.tables }})
+    timeout-minutes: 60
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-24.04, arch: x86_64 }
+          - { runner: ubuntu-24.04-arm, arch: aarch64 }
+        tables: [default, large]
+        include:
+          - tables: default
+            native_features: "--no-default-features"
+            trait_features: "--no-default-features --features traits,poseidon"
+          - tables: large
+            native_features: "--no-default-features --features sqrt-table-large"
+            trait_features: "--all-features"
+    env:
+      PROPTEST_CASES: "32"
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify native architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.platform.arch }}
+        run: test "$(uname -m)" = "$EXPECTED_ARCH"
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+          # The compile-test harnesses build generated consumer crates with
+          # the ambient Cargo environment and assume default warning behavior.
+          build-warnings: ""
+      - name: Run release tests without traits
+        env:
+          FEATURES: ${{ matrix.native_features }}
+        run: |
+          read -r -a features <<< "$FEATURES"
+          cargo test --release --locked -p zakura-bento-core -p zakura-bento-macros -p zakura-bento -p zakura-udon "${features[@]}"
+      - name: Run release tests with traits
+        env:
+          FEATURES: ${{ matrix.trait_features }}
+        run: |
+          read -r -a features <<< "$FEATURES"
+          cargo test --release --locked -p zakura-bento-core -p zakura-bento-macros -p zakura-bento -p zakura-udon "${features[@]}"
+      - name: Check Udon with debug assertions without traits
+        env:
+          FEATURES: ${{ matrix.native_features }}
+        run: |
+          read -r -a features <<< "$FEATURES"
+          cargo test --locked -p zakura-udon --lib "${features[@]}"
+      - name: Check Udon with debug assertions with traits
+        env:
+          FEATURES: ${{ matrix.trait_features }}
+        run: |
+          read -r -a features <<< "$FEATURES"
+          cargo test --locked -p zakura-udon --lib "${features[@]}"
+      - name: Preserve property regressions
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: udon-regressions-${{ matrix.platform.arch }}-${{ matrix.tables }}
+          path: crates/udon/src/**/*.regressions
+          if-no-files-found: ignore
+
+  udon-consumers:
+    needs: changes
+    if: needs.changes.outputs.udon == 'true'
+    defaults:
+      run:
+        shell: bash
+    name: Udon / Compiler and artifact consumers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PROPTEST_CASES: "32"
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+          # The consumer harnesses build generated crates with the ambient
+          # Cargo environment and assume default warning behavior.
+          build-warnings: ""
+      - name: Run Udon compiler and artifact consumers
+        # Each consumer selects its own dependency feature matrix.
+        run: |
+          cargo test --release --locked -p zakura-udon \
+            --test api --test field --test curve --test fft -- --ignored | tee "$RUNNER_TEMP/consumers.log"
+          # Require a completed nonempty run, and reject any empty target.
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/consumers.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/consumers.log"
+
+  udon-benchmarks:
+    needs: changes
+    if: needs.changes.outputs.udon == 'true'
+    defaults:
+      run:
+        shell: bash
+    name: Udon / Benchmark smoke tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PROPTEST_CASES: "32"
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+      - name: Exercise field benchmarks
+        run: |
+          cargo bench --locked -p zakura-udon --bench field --features traits -- --test
+          cargo bench --locked -p zakura-udon --bench field --features traits,sqrt-table-large -- --test
+      - name: Exercise FFT benchmarks
+        run: |
+          cargo bench --locked -p zakura-udon --bench fft --features traits -- --test
+          cargo bench --locked -p zakura-udon --bench fft_strategies -- --test
+      - name: Exercise curve benchmarks
+        run: |
+          cargo bench --locked -p zakura-udon --bench curve -- --test
+          cargo bench --locked -p zakura-udon --bench curve --features sqrt-table-large -- --test
+          cargo bench --locked -p zakura-udon --bench msm -- --test
+      - name: Exercise incremental execution benchmarks
+        run: cargo bench --locked -p zakura-udon --bench execution -- --test
+
+  udon-miri:
+    needs: changes
+    if: needs.changes.outputs.udon == 'true'
+    defaults:
+      run:
+        shell: bash
+    name: Udon / Unsafe storage checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      MIRI_TOOLCHAIN: nightly-2026-09-06
+      PROPTEST_CASES: "32"
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Miri toolchain
+        run: rustup toolchain install "$MIRI_TOOLCHAIN" --profile minimal --component miri,rust-src
+      - name: Check core storage
+        run: |
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento-core --lib pod:: | tee "$RUNNER_TEMP/core.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/core.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/core.log"
+      - name: Check public storage API
+        run: |
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-bento --test pod storage:: | tee "$RUNNER_TEMP/pod.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/pod.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/pod.log"
+      - name: Check field and affine point storage
+        run: |
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --test field --test curve pod:: | tee "$RUNNER_TEMP/udon-pod.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/udon-pod.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/udon-pod.log"
+      - name: Check transparent consumer views
+        run: |
+          cargo +"$MIRI_TOOLCHAIN" miri test --locked -p zakura-udon --lib --features poseidon transparent_views | tee "$RUNNER_TEMP/udon-views.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/udon-views.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/udon-views.log"
+
+  udon-portability:
+    needs: changes
+    if: needs.changes.outputs.udon == 'true'
+    defaults:
+      run:
+        shell: bash
+    name: Udon / Target portability contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PROPTEST_CASES: "32"
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
+        with:
+          cache: false
+          # The portability harness builds generated crates with the ambient
+          # Cargo environment and assumes default warning behavior.
+          build-warnings: ""
+      - name: Install target libraries
+        run: rustup target add thumbv7em-none-eabi s390x-unknown-linux-gnu
+      - name: Build portable libraries and check unsupported layouts
+        run: |
+          cargo test --release --locked -p zakura-bento --test api portability:: -- --ignored | tee "$RUNNER_TEMP/portability.log"
+          grep -Eq '^test result: ok\. [1-9][0-9]* passed;' "$RUNNER_TEMP/portability.log"
+          ! grep -Eq '^test result: ok\. 0 passed;' "$RUNNER_TEMP/portability.log"
 
   test-success:
     name: test success
@@ -1429,9 +1788,16 @@ jobs:
       - sapling-platform-smoke
       - sapling-no-std
       - sinsemilla-weighted-test
+      - equihash-test
       - librustzcash-test
       - librustzcash-configurations
       - librustzcash-no-std
+      - udon-features
+      - udon-test
+      - udon-consumers
+      - udon-benchmarks
+      - udon-miri
+      - udon-portability
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -1472,6 +1838,13 @@ jobs:
             sapling-platform-smoke,
             sapling-no-std,
             sinsemilla-weighted-test,
+            equihash-test,
             librustzcash-test,
             librustzcash-configurations,
-            librustzcash-no-std
+            librustzcash-no-std,
+            udon-features,
+            udon-test,
+            udon-consumers,
+            udon-benchmarks,
+            udon-miri,
+            udon-portability

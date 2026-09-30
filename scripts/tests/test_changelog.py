@@ -57,6 +57,35 @@ CHANGELOG_WITH_CANDIDATES = """\
 """
 
 
+CHANGELOG_WITH_PRERELEASES = """\
+# Changelog
+
+## [Unreleased]
+
+## [1.3.0-rc.1] - 2026-07-22
+
+### Fixed
+
+- Candidate fix.
+
+## [1.3.0-alpha.1] - 2026-07-21
+
+### Added
+
+- Alpha feature.
+
+## [1.2.0] - 2026-07-20
+
+### Added
+
+- Previous stable feature.
+
+## Record of Fork
+
+`{name}` began as a fork.
+"""
+
+
 def seeded_changelog(name: str, unreleased: str = "", versions: str = "") -> str:
     return SEEDED_CHANGELOG.format(
         name=name, unreleased=unreleased, versions=versions
@@ -116,6 +145,55 @@ class ChangelogTests(unittest.TestCase):
         self.assertEqual(
             fragment.entries["zakura-beta"]["Changed"], "- Changed behavior."
         )
+
+    def test_unpublished_members_are_excluded_from_releases(self):
+        for setting in ("false", "[]", "{ workspace = true }"):
+            with self.subTest(publish=setting):
+                (self.root / "Cargo.toml").write_text(
+                    WORKSPACE_MANIFEST + "\n[workspace.package]\npublish = false\n"
+                )
+                (self.root / "crates/beta/Cargo.toml").write_text(
+                    MEMBER_MANIFEST.format(name="zakura-beta")
+                    + f"version = \"0.1.0\"\npublish = {setting}\n"
+                )
+                self.member_changelog("beta").unlink(missing_ok=True)
+                self.assertEqual(
+                    changelog.workspace_changelogs(self.root),
+                    {"zakura-alpha": self.member_changelog("alpha")},
+                )
+                changelog.check_seeds(self.root)
+                fragment = self.write_fragment(
+                    "123.md", "## zakura-alpha\n\n### Fixed\n\n- Fixed a bug.\n"
+                )
+                writes, removals = changelog.release_plan(
+                    self.root, "v2.1.0", "2026-09-28"
+                )
+                self.assertEqual(set(writes), {self.member_changelog("alpha")})
+                self.assertEqual(removals, [fragment])
+                self.assertIn("## [2.1.0]", writes[self.member_changelog("alpha")])
+                self.assertFalse(self.member_changelog("beta").exists())
+
+    def test_rejects_fragment_for_unpublished_member(self):
+        (self.root / "crates/beta/Cargo.toml").write_text(
+            MEMBER_MANIFEST.format(name="zakura-beta") + "publish = false\n"
+        )
+        self.write_fragment("123.md", "## zakura-beta\n\n### Added\n\n- Experiment.\n")
+        with self.assertRaisesRegex(changelog.ChangelogError, "unknown crate"):
+            changelog.load_fragments(self.root)
+
+    def test_explicit_and_inherited_registry_lists_remain_publishable(self):
+        (self.root / "Cargo.toml").write_text(
+            WORKSPACE_MANIFEST + '\n[workspace.package]\npublish = ["crates-io"]\n'
+        )
+        for setting in ('["crates-io"]', "{ workspace = true }"):
+            with self.subTest(publish=setting):
+                (self.root / "crates/beta/Cargo.toml").write_text(
+                    MEMBER_MANIFEST.format(name="zakura-beta") + f"publish = {setting}\n"
+                )
+                self.assertIn("zakura-beta", changelog.workspace_changelogs(self.root))
+                self.member_changelog("beta").write_text("# Missing release history\n")
+                with self.assertRaises(changelog.ChangelogError):
+                    changelog.check_seeds(self.root)
 
     def test_rejects_unknown_crate(self):
         self.write_fragment("123.md", "## zakura-gamma\n\n### Fixed\n\n- Fix.\n")
@@ -342,6 +420,26 @@ class ChangelogTests(unittest.TestCase):
         late_fix = alpha.index("Final fix")
         self.assertLess(early_fix, late_fix)
         self.assertTrue(added)
+
+    def test_stable_release_combines_alpha_and_candidate_prereleases(self):
+        self.member_changelog("alpha").write_text(
+            CHANGELOG_WITH_PRERELEASES.format(name="zakura-alpha")
+        )
+        self.write_fragment(
+            "126.md", "## zakura-alpha\n\n### Fixed\n\n- Final fix.\n"
+        )
+
+        writes, _ = changelog.release_plan(self.root, "v1.3.0", "2026-08-28")
+
+        alpha = writes[self.member_changelog("alpha")]
+        self.assertIn("## [1.3.0] - 2026-08-28", alpha)
+        self.assertNotIn("1.3.0-alpha", alpha)
+        self.assertNotIn("1.3.0-rc", alpha)
+        # Only pre-releases of 1.3.0 fold in; the earlier stable stays put.
+        self.assertIn("## [1.2.0] - 2026-07-20\n\n### Added\n\n- Previous stable", alpha)
+        self.assertIn("### Added\n\n- Alpha feature.\n\n### Fixed", alpha)
+        self.assertLess(alpha.index("Candidate fix"), alpha.index("Final fix"))
+        self.assertLess(alpha.index("## [1.3.0]"), alpha.index("## [1.2.0]"))
 
     def test_release_rejects_existing_version_with_new_entries(self):
         self.member_changelog("alpha").write_text(

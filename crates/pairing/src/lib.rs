@@ -14,7 +14,7 @@ pub use group;
 
 use core::ops::{Add, AddAssign, Mul};
 use group::{
-    Group, GroupOps, GroupOpsOwned, ScalarMul, ScalarMulOwned, UncompressedEncoding,
+    Curve, Group, GroupOps, GroupOpsOwned, ScalarMul, ScalarMulOwned, UncompressedEncoding,
     ff::PrimeField,
     prime::{PrimeCurve, PrimeCurveAffine},
 };
@@ -68,6 +68,22 @@ pub trait Engine: Sized + 'static + Clone + Sync + Send + core::fmt::Debug {
     /// Invoke the pairing function `G1 x G2 -> Gt` without the use of precomputation and
     /// other optimizations.
     fn pairing(p: &Self::G1Affine, q: &Self::G2Affine) -> Self::Gt;
+
+    /// Converts a G1 point to affine form. Implementations may use inversion
+    /// whose timing depends on the complete projective representation, which
+    /// can carry information beyond the affine point. The caller must accept
+    /// that timing behavior. The default uses [`Curve::to_affine`].
+    fn g1_to_affine_vartime(point: &Self::G1) -> Self::G1Affine {
+        point.to_affine()
+    }
+
+    /// Converts a G2 point to affine form. Implementations may use inversion
+    /// whose timing depends on the complete projective representation, which
+    /// can carry information beyond the affine point. The caller must accept
+    /// that timing behavior. The default uses [`Curve::to_affine`].
+    fn g2_to_affine_vartime(point: &Self::G2) -> Self::G2Affine {
+        point.to_affine()
+    }
 }
 
 /// Affine representation of an elliptic curve point that can be used
@@ -84,6 +100,17 @@ pub trait PairingCurveAffine: PrimeCurveAffine + UncompressedEncoding {
 pub trait MultiMillerLoop: Engine {
     /// The prepared form of `Self::G2Affine`.
     type G2Prepared: Clone + Send + Sync + From<Self::G2Affine>;
+
+    /// Prepare a G2 point for repeated use across Miller loops.
+    ///
+    /// Implementations may spend more time here to speed up each later loop.
+    /// The default uses ordinary G2 preparation. The raw Miller loop result
+    /// may differ from ordinary preparation, but final exponentiation must
+    /// produce the same pairing result. Implementations may be variable time
+    /// in `q`; use this for public points.
+    fn prepare_reusable_g2(q: Self::G2Affine) -> Self::G2Prepared {
+        q.into()
+    }
 
     /// The type returned by `Engine::miller_loop`.
     type Result: MillerLoopResult<Gt = Self::Gt>;

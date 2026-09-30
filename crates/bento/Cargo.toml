@@ -1,0 +1,38 @@
+[package]
+name = "zakura-bento"
+description = """
+Compile-time arithmetic, addition chains, and checked POD storage and embedding
+for Zakura
+"""
+version = "0.1.0"
+authors = ["Sean Bowe <ewillbefull@gmail.com>"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+bento-core.workspace = true
+bento-macros.workspace = true
+
+[dev-dependencies]
+proc-macro2 = "1"
+quote = "1"
+tempfile = "3"
+
+# Run the examples' assertions as part of the workspace test suite.
+[[example]]
+name = "addition_chain"
+test = true
+harness = false
+
+[[example]]
+name = "embed"
+test = true
+harness = false
+
+[[example]]
+name = "field_constants"
+test = true
+harness = false

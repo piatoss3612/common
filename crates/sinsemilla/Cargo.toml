@@ -25,7 +25,7 @@ pasta_curves = { workspace = true, features = ["alloc"] }
 subtle = { version = "2.3", default-features = false }
 
 [dev-dependencies]
-criterion = "0.4"
+criterion = "0.5"
 
 [features]
 test-dependencies = []

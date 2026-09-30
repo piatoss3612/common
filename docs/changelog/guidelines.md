@@ -9,10 +9,15 @@ How and when to update the changelogs in this repository.
 | `docs/changelog/unreleased/<PR>.md` | Unreleased entries owned by one PR | Reviewers and release tooling |
 | `crates/<name>/CHANGELOG.md` | That crate's released public-API history | crates.io consumers of the crate |
 
-Each crate's `CHANGELOG.md` ships inside its published package. Entries
+Each published crate's `CHANGELOG.md` ships inside its package. Entries
 describe the crate's public API and observable behavior from a consumer's
 perspective; internal implementation details, refactors, and CI changes live
 in commit messages and pull requests instead.
+
+Workspace members with `publish = false`, including Udon and Bento, version
+independently and are excluded from Common's changelog checks and release
+assembly. PRs affecting only these unpublished crates still follow the
+fragment requirement below, using `<!-- changelog: none -->` with a reason.
 
 ## Per-crate changelog structure
 
@@ -70,7 +75,7 @@ consume every pending fragment.
 
 Run `./scripts/changelog.py check` locally. CI validates the syntax, checks
 the fragment filename matches the PR number, verifies crate headings name real
-workspace members, and keeps the provenance records intact.
+publishable workspace members, and keeps the provenance records intact.
 
 ## Writing entries
 
@@ -99,10 +104,11 @@ new version section in each affected crate's changelog. Crates with no entries
 for the release are left untouched. Review and commit the generated changelogs
 and fragment deletions.
 
-Release candidates get temporary version sections. When the matching stable
-version is assembled, the tool combines those sections from oldest to newest
-with any later unreleased entries, removes the release-candidate sections, and
-creates one stable section per crate.
+Pre-releases (`X.Y.Z-alpha.N`, `X.Y.Z-beta.N`, `X.Y.Z-rc.N`) get temporary
+version sections. When the matching stable version is assembled, the tool
+combines those sections from oldest to newest with any later unreleased
+entries, removes the pre-release sections, and creates one stable section per
+crate.
 
 `./scripts/changelog.py release vX.Y.Z --check` fails if fragments remain or
 the assembled changelogs were not committed; release PRs must contain no

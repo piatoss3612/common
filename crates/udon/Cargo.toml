@@ -1,0 +1,65 @@
+[package]
+name = "zakura-udon"
+description = """
+Pasta field and curve arithmetic with allocation-free FFTs
+"""
+version = "0.1.0"
+authors = ["Sean Bowe <ewillbefull@gmail.com>"]
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[features]
+# Unstable consumer-facing traits and generic arithmetic adapters.
+traits = []
+# Fixed Pasta Poseidon parameters and consumer views, likely to move to a
+# separate crate. The views use the consumer field traits and adapters.
+poseidon = ["traits"]
+# Selects larger square-root tables; see the crate-level feature documentation.
+sqrt-table-large = []
+# Assembly field arithmetic and FFT butterflies on supported AArch64 targets;
+# see the crate-level feature documentation and arithmetic safety contracts.
+aarch64-asm = ["dep:cc"]
+
+[dependencies]
+bento.workspace = true
+
+[build-dependencies]
+cc = { version = "1", optional = true }
+
+[dev-dependencies]
+# The consumer harness builds offline with `aarch64-asm` enabled; a test run
+# must seed the registry cache with the optional `cc` build dependency.
+cc = "1"
+criterion = { version = "0.6", features = ["html_reports"] }
+num-bigint = "0.4"
+proptest = { version = ">=1,<1.7", default-features = false, features = ["std"] }
+rayon = "1.12"
+spin = { version = "0.10", default-features = false, features = ["rwlock"] }
+tempfile = "3"
+
+[[bench]]
+name = "field"
+harness = false
+
+[[bench]]
+name = "fft"
+harness = false
+
+[[bench]]
+name = "fft_strategies"
+harness = false
+
+[[bench]]
+name = "curve"
+harness = false
+
+[[bench]]
+name = "msm"
+harness = false
+
+[[bench]]
+name = "execution"
+harness = false

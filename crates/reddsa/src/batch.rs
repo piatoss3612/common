@@ -191,12 +191,27 @@ impl<S: SpendAuth, B: Binding<Scalar = S::Scalar, Point = S::Point>> Verifier<S,
         // https://p.z.cash/TCR:bad-txns-orchard-binding-signature-invalid?partial
         let n = self.signatures.len();
 
+        if n == 0 {
+            return Ok(());
+        }
+
         let mut VK_coeffs = Vec::with_capacity(n);
         let mut VKs = Vec::with_capacity(n);
         let mut R_coeffs = Vec::with_capacity(self.signatures.len());
         let mut Rs = Vec::with_capacity(self.signatures.len());
         let mut P_spendauth_coeff = S::Scalar::ZERO;
         let mut P_binding_coeff = B::Scalar::ZERO;
+
+        // For Sapling, decode each R and verification key together so their
+        // field inversions share one batch inversion.
+        let mut decoded_points = S::batch_decode_points(self.signatures.iter().flat_map(|item| {
+            let (r_bytes, vk_bytes) = match item.inner {
+                Inner::SpendAuth { sig, vk_bytes, .. } => (sig.r_bytes, vk_bytes.bytes),
+                Inner::Binding { sig, vk_bytes, .. } => (sig.r_bytes, vk_bytes.bytes),
+            };
+            [r_bytes, vk_bytes]
+        }))
+        .map(|points| points.into_iter());
 
         for item in self.signatures.iter() {
             let (s_bytes, r_bytes, c) = match item.inner {
@@ -216,9 +231,9 @@ impl<S: SpendAuth, B: Binding<Scalar = S::Scalar, Point = S::Point>> Verifier<S,
                 }
             };
 
-            let R = {
-                // XXX-jubjub: should not use CtOption here
-                // XXX-jubjub: inconsistent ownership in from_bytes
+            let R = if let Some(points) = decoded_points.as_mut() {
+                points.next().unwrap().ok_or(Error::InvalidSignature)?
+            } else {
                 let mut repr = <S::Point as GroupEncoding>::Repr::default();
                 repr.as_mut().copy_from_slice(&r_bytes);
                 let maybe_point = S::Point::from_bytes(&repr);
@@ -229,14 +244,39 @@ impl<S: SpendAuth, B: Binding<Scalar = S::Scalar, Point = S::Point>> Verifier<S,
                 }
             };
 
-            let VK = match item.inner {
-                Inner::SpendAuth { vk_bytes, .. } => {
-                    VerificationKey::<S>::try_from(vk_bytes.bytes)?.point
-                }
-                Inner::Binding { vk_bytes, .. } => {
-                    VerificationKey::<B>::try_from(vk_bytes.bytes)?.point
+            let VK = if let Some(points) = decoded_points.as_mut() {
+                points
+                    .next()
+                    .unwrap()
+                    .ok_or(Error::MalformedVerificationKey)?
+            } else {
+                match item.inner {
+                    Inner::SpendAuth { vk_bytes, .. } => {
+                        VerificationKey::<S>::try_from(vk_bytes.bytes)?.point
+                    }
+                    Inner::Binding { vk_bytes, .. } => {
+                        VerificationKey::<B>::try_from(vk_bytes.bytes)?.point
+                    }
                 }
             };
+
+            if n == 1 {
+                // A single signature needs no random weighting. Keep the
+                // decoding order above so malformed encodings report the
+                // same error as larger batches.
+                let basepoint = match item.inner {
+                    Inner::SpendAuth { .. } => S::basepoint(),
+                    Inner::Binding { .. } => B::basepoint(),
+                };
+                // Scalar negation can add torsion for a non-prime-order key;
+                // the small-order check below ignores that component.
+                let check = S::Point::vartime_multiscalar_mul([s, -c], [basepoint, VK]) - R;
+                return if check.is_small_order().into() {
+                    Ok(())
+                } else {
+                    Err(Error::InvalidSignature)
+                };
+            }
 
             let z = S::Scalar::from_raw(gen_128_bits(&mut rng));
 

@@ -903,7 +903,6 @@ impl<P, U> Builder<P, U> {
             // (V6) and the consensus branch is one in which Ironwood is active.
             let ironwood_branch = match self.consensus_branch_id {
                 BranchId::Nu6_3 => true,
-                #[cfg(zcash_unstable = "nu7")]
                 BranchId::Nu7 => true,
                 #[cfg(zcash_unstable = "nutachyon")]
                 BranchId::NuTachyon => true,
@@ -1967,14 +1966,13 @@ mod tests {
             nu6_1: Some(BlockHeight::from_u32(8)),
             nu6_2: Some(BlockHeight::from_u32(9)),
             nu6_3: Some(BlockHeight::from_u32(10)),
-            #[cfg(zcash_unstable = "nu7")]
             nu7: None,
             #[cfg(zcash_unstable = "nutachyon")]
             nu_tachyon: None,
         }
     }
 
-    #[cfg(all(feature = "circuits", zcash_unstable = "nu7"))]
+    #[cfg(feature = "circuits")]
     fn nu7_test_network() -> zcash_protocol::local_consensus::LocalNetwork {
         use zcash_protocol::consensus::BlockHeight;
 
@@ -1992,6 +1990,26 @@ mod tests {
             nu7: Some(BlockHeight::from_u32(11)),
             #[cfg(zcash_unstable = "nutachyon")]
             nu_tachyon: None,
+        }
+    }
+
+    #[cfg(all(feature = "circuits", zcash_unstable = "nutachyon"))]
+    fn nu_tachyon_test_network() -> zcash_protocol::local_consensus::LocalNetwork {
+        use zcash_protocol::consensus::BlockHeight;
+
+        zcash_protocol::local_consensus::LocalNetwork {
+            overwinter: Some(BlockHeight::from_u32(1)),
+            sapling: Some(BlockHeight::from_u32(2)),
+            blossom: Some(BlockHeight::from_u32(3)),
+            heartwood: Some(BlockHeight::from_u32(4)),
+            canopy: Some(BlockHeight::from_u32(5)),
+            nu5: Some(BlockHeight::from_u32(6)),
+            nu6: Some(BlockHeight::from_u32(7)),
+            nu6_1: Some(BlockHeight::from_u32(8)),
+            nu6_2: Some(BlockHeight::from_u32(9)),
+            nu6_3: Some(BlockHeight::from_u32(10)),
+            nu7: None,
+            nu_tachyon: Some(BlockHeight::from_u32(11)),
         }
     }
 
@@ -2055,7 +2073,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(feature = "circuits", zcash_unstable = "nu7"))]
+    #[cfg(feature = "circuits")]
     fn nu7_coinbase_builder_does_not_expose_orchard() {
         let builder = Builder::new(
             nu7_test_network(),
@@ -2890,7 +2908,11 @@ mod tests {
                 orchard_padding: BundlePadding::DEFAULT,
                 ironwood_padding: BundlePadding::DEFAULT,
             };
-            let mut builder = Builder::new(TEST_NETWORK, tx_height, build_config);
+            let mut builder = Builder::new(
+                nu_tachyon_test_network(),
+                zcash_protocol::consensus::BlockHeight::from_u32(11),
+                build_config,
+            );
             builder.set_zip233_amount(Zatoshis::const_from_u64(50000));
 
             assert_matches!(
@@ -2958,7 +2980,11 @@ mod tests {
                 orchard_padding: BundlePadding::DEFAULT,
                 ironwood_padding: BundlePadding::DEFAULT,
             };
-            let mut builder = Builder::new(TEST_NETWORK, tx_height, build_config);
+            let mut builder = Builder::new(
+                nu_tachyon_test_network(),
+                zcash_protocol::consensus::BlockHeight::from_u32(11),
+                build_config,
+            );
             builder
                 .add_sapling_spend::<Infallible>(
                     dfvk.fvk().clone(),
@@ -3006,7 +3032,11 @@ mod tests {
                 orchard_padding: BundlePadding::DEFAULT,
                 ironwood_padding: BundlePadding::DEFAULT,
             };
-            let mut builder = Builder::new(TEST_NETWORK, tx_height, build_config);
+            let mut builder = Builder::new(
+                nu_tachyon_test_network(),
+                zcash_protocol::consensus::BlockHeight::from_u32(11),
+                build_config,
+            );
             builder
                 .add_sapling_spend::<Infallible>(
                     dfvk.fvk().clone(),
@@ -3057,7 +3087,11 @@ mod tests {
                 orchard_padding: BundlePadding::DEFAULT,
                 ironwood_padding: BundlePadding::DEFAULT,
             };
-            let mut builder = Builder::new(TEST_NETWORK, tx_height, build_config);
+            let mut builder = Builder::new(
+                nu_tachyon_test_network(),
+                zcash_protocol::consensus::BlockHeight::from_u32(11),
+                build_config,
+            );
             builder
                 .add_sapling_spend::<Infallible>(
                     dfvk.fvk().clone(),

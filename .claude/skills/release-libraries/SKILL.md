@@ -8,9 +8,12 @@ description: >-
 
 # Release the Zakura Common libraries
 
-The 17 crates version in lockstep from `[workspace.package]` in the root
-`Cargo.toml`. Changelog policy is canonical in `docs/changelog/guidelines.md`;
-this skill adds the mechanics that are easy to miss.
+The published crates version in lockstep from `[workspace.package]` in the
+root `Cargo.toml`. Unpublished members (`publish = false`), including Udon
+and Bento, keep independent versions and are excluded from coordinated
+version bumps, changelog assembly, and publishing. Changelog policy is
+canonical in `docs/changelog/guidelines.md`; this skill adds the mechanics
+that are easy to miss.
 
 ## Safety
 
@@ -20,11 +23,12 @@ this skill adds the mechanics that are easy to miss.
 
 ## Version bump
 
-1. `version` in `[workspace.package]` — every crate inherits it.
+1. `version` in `[workspace.package]` — the published crates inherit it.
 2. The intra-workspace `version = "..."` requirements in
-   `[workspace.dependencies]` (same file, one place).
+   `[workspace.dependencies]` for those published crates (same file, one
+   place). Leave requirements for independently versioned members unchanged.
 3. `cargo metadata --locked` must still succeed and `Cargo.lock` should show
-   only the 17 member version lines changing.
+   only the released members' version lines changing.
 
 ## Changelog assembly
 
@@ -36,8 +40,9 @@ After the version bump, on the release branch:
 
 This folds every pending `docs/changelog/unreleased/<PR>.md` fragment into the
 matching crates' `CHANGELOG.md` version sections and deletes the fragments;
-when assembling a stable `X.Y.Z` it also collapses any `X.Y.Z-rc*` sections
-into the stable section. Review and commit the result. The gate form is:
+when assembling a stable `X.Y.Z` it also collapses any pre-release sections
+(`X.Y.Z-alpha.N`, `X.Y.Z-beta.N`, `X.Y.Z-rc.N`) into the stable section.
+Review and commit the result. The gate form is:
 
 ```sh
 ./scripts/changelog.py release vX.Y.Z --check
@@ -52,7 +57,7 @@ pending fragments instead of a PR-owned fragment.
 - Full suite: `cargo test --release --workspace --all-features --locked`.
 - Docs as docs.rs will build them:
   `RUSTDOCFLAGS="--cfg docsrs" cargo +nightly doc --workspace --no-deps --all-features --locked`.
-- Package contents: `cargo package --list -p <crate>` for each crate — no
+- Package contents: `cargo package --list -p <crate>` for each published crate — no
   stray files; LICENSE/COPYRIGHT/katex symlinks materialize as real files.
 - Semver: use the [semver policy](../../../docs/semver-policy.md), including
   its feature-removal ignore list. For a release, run
@@ -67,11 +72,12 @@ pending fragments instead of a PR-owned fragment.
 dependencies against crates.io, so a crate cannot even be packaged until its
 workspace dependencies are published at the new version. Publish bottom-up:
 
-1. `zakura-halo2-legacy-pdqsort`, `zakura-pairing`, `zakura-pasta-curves`
-2. `zakura-bls12-381`, `zakura-jubjub`
+1. `zakura-equihash`, `zakura-halo2-legacy-pdqsort`, `zakura-pairing`,
+   `zakura-pasta-curves`, `zakura-protocol`
+2. `zakura-bls12-381`, `zakura-jubjub`, `zakura-address`
 3. `zakura-bellman`, `zakura-reddsa`, `zakura-sinsemilla`,
    `zakura-halo2-poseidon`, then `zakura-halo2-proofs`,
-   `zakura-halo2-gadgets`
+   `zakura-halo2-gadgets`; `zakura-transparent`, `zakura-zip321`
 4. `zakura-redjubjub`, `zakura-sapling-crypto`, `zakura-orchard`
 5. `zakura-keys`, `zakura-primitives`, `zakura-proofs`
 

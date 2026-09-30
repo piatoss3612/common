@@ -1,4 +1,4 @@
-use bellman::{gadgets::multipack, groth16::Proof};
+use bellman::groth16::Proof;
 use bls12_381::Bls12;
 use group::{Curve, ff::PrimeField};
 use redjubjub::{Binding, SpendAuth};
@@ -12,7 +12,28 @@ mod single;
 pub use single::SaplingVerificationContext;
 
 mod batch;
-pub use batch::BatchValidator;
+pub use batch::{BatchValidator, PreparedBatchVerifyingKeys};
+
+const SPEND_PUBLIC_INPUT_COUNT: usize = 7;
+const OUTPUT_PUBLIC_INPUT_COUNT: usize = 5;
+
+// A nullifier fills one scalar-capacity public input and two bits of the next.
+const NULLIFIER_LOW_BITS: u32 = bls12_381::Scalar::CAPACITY;
+const _: () = assert!(NULLIFIER_LOW_BITS == 254);
+
+fn pack_nullifier(nullifier: &[u8; 32]) -> [bls12_381::Scalar; 2] {
+    const SPLIT_BYTE: usize = (NULLIFIER_LOW_BITS / 8) as usize;
+    const SPLIT_BITS: u8 = (NULLIFIER_LOW_BITS % 8) as u8;
+
+    let mut low = *nullifier;
+    let high = low[SPLIT_BYTE] >> SPLIT_BITS;
+    low[SPLIT_BYTE] &= (1 << SPLIT_BITS) - 1;
+
+    [
+        bls12_381::Scalar::from_repr(low).unwrap(),
+        bls12_381::Scalar::from(u64::from(high)),
+    ]
+}
 
 /// A context object for verifying the Sapling components of a Zcash transaction.
 struct SaplingVerificationContextInner {
@@ -40,7 +61,11 @@ impl SaplingVerificationContextInner {
         zkproof: Proof<Bls12>,
         verifier_ctx: &mut C,
         spend_auth_sig_verifier: impl FnOnce(&mut C, &redjubjub::VerificationKey<SpendAuth>) -> bool,
-        proof_verifier: impl FnOnce(&mut C, Proof<Bls12>, [bls12_381::Scalar; 7]) -> bool,
+        proof_verifier: impl FnOnce(
+            &mut C,
+            Proof<Bls12>,
+            [bls12_381::Scalar; SPEND_PUBLIC_INPUT_COUNT],
+        ) -> bool,
     ) -> bool {
         // The "cv is not small order" happens when a SpendDescription is deserialized.
         // This happens when transactions or blocks are received over the network, or when
@@ -53,16 +78,13 @@ impl SaplingVerificationContextInner {
         // Accumulate the value commitment in the context
         self.cv_sum += cv;
 
-        // Grab the nullifier as a sequence of bytes
-        let nullifier = &nullifier[..];
-
         // Verify the spend_auth_sig
         if !spend_auth_sig_verifier(verifier_ctx, rk) {
             return false;
         }
 
         // Construct public input for circuit
-        let mut public_input = [bls12_381::Scalar::zero(); 7];
+        let mut public_input = [bls12_381::Scalar::zero(); SPEND_PUBLIC_INPUT_COUNT];
         {
             let affine = rk_affine;
             let (u, v) = (affine.get_u(), affine.get_v());
@@ -77,16 +99,10 @@ impl SaplingVerificationContextInner {
         }
         public_input[4] = anchor;
 
-        // Add the nullifier through multiscalar packing
-        {
-            let nullifier = multipack::bytes_to_bits_le(nullifier);
-            let nullifier = multipack::compute_multipacking(&nullifier);
-
-            assert_eq!(nullifier.len(), 2);
-
-            public_input[5] = nullifier[0];
-            public_input[6] = nullifier[1];
-        }
+        // Pack the nullifier into the circuit's two public inputs.
+        let packed_nullifier = pack_nullifier(nullifier);
+        public_input[5] = packed_nullifier[0];
+        public_input[6] = packed_nullifier[1];
 
         // Verify the proof
         proof_verifier(verifier_ctx, zkproof, public_input)
@@ -100,7 +116,10 @@ impl SaplingVerificationContextInner {
         cmu: ExtractedNoteCommitment,
         epk: jubjub::ExtendedPoint,
         zkproof: Proof<Bls12>,
-        proof_verifier: impl FnOnce(Proof<Bls12>, [bls12_381::Scalar; 5]) -> bool,
+        proof_verifier: impl FnOnce(
+            Proof<Bls12>,
+            [bls12_381::Scalar; OUTPUT_PUBLIC_INPUT_COUNT],
+        ) -> bool,
     ) -> bool {
         // The "cv is not small order" happens when an OutputDescription is deserialized.
         // This happens when transactions or blocks are received over the network, or when
@@ -113,7 +132,7 @@ impl SaplingVerificationContextInner {
         self.cv_sum -= cv;
 
         // Construct public input for circuit
-        let mut public_input = [bls12_381::Scalar::zero(); 5];
+        let mut public_input = [bls12_381::Scalar::zero(); OUTPUT_PUBLIC_INPUT_COUNT];
         {
             let affine = cv.as_inner().to_affine();
             let (u, v) = (affine.get_u(), affine.get_v());
@@ -145,5 +164,75 @@ impl SaplingVerificationContextInner {
 
         // Verify the binding_sig
         binding_sig_verifier(bvk)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bellman::gadgets::multipack;
+
+    use super::pack_nullifier;
+
+    #[test]
+    fn nullifier_packing_matches_circuit() {
+        let check = |nullifier: [u8; 32]| {
+            let bits = multipack::bytes_to_bits_le(&nullifier);
+            let expected = multipack::compute_multipacking(&bits);
+            assert_eq!(pack_nullifier(&nullifier).as_slice(), expected);
+        };
+
+        check([0; 32]);
+        check([u8::MAX; 32]);
+
+        for bit in 0..256 {
+            let mut nullifier = [0; 32];
+            nullifier[bit / 8] = 1 << (bit % 8);
+            check(nullifier);
+        }
+
+        for seed in 0..256u16 {
+            let mut nullifier = [0; 32];
+            for (i, byte) in nullifier.iter_mut().enumerate() {
+                *byte = seed.wrapping_mul(73).wrapping_add(i as u16 * 109) as u8;
+            }
+            check(nullifier);
+        }
+    }
+
+    #[test]
+    #[ignore = "release-mode performance measurement"]
+    fn bench_nullifier_packing() {
+        use std::{eprintln, hint::black_box, time::Instant, vec::Vec};
+
+        const SAMPLES: usize = 100;
+        const ITERATIONS: usize = 1_000;
+
+        let nullifier = [0xa5; 32];
+        let mut old = Vec::with_capacity(SAMPLES);
+        let mut new = Vec::with_capacity(SAMPLES);
+
+        for _ in 0..SAMPLES {
+            let start = Instant::now();
+            for _ in 0..ITERATIONS {
+                let input = black_box(&nullifier);
+                let bits = multipack::bytes_to_bits_le(input);
+                black_box(multipack::compute_multipacking::<bls12_381::Scalar>(&bits));
+            }
+            old.push(start.elapsed().as_nanos() / ITERATIONS as u128);
+
+            let start = Instant::now();
+            for _ in 0..ITERATIONS {
+                black_box(pack_nullifier(black_box(&nullifier)));
+            }
+            new.push(start.elapsed().as_nanos() / ITERATIONS as u128);
+        }
+
+        old.sort_unstable();
+        new.sort_unstable();
+        eprintln!(
+            "nullifier packing: {} -> {} ns",
+            old[SAMPLES / 2],
+            new[SAMPLES / 2]
+        );
     }
 }

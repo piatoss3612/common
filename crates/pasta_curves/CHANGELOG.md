@@ -10,7 +10,32 @@ internal implementation details are not tracked here.
 
 ## [Unreleased]
 
-## [1.3.0-alpha.1] - 2026-09-18
+## [2.1.0] - 2026-09-29
+
+### Added
+
+- Added the `portable` feature to disable automatic x86-64 assembly selection
+  for binaries that may run on older CPUs
+  ([#505](https://github.com/zakura-core/common/pull/505)).
+
+### Changed
+
+- x86-64 builds now select the BMI2+ADX Pasta field backend at build time
+  when Rust's resolved target features include both extensions, for example
+  with `-C target-cpu=native` on a supporting CPU or
+  `-C target-feature=+adx,+bmi2`. Baseline and cross-compiled builds keep the
+  portable backend, the existing `x86_64-asm` feature still forces the backend
+  on, and there is no runtime dispatch
+  ([#505](https://github.com/zakura-core/common/pull/505),
+  [#526](https://github.com/zakura-core/common/pull/526)).
+- Reduced the scratch memory used by batched affine additions in
+  multi-scalar multiplications
+  ([#518](https://github.com/zakura-core/common/pull/518)).
+- Improved deferred field-product accumulation performance on supported
+  AArch64 targets with the `aarch64-asm` feature enabled
+  ([#519](https://github.com/zakura-core/common/pull/519)).
+
+## [2.0.0] - 2026-09-23
 
 ### Added
 

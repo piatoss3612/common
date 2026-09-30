@@ -2,6 +2,17 @@
 
 This repository contains the Zakura Common libraries: the foundational Rust crates used in [Zakura](https://github.com/zakura-core/zakura) and made available for the Zcash ecosystem. Use this stack in your wallets or in other tools for better performance.
 
+## Protocol types
+
+- [`zakura-protocol`](crates/zcash_protocol) (forked from [`zcash_protocol 0.10.5`](https://github.com/zcash/librustzcash/tree/97aefdc39a037da9c4f19a0e8a450d2c7932f53e/components/zcash_protocol))
+- [`zakura-address`](crates/zcash_address) (forked from [`zcash_address 0.13.0`](https://github.com/zcash/librustzcash/tree/97aefdc39a037da9c4f19a0e8a450d2c7932f53e/components/zcash_address))
+- [`zakura-transparent`](crates/zcash_transparent) (forked from [`zcash_transparent 0.10.0`](https://github.com/zcash/librustzcash/tree/97aefdc39a037da9c4f19a0e8a450d2c7932f53e/zcash_transparent))
+- [`zakura-zip321`](crates/zip321) (forked from [`zip321 0.9.0`](https://github.com/zcash/librustzcash/tree/97aefdc39a037da9c4f19a0e8a450d2c7932f53e/components/zip321))
+
+## Proof of work
+
+- [`zakura-equihash`](crates/equihash) (forked from [`equihash 0.3.0`](https://github.com/zcash/librustzcash/tree/3f231c7ac172ca333487f5ee5ea8379b59598130/components/equihash))
+
 ## Transactions and keys
 
 - [`zakura-primitives`](crates/zcash_primitives) (forked from [`zcash_primitives 0.30.0`](https://github.com/zcash/librustzcash/tree/57b844dc00bf1f25254b5859b8d5faa8e5730f98/zcash_primitives))
@@ -37,6 +48,12 @@ This repository contains the Zakura Common libraries: the foundational Rust crat
 
 `zakura-redjubjub` is a thin wrapper over `zakura-reddsa`, so the two are maintained together.
 
+## Experimental arithmetic
+
+- [`zakura-udon`](crates/udon): Pasta field and curve arithmetic and allocation-free FFTs.
+- [`zakura-bento`](crates/bento): compile-time arithmetic and checked POD storage and embedding.
+- [`zakura-bento-core`](crates/bento-core) and [`zakura-bento-macros`](crates/bento-macros): Bento implementation crates.
+
 ## Rust toolchain
 
 [`rust-toolchain.toml`](rust-toolchain.toml) pins the development toolchain to
@@ -61,6 +78,14 @@ feature removals explicitly recorded in the permanent
 [SemVer ignore list](.github/semver-ignore-list.json). All other API
 compatibility failures block CI. See the [SemVer policy](docs/semver-policy.md)
 for enforcement details and local checks.
+
+## Acknowledgements
+
+The AArch64 and x86-64 assembly field arithmetic in
+[`zakura-pasta-curves`](crates/pasta_curves) is derived from
+[Semolina](https://github.com/supranational/semolina) by
+[Supranational](https://supranational.net/). Thank you to Supranational for
+publishing this work.
 
 ## License
 

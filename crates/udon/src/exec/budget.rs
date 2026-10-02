@@ -105,6 +105,83 @@ impl TaskBudget {
         }
     }
 
+    /// Splits a contiguous weighted sequence and this allowance proportionally.
+    ///
+    /// Each weight estimates one item's work and may be zero. On success,
+    /// `(mid, left, right)` assigns `left` to the items before `mid` and `right`
+    /// to the remainder.
+    /// Both ranges are nonempty, and their nonzero allowances sum to this
+    /// budget. The boundary targets a near-half share of the work, allowing
+    /// unequal ranges for odd budgets; `left` is then rounded from the chosen
+    /// prefix's actual fraction of the total weight.
+    ///
+    /// Returns `None` for fewer than two items, a serial budget, zero total
+    /// weight, or a chosen boundary whose proportional allowance rounds to
+    /// zero on either side. No work is scheduled. A caller can handle `None`
+    /// by running items sequentially, giving each the full budget for nested
+    /// work.
+    ///
+    /// The iterator must be finite, and its clone must yield the same remaining
+    /// weights independently. This method makes up to two passes without
+    /// collecting the weights. The item count must fit `usize`; the weight sum
+    /// `total` and `total * self.get() + total / 2` must fit `u128`. These bounds
+    /// include headroom for rounding and are caller obligations, not validated
+    /// limits.
+    ///
+    /// # Panics
+    ///
+    /// Arithmetic overflow panics when overflow checks are enabled. Without
+    /// those checks, overflowing inputs may produce an incorrect split.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use zakura_udon::exec::TaskBudget;
+    ///
+    /// let budget = TaskBudget::new(3).unwrap();
+    /// let (mid, left, right) = budget.balance([1, 1, 1, 1, 1, 1]).unwrap();
+    /// assert_eq!(mid, 2);
+    /// assert_eq!((left.get(), right.get()), (1, 2));
+    /// // Splitting off the tiny neighbor would leave it with no allowance.
+    /// assert_eq!(budget.balance([100, 1]), None);
+    /// ```
+    pub fn balance<I>(self, weights: I) -> Option<(usize, Self, Self)>
+    where
+        I: IntoIterator<Item = u128>,
+        I::IntoIter: Clone,
+    {
+        let budget = self.get();
+        let weights = weights.into_iter();
+        let (count, total) = weights
+            .clone()
+            .fold((0_usize, 0_u128), |(count, total), weight| {
+                (count + 1, total + weight)
+            });
+        if count < 2 || budget < 2 || total == 0 {
+            return None;
+        }
+        // For an odd budget, target the smaller half's share of total work.
+        // A half-weight cut would give the smaller allowance too much work.
+        let target = total * (budget / 2) as u128 / budget as u128;
+        let mut sum = 0;
+        let mut mid = 1;
+        let mut best = u128::MAX;
+        let mut left_weight = 0;
+        for (i, weight) in weights.take(count - 1).enumerate() {
+            sum += weight;
+            let distance = sum.abs_diff(target);
+            if distance < best {
+                best = distance;
+                mid = i + 1;
+                left_weight = sum;
+            }
+        }
+        // Indivisible items can miss the target, so round the actual prefix's
+        // share to the nearest allowance; reject zero shares in split_at.
+        let left = ((budget as u128 * left_weight + total / 2) / total) as usize;
+        self.split_at(left).map(|(left, right)| (mid, left, right))
+    }
+
     /// Chooses concurrent outer jobs and an equal allowance for each job.
     ///
     /// Returns `(jobs, inner)`, where `jobs` is the smaller of `max_jobs` and

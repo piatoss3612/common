@@ -84,16 +84,23 @@ fn produced_alpha_falls_back_under_a_small_workspace() {
         }
         assert_eq!(run.result(), Some(expected));
 
-        let mut records = [ScalarStorage::ZERO];
+        // A tiny row uses originals even without a ceiling. A substantial row
+        // selects alpha so binding must reject a bank without expanded layers.
+        let scalars = [scalars[0]; 128];
+        let indices = [0; 128];
+        let mut records = [ScalarStorage::ZERO; 128];
         let prepared =
             PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
         let alpha = MsmPlan::for_input(
-            &Input::new_prepared(Bases::Alpha(table), prepared),
+            &Input::indexed_prepared(Bases::Alpha(table), &indices, prepared).unwrap(),
             ExecutionOptions::DEFAULT,
         )
         .unwrap();
         assert!(matches!(alpha.job.geometry, super::Geometry::Alpha(7)));
-        assert!(!alpha.accepts(Input::new_prepared(Bases::Affine(&[g]), prepared)));
+        assert!(
+            !alpha
+                .accepts(Input::indexed_prepared(Bases::Affine(&[g]), &indices, prepared).unwrap())
+        );
         let streaming = MsmPlan::new_with(
             1,
             ArithmeticOptions::DEFAULT

@@ -6,7 +6,7 @@ use super::super::{
     schedule::{JobStorage, Options, Plan, job, requirements, split},
 };
 use super::MsmPlan;
-use crate::exec::{ExecutionOptions, Executor, TaskBudget};
+use crate::exec::{ExecutionOptions, Executor};
 
 /// Initialized opaque metadata for a scheduled contiguous job range.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,10 +39,9 @@ fn execute_inputs<C: PastaCurve, X: Executor>(
     executor: &X,
     mut scratch: Scratch<'_, C>,
 ) {
-    if let Some((mid, left)) = split(inputs, options.task_budget.get()) {
-        let a = options.with_task_budget(TaskBudget::new(left).unwrap());
-        let b =
-            options.with_task_budget(TaskBudget::new(options.task_budget.get() - left).unwrap());
+    if let Some((mid, left, right)) = split(inputs, options.task_budget) {
+        let a = options.with_task_budget(left);
+        let b = options.with_task_budget(right);
         let (sa, sb) = scratch.split(requirements(&inputs[..mid], a).unwrap());
         let (oa, ob) = output.split_at_mut(mid);
         executor.join(
@@ -216,18 +215,18 @@ fn fill_metadata<C: PastaCurve>(
     workers: &mut [WorkerStorage],
     offset: usize,
 ) -> usize {
-    if let Some((mid, left)) = split(inputs, options.task_budget.get()) {
+    if let Some((mid, left, right)) = split(inputs, options.task_budget) {
         let (a, b) = jobs.split_at_mut(mid);
         let used = fill_metadata(
             &inputs[..mid],
-            options.with_task_budget(TaskBudget::new(left).unwrap()),
+            options.with_task_budget(left),
             a,
             workers,
             offset,
         );
         used + fill_metadata(
             &inputs[mid..],
-            options.with_task_budget(TaskBudget::new(options.task_budget.get() - left).unwrap()),
+            options.with_task_budget(right),
             b,
             &mut workers[used..],
             offset + mid,

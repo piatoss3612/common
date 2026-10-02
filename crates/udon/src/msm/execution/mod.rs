@@ -134,6 +134,10 @@ impl<C: PastaCurve> MsmPlan<C> {
 
     /// Resolves a plan using this input's scalar shape and retained preparation.
     ///
+    /// A retained [`AlphaTable`](super::AlphaTable) is an optional accelerator.
+    /// Its [size heuristic](super::AlphaDescription::amortized) is considered
+    /// alongside scalar shape and the resolved resource limits.
+    ///
     /// The input is not borrowed by the plan. Execution checks the term count
     /// and preparation before writing. Requirements are fixed: if planning
     /// omits scalar preparation or digit storage, later inputs must supply the
@@ -163,6 +167,9 @@ impl<C: PastaCurve> MsmPlan<C> {
     ///
     /// `source_fragment` is the maximum consecutive source range the provider
     /// can lease. Udon chooses preparation and arithmetic subdivisions within it.
+    /// A supplied [`AlphaTable`](super::AlphaTable) is considered using each
+    /// subdivision's size and task allowance, rather than the full row length;
+    /// see [`AlphaDescription::amortized`](super::AlphaDescription::amortized).
     /// The plan retains no source borrow. Construction writes no storage and
     /// has the size and workspace errors of [`Self::new`].
     pub fn for_produced(

@@ -1,4 +1,11 @@
-//! Run alone in release mode; preparation and correctness checks are untimed.
+//! Compares recoding and shared-scalar folds across prepared point banks.
+//!
+//! Run `compare_prepared_recoding` alone in release mode with `--ignored` and
+//! `--nocapture`. Preparation timings are reported separately; correctness
+//! checks are outside the execution timing loops. The point-bank comparison
+//! forces α kernels to measure their crossover even below the planner's size
+//! threshold. Task budgets share one eight-thread pool, so they describe the
+//! allowed work partitions rather than a separate pool size for each sample.
 use super::experiments::timing;
 use super::*;
 use crate::curve::{EisensteinTableBatch, FixedBaseDescription, FixedBaseTable};
@@ -84,16 +91,29 @@ fn compare_prepared_recoding() {
             "prepare,width={width},bytes={retained},us={:.3}",
             started.elapsed().as_secs_f64() * 1e6
         );
-        for n in [512, 2048] {
+        for n in [1, 10, 16, 24, 32, 44, 64, 128, 512, 2048] {
             let input = Input::new(bases.range(0..n), &scalars[..n]);
             let expected = reference(&input);
-            for workers in [1, 8] {
-                let options =
-                    ExecutionOptions::default().with_task_budget(TaskBudget::new(workers).unwrap());
-                let r = input.requirements(options).unwrap();
+            for workers in [1, 2, 3, 8] {
+                // Force the table candidate so this remains a comparison even
+                // when automatic selection chooses the retained originals.
+                let arithmetic = if width >= 5 {
+                    ArithmeticOptions::DEFAULT
+                        .with_algorithm(Algorithm::Alpha {
+                            accumulation: Accumulation::Auto,
+                        })
+                        .unwrap()
+                } else {
+                    ArithmeticOptions::DEFAULT
+                };
+                let options = BatchOptions::new(arithmetic)
+                    .with_task_budget(TaskBudget::new(workers).unwrap());
+                let r = input.requirements_with(options).unwrap();
                 let mut buffers = Buffers::new(r);
                 assert_eq!(
-                    pool.install(|| input.execute(options, &Pool, buffers.borrow()).unwrap()),
+                    pool.install(|| input
+                        .execute_with(options, &Pool, buffers.borrow())
+                        .unwrap()),
                     expected
                 );
                 timing(
@@ -101,25 +121,27 @@ fn compare_prepared_recoding() {
                     n,
                     r.bytes::<C>().unwrap(),
                     || {
-                        black_box(
-                            pool.install(|| {
-                                input.execute(options, &Pool, buffers.borrow()).unwrap()
-                            }),
-                        );
+                        black_box(pool.install(|| {
+                            input
+                                .execute_with(options, &Pool, buffers.borrow())
+                                .unwrap()
+                        }));
                     },
                 );
             }
         }
-        let mut weights = scalars[..16].to_vec();
+        // Rows of 128 shared terms cross every width's serial crossover, so
+        // automatic selection folds over the table; outputs partition the bank.
+        let mut weights = scalars[..128].to_vec();
         weights[0] = PastaField::ONE;
-        let mut records = [ScalarStorage::ZERO; 16];
+        let mut records = [ScalarStorage::ZERO; 128];
         let weights =
             PreparedScalars::prepare(&weights, &mut records, TaskBudget::SERIAL, &SerialExecutor);
-        let matrix = SharedScalarInput::new(bases, weights, 128, 1, 128).unwrap();
+        let matrix = SharedScalarInput::new(bases, weights, 16, 1, 16).unwrap();
         let options = ExecutionOptions::default();
         let r = matrix.requirements(options).unwrap();
         let mut buffers = Buffers::new(r);
-        let mut expected = vec![ProjectivePoint::IDENTITY; 128];
+        let mut expected = vec![ProjectivePoint::IDENTITY; 16];
         matrix
             .execute(&mut expected, options, &SerialExecutor, buffers.borrow())
             .unwrap();
@@ -143,9 +165,9 @@ fn compare_prepared_recoding() {
             let matrix = SharedScalarInput::new(
                 Bases::OddPrepared(table.odd_multiples(width).unwrap()),
                 weights,
-                128,
+                16,
                 1,
-                128,
+                16,
             )
             .unwrap();
             let r = matrix.requirements(options).unwrap();

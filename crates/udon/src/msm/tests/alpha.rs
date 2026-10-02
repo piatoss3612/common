@@ -56,9 +56,10 @@ fn differentials<C: PastaCurve>() {
             .iter()
             .map(PreparedAffinePoint::from_affine)
             .collect();
+        // Thirty-three dense terms cross every width's parallel crossover.
         for bases in [
-            Bases::Alpha(table.range(3..38).range(2..33)),
-            Bases::AlphaPrepared(AlphaTable::bind(book, &prepared).range(5..36)),
+            Bases::Alpha(table.range(3..40).range(2..35)),
+            Bases::AlphaPrepared(AlphaTable::bind(book, &prepared).range(4..37)),
         ] {
             for n in [0, 1, 17, 31, 73] {
                 let ix: Vec<_> = (0..n).map(|i| (i * 13 % 31) as u32).collect();
@@ -93,11 +94,9 @@ fn differentials<C: PastaCurve>() {
                 TaskBudget::SERIAL,
                 &SerialExecutor,
             );
-            let plan = MsmPlan::for_input(
-                &Input::new_prepared(bases, prepared),
-                ExecutionOptions::DEFAULT,
-            )
-            .unwrap();
+            let parallel = ExecutionOptions::DEFAULT.with_task_budget(TaskBudget::new(3).unwrap());
+            let plan = MsmPlan::for_input(&Input::new_prepared(bases, prepared), parallel).unwrap();
+            assert_ne!(prepared.alpha_cache_len(&plan), 0);
             let mut digits = vec![0xa5; prepared.alpha_cache_len(&plan) + 5];
             let cached =
                 prepared.cache_alpha(&plan, book, &mut digits, TaskBudget::new(3).unwrap(), &Pool);
@@ -113,10 +112,7 @@ fn differentials<C: PastaCurve>() {
                 ] {
                     let options = BatchOptions::new(
                         ArithmeticOptions::DEFAULT
-                            .with_algorithm(Algorithm::Booth {
-                                width: None,
-                                accumulation,
-                            })
+                            .with_algorithm(Algorithm::Alpha { accumulation })
                             .unwrap(),
                     )
                     .with_task_budget(TaskBudget::new(3).unwrap());
@@ -132,8 +128,14 @@ fn differentials<C: PastaCurve>() {
                 }
             }
             let input = Input::new_prepared(bases, cached);
-            let r = input.requirements(ExecutionOptions::default()).unwrap();
-            assert_eq!(r.digits(), 0);
+            assert_eq!(input.requirements(parallel).unwrap().digits(), 0);
+            // A serial automatic plan consults the width's own crossover and
+            // consumes the cache only when it still selects the table.
+            let serial = input.requirements(ExecutionOptions::default()).unwrap();
+            assert_eq!(
+                serial.digits() == 0,
+                d.amortized(bases.len(), TaskBudget::SERIAL)
+            );
             assert_eq!(&digits[digits.len() - 5..], &[0xa5; 5]);
             // Force full-width alpha affine passes; cancellation must empty a
             // bucket before a later term repopulates it.
@@ -143,8 +145,7 @@ fn differentials<C: PastaCurve>() {
                 let input = Input::indexed(bases, &ix, ks).unwrap();
                 let options = BatchOptions::new(
                     ArithmeticOptions::DEFAULT
-                        .with_algorithm(Algorithm::Booth {
-                            width: None,
+                        .with_algorithm(Algorithm::Alpha {
                             accumulation: Accumulation::Affine,
                         })
                         .unwrap()
@@ -162,6 +163,8 @@ fn differentials<C: PastaCurve>() {
                 buffers.tails(r);
             }
 
+            // Four shared terms sit below every width's crossover and fold
+            // over the original layer.
             let mut records = [ScalarStorage::ZERO; 4];
             let shared = PreparedScalars::prepare(
                 &scalars[..4],
@@ -191,6 +194,36 @@ fn differentials<C: PastaCurve>() {
                 }
                 buffers.tails(r);
             }
+            // Enough shared terms to amortize the table under a parallel
+            // allowance; the alpha matrix kernel must run and match.
+            let m = d.layers() / 2;
+            let mut records = vec![ScalarStorage::ZERO; m];
+            let shared = PreparedScalars::prepare(
+                &scalars[..m],
+                &mut records,
+                TaskBudget::SERIAL,
+                &SerialExecutor,
+            );
+            let matrix = SharedScalarInput::new(bases, shared, 3, 1, 0).unwrap();
+            let options = ExecutionOptions::default().with_task_budget(TaskBudget::new(3).unwrap());
+            let r = matrix.requirements(options).unwrap();
+            let mut buffers = Buffers::new(r);
+            let mut output = [ProjectivePoint::IDENTITY; 3];
+            let (_, calls) = super::super::test_support::count_kernels(|| {
+                matrix
+                    .execute(&mut output, options, &SerialExecutor, buffers.borrow())
+                    .unwrap()
+            });
+            assert!(calls.for_geometry(recode::Geometry::Alpha(width)) > 0);
+            for (j, result) in output.into_iter().enumerate() {
+                let indices = vec![j as u32; m];
+                assert_eq!(
+                    result,
+                    reference(&Input::indexed(bases, &indices, &scalars[..m]).unwrap()),
+                    "width={width} output={j}"
+                );
+            }
+            buffers.tails(r);
         }
 
         let mut records = [ScalarStorage::ZERO; 4];
@@ -484,7 +517,7 @@ fn alpha_cache_admission_and_preflight() {
         let input = Input::indexed_prepared(Bases::Alpha(table), &indices, prepared).unwrap();
         let plan = MsmPlan::for_input(&input, ExecutionOptions::DEFAULT).unwrap();
         let bytes = prepared.alpha_cache_len(&plan);
-        assert_eq!(bytes != 0, n != 0 && n <= 8192);
+        assert_eq!(bytes != 0, (128..=8192).contains(&n));
         let mut storage = vec![0xa5; bytes + 1];
         let cached = prepared.cache_alpha(&plan, book, &mut storage, TaskBudget::SERIAL, &executor);
         if bytes != 0 {
@@ -571,6 +604,87 @@ fn alpha_cache_admission_and_preflight() {
         assert_eq!(storage[bytes], 0xa5);
     }
     executor.check();
+}
+
+#[test]
+fn alpha_selection_uses_size_workers_and_available_scratch() {
+    fn check<C: PastaCurve>() {
+        use crate::msm::execution::ProducedInput;
+        let d = AlphaDescription::new(7).unwrap();
+        let mut codes = vec![0; d.codes()];
+        let mut coefficients = vec![AlphaCoefficient::ZERO; d.layers()];
+        let book = AlphaCodebook::prepare(
+            d,
+            &mut codes,
+            &mut coefficients,
+            &mut vec![0; d.codebook_scratch()],
+        );
+        let g = AffinePoint::<C>::GENERATOR;
+        let mut entries = vec![g; d.layers()];
+        let table = AlphaTable::prepare(
+            book,
+            &[g],
+            &mut entries,
+            &mut [ProjectivePoint::IDENTITY],
+            &mut [PastaField::ZERO],
+            TaskBudget::SERIAL,
+            &SerialExecutor,
+        );
+        let bases = Bases::Alpha(table);
+        let scalars: Vec<_> = field_samples::<C::Scalar>().take(64).collect();
+        let indices = [0; 64];
+        let mut records = [ScalarStorage::ZERO; 64];
+        let prepared =
+            PreparedScalars::prepare(&scalars, &mut records, TaskBudget::SERIAL, &SerialExecutor);
+        let input = Input::indexed_prepared(bases, &indices, prepared).unwrap();
+        let parallel = ExecutionOptions::DEFAULT.with_task_budget(TaskBudget::new(3).unwrap());
+        let plan = MsmPlan::for_input(&input, parallel).unwrap();
+        let mut digits = vec![0; prepared.alpha_cache_len(&plan)];
+        assert!(!digits.is_empty());
+        let cached = prepared.cache_alpha(
+            &plan,
+            book,
+            &mut digits,
+            TaskBudget::SERIAL,
+            &SerialExecutor,
+        );
+        let expected = reference(&Input::indexed(bases, &indices, &scalars).unwrap());
+        for (options, alpha) in [
+            (ExecutionOptions::DEFAULT, false),
+            (parallel, true),
+            (parallel.with_memory_limit(8192), false),
+        ] {
+            for scalars in [prepared, cached] {
+                let input = Input::indexed_prepared(bases, &indices, scalars).unwrap();
+                let plan = MsmPlan::for_input(&input, options).unwrap();
+                assert_eq!(scalars.alpha_cache_len(&plan) != 0, alpha);
+                let produced = MsmPlan::for_produced(
+                    ProducedInput::indexed(bases, 64),
+                    NonZeroUsize::new(64).unwrap(),
+                    options,
+                )
+                .unwrap();
+                assert_eq!(prepared.alpha_cache_len(&produced) != 0, alpha);
+                let r = input.requirements(options).unwrap();
+                let mut buffers = Buffers::new(r);
+                let (actual, calls) = super::super::test_support::count_kernels(|| {
+                    input
+                        .execute(options, &SerialExecutor, buffers.borrow())
+                        .unwrap()
+                });
+                assert_eq!(actual, expected);
+                assert_eq!(calls.for_geometry(recode::Geometry::Alpha(7)) != 0, alpha);
+                buffers.tails(r);
+                assert_eq!(
+                    input.execute(options, &Pool, buffers.borrow()).unwrap(),
+                    expected
+                );
+                buffers.tails(r);
+            }
+        }
+    }
+    check::<Pallas>();
+    check::<Vesta>();
 }
 
 #[test]
@@ -851,8 +965,7 @@ fn large_alpha_batches_match_independent_multiplication() {
                 for cap in [17, 97, 233] {
                     let options = BatchOptions::new(
                         ArithmeticOptions::DEFAULT
-                            .with_algorithm(Algorithm::Booth {
-                                width: None,
+                            .with_algorithm(Algorithm::Alpha {
                                 accumulation: Accumulation::Affine,
                             })
                             .unwrap()

@@ -1,0 +1,133 @@
+{
+  "udon_revision": "e1da13c1415d88baa6365e45d7b1e3abca321fdc",
+  "aeneas_version": "aeneas nightly-2026.10.04-557eff8",
+  "charon_version": "0.1.279 (c8f15d7d658c86a95658f71ad99cddd4be002e04)",
+  "lean_toolchain": "leanprover/lean4:v4.31.0",
+  "source_hashes": {
+    "crates/udon/src/field/pasta/word.rs": "88941f3f43369ac6e828f0f1c68f17e634ad34f8cc4fd648b182b78c718a2a63",
+    "crates/udon/src/field/pasta/montgomery.rs": "7cb76e97076721ecb12b068392064a1dd6a74902d7c8bd79b4f1483923cd6acf",
+    "crates/udon/src/field/pasta/parameters.rs": "07faff115da1df5ea594a9db05d3f0082ece6840284597c3f716d6b968e8d110",
+    "crates/udon/src/field/pasta/mod.rs": "3f7e17fa322dee89e219f217e1638985974cc7bc03fa47d63212bbbede8e81b3"
+  },
+  "stages": [
+    {
+      "name": "word-charon",
+      "arguments": [
+        "/private/tmp/udon-aeneas-feasibility.JaWT5u8d/release/charon",
+        "cargo",
+        "--preset=aeneas",
+        "--sysroot=default",
+        "--start-from",
+        "crate::field::pasta::word",
+        "--rustc-arg=-Coverflow-checks=on",
+        "--rustc-arg=-Cdebug-assertions=on",
+        "--dest-file",
+        "/private/tmp/udon-layer1-check/llbc/word.llbc",
+        "--",
+        "--package",
+        "zakura-udon",
+        "--lib",
+        "--locked",
+        "--offline"
+      ],
+      "cwd": "/Users/mariusmargulus/Desktop/programming/Repository/Projects/zcash/udon",
+      "exit_code": 0,
+      "seconds": 10.787,
+      "log": "/private/tmp/udon-layer1-check/logs/word-charon.log"
+    },
+    {
+      "name": "slice-charon",
+      "arguments": [
+        "/private/tmp/udon-aeneas-feasibility.JaWT5u8d/release/charon",
+        "rustc",
+        "--preset=aeneas",
+        "--sysroot=default",
+        "--rustc-arg=-Coverflow-checks=on",
+        "--rustc-arg=-Cdebug-assertions=on",
+        "--dest-file",
+        "/private/tmp/udon-layer1-check/llbc/kernel-slice.llbc",
+        "--",
+        "--crate-type",
+        "lib",
+        "--edition",
+        "2024",
+        "--crate-name",
+        "udon_kernel_slice",
+        "/private/tmp/udon-layer1-check/slice/lib.rs"
+      ],
+      "cwd": "/private/tmp/udon-layer1-check/slice",
+      "exit_code": 0,
+      "seconds": 0.388,
+      "log": "/private/tmp/udon-layer1-check/logs/slice-charon.log"
+    },
+    {
+      "name": "word-aeneas",
+      "arguments": [
+        "/private/tmp/udon-aeneas-feasibility.JaWT5u8d/release/aeneas",
+        "-backend",
+        "lean",
+        "-split-files",
+        "-subdir",
+        "Word",
+        "-no-progress-bar",
+        "-dest",
+        "/private/tmp/udon-layer1-check/lean",
+        "/private/tmp/udon-layer1-check/llbc/word.llbc"
+      ],
+      "cwd": "/private/tmp/udon-layer1-check",
+      "exit_code": 0,
+      "seconds": 2.714,
+      "log": "/private/tmp/udon-layer1-check/logs/word-aeneas.log"
+    },
+    {
+      "name": "kernelslice-aeneas",
+      "arguments": [
+        "/private/tmp/udon-aeneas-feasibility.JaWT5u8d/release/aeneas",
+        "-backend",
+        "lean",
+        "-split-files",
+        "-subdir",
+        "KernelSlice",
+        "-no-progress-bar",
+        "-dest",
+        "/private/tmp/udon-layer1-check/lean",
+        "/private/tmp/udon-layer1-check/llbc/kernel-slice.llbc"
+      ],
+      "cwd": "/private/tmp/udon-layer1-check",
+      "exit_code": 0,
+      "seconds": 7.194,
+      "log": "/private/tmp/udon-layer1-check/logs/kernelslice-aeneas.log"
+    },
+    {
+      "name": "lean-build",
+      "arguments": [
+        "lake",
+        "build"
+      ],
+      "cwd": "/private/tmp/udon-layer1-check/lean",
+      "exit_code": 0,
+      "seconds": 63.701,
+      "log": "/private/tmp/udon-layer1-check/logs/lean-build.log"
+    },
+    {
+      "name": "proof-census",
+      "arguments": [
+        "lake",
+        "env",
+        "lean",
+        "Census.lean"
+      ],
+      "cwd": "/private/tmp/udon-layer1-check/lean",
+      "exit_code": 0,
+      "seconds": 5.342,
+      "log": "/private/tmp/udon-layer1-check/logs/proof-census.log"
+    }
+  ],
+  "checkout_revision": "e1da13c1415d88baa6365e45d7b1e3abca321fdc",
+  "proved": [
+    "adc_spec",
+    "mac_spec",
+    "sbb_spec"
+  ],
+  "scope": "Three universally quantified word-arithmetic proofs over the native extracted Udon definitions."
+}

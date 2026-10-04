@@ -1,0 +1,3 @@
+'adc_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+'mac_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+'sbb_spec' depends on axioms: [propext, Classical.choice, Quot.sound]

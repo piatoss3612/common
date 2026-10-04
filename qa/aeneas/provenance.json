@@ -1,0 +1,15 @@
+{
+  "udon_revision": "e1da13c1415d88baa6365e45d7b1e3abca321fdc",
+  "aeneas_revision": "557eff83ecef5083b98a52a94ca7fae63d6c1dab",
+  "charon_revision": "c8f15d7d658c86a95658f71ad99cddd4be002e04",
+  "aeneas_release": "nightly-2026.10.04-557eff8",
+  "source_hashes": {
+    "crates/udon/src/field/pasta/word.rs": "88941f3f43369ac6e828f0f1c68f17e634ad34f8cc4fd648b182b78c718a2a63",
+    "crates/udon/src/field/pasta/montgomery.rs": "7cb76e97076721ecb12b068392064a1dd6a74902d7c8bd79b4f1483923cd6acf",
+    "crates/udon/src/field/pasta/parameters.rs": "07faff115da1df5ea594a9db05d3f0082ece6840284597c3f716d6b968e8d110",
+    "crates/udon/src/field/pasta/mod.rs": "3f7e17fa322dee89e219f217e1638985974cc7bc03fa47d63212bbbede8e81b3"
+  },
+  "lean_version": "4.31.0",
+  "mathlib_revision": "fabf563a7c95a166b8d7b6efca11c8b4dc9d911f",
+  "rust_toolchain": "nightly-2026-09-17"
+}

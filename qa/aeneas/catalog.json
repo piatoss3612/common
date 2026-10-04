@@ -1,0 +1,11 @@
+{
+  "modules": [
+    "Proofs"
+  ],
+  "proved": [
+    "adc_spec",
+    "mac_spec",
+    "sbb_spec"
+  ],
+  "scope": "Three universally quantified word-arithmetic proofs over the native extracted Udon definitions."
+}

@@ -6,7 +6,6 @@ use alloc::collections::BTreeMap;
 
 use frost_rerandomized::RandomizedCiphersuite;
 use group::GroupEncoding;
-#[cfg(feature = "alloc")]
 use group::{Group as _, ff::Field as _, ff::PrimeField};
 
 pub mod rerandomized;
@@ -21,7 +20,7 @@ pub use rand_core_06 as rand_core;
 
 use rand_core_06::{CryptoRng, RngCore};
 
-use crate::{frost::rng_compat::RngCompat, hash::HStar, private::Sealed, sapling};
+use crate::{hash_to_bytes, rng_compat::RngCompat, spend_auth_generator};
 
 /// An error type for the FROST(Jubjub, BLAKE2b-512) ciphersuite.
 pub type Error = frost_rerandomized::frost_core::Error<JubjubBlake2b512>;
@@ -93,11 +92,8 @@ impl Group for JubjubGroup {
     }
 
     fn generator() -> Self::Element {
-        let basepoint: jubjub::AffinePoint = sapling::SpendAuth::basepoint().into();
-        // This is safe because the basepoint is in the prime-order subgroup.
-        // This fact is checked in a test below.
-        // (We could call into_subgroup() but that's much slower.)
-        jubjub::SubgroupPoint::from_raw_unchecked(basepoint.get_u(), basepoint.get_v())
+        jubjub::SubgroupPoint::from_bytes(&spend_auth_generator::<reddsa::sapling::SpendAuth>())
+            .expect("the Sapling spending generator is in the prime-order subgroup")
     }
 
     fn serialize(element: &Self::Element) -> Result<Self::Serialization, GroupError> {
@@ -138,21 +134,17 @@ impl Ciphersuite for JubjubBlake2b512 {
 
     /// H1 for FROST(Jubjub, BLAKE2b-512)
     fn H1(m: &[u8]) -> <<Self::Group as Group>::Field as Field>::Scalar {
-        HStar::<sapling::SpendAuth>::new(b"FROST_RedJubjubR")
-            .update(m)
-            .finalize()
+        jubjub::Scalar::from_bytes_wide(&hash_to_bytes(b"FROST_RedJubjubR", m))
     }
 
     /// H2 for FROST(Jubjub, BLAKE2b-512)
     fn H2(m: &[u8]) -> <<Self::Group as Group>::Field as Field>::Scalar {
-        HStar::<sapling::SpendAuth>::default().update(m).finalize()
+        jubjub::Scalar::from_bytes_wide(&hash_to_bytes(b"Zcash_RedJubjubH", m))
     }
 
     /// H3 for FROST(Jubjub, BLAKE2b-512)
     fn H3(m: &[u8]) -> <<Self::Group as Group>::Field as Field>::Scalar {
-        HStar::<sapling::SpendAuth>::new(b"FROST_RedJubjubN")
-            .update(m)
-            .finalize()
+        jubjub::Scalar::from_bytes_wide(&hash_to_bytes(b"FROST_RedJubjubN", m))
     }
 
     /// H4 for FROST(Jubjub, BLAKE2b-512)
@@ -175,30 +167,27 @@ impl Ciphersuite for JubjubBlake2b512 {
 
     /// HDKG for FROST(Jubjub, BLAKE2b-512)
     fn HDKG(m: &[u8]) -> Option<<<Self::Group as Group>::Field as Field>::Scalar> {
-        Some(
-            HStar::<sapling::SpendAuth>::new(b"FROST_RedJubjubD")
-                .update(m)
-                .finalize(),
-        )
+        Some(jubjub::Scalar::from_bytes_wide(&hash_to_bytes(
+            b"FROST_RedJubjubD",
+            m,
+        )))
     }
 
     /// HID for FROST(Jubjub, BLAKE2b-512)
     fn HID(m: &[u8]) -> Option<<<Self::Group as Group>::Field as Field>::Scalar> {
-        Some(
-            HStar::<sapling::SpendAuth>::new(b"FROST_RedJubjubI")
-                .update(m)
-                .finalize(),
-        )
+        Some(jubjub::Scalar::from_bytes_wide(&hash_to_bytes(
+            b"FROST_RedJubjubI",
+            m,
+        )))
     }
 }
 
 impl RandomizedCiphersuite for JubjubBlake2b512 {
     fn hash_randomizer(m: &[u8]) -> Option<<<Self::Group as Group>::Field as Field>::Scalar> {
-        Some(
-            HStar::<sapling::SpendAuth>::new(b"FROST_RedJubjubA")
-                .update(m)
-                .finalize(),
-        )
+        Some(jubjub::Scalar::from_bytes_wide(&hash_to_bytes(
+            b"FROST_RedJubjubA",
+            m,
+        )))
     }
 }
 
@@ -414,10 +403,8 @@ mod test {
 
     #[test]
     fn basepoint_is_in_prime_subgroup() {
-        let basepoint: jubjub::AffinePoint = sapling::SpendAuth::basepoint().into();
+        let basepoint = jubjub::ExtendedPoint::from(JubjubGroup::generator());
         assert!(Into::<bool>::into(basepoint.is_prime_order()));
-        assert!(Into::<bool>::into(
-            basepoint.to_extended().into_subgroup().is_some()
-        ));
+        assert!(Into::<bool>::into(basepoint.into_subgroup().is_some()));
     }
 }

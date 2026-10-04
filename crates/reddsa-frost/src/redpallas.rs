@@ -6,7 +6,6 @@ use alloc::collections::BTreeMap;
 
 use frost_rerandomized::RandomizedCiphersuite;
 use group::GroupEncoding;
-#[cfg(feature = "alloc")]
 use group::{Group as FFGroup, ff::Field as FFField, ff::PrimeField};
 use pasta_curves::pallas;
 
@@ -22,12 +21,7 @@ pub use rand_core_06 as rand_core;
 
 use rand_core_06::{CryptoRng, RngCore};
 
-use crate::{
-    frost::{redpallas::keys::EvenY, rng_compat::RngCompat},
-    hash::HStar,
-    orchard,
-    private::Sealed,
-};
+use crate::{hash_to_bytes, redpallas::keys::EvenY, rng_compat::RngCompat, spend_auth_generator};
 
 /// An error type for the FROST(Pallas, BLAKE2b-512) ciphersuite.
 pub type Error = frost_rerandomized::frost_core::Error<PallasBlake2b512>;
@@ -102,7 +96,8 @@ impl Group for PallasGroup {
     }
 
     fn generator() -> Self::Element {
-        orchard::SpendAuth::basepoint()
+        pallas::Point::from_bytes(&spend_auth_generator::<reddsa::orchard::SpendAuth>())
+            .expect("the Orchard spending generator has a canonical encoding")
     }
 
     fn serialize(element: &Self::Element) -> Result<Self::Serialization, GroupError> {
@@ -145,21 +140,26 @@ impl Ciphersuite for PallasBlake2b512 {
 
     /// H1 for FROST(Pallas, BLAKE2b-512)
     fn H1(m: &[u8]) -> <<Self::Group as Group>::Field as Field>::Scalar {
-        HStar::<orchard::SpendAuth>::new(b"FROST_RedPallasR")
-            .update(m)
-            .finalize()
+        <pallas::Scalar as group::ff::FromUniformBytes<64>>::from_uniform_bytes(&hash_to_bytes(
+            b"FROST_RedPallasR",
+            m,
+        ))
     }
 
     /// H2 for FROST(Pallas, BLAKE2b-512)
     fn H2(m: &[u8]) -> <<Self::Group as Group>::Field as Field>::Scalar {
-        HStar::<orchard::SpendAuth>::default().update(m).finalize()
+        <pallas::Scalar as group::ff::FromUniformBytes<64>>::from_uniform_bytes(&hash_to_bytes(
+            b"Zcash_RedPallasH",
+            m,
+        ))
     }
 
     /// H3 for FROST(Pallas, BLAKE2b-512)
     fn H3(m: &[u8]) -> <<Self::Group as Group>::Field as Field>::Scalar {
-        HStar::<orchard::SpendAuth>::new(b"FROST_RedPallasN")
-            .update(m)
-            .finalize()
+        <pallas::Scalar as group::ff::FromUniformBytes<64>>::from_uniform_bytes(&hash_to_bytes(
+            b"FROST_RedPallasN",
+            m,
+        ))
     }
 
     /// H4 for FROST(Pallas, BLAKE2b-512)
@@ -183,18 +183,18 @@ impl Ciphersuite for PallasBlake2b512 {
     /// HDKG for FROST(Pallas, BLAKE2b-512)
     fn HDKG(m: &[u8]) -> Option<<<Self::Group as Group>::Field as Field>::Scalar> {
         Some(
-            HStar::<orchard::SpendAuth>::new(b"FROST_RedPallasD")
-                .update(m)
-                .finalize(),
+            <pallas::Scalar as group::ff::FromUniformBytes<64>>::from_uniform_bytes(
+                &hash_to_bytes(b"FROST_RedPallasD", m),
+            ),
         )
     }
 
     /// HID for FROST(Pallas, BLAKE2b-512)
     fn HID(m: &[u8]) -> Option<<<Self::Group as Group>::Field as Field>::Scalar> {
         Some(
-            HStar::<orchard::SpendAuth>::new(b"FROST_RedPallasI")
-                .update(m)
-                .finalize(),
+            <pallas::Scalar as group::ff::FromUniformBytes<64>>::from_uniform_bytes(
+                &hash_to_bytes(b"FROST_RedPallasI", m),
+            ),
         )
     }
 
@@ -232,9 +232,9 @@ impl Ciphersuite for PallasBlake2b512 {
 impl RandomizedCiphersuite for PallasBlake2b512 {
     fn hash_randomizer(m: &[u8]) -> Option<<<Self::Group as Group>::Field as Field>::Scalar> {
         Some(
-            HStar::<orchard::SpendAuth>::new(b"FROST_RedPallasA")
-                .update(m)
-                .finalize(),
+            <pallas::Scalar as group::ff::FromUniformBytes<64>>::from_uniform_bytes(
+                &hash_to_bytes(b"FROST_RedPallasA", m),
+            ),
         )
     }
 }

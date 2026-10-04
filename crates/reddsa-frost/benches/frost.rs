@@ -1,9 +1,9 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use reddsa::frost::redpallas::{PallasBlake2b512, rand_core::OsRng};
+use reddsa_frost::redpallas::{PallasBlake2b512, rand_core::OsRng};
 
 use std::collections::BTreeMap;
 
-use reddsa::frost::redpallas::rand_core::{CryptoRng, RngCore};
+use reddsa_frost::redpallas::rand_core::{CryptoRng, RngCore};
 
 use frost_rerandomized::frost_core::Ciphersuite;
 use frost_rerandomized::{RandomizedParams, frost_core as frost};

@@ -7,7 +7,8 @@ use alloc::collections::btree_map::BTreeMap;
 /// Re-randomized FROST signing using the given `randomizer_seed`, which should
 /// be sent from the Coordinator using a confidential channel.
 ///
-/// See [`crate::redjubjub::round2::sign`] for documentation on the other parameters.
+/// See [`crate::redjubjub::round2::sign`] for documentation on the other
+/// parameters.
 pub fn sign_with_randomizer_seed(
     signing_package: &frost::SigningPackage,
     signer_nonces: &frost::round1::SigningNonces,

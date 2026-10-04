@@ -107,7 +107,7 @@ fn check_even_y_frost_core() {
         frost::tests::ciphersuite_generic::check_sign(
             min_signers,
             key_packages,
-            &mut rng,
+            rng,
             public_key_package,
         )
         .unwrap();

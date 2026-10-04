@@ -80,6 +80,11 @@ impl Field for PallasScalarField {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PallasGroup;
 
+fn spend_auth_basepoint() -> pallas::Point {
+    pallas::Point::from_bytes(&spend_auth_generator::<reddsa::orchard::SpendAuth>())
+        .expect("the Orchard spending generator has a canonical encoding")
+}
+
 impl Group for PallasGroup {
     type Field = PallasScalarField;
 
@@ -96,8 +101,18 @@ impl Group for PallasGroup {
     }
 
     fn generator() -> Self::Element {
-        pallas::Point::from_bytes(&spend_auth_generator::<reddsa::orchard::SpendAuth>())
-            .expect("the Orchard spending generator has a canonical encoding")
+        #[cfg(feature = "std")]
+        {
+            // Deriving the generator through RedDSA requires a scalar multiply.
+            // Cache the result rather than repeat that work on each call.
+            static GENERATOR: std::sync::LazyLock<pallas::Point> =
+                std::sync::LazyLock::new(spend_auth_basepoint);
+            *GENERATOR
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            spend_auth_basepoint()
+        }
     }
 
     fn serialize(element: &Self::Element) -> Result<Self::Serialization, GroupError> {

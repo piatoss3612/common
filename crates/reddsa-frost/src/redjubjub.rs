@@ -76,6 +76,11 @@ impl Field for JubjubScalarField {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct JubjubGroup;
 
+fn spend_auth_basepoint() -> jubjub::SubgroupPoint {
+    jubjub::SubgroupPoint::from_bytes(&spend_auth_generator::<reddsa::sapling::SpendAuth>())
+        .expect("the Sapling spending generator is in the prime-order subgroup")
+}
+
 impl Group for JubjubGroup {
     type Field = JubjubScalarField;
 
@@ -92,8 +97,18 @@ impl Group for JubjubGroup {
     }
 
     fn generator() -> Self::Element {
-        jubjub::SubgroupPoint::from_bytes(&spend_auth_generator::<reddsa::sapling::SpendAuth>())
-            .expect("the Sapling spending generator is in the prime-order subgroup")
+        #[cfg(feature = "std")]
+        {
+            // Deriving the generator through RedDSA requires a scalar multiply.
+            // Cache the result rather than repeat that work on each call.
+            static GENERATOR: std::sync::LazyLock<jubjub::SubgroupPoint> =
+                std::sync::LazyLock::new(spend_auth_basepoint);
+            *GENERATOR
+        }
+        #[cfg(not(feature = "std"))]
+        {
+            spend_auth_basepoint()
+        }
     }
 
     fn serialize(element: &Self::Element) -> Result<Self::Serialization, GroupError> {

@@ -3484,7 +3484,6 @@ dependencies = [
  "f4jumble",
  "proptest",
  "zakura-protocol",
- "zcash_encoding",
 ]
 
 [[package]]
@@ -3676,10 +3675,20 @@ dependencies = [
  "zakura-protocol",
  "zakura-sapling-crypto",
  "zakura-transparent",
- "zcash_encoding",
  "zcash_script",
  "zeroize",
  "zip32",
+]
+
+[[package]]
+name = "zakura-note-encryption"
+version = "2.2.0"
+dependencies = [
+ "chacha20 0.9.1",
+ "chacha20poly1305",
+ "cipher",
+ "rand_core 0.6.4",
+ "subtle",
 ]
 
 [[package]]
@@ -3718,10 +3727,10 @@ dependencies = [
  "zakura-halo2-gadgets",
  "zakura-halo2-poseidon",
  "zakura-halo2-proofs",
+ "zakura-note-encryption",
  "zakura-pasta-curves",
  "zakura-reddsa",
  "zakura-sinsemilla",
- "zcash_note_encryption",
  "zcash_spec",
  "zip32",
 ]
@@ -3783,13 +3792,12 @@ dependencies = [
  "zakura-bls12-381",
  "zakura-equihash",
  "zakura-jubjub",
+ "zakura-note-encryption",
  "zakura-orchard",
  "zakura-protocol",
  "zakura-redjubjub",
  "zakura-sapling-crypto",
  "zakura-transparent",
- "zcash_encoding",
- "zcash_note_encryption",
  "zcash_script",
  "zip32",
 ]
@@ -3827,8 +3835,8 @@ dependencies = [
  "incrementalmerkletree",
  "incrementalmerkletree-testing",
  "memuse",
+ "nonempty",
  "proptest",
- "zcash_encoding",
 ]
 
 [[package]]
@@ -3905,8 +3913,8 @@ dependencies = [
  "zakura-bellman",
  "zakura-bls12-381",
  "zakura-jubjub",
+ "zakura-note-encryption",
  "zakura-redjubjub",
- "zcash_note_encryption",
  "zcash_spec",
  "zip32",
 ]
@@ -3940,7 +3948,6 @@ dependencies = [
  "subtle",
  "zakura-address",
  "zakura-protocol",
- "zcash_encoding",
  "zcash_script",
  "zcash_spec",
  "zip32",
@@ -3970,30 +3977,6 @@ dependencies = [
  "proptest",
  "zakura-address",
  "zakura-protocol",
-]
-
-[[package]]
-name = "zcash_encoding"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1440921903cdb86133fb9e2fe800be488015db2939a30bedb413078a1acb0306"
-dependencies = [
- "corez",
- "hex",
- "nonempty",
-]
-
-[[package]]
-name = "zcash_note_encryption"
-version = "0.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1cb1b9170c94370e3d66c5cc0877661db743337588b64de7711239eed462198"
-dependencies = [
- "chacha20 0.9.1",
- "chacha20poly1305",
- "cipher",
- "rand_core 0.6.4",
- "subtle",
 ]
 
 [[package]]

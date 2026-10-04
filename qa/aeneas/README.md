@@ -25,6 +25,34 @@ are in [Common.lean](proofs/Common.lean).
 | `multiply_wide` | `val8(out) = val4(lhs) * val4(rhs)` |
 | `square_wide` | `val8(out) = val4(value)^2` |
 
+The seven Montgomery routines are also proved. Write `p` for the selected
+Pasta modulus and `R = 2^256`:
+
+| Routine | Input bound and postcondition |
+| --- | --- |
+| `reduce_once` | Input below `2p`; canonical result `input mod p` below `p` |
+| `reduce_twice_modulus` | Five-limb input below `4p`; result `input mod 2p` below `2p` |
+| `montgomery_reduce_unreduced` | Input `T < pR + p²`; result `u < 3p` with `Ru = T + mp`, `m < R` |
+| `montgomery_reduce` | Input `T < pR`; result below `p` with `Ru ≡ T (mod p)` |
+| `montgomery_multiply` | Both operands below `2p`, or product below `pR`; result `u < 2p` with `Ru = ab + mp`, `m < R` |
+| `montgomery_square` | Input below `2p`; result `u < 2p` with `Ru = a² + mp`, `m < R` |
+| `square_run` | Every `usize` count and either factor branch; loose bounds and the weighted power congruence below |
+
+For `n` squarings without a final factor, `square_run` proves
+`R^(2^n - 1) * u ≡ a^(2^n) (mod p)`. With a loose final factor `f`, it proves
+`R^(2^n) * u ≡ a^(2^n) * f (mod p)`. Thus it covers arbitrary run lengths
+rather than a fixed collection of exponentiation schedules. All these theorems
+include successful execution of the extracted loops, checked operations,
+debug assertions, slice conversion, and unwrap.
+
+[Parameters.lean](proofs/Parameters.lean) checks the required modulus shape,
+Montgomery inverse, doubled modulus, and integer bounds for both actual Pasta
+modulus literals. [Algebra.lean](proofs/Algebra.lean) proves the stronger closure
+argument for arbitrary loose products documented in the production kernel.
+No primality assumption is needed for these integer and congruence theorems.
+The parameter harness still needs a refinement bridge to the complete native
+parameter traits and public Fp/Fq representation.
+
 [catalog.json](catalog.json) records the proof modules and theorem census.
 [provenance.json](provenance.json) pins Udon source hashes, Charon, Aeneas,
 Lean, Mathlib, and the extraction compiler. The source hashes are checked on
@@ -52,23 +80,27 @@ generated Lean files, and logs are retained there.
 
 The script selects the native `word.rs` from the Udon crate. It also translates
 all limb and Montgomery kernels through a small parameter harness that imports
-production `word.rs` and `montgomery.rs` by path. The eight word and limb routines
-have correctness theorems; the Montgomery routines are only translated at this
-layer. The harness reads both Pasta
+production `word.rs` and `montgomery.rs` by path. All fifteen word, limb, and Montgomery routines
+have correctness theorems for the specified input bounds. The harness reads both Pasta
 modulus literals and derives the doubled modulus and Montgomery coefficient;
 it bypasses the complete parameter traits and constant table generation.
 
 ## Trust boundary
 
-The proof census accepts only Lean's standard `propext`, `Classical.choice`,
-and `Quot.sound`. The generated model and proof sources must contain no proof
+The proof census accepts Lean's standard `propext`, `Classical.choice`, and
+`Quot.sound`. Multiplication and `square_run` also mention Aeneas's
+`core.fmt.Formatter`: an abstract **type** used by the standard-library model
+of the debug trait passed to `unwrap`. It supplies no arithmetic proposition.
+The proof establishes the successful conversion and unwrap; it does not model
+formatting on the error path. The exact per-theorem allowance is recorded in
+the catalog and checked on each run. The generated model and proof sources must contain no proof
 holes, extra declared axioms, or external-model placeholders. Extraction enables
 both overflow checks and debug assertions. Specifications require successful
 execution and the stated mathematical result.
 
 The theorems concern the extracted Lean definitions. Rust compilation, Charon,
 Aeneas, and Aeneas's standard-library models form the translation trust boundary.
-The complete native Fp/Fq API, its parameter refinement, modular multiplication,
-inversion, square roots, encodings, curves, and FFTs have no correctness theorem
-in this package yet. Udon's variable-time arithmetic is unchanged; these proofs
+The complete native Fp/Fq API and its parameter refinement, inversion, square
+roots, encodings, curves, and FFTs have no correctness theorem in this package
+yet. Udon's variable-time arithmetic is unchanged; these proofs
 do not establish constant-time behavior.

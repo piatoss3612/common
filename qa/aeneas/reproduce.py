@@ -94,6 +94,10 @@ def main():
     lean_toolchain = (backend / "lean-toolchain").read_text().strip()
     if lean_toolchain != "leanprover/lean4:v4.31.0":
         raise RuntimeError("Unexpected Lean toolchain: " + lean_toolchain)
+    backend_manifest = json.loads((backend / "lake-manifest.json").read_text())
+    mathlib = next(package for package in backend_manifest["packages"] if package["name"] == "mathlib")
+    if mathlib["rev"] != PIN["mathlib_revision"]:
+        raise RuntimeError("Unexpected Mathlib revision: " + mathlib["rev"])
     if args.output:
         output = args.output.resolve()
         output.mkdir(parents=True, exist_ok=False)
@@ -170,8 +174,15 @@ def main():
     if "sorryAx" in proof_log:
         raise RuntimeError("Proof trust census contains sorryAx")
     for theorem in CATALOG["proved"]:
-        if f"'{theorem}' depends on axioms: [propext, Classical.choice, Quot.sound]" not in proof_log:
-            raise RuntimeError("Unexpected proof trust census for " + theorem)
+        pattern = re.escape("'" + theorem + "' depends on axioms:") + r"\s*\[([^]]*)\]"
+        match = re.search(pattern, proof_log)
+        if not match:
+            raise RuntimeError("Missing proof trust census for " + theorem)
+        actual = {item.strip() for item in match.group(1).split(",")}
+        allowed = {"propext", "Classical.choice", "Quot.sound"}
+        allowed.update(CATALOG.get("type_only_axioms", {}).get(theorem, []))
+        if actual != allowed:
+            raise RuntimeError(f"Unexpected proof trust census for {theorem}: {actual}")
     summary = {"udon_revision": PIN["udon_revision"], "aeneas_version": aeneas_version,
                "charon_version": charon_version, "lean_toolchain": lean_toolchain,
                "source_hashes": PIN["source_hashes"], "stages": results,

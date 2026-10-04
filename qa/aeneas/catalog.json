@@ -6,7 +6,19 @@
     "SubtractProofs",
     "CompareProofs",
     "WideMultiply",
-    "SquareProofs"
+    "SquareProofs",
+    "Algebra",
+    "Parameters",
+    "ReduceProofs",
+    "MontgomeryCommon",
+    "RedcRound",
+    "RedcProofs",
+    "MontgomerySemantics",
+    "MontgomeryInner",
+    "MontgomeryRound",
+    "MontgomeryWrappers",
+    "MontgomeryMultiply",
+    "SquareRun"
   ],
   "proved": [
     "adc_spec",
@@ -16,7 +28,22 @@
     "UdonVerify.subtract_limbs_spec",
     "UdonVerify.compare_limbs_spec",
     "UdonVerify.multiply_wide_spec",
-    "UdonVerify.square_wide_spec"
+    "UdonVerify.square_wide_spec",
+    "UdonVerify.reduce_once_spec",
+    "UdonVerify.reduce_twice_modulus_spec",
+    "UdonVerify.montgomery_reduce_unreduced_spec",
+    "UdonVerify.montgomery_reduce_spec",
+    "UdonVerify.montgomery_square_spec",
+    "UdonVerify.montgomery_multiply_spec",
+    "UdonVerify.square_run_spec"
   ],
-  "scope": "Eight universally quantified word and multi-limb arithmetic proofs; Montgomery correctness and the public field API remain outside this layer."
+  "scope": "All 15 shared word, multi-limb, and Montgomery kernels have universally quantified correctness and total-execution proofs. Both Pasta parameter instances discharge the arithmetic assumptions. Full native Fp/Fq API refinement remains outside this layer.",
+  "type_only_axioms": {
+    "UdonVerify.montgomery_multiply_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.square_run_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ]
+  }
 }

@@ -3815,7 +3815,6 @@ version = "3.0.0"
 dependencies = [
  "assert_matches",
  "blake2b_simd",
- "chacha20poly1305",
  "corez",
  "criterion 0.5.1",
  "document-features",

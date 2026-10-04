@@ -1,11 +1,22 @@
 {
   "modules": [
-    "Proofs"
+    "Proofs",
+    "Common",
+    "LimbProofs",
+    "SubtractProofs",
+    "CompareProofs",
+    "WideMultiply",
+    "SquareProofs"
   ],
   "proved": [
     "adc_spec",
     "mac_spec",
-    "sbb_spec"
+    "sbb_spec",
+    "UdonVerify.add_limbs_spec",
+    "UdonVerify.subtract_limbs_spec",
+    "UdonVerify.compare_limbs_spec",
+    "UdonVerify.multiply_wide_spec",
+    "UdonVerify.square_wide_spec"
   ],
-  "scope": "Three universally quantified word-arithmetic proofs over the native extracted Udon definitions."
+  "scope": "Eight universally quantified word and multi-limb arithmetic proofs; Montgomery correctness and the public field API remain outside this layer."
 }

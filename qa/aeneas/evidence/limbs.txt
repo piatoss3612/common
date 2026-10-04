@@ -1,0 +1,8 @@
+'adc_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+'mac_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+'sbb_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+'UdonVerify.add_limbs_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+'UdonVerify.subtract_limbs_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+'UdonVerify.compare_limbs_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+'UdonVerify.multiply_wide_spec' depends on axioms: [propext, Classical.choice, Quot.sound]
+'UdonVerify.square_wide_spec' depends on axioms: [propext, Classical.choice, Quot.sound]

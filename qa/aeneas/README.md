@@ -10,6 +10,21 @@ the low remainder and high quotient of their exact integer sum or product.
 at most one and `low + rhs + borrow = lhs + B * outgoing_borrow`.
 Each theorem also proves successful execution with overflow checks enabled.
 
+The five multi-limb theorems additionally prove comparison of the represented
+256-bit integers, exact addition and subtraction including the outgoing carry
+or borrow, and exact 512-bit multiplication and squaring. These proofs use the
+unchanged production `word.rs` imported by the parameter harness. `val4` and
+`val8` interpret little-endian limb arrays as natural numbers; their definitions
+are in [Common.lean](proofs/Common.lean).
+
+| Routine | Postcondition |
+| --- | --- |
+| `compare_limbs` | Returned ordering agrees with `val4` |
+| `add_limbs` | `val4(out) + 2^256 * carry = val4(lhs) + val4(rhs)`, carry at most one |
+| `subtract_limbs` | `val4(out) + val4(rhs) = val4(lhs) + 2^256 * borrow`, borrow at most one |
+| `multiply_wide` | `val8(out) = val4(lhs) * val4(rhs)` |
+| `square_wide` | `val8(out) = val4(value)^2` |
+
 [catalog.json](catalog.json) records the proof modules and theorem census.
 [provenance.json](provenance.json) pins Udon source hashes, Charon, Aeneas,
 Lean, Mathlib, and the extraction compiler. The source hashes are checked on
@@ -37,8 +52,9 @@ generated Lean files, and logs are retained there.
 
 The script selects the native `word.rs` from the Udon crate. It also translates
 all limb and Montgomery kernels through a small parameter harness that imports
-production `word.rs` and `montgomery.rs` by path. Translation of those additional
-routines is not a correctness theorem for them. The harness reads both Pasta
+production `word.rs` and `montgomery.rs` by path. The eight word and limb routines
+have correctness theorems; the Montgomery routines are only translated at this
+layer. The harness reads both Pasta
 modulus literals and derives the doubled modulus and Montgomery coefficient;
 it bypasses the complete parameter traits and constant table generation.
 

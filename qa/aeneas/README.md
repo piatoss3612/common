@@ -5,7 +5,8 @@ then checks handwritten Lean proofs. The package covers four layers of field
 arithmetic, canonical integer and byte encodings, Pasta primality, roots of
 unity, the fixed square-root exponentiation schedules, generic Tonelli–Shanks
 correction, and all six default Fp/Fq square-root entry points.
-Inversion remains in progress.
+The inversion parameter checks and signed-limb input conversion are also
+proved; the full inversion routine remains in progress.
 
 The checked word theorems in [Proofs.lean](proofs/Proofs.lean) cover `adc`,
 `mac`, and `sbb` for all valid inputs. With `B = 2^64`, `adc` and `mac` return
@@ -132,6 +133,18 @@ nonsquare multiple; the flag identifies whether the ratio is square. A zero
 numerator returns `(true, 0)`, including when both inputs are zero. A nonzero
 numerator with zero denominator returns `(false, 0)`. These proofs use the
 default feature configuration; `sqrt-table-large` remains unproved.
+
+[NativeSafegcdParameters.lean](proofs/NativeSafegcdParameters.lean) checks both
+compiled signed-62 modulus representations, the five-limb offset `p * 2^63`,
+and every entry in the twelve-element Montgomery correction tables. Entry `k`
+decodes to `4^(k + 1)` modulo the selected prime.
+[NativeSigned62.lean](proofs/NativeSigned62.lean) proves the extracted
+`to_signed62` loop succeeds for every four-limb input below `2^255` and
+preserves its integer value in radix `2^62`. Its first four digits lie in
+`[0, 2^62)` and its top digit lies in `[0, 128)`. The proof checks all five
+packing steps, including the shifts, masks, casts, array accesses and updates.
+The divstep loop and coefficient updates still need correctness proofs before
+these results establish inversion.
 
 [PastaPrimality.lean](proofs/PastaPrimality.lean) proves primality of the two
 compiled Pasta moduli using Lucas certificates and recursively checked prime

@@ -72,7 +72,11 @@
     "NativeSqrtConfig",
     "NativeSqrtPublic",
     "NativeSqrtAlternate",
-    "NativeSqrtCaps"
+    "NativeSqrtCaps",
+    "NativeSafegcdParameters",
+    "NativeSigned62Math",
+    "NativeSigned62Input",
+    "NativeSigned62"
   ],
   "proved": [
     "adc_spec",
@@ -280,9 +284,21 @@
     "UdonVerify.SqrtNativeBridge.fp_sqrt_alt_spec",
     "UdonVerify.SqrtNativeBridge.fq_sqrt_alt_spec",
     "UdonVerify.SqrtNativeBridge.fp_sqrt_ratio_spec",
-    "UdonVerify.SqrtNativeBridge.fq_sqrt_ratio_spec"
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_ratio_spec",
+    "UdonVerify.Native.fp_safegcd_parameter_checks",
+    "UdonVerify.Native.fq_safegcd_parameter_checks",
+    "UdonVerify.Native.signed62_join",
+    "UdonVerify.Native.packed62_value",
+    "UdonVerify.Native.packed62_representation",
+    "UdonVerify.Native.signed62_cast_value",
+    "UdonVerify.Native.packing_body0_spec",
+    "UdonVerify.Native.packing_body1_spec",
+    "UdonVerify.Native.packing_body2_spec",
+    "UdonVerify.Native.packing_body3_spec",
+    "UdonVerify.Native.packing_body4_spec",
+    "UdonVerify.Native.to_signed62_spec"
   ],
-  "scope": "Layers one through four, plus canonical 256-bit integer and 32-byte encodings for both Pasta fields in both representation states, exact byte round trips, field-value round trips, canonical parity, primality of both compiled Pasta moduli, forward and inverse roots of unity with exact orders and lookup bounds, both compiled square-root exponentiation schedules, generic Tonelli-Shanks contracts, and all six concrete Fp/Fq default sqrt, sqrt_alt and sqrt_ratio entry points with successful execution, correct roots and square flags, nonsquare rejection, and documented zero cases. Inversion, the sqrt-table-large feature, reducing encodings of wider byte strings, product accumulation, and other subsystems remain unproved.",
+  "scope": "Layers one through four, plus canonical 256-bit integer and 32-byte encodings for both Pasta fields in both representation states, exact byte round trips, field-value round trips, canonical parity, primality of both compiled Pasta moduli, forward and inverse roots of unity with exact orders and lookup bounds, both compiled square-root exponentiation schedules, generic Tonelli-Shanks contracts, and all six concrete Fp/Fq default sqrt, sqrt_alt and sqrt_ratio entry points with successful execution, correct roots and square flags, nonsquare rejection, and documented zero cases. The compiled inversion modulus representation, offset and all twelve correction factors are checked for both fields; the extracted signed-62 packing loop preserves the input integer and proves its limb bounds. Full inversion, the sqrt-table-large feature, reducing encodings of wider byte strings, product accumulation, and other subsystems remain unproved.",
   "type_only_axioms": {
     "UdonVerify.montgomery_multiply_spec": [
       "Aeneas.Std.core.fmt.Formatter"

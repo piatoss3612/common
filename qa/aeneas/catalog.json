@@ -50,7 +50,14 @@
     "NativeEncodingCaps",
     "NativeEncoding",
     "NativeByteCaps",
-    "NativeParity"
+    "NativeParity",
+    "NativeRootTables",
+    "NativeRootLookup",
+    "NativeRootOrder",
+    "NativeRootCaps",
+    "NativeSquareRun",
+    "NativeChainSteps",
+    "NativeSqrtChains"
   ],
   "proved": [
     "adc_spec",
@@ -176,9 +183,33 @@
     "UdonVerify.Native.fq_to_bytes_reduced_spec",
     "UdonVerify.Native.fq_canonical_bytes_roundtrip_reduced",
     "UdonVerify.Native.fq_field_bytes_roundtrip_reduced",
-    "UdonVerify.Native.fq_is_odd_reduced_spec"
+    "UdonVerify.Native.fq_is_odd_reduced_spec",
+    "UdonVerify.Native.native_square_run_spec",
+    "UdonVerify.Native.chain_double_n_spec",
+    "UdonVerify.Native.chain_double_n_add_spec",
+    "UdonVerify.Native.chain_add_spec",
+    "UdonVerify.Native.fp_sqrt_chain_spec",
+    "UdonVerify.Native.fq_sqrt_chain_spec",
+    "UdonVerify.Native.fp_pow_sqrt_exponent_spec",
+    "UdonVerify.Native.fq_pow_sqrt_exponent_spec",
+    "UdonVerify.Native.fp_root_table_checks",
+    "UdonVerify.Native.fq_root_table_checks",
+    "UdonVerify.Native.root_of_unity_lookup_spec",
+    "UdonVerify.Native.root_of_unity_inverse_lookup_spec",
+    "UdonVerify.Native.fp_root_table_primitive",
+    "UdonVerify.Native.fq_root_table_primitive",
+    "UdonVerify.Native.fp_inverse_root_table_primitive",
+    "UdonVerify.Native.fq_inverse_root_table_primitive",
+    "UdonVerify.Native.fp_root_of_unity_spec",
+    "UdonVerify.Native.fp_root_of_unity_reduced_spec",
+    "UdonVerify.Native.fp_root_of_unity_inverse_spec",
+    "UdonVerify.Native.fp_root_of_unity_inverse_reduced_spec",
+    "UdonVerify.Native.fq_root_of_unity_spec",
+    "UdonVerify.Native.fq_root_of_unity_reduced_spec",
+    "UdonVerify.Native.fq_root_of_unity_inverse_spec",
+    "UdonVerify.Native.fq_root_of_unity_inverse_reduced_spec"
   ],
-  "scope": "Layers one through four, plus canonical 256-bit integer and 32-byte encodings for both Pasta fields in both representation states, exact byte round trips, field-value round trips, canonical parity, and primality of both compiled Pasta moduli. Inversion, square roots, reducing encodings of wider byte strings, product accumulation, and other subsystems remain unproved.",
+  "scope": "Layers one through four, plus canonical 256-bit integer and 32-byte encodings for both Pasta fields in both representation states, exact byte round trips, field-value round trips, canonical parity, primality of both compiled Pasta moduli, forward and inverse roots of unity with exact orders and lookup bounds, and both compiled square-root exponentiation schedules. Inversion, square-root correction and public square-root methods, reducing encodings of wider byte strings, product accumulation, and other subsystems remain unproved.",
   "type_only_axioms": {
     "UdonVerify.montgomery_multiply_spec": [
       "Aeneas.Std.core.fmt.Formatter"
@@ -328,6 +359,30 @@
       "Aeneas.Std.core.fmt.Formatter"
     ],
     "UdonVerify.Native.fq_field_bytes_roundtrip_reduced": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.native_square_run_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.chain_double_n_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.chain_double_n_add_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.chain_add_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_sqrt_chain_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_sqrt_chain_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_pow_sqrt_exponent_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_pow_sqrt_exponent_spec": [
       "Aeneas.Std.core.fmt.Formatter"
     ]
   }

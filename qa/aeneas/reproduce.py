@@ -197,7 +197,7 @@ def main():
         "--include", "core::cmp::*::is_lt", "--include", "core::num::*::unsigned_abs",
         "--include", "core::num::*::wrapping_neg", "--include", "core::num::*::wrapping_abs",
         "--include", "core::num::*::is_negative",
-        "--opaque", "zakura_udon::field::pasta::parameters::{impl zakura_udon::field::pasta::parameters::sealed::Parameters<_> for _}::pow_sqrt_exponent",
+        "--include", "zakura_bento_core::addchain", "--include", "core::mem::drop",
         "--start-from", "udon_native_field_proof",
         "--start-from", "zakura_udon::field::pasta::PastaField::half",
         "--no-dedup-serialized-ast", *checked, "--dest-file", str(raw), "--", "--lib",
@@ -210,8 +210,9 @@ def main():
     for name in ["normalize_constants", "project_parameters", "mark_constant_effects",
                  "select_private_roots"]:
         adapted = output / "llbc" / (name + ".llbc")
+        flags = ["--retain-callback-functions"] if name == "project_parameters" else []
         run(name, ["python3", str(HERE / "adapters" / (name + ".py")),
-                   str(previous), str(adapted)], output)
+                   str(previous), str(adapted), *flags], output)
         previous = adapted
     run("native-aeneas", [str(aeneas), "-backend", "lean", "-namespace", "NativeField",
         "-subdir", "NativeField", "-filter-trait-methods", "-split-files", "-no-progress-bar",

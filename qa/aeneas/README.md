@@ -2,7 +2,8 @@
 
 This package extracts the production Rust arithmetic with Charon and Aeneas,
 then checks handwritten Lean proofs. The package covers four layers of field
-arithmetic, canonical integer and byte encodings, and Pasta primality.
+arithmetic, canonical integer and byte encodings, Pasta primality, roots of
+unity, and the fixed square-root exponentiation schedules.
 Inversion and square roots remain in progress.
 
 The checked word theorems in [Proofs.lean](proofs/Proofs.lean) cover `adc`,
@@ -89,6 +90,22 @@ bytes round-trip exactly. Field values round-trip with the same decoded value
 and the requested representation bound. `is_odd` tests the decoded integer's
 parity. These are universal input theorems.
 
+The root-of-unity proofs cover both fields and representation states, including
+every `u32` index. Indices above 32 return `None`. Valid indices return canonical
+Montgomery limbs whose decoded values are primitive roots of order `2^log_size`.
+Forward roots equal `5^((p - 1) / 2^log_size)`; inverse roots multiply those
+values to one modulo `p`. [NativeRootTables.lean](proofs/NativeRootTables.lean)
+checks the actual compiled tables with kernel `decide`, and
+[NativeRootOrder.lean](proofs/NativeRootOrder.lean) derives exact orders from
+the full-power and half-power checks. The lookup proofs check the index cast,
+array access and representation constructor.
+
+[NativeSqrtChains.lean](proofs/NativeSqrtChains.lean) proves both compiled
+addition chains compute `value^((t - 1) / 2)`, where `p - 1 = t * 2^32`, for
+every valid loose input. These proofs follow the extracted schedules and use
+the checked native multiplication and square-run routines. They do not yet
+prove the Tonelli–Shanks correction loops or the public square-root methods.
+
 [PastaPrimality.lean](proofs/PastaPrimality.lean) proves primality of the two
 compiled Pasta moduli using Lucas certificates and recursively checked prime
 factors. [Pratt.lean](proofs/Pratt.lean) supplies bounded modular exponentiation
@@ -101,7 +118,7 @@ use Lean's kernel `decide`; certificate generation supplies no trusted premise.
 | 2. Limbs | Comparison, addition, subtraction, wide multiplication and squaring |
 | 3. Montgomery | Reduction, multiplication, squaring, and square runs |
 | 4. Native fields | Concrete Fp/Fq parameters, arithmetic, representation, predicates and integer constructors |
-| 5. Remaining field routines | Canonical encodings, round trips, parity and primality checked; inversion and square roots in progress |
+| 5. Remaining field routines | Canonical encodings, round trips, parity, primality, roots of unity and square-root exponentiation checked; inversion and square-root correction in progress |
 
 [catalog.json](catalog.json) records the proof modules and theorem census.
 [provenance.json](provenance.json) pins Udon source hashes, Charon, Aeneas,
@@ -147,8 +164,10 @@ iterator models and missing generic promoted constants in the pinned frontend.
 Encoding uses indexed byte loops and explicit branches. Inversion names the
 compile-time Bézout offset, expands the four signed coefficient conversions, and
 uses widening casts and explicit bounds. The default native extraction includes
-inversion and root-of-unity bodies; extraction alone supplies no correctness
-claim for those routines.
+inversion bodies; extraction alone supplies no correctness claim for inversion.
+The square-root assertions use explicit range bounds and tuple equality so
+both conditions remain checked during extraction. Public square-root extraction
+still requires frontend work outside the checked reproducer.
 
 ## Trust boundary
 
@@ -168,9 +187,12 @@ The native translation uses four checked adapters in [adapters/](adapters/):
 
 - Closed, typed literal globals become pure initializer functions; existing
   functions, types and dictionary implementations are retained.
-- The unused parameter-dictionary back edge and two unused square-root
-  callbacks are removed. The adapter rejects references to either from retained
-  arithmetic bodies. It is unsuitable for extracting square-root calls.
+- The unused parameter-dictionary back edge and square-root callback fields
+  are removed. The two transparent callback functions remain as independent
+  proof roots, with unchanged bodies. Their selection metadata and declaration
+  order reflect the projected dictionary. The adapter rejects references to
+  either erased component from retained bodies. It is unsuitable for extracting
+  square-root calls.
 - The generic `ONE` initializer receives an assertion of literal `true` to
   correct its inferred effect type. All other definitions are checked unchanged.
 - Charon's explicitly selected private halving root is retained by marking

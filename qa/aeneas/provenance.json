@@ -1,5 +1,5 @@
 {
-  "udon_revision": "225b160ff757b3f811fc0a573ca16dad404143ef",
+  "udon_revision": "9444b27a0501b4063291253e75014d00d71d3360",
   "aeneas_revision": "557eff83ecef5083b98a52a94ca7fae63d6c1dab",
   "charon_revision": "c8f15d7d658c86a95658f71ad99cddd4be002e04",
   "aeneas_release": "nightly-2026.10.04-557eff8",
@@ -147,7 +147,7 @@
     "crates/udon/src/field/consumer/mod.rs": "4c6f0e0da2d45f08be1ac72641f99a60c3819ed3b44f63c1ee8930d8dbdf94e3",
     "crates/udon/src/field/consumer/traits.rs": "70820ffd2086624df36b241f9e743220fa9f9fc3fdee1bee2cdfa8fd6be265e1",
     "crates/udon/src/field/mod.rs": "fd2907b3a4f7f948aea5ba73c5634b76a0c424992b93e4386b0a7db9d6b390b5",
-    "crates/udon/src/field/pasta/algorithms.rs": "029ac2aedb7966ab24471bf7a2e20294d5d563fd7f22d93f00ac5357996720b7",
+    "crates/udon/src/field/pasta/algorithms.rs": "67c28cbfef7ef86243d3c2a453b9d21d040ad8aaa9667f35e016d23279f3eed4",
     "crates/udon/src/field/pasta/batch.rs": "d115e19f13f73af2dc0c2bac25877a84cbab5bb2ad55ece18ce5bf7501a3ed6b",
     "crates/udon/src/field/pasta/butterfly/experiments.rs": "1695cb7911de3ebd9ea0996c879dbe240ea2b09af46cc656104ede40869dc255",
     "crates/udon/src/field/pasta/butterfly/mod.rs": "36e4eb357fa152e38eb0e2758c9b675370eacc990eed851ad1ce60d5d103190e",

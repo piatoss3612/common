@@ -39,7 +39,18 @@
     "NativeOne",
     "NativePowerHelpers",
     "NativePower",
-    "NativeReducedConvert"
+    "NativeReducedConvert",
+    "Pratt",
+    "PastaPrimality",
+    "NativeCanonical",
+    "NativeByteMath",
+    "NativeBytePartition",
+    "NativeByteDecode",
+    "NativeByteEncode",
+    "NativeEncodingCaps",
+    "NativeEncoding",
+    "NativeByteCaps",
+    "NativeParity"
   ],
   "proved": [
     "adc_spec",
@@ -118,9 +129,56 @@
     "UdonVerify.Native.fp_from_u128_reduced_spec",
     "UdonVerify.Native.fp_from_i64_reduced_spec",
     "UdonVerify.Native.fq_from_u128_reduced_spec",
-    "UdonVerify.Native.fq_from_i64_reduced_spec"
+    "UdonVerify.Native.fq_from_i64_reduced_spec",
+    "UdonVerify.Native.fp_prime",
+    "UdonVerify.Native.fq_prime",
+    "UdonVerify.Native.canonical_limbs_spec",
+    "UdonVerify.Native.to_canonical_uint_spec",
+    "UdonVerify.Native.from_canonical_uint_spec",
+    "UdonVerify.Native.from_uint_reduced_spec",
+    "UdonVerify.Native.uint_from_bytes_spec",
+    "UdonVerify.Native.uint_to_bytes_spec",
+    "UdonVerify.Native.from_bytes_spec",
+    "UdonVerify.Native.to_bytes_spec",
+    "UdonVerify.Native.canonical_bytes_roundtrip",
+    "UdonVerify.Native.field_bytes_roundtrip",
+    "UdonVerify.Native.uint_bytes_roundtrip",
+    "UdonVerify.Native.uint_bit_zero_spec",
+    "UdonVerify.Native.is_odd_spec",
+    "UdonVerify.Native.fp_from_canonical_spec",
+    "UdonVerify.Native.fp_to_canonical_spec",
+    "UdonVerify.Native.fp_from_uint_reduced_spec",
+    "UdonVerify.Native.fp_from_bytes_spec",
+    "UdonVerify.Native.fp_to_bytes_spec",
+    "UdonVerify.Native.fp_canonical_bytes_roundtrip",
+    "UdonVerify.Native.fp_field_bytes_roundtrip",
+    "UdonVerify.Native.fp_is_odd_spec",
+    "UdonVerify.Native.fp_from_canonical_reduced_spec",
+    "UdonVerify.Native.fp_to_canonical_reduced_spec",
+    "UdonVerify.Native.fp_from_uint_reduced_reduced_spec",
+    "UdonVerify.Native.fp_from_bytes_reduced_spec",
+    "UdonVerify.Native.fp_to_bytes_reduced_spec",
+    "UdonVerify.Native.fp_canonical_bytes_roundtrip_reduced",
+    "UdonVerify.Native.fp_field_bytes_roundtrip_reduced",
+    "UdonVerify.Native.fp_is_odd_reduced_spec",
+    "UdonVerify.Native.fq_from_canonical_spec",
+    "UdonVerify.Native.fq_to_canonical_spec",
+    "UdonVerify.Native.fq_from_uint_reduced_spec",
+    "UdonVerify.Native.fq_from_bytes_spec",
+    "UdonVerify.Native.fq_to_bytes_spec",
+    "UdonVerify.Native.fq_canonical_bytes_roundtrip",
+    "UdonVerify.Native.fq_field_bytes_roundtrip",
+    "UdonVerify.Native.fq_is_odd_spec",
+    "UdonVerify.Native.fq_from_canonical_reduced_spec",
+    "UdonVerify.Native.fq_to_canonical_reduced_spec",
+    "UdonVerify.Native.fq_from_uint_reduced_reduced_spec",
+    "UdonVerify.Native.fq_from_bytes_reduced_spec",
+    "UdonVerify.Native.fq_to_bytes_reduced_spec",
+    "UdonVerify.Native.fq_canonical_bytes_roundtrip_reduced",
+    "UdonVerify.Native.fq_field_bytes_roundtrip_reduced",
+    "UdonVerify.Native.fq_is_odd_reduced_spec"
   ],
-  "scope": "Layers one through four: all 15 shared arithmetic kernels and the listed native Fp/Fq arithmetic, representation, predicates, integer constructors, small multiples, halving, and arbitrary-u64 exponentiation. Concrete native parameters refine the kernel harness. Inversion, square roots, canonical encodings, product accumulation, and other subsystems are not yet proved.",
+  "scope": "Layers one through four, plus canonical 256-bit integer and 32-byte encodings for both Pasta fields in both representation states, exact byte round trips, field-value round trips, canonical parity, and primality of both compiled Pasta moduli. Inversion, square roots, reducing encodings of wider byte strings, product accumulation, and other subsystems remain unproved.",
   "type_only_axioms": {
     "UdonVerify.montgomery_multiply_spec": [
       "Aeneas.Std.core.fmt.Formatter"
@@ -189,6 +247,87 @@
       "Aeneas.Std.core.fmt.Formatter"
     ],
     "UdonVerify.Native.fq_from_i64_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.from_canonical_uint_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.from_uint_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.uint_from_bytes_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.from_bytes_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.canonical_bytes_roundtrip": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.field_bytes_roundtrip": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.uint_bytes_roundtrip": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_canonical_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_uint_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_bytes_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_canonical_bytes_roundtrip": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_field_bytes_roundtrip": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_canonical_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_uint_reduced_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_bytes_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_canonical_bytes_roundtrip_reduced": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_field_bytes_roundtrip_reduced": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_canonical_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_uint_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_bytes_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_canonical_bytes_roundtrip": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_field_bytes_roundtrip": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_canonical_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_uint_reduced_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_bytes_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_canonical_bytes_roundtrip_reduced": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_field_bytes_roundtrip_reduced": [
       "Aeneas.Std.core.fmt.Formatter"
     ]
   }

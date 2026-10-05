@@ -1,7 +1,7 @@
 #![no_std]
 #![forbid(unsafe_code)]
 
-use udon::field::{Fp, Fq, Reduced};
+use udon::field::{CanonicalUint, Fp, Fq, Reduced};
 
 pub fn fp_mul(lhs: &Fp, rhs: &Fp) -> Fp {
     lhs.mul(rhs)
@@ -201,4 +201,76 @@ pub fn fq_montgomery(value: &Fq) -> [u64; 4] {
 
 pub fn fq_import_montgomery(limbs: [u64; 4]) -> Fq {
     Fq::from_montgomery_limbs(limbs)
+}
+
+pub fn fp_from_canonical(value: CanonicalUint) -> Option<Fp> {
+    Fp::from_canonical_uint(value)
+}
+
+pub fn fq_from_canonical(value: CanonicalUint) -> Option<Fq> {
+    Fq::from_canonical_uint(value)
+}
+
+pub fn fp_from_uint_reduced(value: CanonicalUint) -> Fp {
+    Fp::from_uint_reduced(value)
+}
+
+pub fn fq_from_uint_reduced(value: CanonicalUint) -> Fq {
+    Fq::from_uint_reduced(value)
+}
+
+pub fn fp_to_canonical(value: Fp) -> CanonicalUint {
+    value.to_canonical_uint()
+}
+
+pub fn fq_to_canonical(value: Fq) -> CanonicalUint {
+    value.to_canonical_uint()
+}
+
+pub fn fp_from_bytes(bytes: [u8; 32]) -> Option<Fp> {
+    Fp::from_bytes(bytes)
+}
+
+pub fn fq_from_bytes(bytes: [u8; 32]) -> Option<Fq> {
+    Fq::from_bytes(bytes)
+}
+
+pub fn fp_to_bytes(value: Fp) -> [u8; 32] {
+    value.to_bytes()
+}
+
+pub fn fq_to_bytes(value: Fq) -> [u8; 32] {
+    value.to_bytes()
+}
+
+pub fn fp_is_odd(value: &Fp) -> bool {
+    value.is_odd()
+}
+
+pub fn fq_is_odd(value: &Fq) -> bool {
+    value.is_odd()
+}
+
+pub fn fp_invert(value: &Fp) -> Option<Fp> {
+    value.invert()
+}
+
+pub fn fq_invert(value: &Fq) -> Option<Fq> {
+    value.invert()
+}
+
+pub fn fp_root_of_unity(log_size: u32) -> Option<Fp> {
+    Fp::root_of_unity(log_size)
+}
+
+pub fn fq_root_of_unity(log_size: u32) -> Option<Fq> {
+    Fq::root_of_unity(log_size)
+}
+
+pub fn fp_root_of_unity_inverse(log_size: u32) -> Option<Fp> {
+    Fp::root_of_unity_inverse(log_size)
+}
+
+pub fn fq_root_of_unity_inverse(log_size: u32) -> Option<Fq> {
+    Fq::root_of_unity_inverse(log_size)
 }

@@ -65,11 +65,14 @@ def literal_initializer(constant, types, span, start):
             sign, pair = next(iter(expression["Integer"].items()))
             kind, number = pair
             assert set(expression["Integer"]) == {sign}
-            assert (sign, kind) in [("Unsigned", "U64"), ("Signed", "I64")]
+            assert (sign, kind) in [("Unsigned", "U32"), ("Unsigned", "U64"),
+                                    ("Unsigned", "Usize"), ("Signed", "I64")]
             assert ty == {"Untagged": {"Scalar": {"Integer": {sign: kind}}}}
             number_int = int(number)
             assert str(number_int) == number
-            assert ((0 <= number_int < 2**64) if sign == "Unsigned"
+            # A usize literal must also fit the 32-bit interpretation.
+            bits = 32 if kind in ["Usize", "U32"] else 64
+            assert ((0 <= number_int < 2**bits) if sign == "Unsigned"
                     else (-2**63 <= number_int < 2**63))
             return True
         return False

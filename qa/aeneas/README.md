@@ -2,7 +2,8 @@
 
 This package extracts the production Rust arithmetic with Charon and Aeneas,
 then checks handwritten Lean proofs. The package covers four layers of field
-arithmetic; inversion, square roots, and canonical encodings remain in progress.
+arithmetic, canonical integer and byte encodings, and Pasta primality.
+Inversion and square roots remain in progress.
 
 The checked word theorems in [Proofs.lean](proofs/Proofs.lean) cover `adc`,
 `mac`, and `sbb` for all valid inputs. With `B = 2^64`, `adc` and `mac` return
@@ -77,13 +78,30 @@ reduced results. Input preconditions describe valid stored field values:
 below `2p` for loose values and below `p` for reduced values. The generic
 arithmetic proofs also accept tighter operand bounds.
 
+The encoding proofs cover both fields and representation states.
+`from_canonical_uint` and `from_bytes` reject exactly the integers at or above
+the modulus. Accepted inputs decode to the supplied ordinary integer.
+`from_uint_reduced` reduces every 256-bit input modulo the selected prime.
+`to_canonical_uint` and `to_bytes` produce the decoded integer below the modulus.
+The byte proofs use an independent little-endian `Nat.ofDigits` interpretation;
+they check the indexed loops, slice bounds, conversion and unwrap. Canonical
+bytes round-trip exactly. Field values round-trip with the same decoded value
+and the requested representation bound. `is_odd` tests the decoded integer's
+parity. These are universal input theorems.
+
+[PastaPrimality.lean](proofs/PastaPrimality.lean) proves primality of the two
+compiled Pasta moduli using Lucas certificates and recursively checked prime
+factors. [Pratt.lean](proofs/Pratt.lean) supplies bounded modular exponentiation
+and connects its computations to Mathlib's Lucas theorem. The numeric checks
+use Lean's kernel `decide`; certificate generation supplies no trusted premise.
+
 | Layer | Checked claim |
 | --- | --- |
 | 1. Words | Exact `adc`, `mac`, and `sbb`, including carries and borrows |
 | 2. Limbs | Comparison, addition, subtraction, wide multiplication and squaring |
 | 3. Montgomery | Reduction, multiplication, squaring, and square runs |
 | 4. Native fields | Concrete Fp/Fq parameters, arithmetic, representation, predicates and integer constructors |
-| 5. Remaining field routines | Inversion, square roots and canonical encodings: in progress |
+| 5. Remaining field routines | Canonical encodings, round trips, parity and primality checked; inversion and square roots in progress |
 
 [catalog.json](catalog.json) records the proof modules and theorem census.
 [provenance.json](provenance.json) pins Udon source hashes, Charon, Aeneas,
@@ -126,6 +144,11 @@ The production refactors reuse the already-proved limb kernels in addition,
 subtraction and halving, use an indexed loop for small multiples, and name the
 compile-time `R + p` constant used by `is_one`. This avoids unsupported mutable
 iterator models and missing generic promoted constants in the pinned frontend.
+Encoding uses indexed byte loops and explicit branches. Inversion names the
+compile-time Bézout offset, expands the four signed coefficient conversions, and
+uses widening casts and explicit bounds. The default native extraction includes
+inversion and root-of-unity bodies; extraction alone supplies no correctness
+claim for those routines.
 
 ## Trust boundary
 
@@ -163,9 +186,10 @@ The theorems concern the extracted Lean definitions. Rust compilation, Charon,
 Aeneas, its standard-library models, and the documented adapters and extensions
 form the translation trust boundary. The source hashes pin the workspace Rust
 sources and dependency manifests; the tool hashes pin the extraction binaries.
-Lean checks the arithmetic proofs and their axiom census. No primality theorem
-is required for the current integer and modular arithmetic claims.
+Lean checks the arithmetic proofs and their axiom census. The first four layers
+use integer bounds and modular congruences. Primality has its own checked
+certificates.
 
-Inversion, square roots, canonical encodings, product accumulation, curves and
-FFTs have no correctness theorem in this package yet. The proofs do not
-establish constant-time behavior.
+Inversion, square roots, reducing byte strings of other widths, product
+accumulation, curves and FFTs have no correctness theorem in this package yet.
+The proofs do not establish constant-time behavior.

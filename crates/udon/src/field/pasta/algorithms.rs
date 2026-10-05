@@ -60,10 +60,8 @@ pub(super) fn tonelli_shanks_with_roots<F: SqrtField>(
     root: impl Fn(u32) -> F,
     two_adicity: u32,
 ) -> Option<F> {
-    assert!(
-        (1..=64).contains(&two_adicity),
-        "two_adicity must be within 1..=64"
-    );
+    assert!(1 <= two_adicity, "two_adicity must be within 1..=64");
+    assert!(two_adicity <= 64, "two_adicity must be within 1..=64");
     if value.is_zero() {
         return Some(F::ZERO);
     }
@@ -104,7 +102,8 @@ pub(super) fn tonelli_shanks_alt_with_roots<F: SqrtField>(
     root: impl Fn(u32) -> F,
     two_adicity: u32,
 ) -> (bool, F) {
-    assert!((1..=64).contains(&two_adicity));
+    assert!(1 <= two_adicity);
+    assert!(two_adicity <= 64);
     let mut is_square = true;
     let mut m = two_adicity;
     while !t.is_one() {
@@ -118,7 +117,7 @@ pub(super) fn tonelli_shanks_alt_with_roots<F: SqrtField>(
             // Maximal order identifies a nonsquare. Multiplying both x and t
             // by r changes the invariant to x^2 = (a * r) * t and makes t a
             // square in the subgroup. This branch can occur only once.
-            debug_assert!(is_square && m == two_adicity);
+            debug_assert_eq!((is_square, m), (true, two_adicity));
             let r = root(two_adicity);
             x = x.mul(&r);
             t = t.mul(&r);
@@ -140,10 +139,8 @@ pub(super) fn tonelli_shanks<F: SqrtField>(
     root: F,
     two_adicity: u32,
 ) -> Option<F> {
-    assert!(
-        (1..=64).contains(&two_adicity),
-        "two_adicity must be within 1..=64"
-    );
+    assert!(1 <= two_adicity, "two_adicity must be within 1..=64");
+    assert!(two_adicity <= 64, "two_adicity must be within 1..=64");
     if value.is_zero() {
         return Some(F::ZERO);
     }

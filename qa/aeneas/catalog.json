@@ -18,7 +18,28 @@
     "MontgomeryRound",
     "MontgomeryWrappers",
     "MontgomeryMultiply",
-    "SquareRun"
+    "SquareRun",
+    "NativeField",
+    "NativeBridge",
+    "NativeArithmetic",
+    "NativeBasics",
+    "NativeBits",
+    "NativeDouble",
+    "NativeSubtract",
+    "NativeNegate",
+    "NativeConstants",
+    "NativeConvert",
+    "NativeSigned",
+    "NativeComposed",
+    "NativePredicates",
+    "NativeRepresentation",
+    "NativeSmallLoop",
+    "NativeSmall",
+    "NativeHalf",
+    "NativeOne",
+    "NativePowerHelpers",
+    "NativePower",
+    "NativeReducedConvert"
   ],
   "proved": [
     "adc_spec",
@@ -35,14 +56,139 @@
     "UdonVerify.montgomery_reduce_spec",
     "UdonVerify.montgomery_square_spec",
     "UdonVerify.montgomery_multiply_spec",
-    "UdonVerify.square_run_spec"
+    "UdonVerify.square_run_spec",
+    "UdonVerify.Native.fp_multiply_spec",
+    "UdonVerify.Native.fq_multiply_spec",
+    "UdonVerify.Native.fp_square_spec",
+    "UdonVerify.Native.fq_square_spec",
+    "UdonVerify.Native.fp_add_spec",
+    "UdonVerify.Native.fq_add_spec",
+    "UdonVerify.Native.fp_reduce_spec",
+    "UdonVerify.Native.fq_reduce_spec",
+    "UdonVerify.Native.fp_widen_spec",
+    "UdonVerify.Native.fq_widen_spec",
+    "UdonVerify.Native.fp_double_spec",
+    "UdonVerify.Native.fq_double_spec",
+    "UdonVerify.Native.fp_subtract_spec",
+    "UdonVerify.Native.fq_subtract_spec",
+    "UdonVerify.Native.fp_negate_spec",
+    "UdonVerify.Native.fq_negate_spec",
+    "UdonVerify.Native.fp_from_u128_spec",
+    "UdonVerify.Native.fq_from_u128_spec",
+    "UdonVerify.Native.fp_from_u64_spec",
+    "UdonVerify.Native.fq_from_u64_spec",
+    "UdonVerify.Native.fp_from_i64_spec",
+    "UdonVerify.Native.fq_from_i64_spec",
+    "UdonVerify.Native.fp_mul_add_spec",
+    "UdonVerify.Native.fq_mul_add_spec",
+    "UdonVerify.Native.fp_mul_sub_spec",
+    "UdonVerify.Native.fq_mul_sub_spec",
+    "UdonVerify.Native.fp_is_zero_spec",
+    "UdonVerify.Native.fq_is_zero_spec",
+    "UdonVerify.Native.fp_from_u64_reduced_spec",
+    "UdonVerify.Native.fq_from_u64_reduced_spec",
+    "UdonVerify.Native.fp_reduce_reduced_spec",
+    "UdonVerify.Native.fq_reduce_reduced_spec",
+    "UdonVerify.Native.fp_zero_spec",
+    "UdonVerify.Native.fq_zero_spec",
+    "UdonVerify.Native.fp_one_spec",
+    "UdonVerify.Native.fq_one_spec",
+    "UdonVerify.Native.fp_import_montgomery_spec",
+    "UdonVerify.Native.fq_import_montgomery_spec",
+    "UdonVerify.Native.fp_montgomery_spec",
+    "UdonVerify.Native.fq_montgomery_spec",
+    "UdonVerify.Native.small_loop_spec",
+    "UdonVerify.Native.small_multiply_spec",
+    "UdonVerify.Native.fp_triple_spec",
+    "UdonVerify.Native.fp_mul_by_4_spec",
+    "UdonVerify.Native.fp_mul_by_8_spec",
+    "UdonVerify.Native.fq_triple_spec",
+    "UdonVerify.Native.fq_mul_by_4_spec",
+    "UdonVerify.Native.fq_mul_by_8_spec",
+    "UdonVerify.Native.fp_half_loose_spec",
+    "UdonVerify.Native.fp_half_reduced_spec",
+    "UdonVerify.Native.fq_half_loose_spec",
+    "UdonVerify.Native.fq_half_reduced_spec",
+    "UdonVerify.Native.half_spec",
+    "UdonVerify.Native.fp_is_one_spec",
+    "UdonVerify.Native.fq_is_one_spec",
+    "UdonVerify.Native.fp_pow_u64_spec",
+    "UdonVerify.Native.fq_pow_u64_spec",
+    "UdonVerify.Native.pow_u64_spec",
+    "UdonVerify.Native.fp_from_u128_reduced_spec",
+    "UdonVerify.Native.fp_from_i64_reduced_spec",
+    "UdonVerify.Native.fq_from_u128_reduced_spec",
+    "UdonVerify.Native.fq_from_i64_reduced_spec"
   ],
-  "scope": "All 15 shared word, multi-limb, and Montgomery kernels have universally quantified correctness and total-execution proofs. Both Pasta parameter instances discharge the arithmetic assumptions. Full native Fp/Fq API refinement remains outside this layer.",
+  "scope": "Layers one through four: all 15 shared arithmetic kernels and the listed native Fp/Fq arithmetic, representation, predicates, integer constructors, small multiples, halving, and arbitrary-u64 exponentiation. Concrete native parameters refine the kernel harness. Inversion, square roots, canonical encodings, product accumulation, and other subsystems are not yet proved.",
   "type_only_axioms": {
     "UdonVerify.montgomery_multiply_spec": [
       "Aeneas.Std.core.fmt.Formatter"
     ],
     "UdonVerify.square_run_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_multiply_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_multiply_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_u128_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_u128_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_u64_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_u64_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_i64_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_i64_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_mul_add_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_mul_add_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_mul_sub_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_mul_sub_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_u64_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_u64_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_pow_u64_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_pow_u64_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.pow_u64_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_u128_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fp_from_i64_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_u128_reduced_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.Native.fq_from_i64_reduced_spec": [
       "Aeneas.Std.core.fmt.Formatter"
     ]
   }

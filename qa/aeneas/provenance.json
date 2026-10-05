@@ -259,5 +259,20 @@
     "charon": "87ffb25b4263289704a913799eb67882b4d6ba5eaedc5a12522f7cf0b7fd361b",
     "charon-driver": "cb8d6ec2dde30415f61766209b4bef445dc92c50cc5ad28e1508ad95bd74bfee",
     "rust-toolchain": "60d242314032dfb524f52d9c31397a64dcf6697cdb20a08c29c004fef4059306"
+  },
+  "charon_sqrt": {
+    "archive_url": "https://codeload.github.com/AeneasVerif/charon/tar.gz/c8f15d7d658c86a95658f71ad99cddd4be002e04",
+    "archive_sha256": "8fb8d08240affd9db31d92dc2eac80048ea6be45979d62cbaa975be2e1c5db92",
+    "patch": "charon-retain-cyclic-bounds.patch",
+    "patch_sha256": "be6ddf2ad1a02a11c9fda0af44cc8e234e65bf9afe58c78eca40e2430b8bb63a",
+    "patched_source": "charon/src/transform/simplify_output/remove_adt_clauses.rs",
+    "patched_source_sha256": "7fe97ba355e84e8873f484d907540cac2b9c5839bbf3036237a30108a20e5e0e",
+    "source_tree_sha256": "76c422c6d9ab865025d3de8d64773c21a87963a8d88e478c3767928e11a954d7",
+    "revision_label": "c8f15d7d658c86a95658f71ad99cddd4be002e04+retain-cyclic-bounds",
+    "source_links": {
+      "doc-ml.html": "./_build/default/_doc/_html/charon/index.html",
+      "doc-rust.html": "./charon/target/doc/charon/index.html",
+      "rust-toolchain": "charon/rust-toolchain"
+    }
   }
 }

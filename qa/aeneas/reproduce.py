@@ -12,6 +12,8 @@ import subprocess
 import time
 import tomllib
 
+from build_sqrt_charon import verify_manifest
+
 if not __debug__:
     raise RuntimeError("The extraction checks require Python assertions")
 
@@ -69,13 +71,13 @@ def make_slice(repo, destination):
     destination.write_text("\n".join(lines) + "\n")
 
 
-def check_native_lock(repo, wrapper):
+def check_native_lock(repo, wrapper, package_name="udon-native-field-proof"):
     original = tomllib.loads((repo / "Cargo.lock").read_text())
     actual = tomllib.loads((wrapper / "Cargo.lock").read_text())
     fields = ["name", "version", "source", "checksum"]
     pinned = {tuple(package.get(key) for key in fields) for package in original["package"]}
     for package in actual["package"]:
-        if package["name"] == "udon-native-field-proof":
+        if package["name"] == package_name:
             continue
         if tuple(package.get(key) for key in fields) not in pinned:
             raise RuntimeError("Unpinned native extraction dependency: " + package["name"])
@@ -98,11 +100,19 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=HERE.parents[1])
     parser.add_argument("--tools", type=Path, required=True)
+    parser.add_argument("--sqrt-tools", type=Path, required=True,
+                        help="Pinned source build from build_sqrt_charon.py")
     parser.add_argument("--output", type=Path, help="New output directory; must not already exist")
     parser.add_argument("--offline", action="store_true", help="Require cached Cargo dependencies")
     args = parser.parse_args()
     repo = args.repo.resolve()
     tools = args.tools.resolve()
+    sqrt_tools = args.sqrt_tools.resolve()
+    sqrt_manifest = verify_manifest(sqrt_tools)
+    sqrt_charon = sqrt_tools / "build/release/charon"
+    sqrt_charon_version = read_command([str(sqrt_charon), "version"], repo)
+    if PIN["charon_sqrt"]["revision_label"] not in sqrt_charon_version:
+        raise RuntimeError("Unexpected square-root Charon version: " + sqrt_charon_version)
     head = read_command(["git", "rev-parse", "HEAD"], repo)
     subprocess.run(["git", "merge-base", "--is-ancestor", PIN["udon_revision"], head],
                    cwd=repo, check=True)
@@ -137,7 +147,7 @@ def main():
         output = repo / "target/aeneas" / time.strftime("repro-%Y%m%d-%H%M%S")
         output.mkdir(parents=True, exist_ok=False)
     print("Output:", output, flush=True)
-    for directory in ["logs", "llbc", "slice", "native/src", "lean"]:
+    for directory in ["logs", "llbc", "slice", "native/src", "sqrt/src", "lean"]:
         (output / directory).mkdir(parents=True)
     environment = os.environ.copy()
     environment["CARGO_TARGET_DIR"] = str(output / "cargo-target")
@@ -238,6 +248,58 @@ def main():
     for name in ["Prelude.lean", "FunsExternal.lean"]:
         shutil.copyfile(HERE / "native_support" / name, lean / "NativeField" / name)
     (lean / "NativeField/FunsExternal_Template.lean").unlink(missing_ok=True)
+    sqrt = output / "sqrt"
+    (sqrt / "Cargo.toml").write_text(
+        '[package]\nname = "udon-sqrt-proof"\nversion = "0.0.0"\n'
+        'edition = "2024"\n\n[workspace]\n\n[dependencies]\n'
+        'udon = { package = "zakura-udon", path = ' +
+        json.dumps(str(repo / "crates/udon")) + ' }\n')
+    shutil.copyfile(HERE / "sqrt_wrapper.rs", sqrt / "src/lib.rs")
+    shutil.copyfile(repo / "Cargo.lock", sqrt / "Cargo.lock")
+    run("sqrt-lock", ["cargo", "+" + PIN["rust_toolchain"], "metadata",
+                      "--format-version=1", "--offline"], sqrt)
+    check_native_lock(repo, sqrt, "udon-sqrt-proof")
+    sqrt_raw = output / "llbc/sqrt-raw.llbc"
+    run("sqrt-charon", [str(sqrt_charon), "cargo", "--preset=aeneas", "--sysroot=default",
+        "--consts=values", "--remove-adt-clauses", "--lift-associated-types=*",
+        "--remove-unused-clauses", "--include", "zakura_udon",
+        "--include", "core::cmp::*::is_lt", "--include", "core::num::*::unsigned_abs",
+        "--include", "core::num::*::wrapping_neg", "--include", "core::num::*::wrapping_abs",
+        "--include", "core::num::*::is_negative",
+        "--opaque", "zakura_udon::field::pasta::parameters::{impl zakura_udon::field::pasta::parameters::sealed::Parameters<_> for _}::pow_sqrt_exponent",
+        "--start-from", "udon_sqrt_proof", "--no-dedup-serialized-ast", *checked,
+        "--dest-file", str(sqrt_raw), "--", "--lib", "--locked",
+        *(["--offline"] if args.offline else [])], sqrt)
+    sqrt_data = json.loads(sqrt_raw.read_text())
+    if sqrt_data["has_errors"]:
+        raise RuntimeError("Charon exported a partial concrete square-root model")
+    check_ordering(sqrt_data)
+    previous = sqrt_raw
+    for name in ["normalize_constants", "mark_constant_effects", "project_unused_parent"]:
+        adapted = output / "llbc" / ("sqrt-" + name + ".llbc")
+        run("sqrt-" + name, ["python3", str(HERE / "adapters" / (name + ".py")),
+                            str(previous), str(adapted)], output)
+        previous = adapted
+    run("sqrt-aeneas", [str(aeneas), "-backend", "lean", "-namespace", "SqrtNative",
+        "-subdir", "SqrtNative", "-filter-trait-methods", "-split-files", "-no-progress-bar",
+        "-abort-on-error", "-dest", str(lean), str(previous)], output)
+    sqrt_funs = lean / "SqrtNative/Funs.lean"
+    generated = sqrt_funs.read_text()
+    if generated.count(anchor) != 1:
+        raise RuntimeError("Could not locate the concrete square-root model imports")
+    sqrt_funs.write_text(generated.replace(anchor, anchor + "public import NativeField.Prelude\n"))
+    external = lean / "SqrtNative/FunsExternal_Template.lean"
+    declarations = set(re.findall(r"\baxiom\s+([A-Za-z0-9_.]+)", external.read_text()))
+    expected_external = {
+        "core.marker.PhantomData.Insts.CoreCloneClone.clone", "core.option.Option.map",
+        "Pair.Insts.CoreCmpPartialEqPair.eq",
+        "zakura_udon.field.pasta.parameters.PallasBase.Insts.Zakura_udonFieldPastaParametersSealedParametersPallasBase.pow_sqrt_exponent",
+        "zakura_udon.field.pasta.parameters.PallasScalar.Insts.Zakura_udonFieldPastaParametersSealedParametersPallasScalar.pow_sqrt_exponent",
+    }
+    if declarations != expected_external:
+        raise RuntimeError("Unexpected concrete square-root external declarations: " + repr(declarations))
+    shutil.copyfile(HERE / "sqrt_support/FunsExternal.lean", lean / "SqrtNative/FunsExternal.lean")
+    external.unlink()
     shutil.copyfile(backend / "lean-toolchain", lean / "lean-toolchain")
     for module in CATALOG["modules"]:
         shutil.copyfile(HERE / "proofs" / (module + ".lean"), lean / (module + ".lean"))
@@ -257,6 +319,8 @@ def main():
     for file in source_files:
         permitted = file == lean / "NativeField/FunsExternal.lean" and \
             file.read_bytes() == (HERE / "native_support/FunsExternal.lean").read_bytes()
+        permitted |= file == lean / "SqrtNative/FunsExternal.lean" and \
+            file.read_bytes() == (HERE / "sqrt_support/FunsExternal.lean").read_bytes()
         if ("External" in file.name and not permitted) or re.search(
                 r"\b(sorry|admit|axiom|opaque)\b", file.read_text()):
             raise RuntimeError("A model has holes or requires external definitions: " + str(file))
@@ -280,6 +344,7 @@ def main():
             raise RuntimeError(f"Unexpected proof trust census for {theorem}: {actual}")
     summary = {"udon_revision": PIN["udon_revision"], "aeneas_version": aeneas_version,
                "charon_version": charon_version, "lean_toolchain": lean_toolchain,
+               "sqrt_charon_version": sqrt_charon_version, "sqrt_charon_build": sqrt_manifest,
                "source_hashes": PIN["source_hashes"], "stages": results,
                "checkout_revision": head, "proved": CATALOG["proved"],
                "scope": CATALOG["scope"]}

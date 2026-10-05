@@ -3,9 +3,9 @@
 This package extracts the production Rust arithmetic with Charon and Aeneas,
 then checks handwritten Lean proofs. The package covers four layers of field
 arithmetic, canonical integer and byte encodings, Pasta primality, roots of
-unity, the fixed square-root exponentiation schedules, and generic
-Tonelli–Shanks correction.
-Inversion and square roots remain in progress.
+unity, the fixed square-root exponentiation schedules, generic Tonelli–Shanks
+correction, and all six default Fp/Fq square-root entry points.
+Inversion remains in progress.
 
 The checked word theorems in [Proofs.lean](proofs/Proofs.lean) cover `adc`,
 `mac`, and `sbb` for all valid inputs. With `B = 2^64`, `adc` and `mac` return
@@ -114,8 +114,24 @@ correction loops preserve the root equation, terminate, and discharge the
 checked increments and assertions. The alternate routine's flag identifies
 squares and its returned value squares to the input or its fixed nonsquare
 multiple. The ordinary routine returns a root or rejects a nonsquare, including
-the zero case. These contracts still need to be connected to the concrete
-Fp/Fq entry points; those public square-root methods remain unproved.
+the zero case. [NativeSqrtBridge.lean](proofs/NativeSqrtBridge.lean) connects the
+concrete model to the checked native arithmetic and proves equality with the
+separately extracted generic routines. The compiled root tables, fixed powers,
+zero and one predicates, multiplication, squaring and representation conversions
+discharge every contract for both Pasta fields. Checked Euler powers establish
+that each compiled top root is a nonsquare; Pasta primality supplies the starting
+power identity.
+
+[NativeSqrtCaps.lean](proofs/NativeSqrtCaps.lean) proves successful execution of
+`sqrt`, `sqrt_alt` and `sqrt_ratio` for every valid reduced Fp/Fq input. `sqrt`
+returns a reduced root, or `None` exactly for nonsquares. `sqrt_alt` returns a
+square flag and a reduced root of either the input or its fixed nonsquare
+multiple. For nonzero numerator and denominator, `sqrt_ratio` returns a reduced
+root whose square times the denominator equals the numerator or its fixed
+nonsquare multiple; the flag identifies whether the ratio is square. A zero
+numerator returns `(true, 0)`, including when both inputs are zero. A nonzero
+numerator with zero denominator returns `(false, 0)`. These proofs use the
+default feature configuration; `sqrt-table-large` remains unproved.
 
 [PastaPrimality.lean](proofs/PastaPrimality.lean) proves primality of the two
 compiled Pasta moduli using Lucas certificates and recursively checked prime
@@ -129,7 +145,7 @@ use Lean's kernel `decide`; certificate generation supplies no trusted premise.
 | 2. Limbs | Comparison, addition, subtraction, wide multiplication and squaring |
 | 3. Montgomery | Reduction, multiplication, squaring, and square runs |
 | 4. Native fields | Concrete Fp/Fq parameters, arithmetic, representation, predicates and integer constructors |
-| 5. Remaining field routines | Encodings, parity, primality, roots, square-root exponentiation and generic Tonelli–Shanks contracts checked; concrete square-root entry points and inversion in progress |
+| 5. Remaining field routines | Encodings, parity, primality, roots and all six default square-root methods checked; inversion and the additional scopes listed below remain in progress |
 
 [catalog.json](catalog.json) records the proof modules and theorem census.
 [provenance.json](provenance.json) pins Udon source hashes, Charon, Aeneas,
@@ -146,8 +162,19 @@ The host used here is macOS arm64. Install the pinned Rust nightly including
 `rustc-dev` and `rust-src`, and Lean 4.31.0. Prepare the Lean backend's pinned
 Lake dependencies and Mathlib cache before an offline run.
 
+The concrete square-root extraction uses a source build of the same pinned
+Charon revision with [charon-retain-cyclic-bounds.patch](charon-retain-cyclic-bounds.patch).
+Its source archive is available at the URL recorded in `charon_sqrt` in the
+provenance file; its SHA256 is
+`8fb8d08240affd9db31d92dc2eac80048ea6be45979d62cbaa975be2e1c5db92`.
+The build script checks the archive, patch, complete regular-file source tree
+and source links, builds both binaries with the pinned compiler, and records
+their hashes and exact build commands. Cargo dependencies must be cached for
+an offline build.
+
 ```console
-python3 qa/aeneas/reproduce.py --tools /path/to/aeneas-release --offline
+python3 qa/aeneas/build_sqrt_charon.py --archive /path/to/charon-source.tar.gz --output target/aeneas/sqrt-charon --offline
+python3 qa/aeneas/reproduce.py --tools /path/to/aeneas-release --sqrt-tools target/aeneas/sqrt-charon --offline
 ```
 
 `--tools` names the extracted release directory containing `aeneas`, `charon`,
@@ -155,6 +182,8 @@ and `backends/lean`. Python 3.11 or later is required. The script creates a
 fresh directory under `target/aeneas/`. Use `--output /path/to/new-directory`
 to choose its location; it must not already exist. Results, exact commands, timings,
 generated Lean files, and logs are retained there.
+`--sqrt-tools` names the source-build directory containing its checked manifest.
+Every other extraction stage uses the official release binaries.
 
 The script selects the native `word.rs` from the Udon crate. It also translates
 all limb and Montgomery kernels through a small parameter harness that imports
@@ -180,8 +209,8 @@ compile-time Bézout offset, expands the four signed coefficient conversions, an
 uses widening casts and explicit bounds. The default native extraction includes
 inversion bodies; extraction alone supplies no correctness claim for inversion.
 The square-root assertions use explicit range bounds and tuple equality so
-both conditions remain checked during extraction. Public square-root extraction
-still requires frontend work outside the checked reproducer.
+both conditions remain checked during extraction. The concrete square-root
+model imports the production crate through [sqrt_wrapper.rs](sqrt_wrapper.rs).
 
 ## Trust boundary
 
@@ -218,6 +247,26 @@ and identity cloning for the zero-sized `PhantomData` marker. The reproducer
 allows only the exact supplied external-definition file, never a generated
 template with placeholders.
 
+The concrete square-root model has three additional translation details:
+
+- The pinned Charon patch changes only the cycle case in `has_assoc_types`,
+  retaining ADT trait clauses instead of recursively expanding cyclic removed
+  clauses. The patch changes no Rust arithmetic body. The source-build manifest
+  and binary hashes are checked on every reproduction.
+- [project_unused_parent.py](adapters/project_unused_parent.py) removes the
+  unused parameter-dictionary back edge while retaining its callback fields.
+  It rejects references to the removed parent and checks that all functions,
+  types, globals and other dictionary contents are unchanged. Constants use
+  the same checked normalization and effect adapters as the native model.
+- [sqrt_support/FunsExternal.lean](sqrt_support/FunsExternal.lean) fully defines
+  marker cloning, short-circuit tuple equality and `Option::map`. It also links
+  the two parameter callbacks to their already-verified extracted Rust bodies
+  through the same four-limb representation. No callback arithmetic is assumed.
+  The generic-routine equality proofs also check the tuple-comparison definition
+  against the separately extracted standard-library implementation. The
+  reproducer checks the exact five external declarations and permits only the
+  supplied definitions, which contain no placeholders.
+
 The theorems concern the extracted Lean definitions. Rust compilation, Charon,
 Aeneas, its standard-library models, and the documented adapters and extensions
 form the translation trust boundary. The source hashes pin the workspace Rust
@@ -226,6 +275,6 @@ Lean checks the arithmetic proofs and their axiom census. The first four layers
 use integer bounds and modular congruences. Primality has its own checked
 certificates.
 
-Inversion, the public Fp/Fq square-root methods, reducing byte strings of other widths, product
-accumulation, curves and FFTs have no correctness theorem in this package yet.
+Inversion, the `sqrt-table-large` feature, reducing byte strings of other widths,
+product accumulation, curves and FFTs have no correctness theorem in this package yet.
 The proofs do not establish constant-time behavior.

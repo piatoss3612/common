@@ -60,7 +60,19 @@
     "NativeSqrtChains",
     "SqrtCorrectionMath",
     "NativeTonelli",
-    "NativeTonelliSqrt"
+    "NativeTonelliSqrt",
+    "SqrtNative",
+    "NativeSqrtBridge",
+    "NativeSqrtOperations",
+    "NativeSqrtMath",
+    "NativeSqrtParameters",
+    "NativeSqrtRoots",
+    "NativeSqrtRepresentation",
+    "NativeSqrtPower",
+    "NativeSqrtConfig",
+    "NativeSqrtPublic",
+    "NativeSqrtAlternate",
+    "NativeSqrtCaps"
   ],
   "proved": [
     "adc_spec",
@@ -226,9 +238,51 @@
     "UdonVerify.Sqrt.correction_square_flag_spec",
     "UdonVerify.Sqrt.maximal_order_nonsquare",
     "UdonVerify.Sqrt.sqrt_loop_spec",
-    "UdonVerify.Sqrt.tonelli_shanks_spec"
+    "UdonVerify.Sqrt.tonelli_shanks_spec",
+    "UdonVerify.Native.fp_sqrt_nonsquare",
+    "UdonVerify.Native.fq_sqrt_nonsquare",
+    "UdonVerify.Native.fp_sqrt_initial_power",
+    "UdonVerify.Native.fq_sqrt_initial_power",
+    "UdonVerify.Native.root_half_power",
+    "UdonVerify.Native.root_next_square",
+    "UdonVerify.SqrtNativeBridge.multiply_bridge",
+    "UdonVerify.SqrtNativeBridge.square_bridge",
+    "UdonVerify.SqrtNativeBridge.correction_bridge",
+    "UdonVerify.SqrtNativeBridge.tonelli_bridge",
+    "UdonVerify.SqrtNativeBridge.sqrt_multiply_spec",
+    "UdonVerify.SqrtNativeBridge.sqrt_square_spec",
+    "UdonVerify.SqrtNativeBridge.nativeOperations",
+    "UdonVerify.SqrtNativeBridge.fpOperations",
+    "UdonVerify.SqrtNativeBridge.fqOperations",
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_root_limbs",
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_root_limbs",
+    "UdonVerify.SqrtNativeBridge.sqrt_root_lookup_spec",
+    "UdonVerify.SqrtNativeBridge.fpRootsContract",
+    "UdonVerify.SqrtNativeBridge.fqRootsContract",
+    "UdonVerify.SqrtNativeBridge.fpFinishRoots",
+    "UdonVerify.SqrtNativeBridge.fqFinishRoots",
+    "UdonVerify.SqrtNativeBridge.sqrt_reduce_spec",
+    "UdonVerify.SqrtNativeBridge.sqrt_widen_spec",
+    "UdonVerify.SqrtNativeBridge.sqrt_zero_reduced",
+    "UdonVerify.SqrtNativeBridge.sqrt_is_zero_reduced",
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_power_spec",
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_power_spec",
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_starting_power",
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_starting_power",
+    "UdonVerify.SqrtNativeBridge.fpConfiguration",
+    "UdonVerify.SqrtNativeBridge.fqConfiguration",
+    "UdonVerify.SqrtNativeBridge.sqrt_public_spec",
+    "UdonVerify.SqrtNativeBridge.finish_public_spec",
+    "UdonVerify.SqrtNativeBridge.sqrt_alt_public_spec",
+    "UdonVerify.SqrtNativeBridge.sqrt_ratio_public_spec",
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_spec",
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_spec",
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_alt_spec",
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_alt_spec",
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_ratio_spec",
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_ratio_spec"
   ],
-  "scope": "Layers one through four, plus canonical 256-bit integer and 32-byte encodings for both Pasta fields in both representation states, exact byte round trips, field-value round trips, canonical parity, primality of both compiled Pasta moduli, forward and inverse roots of unity with exact orders and lookup bounds, both compiled square-root exponentiation schedules, and the extracted generic Tonelli-Shanks routines under explicit field-operation and root-callback contracts. Those contracts still need to be connected to the concrete Fp/Fq square-root entry points. Inversion and public square-root methods, reducing encodings of wider byte strings, product accumulation, and other subsystems remain unproved.",
+  "scope": "Layers one through four, plus canonical 256-bit integer and 32-byte encodings for both Pasta fields in both representation states, exact byte round trips, field-value round trips, canonical parity, primality of both compiled Pasta moduli, forward and inverse roots of unity with exact orders and lookup bounds, both compiled square-root exponentiation schedules, generic Tonelli-Shanks contracts, and all six concrete Fp/Fq default sqrt, sqrt_alt and sqrt_ratio entry points with successful execution, correct roots and square flags, nonsquare rejection, and documented zero cases. Inversion, the sqrt-table-large feature, reducing encodings of wider byte strings, product accumulation, and other subsystems remain unproved.",
   "type_only_axioms": {
     "UdonVerify.montgomery_multiply_spec": [
       "Aeneas.Std.core.fmt.Formatter"
@@ -402,6 +456,75 @@
       "Aeneas.Std.core.fmt.Formatter"
     ],
     "UdonVerify.Native.fq_pow_sqrt_exponent_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.multiply_bridge": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.sqrt_multiply_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.nativeOperations": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fpOperations": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fqOperations": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fpRootsContract": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fqRootsContract": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fpFinishRoots": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fqFinishRoots": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_power_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_power_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fpConfiguration": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fqConfiguration": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.sqrt_public_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.finish_public_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.sqrt_alt_public_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.sqrt_ratio_public_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_alt_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_alt_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fp_sqrt_ratio_spec": [
+      "Aeneas.Std.core.fmt.Formatter"
+    ],
+    "UdonVerify.SqrtNativeBridge.fq_sqrt_ratio_spec": [
       "Aeneas.Std.core.fmt.Formatter"
     ]
   }

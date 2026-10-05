@@ -36,6 +36,8 @@ mod sealed {
         const MONTGOMERY_INV: u64;
         /// `2^256 mod p`, also the Montgomery representation of one.
         const R: [u64; 4];
+        /// `R + p`, the second loose Montgomery representation of one.
+        const LOOSE_ONE: [u64; 4];
         /// `2^512 mod p`, used to enter Montgomery form.
         const R2: [u64; 4];
         /// `2^768 mod p`, used by wide decoding.
@@ -171,6 +173,7 @@ macro_rules! pasta_field_parameters {
             const TWICE_MODULUS: [u64; 4] = add_limbs(&Self::MODULUS, &Self::MODULUS).0;
             const MONTGOMERY_INV: u64 = m255::reduction_coefficient!(Self::MODULUS[0]);
             const R: [u64; 4] = m255::one!(&Self::MODULUS);
+            const LOOSE_ONE: [u64; 4] = add_limbs(&Self::R, &Self::MODULUS).0;
             const R2: [u64; 4] = m255::r2!(&Self::MODULUS);
             const R3: [u64; 4] = m255::mul!(&Self::MODULUS, &Self::R2, &Self::R2);
             const B448: [u64; 4] = m255::from_u256!(&Self::MODULUS, &[0, 0, 0, 1]);

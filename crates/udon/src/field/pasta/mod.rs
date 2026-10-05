@@ -231,7 +231,7 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     #[inline]
     pub const fn is_one(&self) -> bool {
         let limbs = self.limbs;
-        let loose_one = const { word::add_limbs(&M::R, &M::MODULUS).0 };
+        let loose_one = M::LOOSE_ONE;
         (limbs[0] == M::R[0] && limbs[1] == M::R[1] && limbs[2] == M::R[2] && limbs[3] == M::R[3])
             || (!S::REDUCED
                 && limbs[0] == loose_one[0]

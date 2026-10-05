@@ -8,7 +8,7 @@ use super::word::{adc, mac};
 use super::{PastaField, PrimeModulus, Reduced, ReductionState};
 
 use crate::field::pasta::safegcd::{
-    SAFEGCD_BATCHES, SIGNED62_MASK, bezout_offset, divsteps_62, to_signed62, update_fg,
+    SAFEGCD_BATCHES, SIGNED62_MASK, divsteps_62, to_signed62, update_fg,
 };
 
 #[cfg(test)]
@@ -121,20 +121,20 @@ impl<M: PrimeModulus> PastaField<M, Reduced> {
     #[inline]
     fn bezout_row_update(u: i64, lhs: &Self, v: i64, rhs: &Self) -> Self {
         debug_assert!(u.unsigned_abs() + v.unsigned_abs() <= 1 << 62);
-        let offset = const { bezout_offset(&M::MODULUS) };
+        let offset = M::SAFEGCD_OFFSET;
         let (u, v) = (i128::from(u), i128::from(v));
         let mut limbs = [0u64; 5];
         let mut carry = 0i128;
         for index in 0..4 {
             let acc = carry
-                + u * i128::from(lhs.limbs[index])
-                + v * i128::from(rhs.limbs[index])
-                + i128::from(offset[index]);
+                + u * (lhs.limbs[index] as i128)
+                + v * (rhs.limbs[index] as i128)
+                + (offset[index] as i128);
             limbs[index] = acc as u64;
             carry = acc >> 64;
         }
-        let top = carry + i128::from(offset[4]);
-        debug_assert!((0..=i128::from(u64::MAX)).contains(&top));
+        let top = carry + (offset[4] as i128);
+        debug_assert!(0 <= top && top <= u64::MAX as i128);
         limbs[4] = top as u64;
 
         let multiplier = limbs[0].wrapping_mul(M::MONTGOMERY_INV);

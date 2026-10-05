@@ -1,6 +1,6 @@
 use super::*;
 use crate::field::pasta::safegcd::{
-    SAFEGCD_BATCHES, SIGNED62_MASK, divsteps_62, to_signed62, update_fg,
+    SAFEGCD_BATCHES, SIGNED62_MASK, bezout_offset, divsteps_62, to_signed62, update_fg,
 };
 use crate::field::pasta::test_support::*;
 

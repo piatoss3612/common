@@ -22,19 +22,24 @@ impl CanonicalUint {
     /// Decodes a 32-byte little-endian integer.
     #[inline]
     pub fn from_le_bytes(bytes: [u8; ENCODED_SIZE]) -> Self {
-        Self {
-            limbs: core::array::from_fn(|index| {
-                u64::from_le_bytes(bytes[index * 8..(index + 1) * 8].try_into().unwrap())
-            }),
+        let mut limbs = [0; 4];
+        let mut index = 0;
+        while index < limbs.len() {
+            limbs[index] =
+                u64::from_le_bytes(bytes[index * 8..(index + 1) * 8].try_into().unwrap());
+            index += 1;
         }
+        Self { limbs }
     }
 
     /// Encodes this integer as 32 little-endian bytes.
     #[inline]
     pub fn to_le_bytes(self) -> [u8; ENCODED_SIZE] {
         let mut bytes = [0; ENCODED_SIZE];
-        for (chunk, limb) in bytes.chunks_exact_mut(8).zip(self.limbs) {
-            chunk.copy_from_slice(&limb.to_le_bytes());
+        let mut index = 0;
+        while index < self.limbs.len() {
+            bytes[index * 8..(index + 1) * 8].copy_from_slice(&self.limbs[index].to_le_bytes());
+            index += 1;
         }
         bytes
     }

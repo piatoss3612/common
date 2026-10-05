@@ -75,7 +75,12 @@ pub(super) fn divsteps_62(mut delta: i64, mut f: u64, mut g: u64) -> (i64, [i64;
 /// `((u·f + v·g) >> 62, (q·f + r·g) >> 62)` exactly over signed 62-bit limbs.
 #[inline]
 pub(super) fn update_fg(f: &[i64; 5], g: &[i64; 5], matrix: [i64; 4]) -> ([i64; 5], [i64; 5]) {
-    let [u, v, q, r] = matrix.map(i128::from);
+    let [u, v, q, r] = [
+        i128::from(matrix[0]),
+        i128::from(matrix[1]),
+        i128::from(matrix[2]),
+        i128::from(matrix[3]),
+    ];
     let (mut out_f, mut out_g) = ([0i64; 5], [0i64; 5]);
     let mut carry_f = u * i128::from(f[0]) + v * i128::from(g[0]);
     let mut carry_g = q * i128::from(f[0]) + r * i128::from(g[0]);

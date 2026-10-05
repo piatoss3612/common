@@ -127,9 +127,11 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Converts an ordinary integer to this field, returning `None` if it is
     /// at least [`M::MODULUS`](PrimeModulus::MODULUS).
     pub fn from_canonical_uint(value: CanonicalUint) -> Option<Self> {
-        compare_limbs(&value.limbs(), &M::MODULUS)
-            .is_lt()
-            .then(|| Self::from_canonical_limbs(value.limbs()))
+        if compare_limbs(&value.limbs(), &M::MODULUS).is_lt() {
+            Some(Self::from_canonical_limbs(value.limbs()))
+        } else {
+            None
+        }
     }
 
     /// Reduces an arbitrary 256-bit integer into this field.
@@ -233,7 +235,7 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
 
     /// Returns the parity of the canonical integer representative.
     pub fn is_odd(&self) -> bool {
-        self.to_canonical_uint().bit(0) == Some(true)
+        matches!(self.to_canonical_uint().bit(0), Some(true))
     }
 }
 

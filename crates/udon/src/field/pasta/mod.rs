@@ -46,7 +46,7 @@ pub use uint::CanonicalUint;
 pub(crate) const TWO_ADICITY: u32 = parameters::TWO_ADICITY;
 
 use montgomery::{montgomery_multiply, montgomery_square, reduce_once};
-use word::{adc, subtract_limbs};
+use word::{add_limbs, subtract_limbs};
 
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -243,24 +243,24 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
     /// Returns `self + rhs`.
     #[inline]
     pub fn add<T: ReductionState>(&self, rhs: &PastaField<M, T>) -> PastaField<M> {
-        let mut limbs = [0; 4];
-        let mut carry = 0;
-        for (index, limb) in limbs.iter_mut().enumerate() {
-            (*limb, carry) = adc(self.limbs[index], rhs.limbs[index], carry);
-        }
+        let (limbs, carry) = add_limbs(&self.limbs, &rhs.limbs);
         PastaField::from_montgomery(montgomery::reduce_twice_modulus::<M>(limbs, carry))
     }
 
     /// Returns `self - rhs`.
     #[inline]
     pub fn sub<T: ReductionState>(&self, rhs: &PastaField<M, T>) -> PastaField<M> {
-        let (mut limbs, borrow) = subtract_limbs(&self.limbs, &rhs.limbs);
+        let (limbs, borrow) = subtract_limbs(&self.limbs, &rhs.limbs);
         // Restore 2p exactly when subtraction borrowed.
         let mask = borrow.wrapping_neg();
-        let mut carry = 0;
-        for (limb, modulus) in limbs.iter_mut().zip(M::TWICE_MODULUS) {
-            (*limb, carry) = adc(*limb, modulus & mask, carry);
-        }
+        let modulus = M::TWICE_MODULUS;
+        let masked = [
+            modulus[0] & mask,
+            modulus[1] & mask,
+            modulus[2] & mask,
+            modulus[3] & mask,
+        ];
+        let (limbs, _) = add_limbs(&limbs, &masked);
         PastaField::from_montgomery(limbs)
     }
 
@@ -318,11 +318,14 @@ impl<M: PrimeModulus, S: ReductionState> PastaField<M, S> {
         // changing its field value. Since a < 2p and 3p < R, a + p fits.
         // Halving also preserves the tighter bound when a < p.
         let mask = (self.limbs[0] & 1).wrapping_neg();
-        let mut limbs = self.limbs;
-        let mut carry = 0;
-        for (limb, modulus) in limbs.iter_mut().zip(M::MODULUS) {
-            (*limb, carry) = adc(*limb, modulus & mask, carry);
-        }
+        let modulus = M::MODULUS;
+        let masked = [
+            modulus[0] & mask,
+            modulus[1] & mask,
+            modulus[2] & mask,
+            modulus[3] & mask,
+        ];
+        let (limbs, carry) = add_limbs(&self.limbs, &masked);
         debug_assert_eq!(carry, 0);
         Self::from_montgomery([
             (limbs[0] >> 1) | (limbs[1] << 63),

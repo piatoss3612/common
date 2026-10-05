@@ -2,7 +2,7 @@
 
 use super::{
     PastaField, PrimeModulus,
-    word::{adc, mac, sbb},
+    word::{add_limbs, mac, sbb},
 };
 
 // Fold the bits above bit 253 using p = 2^254 + c. For k <= 8 and
@@ -14,8 +14,10 @@ pub(super) fn multiply<M: PrimeModulus, const K: u64>(limbs: [u64; 4]) -> PastaF
     }
     let mut limbs = limbs;
     let mut carry = 0;
-    for limb in &mut limbs {
-        (*limb, carry) = mac(0, *limb, K, carry);
+    let mut index = 0;
+    while index < 4 {
+        (limbs[index], carry) = mac(0, limbs[index], K, carry);
+        index += 1;
     }
     let q = (carry << 2) | (limbs[3] >> 62);
     limbs[3] &= (1 << 62) - 1;
@@ -27,10 +29,7 @@ pub(super) fn multiply<M: PrimeModulus, const K: u64>(limbs: [u64; 4]) -> PastaF
     let (r3, borrow) = sbb(limbs[3], 0, borrow);
     let mut limbs = [r0, r1, r2, r3];
     if borrow != 0 {
-        let mut carry = 0;
-        for (limb, modulus) in limbs.iter_mut().zip(M::MODULUS) {
-            (*limb, carry) = adc(*limb, modulus, carry);
-        }
+        limbs = add_limbs(&limbs, &M::MODULUS).0;
     }
     PastaField::from_montgomery(limbs)
 }

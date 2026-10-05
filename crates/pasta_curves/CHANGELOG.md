@@ -10,6 +10,17 @@ internal implementation details are not tracked here.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-30
+
+### Changed
+
+- Improve deferred field reduction performance on AArch64 when the
+  `aarch64-asm` feature is enabled
+  ([#528](https://github.com/zakura-core/common/pull/528)).
+- Reduce lookup-table memory usage and improve scalar recoding performance
+  for alpha-5, alpha-6, and alpha-7 prepared zero checks
+  ([#529](https://github.com/zakura-core/common/pull/529)).
+
 ## [2.1.0] - 2026-09-29
 
 ### Added

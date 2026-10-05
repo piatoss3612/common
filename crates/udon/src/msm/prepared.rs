@@ -339,6 +339,8 @@ impl<'a, C: PastaCurve> PreparedScalars<'a, C> {
     ///
     /// Returns zero for an empty input, a different term count, an ordinary
     /// geometry, streaming, or a plan that splits the input into chunks.
+    /// A supplied [`AlphaTable`](super::AlphaTable) does not force an α plan;
+    /// see [`AlphaDescription::amortized`](super::AlphaDescription::amortized).
     /// These bytes are separate from the plan's execution workspace.
     pub fn alpha_cache_len(&self, plan: &super::execution::MsmPlan<C>) -> usize {
         plan.alpha_cache_geometry(self.len()).map_or(0, |g| {

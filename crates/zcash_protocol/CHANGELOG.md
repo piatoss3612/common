@@ -10,6 +10,16 @@ internal implementation details are not tracked here.
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-09-30
+
+### Changed
+
+- Set the NU7 activation height for Testnet to 4465026: `TEST_NETWORK` now
+  returns `Some(4465026)` from `activation_height(NetworkUpgrade::Nu7)` and
+  selects `BranchId::Nu7` from that height onward. The Mainnet activation
+  height remains unscheduled
+  ([#534](https://github.com/zakura-core/common/pull/534)).
+
 ## [2.0.0] - 2026-09-23
 
 ### Added

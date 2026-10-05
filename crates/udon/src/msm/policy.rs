@@ -13,6 +13,15 @@ pub(super) enum Accumulation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Algorithm {
     Auto,
+    /// Exercises α kernels without the automatic size threshold.
+    ///
+    /// Requires an available bank and still permits fallback when resource
+    /// adaptation disables tables. Explicit ordinary kernels remain ordinary
+    /// even when the input contains an α bank, enabling differential tests.
+    #[cfg(test)]
+    Alpha {
+        accumulation: Accumulation,
+    },
     #[cfg_attr(
         not(test),
         expect(dead_code, reason = "Differential tests force this kernel.")
@@ -74,6 +83,8 @@ impl ArithmeticOptions {
     }
     pub(super) const fn accumulation(self) -> Accumulation {
         match self.algorithm {
+            #[cfg(test)]
+            Algorithm::Alpha { accumulation } => accumulation,
             Algorithm::Booth { accumulation, .. } => accumulation,
             Algorithm::StreamingBooth { .. } => Accumulation::Projective,
             _ => Accumulation::Auto,

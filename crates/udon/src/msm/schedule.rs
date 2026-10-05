@@ -82,6 +82,36 @@ impl Options {
             ),
         }
     }
+
+    /// Considers an available table for one chunk under its assigned allowance.
+    ///
+    /// Bound and produced-input planning share this decision so cache admission
+    /// and scratch sizing agree with the selected kernel. Reevaluate it after
+    /// resource adaptation: fewer terms or tasks can favor the original bases.
+    fn with_alpha(
+        self,
+        terms: usize,
+        ordinary: Geometry,
+        alpha: Option<super::AlphaDescription>,
+    ) -> Geometry {
+        let Some(description) = alpha else {
+            return ordinary;
+        };
+        if !self.alpha || matches!(ordinary, Geometry::Short(_)) || self.arithmetic.streaming() {
+            return ordinary;
+        }
+        let select = match self.arithmetic.algorithm {
+            Algorithm::Auto => description.amortized(terms, self.task_budget),
+            #[cfg(test)]
+            Algorithm::Alpha { .. } => true,
+            _ => false,
+        };
+        if select {
+            Geometry::Alpha(description.window_bits())
+        } else {
+            ordinary
+        }
+    }
 }
 
 const fn layout<C: PastaCurve>(
@@ -239,6 +269,22 @@ const fn conservative<C: PastaCurve>(
     )
 }
 
+// Adaptation may force the narrow kernel only for selections left automatic;
+// an explicit width is a request. A forced table selection adapts its
+// ordinary fallback like an automatic one.
+const fn adaptive_width(algorithm: Algorithm) -> bool {
+    #[cfg(test)]
+    if matches!(algorithm, Algorithm::Alpha { .. }) {
+        return true;
+    }
+    matches!(
+        algorithm,
+        Algorithm::Auto
+            | Algorithm::Booth { width: None, .. }
+            | Algorithm::StreamingBooth { width: None }
+    )
+}
+
 // Shared deterministic memory search for const and runtime planning. Reduce
 // affine staging first, then concurrency, then retain projective buckets, and
 // finally shorten complete chunks (including records and digits).
@@ -263,14 +309,7 @@ pub(super) const fn smaller(mut options: Options, n: usize) -> Option<Options> {
     } else if n > 1 {
         let chunk = n.div_ceil(2);
         options.arithmetic.chunk_size = NonZeroUsize::new(chunk);
-        if chunk < super::BOOTH_MIN
-            && matches!(
-                options.arithmetic.algorithm,
-                Algorithm::Auto
-                    | Algorithm::Booth { width: None, .. }
-                    | Algorithm::StreamingBooth { width: None }
-            )
-        {
+        if chunk < super::BOOTH_MIN && adaptive_width(options.arithmetic.algorithm) {
             options.width = Some(4);
             if matches!(options.accumulation, Accumulation::Auto) {
                 options.accumulation = Accumulation::Projective;
@@ -315,24 +354,26 @@ pub(super) fn unbound<C: PastaCurve>(
     let execution = options;
     let mut requested = BatchOptions::from(options);
     requested.arithmetic.chunk_size = source_fragment;
-    if alpha.is_none()
+    // Short producer fragments repeatedly pay per-chunk integration costs.
+    // Streaming retains buckets across fragments; an alpha bank only bypasses
+    // that default when the fragment-sized chunk meets its size heuristic.
+    if matches!(requested.arithmetic.algorithm, Algorithm::Auto)
         && terms >= 4096
         && source_fragment.is_some_and(|fragment| fragment.get() < 1024)
+        && !alpha.is_some_and(|description| {
+            description.amortized(cap(terms, requested.arithmetic), requested.task_budget)
+        })
     {
         requested.arithmetic.algorithm = Algorithm::StreamingBooth { width: None };
     }
     let mut options = Options::new(requested);
     loop {
-        let job = match alpha {
-            Some(description) => layout::<C>(
-                terms,
-                Geometry::Alpha(description.window_bits()),
-                false,
-                false,
-                false,
-                options,
-            )?,
-            None => conservative::<C>(terms, options)?,
+        let n = cap(terms, options.arithmetic);
+        let job = match options.with_alpha(n, options.geometry(n), alpha) {
+            geometry @ Geometry::Alpha(_) => {
+                layout::<C>(terms, geometry, false, false, false, options)?
+            }
+            _ => conservative::<C>(terms, options)?,
         };
         if options.memory_limit.is_none_or(|limit| {
             job.requirements
@@ -376,19 +417,7 @@ pub(super) fn job<C: PastaCurve>(
             }
         },
     );
-    // A prepared bank determines its recoding width even with a test-forced
-    // ordinary algorithm; accumulation and pass choices remain independent.
-    let geometry = if !options.alpha
-        || matches!(geometry, Geometry::Short(_))
-        || options.arithmetic.streaming()
-    {
-        geometry
-    } else {
-        input
-            .bases
-            .alpha()
-            .map_or(geometry, |c| Geometry::Alpha(c.description().window_bits()))
-    };
+    let geometry = options.with_alpha(n, geometry, input.bases.alpha().map(|c| c.description()));
     let cached = retained.is_some_and(|s| s.cached_digits(geometry).is_some());
     layout::<C>(
         input.len(),
@@ -411,48 +440,26 @@ fn weight<C: PastaCurve>(input: &Input<'_, C>) -> u128 {
     };
     (input.len() as u128).max(1) * windows as u128
 }
+/// Shares one batch allowance across contiguous ranges of estimated work.
+///
+/// Requirement sizing, metadata construction, and direct execution must use
+/// the same partition to keep concurrent scratch ranges disjoint. On `None`,
+/// jobs run sequentially with reusable scratch and the full nested allowance;
+/// a dominant job therefore keeps its budget instead of losing tasks to a
+/// neighbor whose work cannot justify a separate share.
 pub(super) fn split<C: PastaCurve>(
     inputs: &[Input<'_, C>],
-    budget: usize,
-) -> Option<(usize, usize)> {
-    if inputs.len() < 2 || budget < 2 {
-        return None;
-    }
-    let total: u128 = inputs.iter().map(weight).sum();
-    // Odd budgets need unequal work ranges. A half-by-half split would leave
-    // one worker processing half the jobs while two process the other half.
-    let target = total * (budget / 2) as u128 / budget as u128;
-    let mut sum = 0;
-    let mut mid = 1;
-    let mut best = u128::MAX;
-    let mut left_weight = 0;
-    for (i, input) in inputs[..inputs.len() - 1].iter().enumerate() {
-        sum += weight(input);
-        let distance = sum.abs_diff(target);
-        if distance < best {
-            best = distance;
-            mid = i + 1;
-            left_weight = sum;
-        }
-    }
-    let left = ((budget as u128 * left_weight + total / 2) / total) as usize;
-    // Keep a dominant job's budget when a neighboring range cannot justify
-    // even one worker. That range runs sequentially around the parallel job.
-    (left != 0 && left != budget).then_some((mid, left))
+    budget: TaskBudget,
+) -> Option<(usize, TaskBudget, TaskBudget)> {
+    budget.balance(inputs.iter().map(weight))
 }
 pub(super) fn requirements<C: PastaCurve>(
     inputs: &[Input<'_, C>],
     options: Options,
 ) -> Result<Requirements, CurveError> {
-    if let Some((mid, left)) = split(inputs, options.task_budget.get()) {
-        let a = requirements(
-            &inputs[..mid],
-            options.with_task_budget(TaskBudget::new(left).unwrap()),
-        )?;
-        let b = requirements(
-            &inputs[mid..],
-            options.with_task_budget(TaskBudget::new(options.task_budget.get() - left).unwrap()),
-        )?;
+    if let Some((mid, left, right)) = split(inputs, options.task_budget) {
+        let a = requirements(&inputs[..mid], options.with_task_budget(left))?;
+        let b = requirements(&inputs[mid..], options.with_task_budget(right))?;
         a.plus(b)?.times::<C>(1)
     } else {
         let mut r = Requirements::ZERO;

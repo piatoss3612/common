@@ -57,6 +57,32 @@ impl AlphaDescription {
     pub const fn main_windows(self) -> usize {
         127_usize.div_ceil(self.width as usize)
     }
+    /// Whether `terms` meets automatic planning's size heuristic for this bank.
+    ///
+    /// `terms` counts scalar/base pairs in one planned arithmetic chunk, not
+    /// distinct bases or all terms across a batch. `budget` is that job's
+    /// allowance, including nested work. Planning may reduce both the chunk
+    /// size and its allowance to meet resource limits.
+    ///
+    /// Use this as a preparation hint when deciding whether to retain a bank.
+    /// `true` does not guarantee selection, faster execution, or recovery of
+    /// preparation costs across invocations. Streaming, short-scalar, and
+    /// resource-constrained plans may still use the original bases. The
+    /// heuristic can change; resolve an [`MsmPlan`](super::execution::MsmPlan)
+    /// before sizing a cache with
+    /// [`PreparedScalars::alpha_cache_len`](super::PreparedScalars::alpha_cache_len).
+    pub const fn amortized(self, terms: usize, budget: TaskBudget) -> bool {
+        // Integration has a fixed cost per layer. Parallel window tasks lower
+        // the term count needed to offset that cost. The ignored
+        // tests::recoding_bench::compare_prepared_recoding probe compares the
+        // forced kernels across row sizes and budgets to tune these thresholds.
+        terms
+            >= if budget.get() > 1 {
+                self.layers() / 2
+            } else {
+                self.layers() * 2
+            }
+    }
     /// Counts for preparing a bank, including an empty bank.
     ///
     /// Returns [`CurveError::SizeOverflow`] if any required slice cannot be
@@ -428,12 +454,18 @@ impl<'a> AlphaCodebook<'a> {
 /// its entry type's mathematical invariants.
 ///
 /// [`super::Bases`] lets execution use the expanded layers or their original
-/// bases as resources permit. Kernel selection is private and can change.
+/// bases according to scalar shape, chunk size, and resource limits.
+/// [`AlphaDescription::amortized`] exposes the size heuristic as a preparation
+/// hint; retaining a table does not force its selection. Kernel selection is
+/// private and can change.
 /// Tables and codebooks are retained caller-owned storage, separate from MSM
 /// workspace ceilings. Preparation and execution allocate nothing and are
 /// variable-time.
 ///
-/// Prepare one bank and cache a full scalar row for its resolved plan:
+/// Prepare one bank and cache a full scalar row for its resolved plan.
+/// [`PreparedScalars::alpha_cache_len`](super::PreparedScalars::alpha_cache_len)
+/// determines whether the plan accepts a cache, returning zero when it selects
+/// original bases instead:
 ///
 /// ```
 /// use zakura_udon::{
@@ -455,19 +487,28 @@ impl<'a> AlphaCodebook<'a> {
 /// let table = AlphaTable::prepare(book, &[g], &mut entries, &mut projective,
 ///     &mut field, TaskBudget::SERIAL, &SerialExecutor);
 /// assert_eq!(table.odd_multiples(3)?.len(), 1);
-/// let values = [PastaField::<<Pallas as PastaCurve>::Scalar>::from_u64(7).invert().unwrap()];
-/// let mut records = [ScalarStorage::ZERO];
+/// // Inverses give a full-width scalar row for the recoding example.
+/// let values: Vec<_> = (1..=64_u64)
+///     .map(|i| {
+///         PastaField::<<Pallas as PastaCurve>::Scalar>::from_u64(i)
+///             .invert().unwrap()
+///     })
+///     .collect();
+/// let mut records = vec![ScalarStorage::ZERO; values.len()];
 /// let prepared = PreparedScalars::prepare(&values, &mut records,
 ///     TaskBudget::SERIAL, &SerialExecutor);
-/// let input = Input::new_prepared(Bases::Alpha(table), prepared);
+/// // Repeated indices let many terms share a bank containing just one base.
+/// let indices = vec![0; values.len()];
+/// let input = Input::indexed_prepared(Bases::Alpha(table), &indices, prepared)?;
 /// let options = ExecutionOptions::DEFAULT;
+/// assert!(description.amortized(values.len(), options.task_budget()));
 /// let plan = MsmPlan::for_input(&input, options)?;
 /// let bytes = prepared.alpha_cache_len(&plan);
 /// assert!(bytes > 0);
 /// let mut digits = vec![0; bytes];
 /// let cached = prepared.cache_alpha(&plan, book, &mut digits,
 ///     TaskBudget::SERIAL, &SerialExecutor);
-/// let input = Input::new_prepared(Bases::Alpha(table), cached);
+/// let input = Input::indexed_prepared(Bases::Alpha(table), &indices, cached)?;
 /// assert_eq!(input.requirements(options)?.digits(), 0);
 /// assert_eq!(cached.retained_bytes(), prepared.retained_bytes() + bytes);
 /// # Ok::<(), zakura_udon::curve::CurveError>(())

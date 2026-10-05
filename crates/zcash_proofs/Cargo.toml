@@ -23,7 +23,6 @@ bench = false
 bellman = { workspace = true, features = ["groth16"] }
 blake2b_simd = { version = "1", default-features = false }
 bls12_381 = { workspace = true, features = ["default"] }
-document-features = "0.2"
 group = "0.14"
 home = { version = "0.5", optional = true }
 jubjub = { workspace = true, features = ["default"] }
@@ -31,7 +30,6 @@ known-folders = { version = "1", optional = true }
 minreq = { version = "2", features = ["https"], optional = true }
 rand = { version = "0.10", features = ["sys_rng"], default-features = false }
 rand_core = { version = "0.10", default-features = false }
-redjubjub = { workspace = true }
 sapling = { workspace = true }
 wagyu-zcash-parameters = { version = "0.2", optional = true }
 xdg = { version = "3", optional = true }

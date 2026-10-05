@@ -57,7 +57,10 @@
     "NativeRootCaps",
     "NativeSquareRun",
     "NativeChainSteps",
-    "NativeSqrtChains"
+    "NativeSqrtChains",
+    "SqrtCorrectionMath",
+    "NativeTonelli",
+    "NativeTonelliSqrt"
   ],
   "proved": [
     "adc_spec",
@@ -207,9 +210,25 @@
     "UdonVerify.Native.fq_root_of_unity_spec",
     "UdonVerify.Native.fq_root_of_unity_reduced_spec",
     "UdonVerify.Native.fq_root_of_unity_inverse_spec",
-    "UdonVerify.Native.fq_root_of_unity_inverse_reduced_spec"
+    "UdonVerify.Native.fq_root_of_unity_inverse_reduced_spec",
+    "UdonVerify.Sqrt.predecessor_power",
+    "UdonVerify.Sqrt.half_power_minus_one",
+    "UdonVerify.Sqrt.correction_lowers_order",
+    "UdonVerify.Sqrt.correction_preserves_square",
+    "UdonVerify.Sqrt.nonsquare_correction_preserves_square",
+    "UdonVerify.Sqrt.correction_rank_decreases",
+    "UdonVerify.Sqrt.nonsquare_correction_rank_decreases",
+    "UdonVerify.Sqrt.nonsquare_of_alternate_root",
+    "UdonVerify.Sqrt.square_flag_correct",
+    "UdonVerify.Sqrt.order_search_spec",
+    "UdonVerify.Sqrt.correction_loop_spec",
+    "UdonVerify.Sqrt.correction_spec",
+    "UdonVerify.Sqrt.correction_square_flag_spec",
+    "UdonVerify.Sqrt.maximal_order_nonsquare",
+    "UdonVerify.Sqrt.sqrt_loop_spec",
+    "UdonVerify.Sqrt.tonelli_shanks_spec"
   ],
-  "scope": "Layers one through four, plus canonical 256-bit integer and 32-byte encodings for both Pasta fields in both representation states, exact byte round trips, field-value round trips, canonical parity, primality of both compiled Pasta moduli, forward and inverse roots of unity with exact orders and lookup bounds, and both compiled square-root exponentiation schedules. Inversion, square-root correction and public square-root methods, reducing encodings of wider byte strings, product accumulation, and other subsystems remain unproved.",
+  "scope": "Layers one through four, plus canonical 256-bit integer and 32-byte encodings for both Pasta fields in both representation states, exact byte round trips, field-value round trips, canonical parity, primality of both compiled Pasta moduli, forward and inverse roots of unity with exact orders and lookup bounds, both compiled square-root exponentiation schedules, and the extracted generic Tonelli-Shanks routines under explicit field-operation and root-callback contracts. Those contracts still need to be connected to the concrete Fp/Fq square-root entry points. Inversion and public square-root methods, reducing encodings of wider byte strings, product accumulation, and other subsystems remain unproved.",
   "type_only_axioms": {
     "UdonVerify.montgomery_multiply_spec": [
       "Aeneas.Std.core.fmt.Formatter"

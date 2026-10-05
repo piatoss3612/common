@@ -3,7 +3,8 @@
 This package extracts the production Rust arithmetic with Charon and Aeneas,
 then checks handwritten Lean proofs. The package covers four layers of field
 arithmetic, canonical integer and byte encodings, Pasta primality, roots of
-unity, and the fixed square-root exponentiation schedules.
+unity, the fixed square-root exponentiation schedules, and generic
+Tonelli–Shanks correction.
 Inversion and square roots remain in progress.
 
 The checked word theorems in [Proofs.lean](proofs/Proofs.lean) cover `adc`,
@@ -103,8 +104,18 @@ array access and representation constructor.
 [NativeSqrtChains.lean](proofs/NativeSqrtChains.lean) proves both compiled
 addition chains compute `value^((t - 1) / 2)`, where `p - 1 = t * 2^32`, for
 every valid loose input. These proofs follow the extracted schedules and use
-the checked native multiplication and square-run routines. They do not yet
-prove the Tonelli–Shanks correction loops or the public square-root methods.
+the checked native multiplication and square-run routines.
+
+[NativeTonelli.lean](proofs/NativeTonelli.lean) and
+[NativeTonelliSqrt.lean](proofs/NativeTonelliSqrt.lean) prove the extracted generic
+Tonelli–Shanks routines under explicit field-operation and root-callback
+contracts. The order-search loop respects its bounds and terminates. The
+correction loops preserve the root equation, terminate, and discharge the
+checked increments and assertions. The alternate routine's flag identifies
+squares and its returned value squares to the input or its fixed nonsquare
+multiple. The ordinary routine returns a root or rejects a nonsquare, including
+the zero case. These contracts still need to be connected to the concrete
+Fp/Fq entry points; those public square-root methods remain unproved.
 
 [PastaPrimality.lean](proofs/PastaPrimality.lean) proves primality of the two
 compiled Pasta moduli using Lucas certificates and recursively checked prime
@@ -118,7 +129,7 @@ use Lean's kernel `decide`; certificate generation supplies no trusted premise.
 | 2. Limbs | Comparison, addition, subtraction, wide multiplication and squaring |
 | 3. Montgomery | Reduction, multiplication, squaring, and square runs |
 | 4. Native fields | Concrete Fp/Fq parameters, arithmetic, representation, predicates and integer constructors |
-| 5. Remaining field routines | Canonical encodings, round trips, parity, primality, roots of unity and square-root exponentiation checked; inversion and square-root correction in progress |
+| 5. Remaining field routines | Encodings, parity, primality, roots, square-root exponentiation and generic Tonelli–Shanks contracts checked; concrete square-root entry points and inversion in progress |
 
 [catalog.json](catalog.json) records the proof modules and theorem census.
 [provenance.json](provenance.json) pins Udon source hashes, Charon, Aeneas,
@@ -156,6 +167,9 @@ The native extraction additionally imports the actual Udon crate through
 dependencies remain pinned to the workspace lockfile. Native parameter values
 come from the production compile-time derivations and are checked by Lean.
 The extraction uses the default Udon feature configuration.
+The generic square-root routines are separately selected from the production
+crate. Their model includes the extracted standard-library tuple comparison
+and Boolean inequality; it needs no external definitions or translation adapter.
 
 The production refactors reuse the already-proved limb kernels in addition,
 subtraction and halving, use an indexed loop for small multiples, and name the
@@ -212,6 +226,6 @@ Lean checks the arithmetic proofs and their axiom census. The first four layers
 use integer bounds and modular congruences. Primality has its own checked
 certificates.
 
-Inversion, square roots, reducing byte strings of other widths, product
+Inversion, the public Fp/Fq square-root methods, reducing byte strings of other widths, product
 accumulation, curves and FFTs have no correctness theorem in this package yet.
 The proofs do not establish constant-time behavior.

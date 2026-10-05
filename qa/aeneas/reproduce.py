@@ -179,6 +179,17 @@ def main():
         run(module.lower() + "-aeneas", [str(aeneas), "-backend", "lean", "-split-files",
             "-subdir", module, "-no-progress-bar", "-dest", str(output / "lean"),
             str(output / "llbc" / (llbc_name + ".llbc"))], output)
+    algorithms = output / "llbc/sqrt-algorithms.llbc"
+    run("sqrt-algorithms-charon", [str(charon), "cargo", "--preset=aeneas", "--sysroot=default",
+        "--include", "zakura_udon", "--include", "core::tuple", "--include", "core::cmp",
+        "--start-from", "zakura_udon::field::pasta::algorithms::tonelli_shanks_with_roots",
+        "--start-from", "zakura_udon::field::pasta::algorithms::tonelli_shanks_alt_with_roots",
+        *checked, "--dest-file", str(algorithms), "--", *cargo], repo)
+    if json.loads(algorithms.read_text())["has_errors"]:
+        raise RuntimeError("Charon exported a partial square-root algorithm model")
+    run("sqrt-algorithms-aeneas", [str(aeneas), "-backend", "lean", "-namespace", "SqrtAlgorithms",
+        "-subdir", "SqrtAlgorithms", "-split-files", "-filter-trait-methods", "-no-progress-bar",
+        "-abort-on-error", "-dest", str(output / "lean"), str(algorithms)], output)
     native = output / "native"
     (native / "Cargo.toml").write_text(
         '[package]\nname = "udon-native-field-proof"\nversion = "0.0.0"\n'
@@ -233,10 +244,10 @@ def main():
     configuration = ["import Lake", "open Lake DSL",
                      "require aeneas from " + json.dumps(str(backend)),
                      "package udonFeasibility"]
-    for name in ["Word", "KernelSlice", *CATALOG["modules"]]:
+    for name in ["Word", "KernelSlice", "SqrtAlgorithms", *CATALOG["modules"]]:
         configuration.append("@[default_target] lean_lib " + name)
     (lean / "lakefile.lean").write_text("\n".join(configuration) + "\n")
-    for name in ["Word", "KernelSlice"]:
+    for name in ["Word", "KernelSlice", "SqrtAlgorithms"]:
         (lean / (name + ".lean")).write_text("import " + name + ".Funs\n")
     (lean / ".lake").mkdir()
     cached_packages = backend / ".lake/packages"

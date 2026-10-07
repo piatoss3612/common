@@ -9,7 +9,8 @@
 //!
 //! ## Feature flags
 //!
-//! *No documented features in Cargo.toml*
+//! - `bundled-verifying-keys`: embeds the canonical Sapling verifying keys
+//!   without proving parameters, and enables `circuit`.
 //!
 
 #![no_std]

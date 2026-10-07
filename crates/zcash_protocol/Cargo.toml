@@ -34,8 +34,8 @@ hex = { version = "0.4", features = ["alloc"], default-features = false }
 
 # - Test dependencies
 proptest = { version = ">=1,<1.7", optional = true }
-incrementalmerkletree = { version = "0.8.2", optional = true, default-features = false }
-incrementalmerkletree-testing = { version = "0.3", optional = true }
+incrementalmerkletree = { version = "0.9", optional = true, default-features = false }
+incrementalmerkletree-testing = { version = "0.4", optional = true }
 
 [dev-dependencies]
 proptest = ">=1,<1.7"

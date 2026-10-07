@@ -33,7 +33,7 @@ halo2_gadgets = { workspace = true, optional = true }
 halo2_proofs = { workspace = true, features = ["batch", "floor-planner-v1-legacy-pdqsort"], optional = true }
 hex = { version = "0.4", features = ["alloc"], default-features = false }
 image = { version = "0.24", optional = true }
-incrementalmerkletree = "0.8.1"
+incrementalmerkletree = "0.9"
 memuse = { version = "0.2.2", default-features = false }
 maybe-rayon = { version = "0.1.0", default-features = false, optional = true }
 nonempty = { version = "0.11", default-features = false }
@@ -59,12 +59,12 @@ zip32 = { version = "0.2.0", default-features = false }
 criterion = "0.4"
 halo2_gadgets = { workspace = true, features = ["test-dependencies"] }
 hex = "0.4"
-incrementalmerkletree = { version = "0.8.1", features = ["test-dependencies"] }
+incrementalmerkletree = { version = "0.9", features = ["test-dependencies"] }
 proptest = ">=1.0.0, <1.7.0"
 rand = { version = "0.10", features = ["thread_rng"], default-features = false }
 rand_chacha = "0.10"
 rayon = "1"
-shardtree = "0.6"
+shardtree = "0.8"
 sinsemilla = { workspace = true, features = ["test-dependencies"] }
 zcash_note_encryption = { version = "0.4.2", features = ["pre-zip-212"] }
 
